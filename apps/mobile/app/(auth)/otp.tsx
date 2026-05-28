@@ -86,6 +86,13 @@ export default function OtpScreen() {
   const [resendIn, setResendIn] = useState(RESEND_SECONDS);
   const inputs = useRef<Array<TextInput | null>>([]);
 
+  // Tracks the last `code` value we already POSTed for verification. The
+  // auto-verify effect skips any code value it has already attempted, which
+  // prevents the post-error retry loop: a 422 response flips `busy` back to
+  // false → `verify`'s useCallback identity changes → the effect would
+  // re-fire forever otherwise.
+  const lastAttemptedCode = useRef<string>('');
+
   const code = useMemo(() => cells.join(''), [cells]);
   const canSubmit = code.length === CELL_COUNT && !busy;
 
@@ -160,7 +167,11 @@ export default function OtpScreen() {
       await signIn(resp);
       router.replace('/');
     } catch (err) {
-      console.warn('[auth] verify failed', err);
+      // Surface validation details when the API returned 422 so we can see
+      // exactly which field the server rejected.
+      const details =
+        err instanceof ApiError ? { code: err.code, details: err.details } : undefined;
+      console.warn('[auth] verify failed', err, details);
       setError(
         err instanceof ApiError
           ? err.message
@@ -181,6 +192,7 @@ export default function OtpScreen() {
       router.setParams({ otp_token: newToken });
       setResendIn(RESEND_SECONDS);
       setCells(Array(CELL_COUNT).fill(''));
+      lastAttemptedCode.current = '';
       focusCell(0);
     } catch (err) {
       setError(
@@ -193,9 +205,18 @@ export default function OtpScreen() {
     }
   }, [resendIn, phone, focusCell, router, t]);
 
+  // Auto-verify on full 6-digit entry, but only ONCE per unique code value.
+  // Without the ref guard the effect would re-fire on every `verify` identity
+  // change (e.g. after a 422 sets `busy` back to false), hammering the API.
   useEffect(() => {
-    if (code.length === CELL_COUNT) {
+    if (code.length === CELL_COUNT && lastAttemptedCode.current !== code) {
+      lastAttemptedCode.current = code;
       void verify();
+    }
+    // If the user edits the code back below 6 digits, allow auto-verify again
+    // for the next full entry.
+    if (code.length < CELL_COUNT && lastAttemptedCode.current !== '') {
+      lastAttemptedCode.current = '';
     }
   }, [code, verify]);
 
