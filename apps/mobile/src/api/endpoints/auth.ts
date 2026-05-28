@@ -44,15 +44,21 @@ export const authApi = {
     return unwrap<OtpSendResponse>(api.post('/v1/auth/otp/send', { phone }));
   },
 
+  /**
+   * Verify the OTP. The backend binds the call to the original send via
+   * `otp_token` (returned by `otpSend`) — `phone` is NOT part of the verify
+   * body; the server resolves it from the token. The device block lets the
+   * server record a `device_sessions` row.
+   */
   async otpVerify(input: {
-    phone: string;
+    otp_token: string;
     code: string;
     device_id: string;
     platform: 'ios' | 'android' | 'web';
   }): Promise<OtpVerifyResponse> {
     return unwrap<OtpVerifyResponse>(
       api.post('/v1/auth/otp/verify', {
-        phone: input.phone,
+        otp_token: input.otp_token,
         code: input.code,
         device: { device_id: input.device_id, platform: input.platform },
       }),

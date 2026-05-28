@@ -48,12 +48,26 @@ function devicePlatform(): 'ios' | 'android' | 'web' {
 }
 
 function deviceId(): string {
-  // Stable per-install id where available, opaque random fallback.
-  return (
-    Application.getAndroidId() ??
-    Application.applicationId ??
-    `web-${Math.random().toString(36).slice(2, 10)}`
-  );
+  // Stable per-install id where available, opaque random fallback. Every
+  // accessor is wrapped because expo-application's web shim has historically
+  // thrown / returned non-functions on platforms it doesn't implement (and
+  // we never want this to bring down the OTP flow with a sync exception
+  // *before* the API call leaves the device).
+  try {
+    if (Platform.OS === 'android' && typeof Application.getAndroidId === 'function') {
+      const aid = Application.getAndroidId();
+      if (aid) return aid;
+    }
+  } catch {
+    // fall through
+  }
+  try {
+    const appId = (Application as { applicationId?: string | null }).applicationId;
+    if (appId) return appId;
+  } catch {
+    // fall through
+  }
+  return `${Platform.OS}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 export default function OtpScreen() {
@@ -61,8 +75,9 @@ export default function OtpScreen() {
   const router = useRouter();
   const { t } = useTranslation();
   const { signIn } = useAuth();
-  const params = useLocalSearchParams<{ phone?: string }>();
+  const params = useLocalSearchParams<{ phone?: string; otp_token?: string }>();
   const phone = params.phone ?? '';
+  const otpToken = params.otp_token ?? '';
 
   const [cells, setCells] = useState<string[]>(() => Array(CELL_COUNT).fill(''));
   const [focused, setFocused] = useState(0);
@@ -119,12 +134,25 @@ export default function OtpScreen() {
   );
 
   const verify = useCallback(async () => {
-    if (!canSubmit || !phone) return;
+    if (!canSubmit) return;
+    if (!otpToken) {
+      // Defensive: should never happen because phone.tsx always forwards it,
+      // but if the user deep-links straight to /otp we surface the missing
+      // token instead of failing silently.
+      setError(
+        t('auth.otp.errors.missing_token', {
+          defaultValue: 'Session expired. Please go back and request a new OTP.',
+        }),
+      );
+      return;
+    }
     setError(null);
     setBusy(true);
     try {
+      // eslint-disable-next-line no-console
+      console.log('[auth] verifying OTP', { phone, otpToken: `${otpToken.slice(0, 6)}…` });
       const resp = await authApi.otpVerify({
-        phone,
+        otp_token: otpToken,
         code,
         device_id: deviceId(),
         platform: devicePlatform(),
@@ -132,6 +160,7 @@ export default function OtpScreen() {
       await signIn(resp);
       router.replace('/');
     } catch (err) {
+      console.warn('[auth] verify failed', err);
       setError(
         err instanceof ApiError
           ? err.message
@@ -141,13 +170,15 @@ export default function OtpScreen() {
       );
       setBusy(false);
     }
-  }, [canSubmit, code, phone, router, signIn, t]);
+  }, [canSubmit, code, otpToken, phone, router, signIn, t]);
 
   const resend = useCallback(async () => {
     if (resendIn > 0 || !phone) return;
     setError(null);
     try {
-      await authApi.otpSend(phone);
+      const { otp_token: newToken } = await authApi.otpSend(phone);
+      // Update the route param so the next verify uses the fresh token.
+      router.setParams({ otp_token: newToken });
       setResendIn(RESEND_SECONDS);
       setCells(Array(CELL_COUNT).fill(''));
       focusCell(0);
@@ -160,7 +191,7 @@ export default function OtpScreen() {
             }),
       );
     }
-  }, [resendIn, phone, focusCell, t]);
+  }, [resendIn, phone, focusCell, router, t]);
 
   useEffect(() => {
     if (code.length === CELL_COUNT) {

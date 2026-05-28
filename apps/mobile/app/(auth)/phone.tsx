@@ -38,8 +38,8 @@ export default function PhoneScreen() {
     setError(null);
     setBusy(true);
     try {
-      await authApi.otpSend(e164);
-      router.push({ pathname: '/(auth)/otp', params: { phone: e164 } });
+      const { otp_token } = await authApi.otpSend(e164);
+      router.push({ pathname: '/(auth)/otp', params: { phone: e164, otp_token } });
     } catch (err) {
       setError(
         err instanceof ApiError
