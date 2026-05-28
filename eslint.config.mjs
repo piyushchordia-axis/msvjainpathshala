@@ -7,11 +7,16 @@
 //
 // Refs: SPEC.md §19 step 1; CLAUDE.md "Build process rules".
 
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import js from '@eslint/js';
 import importPlugin from 'eslint-plugin-import';
 import unusedImports from 'eslint-plugin-unused-imports';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
+
+const ROOT_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 export default tseslint.config(
   {
@@ -94,7 +99,14 @@ export default tseslint.config(
             'object',
             'type',
           ],
-          pathGroups: [{ pattern: '@jp/**', group: 'internal', position: 'before' }],
+          pathGroups: [
+            { pattern: '@jp/**', group: 'internal', position: 'before' },
+            // Mobile (and any other app) uses `@/*` → `src/*`. Without this the
+            // typescript resolver classifies @/* imports as 'parent' (they
+            // resolve to a real relative path under src/), which breaks the
+            // grouping convention used everywhere else.
+            { pattern: '@/**', group: 'internal', position: 'after' },
+          ],
           pathGroupsExcludedImportTypes: ['type'],
           'newlines-between': 'always',
           alphabetize: { order: 'asc', caseInsensitive: true },
@@ -105,7 +117,14 @@ export default tseslint.config(
     settings: {
       'import/resolver': {
         node: { extensions: ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.cjs'] },
-        typescript: { project: ['./tsconfig.base.json'] },
+        // Absolute path so the resolver finds the same workspace tsconfig
+        // regardless of which directory ESLint is invoked from (per-app
+        // `pnpm lint` runs from apps/<x>/ but the project tsconfig is at
+        // the repo root). Without this the resolver silently falls back to
+        // node-only resolution, which changes how @jp/* modules are
+        // classified by import/order and produces contradictory errors
+        // between root and per-app lints.
+        typescript: { project: [path.join(ROOT_DIR, 'tsconfig.base.json')] },
       },
     },
   },

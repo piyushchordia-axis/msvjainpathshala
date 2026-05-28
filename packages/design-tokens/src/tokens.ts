@@ -40,6 +40,12 @@ export const colors = {
     tarun: '#166534',
     yuva: '#1E3A8A',
   },
+  'age-bg': {
+    bal: '#FBE5E5',
+    kishor: '#F6ECD6',
+    tarun: '#DCEEDD',
+    yuva: '#DDE3F4',
+  },
   tier: {
     jigyasu: '#8B6F5E',
     shravak: '#166534',
@@ -179,6 +185,12 @@ export const JPColors = {
   ageKishor: colors.age.kishor,
   ageTarun: colors.age.tarun,
   ageYuva: colors.age.yuva,
+
+  // Age group backgrounds (paired with ageBal etc for badge fills)
+  ageBalBg: colors['age-bg'].bal,
+  ageKishorBg: colors['age-bg'].kishor,
+  ageTarunBg: colors['age-bg'].tarun,
+  ageYuvaBg: colors['age-bg'].yuva,
 
   // Spiritual tiers
   tierJigyasu: colors.tier.jigyasu,

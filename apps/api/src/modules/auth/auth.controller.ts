@@ -16,7 +16,7 @@
  *   POST   /v1/admin/impersonate/:userId
  */
 
-import { Body, Controller, HttpCode, Param, Post, Get, Req } from '@nestjs/common';
+import { Body, Controller, HttpCode, Param, Patch, Post, Get, Req } from '@nestjs/common';
 import { z } from 'zod';
 
 import { otpRequestSchema, refreshSchema, switchViewSchema, logoutSchema } from '@jp/shared';
@@ -25,6 +25,7 @@ import { AppError, ERROR_CODES, type Role, type ScopeContext } from '@jp/shared'
 import { getRequestContext } from '../../common/context/request-context';
 import { ZodValidationPipe } from '../../common/validation/zod-validation.pipe';
 import { UsersRepository } from '../../db/repositories';
+import { AuditService } from '../audit/audit.service';
 
 import { AuthService } from './auth.service';
 import { CurrentUser, type CurrentUserPayload } from './decorators/current-user.decorator';
@@ -61,6 +62,17 @@ const impersonateBodySchema = z.object({
   reason: z.string().min(1).max(500).optional(),
 });
 
+// PATCH /v1/auth/me — self-service profile patch. Tightened to the columns a
+// user is allowed to set on themselves; never `role`, `phone`, or activity
+// flags (those go through admin endpoints).
+const patchMeSchema = z
+  .object({
+    preferred_language: z.enum(['en', 'hi']).optional(),
+    full_name: z.string().min(1).max(200).optional(),
+    email: z.string().email().nullable().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'At least one field is required' });
+
 @Controller('/v1')
 export class AuthController {
   constructor(
@@ -71,6 +83,7 @@ export class AuthController {
     private readonly viewSwitch: ViewSwitchService,
     private readonly impersonation: ImpersonationService,
     private readonly users: UsersRepository,
+    private readonly audit: AuditService,
   ) {}
 
   // -- /v1/auth/otp/send -------------------------------------------------
@@ -194,6 +207,73 @@ export class AuthController {
       scope: user.scope,
       is_impersonation: user.is_impersonation ?? false,
       impersonator_id: user.impersonator_id,
+    };
+  }
+
+  // -- PATCH /v1/auth/me --------------------------------------------------
+  @Patch('/auth/me')
+  @HttpCode(200)
+  async patchMe(
+    @Body(new ZodValidationPipe(patchMeSchema)) body: z.infer<typeof patchMeSchema>,
+    @CurrentUser() user: CurrentUserPayload | undefined,
+  ) {
+    if (!user) {
+      throw new AppError({
+        code: ERROR_CODES.ERR_AUTH_TOKEN_INVALID,
+        message: 'Not authenticated',
+        statusCode: 401,
+      });
+    }
+    const before = await this.users.findById(user.sub);
+    if (!before) {
+      throw new AppError({
+        code: ERROR_CODES.ERR_RESOURCE_NOT_FOUND,
+        message: 'User not found',
+        statusCode: 404,
+      });
+    }
+    const updated = await this.users.updateProfile(user.sub, body);
+    if (!updated) {
+      throw new AppError({
+        code: ERROR_CODES.ERR_RESOURCE_NOT_FOUND,
+        message: 'User not found',
+        statusCode: 404,
+      });
+    }
+    // Audit so admin operators can trace self-service profile changes
+    // (and to give a paper trail when the user later disputes a setting).
+    await this.audit
+      .emit({
+        actor_user_id: user.sub,
+        actor_role: user.role,
+        action: 'profile.update',
+        entity_kind: 'user',
+        entity_id: user.sub,
+        before: {
+          preferred_language: before.preferred_language,
+          full_name: before.full_name,
+          email: before.email,
+        },
+        after: {
+          preferred_language: updated.preferred_language,
+          full_name: updated.full_name,
+          email: updated.email,
+          patched_fields: Object.keys(body),
+        },
+        ...(getRequestContext()?.request_id !== undefined
+          ? { request_id: getRequestContext()!.request_id }
+          : {}),
+      })
+      .catch(() => undefined);
+
+    return {
+      user: {
+        id: updated.id,
+        phone: updated.phone,
+        role: updated.role,
+        full_name: updated.full_name,
+        preferred_language: updated.preferred_language,
+      },
     };
   }
 

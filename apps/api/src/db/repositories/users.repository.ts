@@ -59,6 +59,30 @@ export class UsersRepository {
   }
 
   /**
+   * Self-service profile update. Constrained to a safe column set so this
+   * helper can't be misused to escalate `role` or flip soft-delete flags;
+   * larger admin-driven updates go through dedicated services.
+   */
+  async updateProfile(
+    id: string,
+    patch: Partial<{ full_name: string; preferred_language: Language; email: string | null }>,
+  ): Promise<User | null> {
+    const updates: Record<string, unknown> = { updated_at: new Date() };
+    if (patch.full_name !== undefined) updates.full_name = patch.full_name;
+    if (patch.preferred_language !== undefined)
+      updates.preferred_language = patch.preferred_language;
+    if (patch.email !== undefined) updates.email = patch.email;
+    // No-op short-circuit (only updated_at would change).
+    if (Object.keys(updates).length === 1) return this.findById(id);
+    const [row] = await this.drizzle.db
+      .update(users)
+      .set(updates)
+      .where(and(eq(users.id, id), isNull(users.deleted_at)))
+      .returning();
+    return row ?? null;
+  }
+
+  /**
    * Create a guest-role user for a brand-new phone on OTP verify
    * (Step 5 prompt decision). The onboarding flow in Step 6 collects the
    * rest of the profile (name, language, gender, …) and may transition the

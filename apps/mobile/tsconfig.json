@@ -1,0 +1,38 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "moduleResolution": "bundler",
+    "module": "ESNext",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "jsx": "react-native",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@jp/shared": ["../../packages/shared/src/index.ts"],
+      "@jp/shared/*": ["../../packages/shared/src/*"],
+      "@jp/design-tokens": ["../../packages/design-tokens/src/index.ts"],
+      "@jp/design-tokens/*": ["../../packages/design-tokens/src/*"],
+      "@jp/i18n": ["../../packages/i18n/src/index.ts"],
+      "@jp/i18n/*": ["../../packages/i18n/src/*"]
+    }
+  },
+  "include": [
+    "app/**/*.ts",
+    "app/**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    "app.config.ts",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ],
+  "exclude": ["node_modules", "dist", ".expo"]
+}

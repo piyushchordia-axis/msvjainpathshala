@@ -325,6 +325,65 @@ describe('Auth module — integration', () => {
     expect(events).toContain('auth.impersonation.started');
     expect(events).toContain('auth.impersonation.subject_recorded');
   });
+
+  // 10 — PATCH /v1/auth/me requires auth
+  it('10. PATCH /v1/auth/me without a token returns 401', async () => {
+    const agent = makeAgent(app);
+    const resp = await agent.patch('/v1/auth/me').send({ preferred_language: 'hi' });
+    expect(resp.status).toBe(401);
+    expect(resp.body.error.code).toBe('ERR_AUTH_TOKEN_INVALID');
+  });
+
+  // 11 — PATCH /v1/auth/me happy path: preferred_language persists + audit row
+  it('11. PATCH /v1/auth/me { preferred_language: "hi" } persists and audits', async () => {
+    const phone = nextTestPhone();
+    const agent = makeAgent(app);
+    await agent.post('/v1/auth/otp/send').send({ phone });
+    const verify = await agent
+      .post('/v1/auth/otp/verify')
+      .send({ phone, code: lastOtpFor(phone), device: { device_id: 'dev-P', platform: 'ios' } });
+    const token = verify.body.data.tokens.access_token;
+    const userId = verify.body.data.user.id;
+
+    const patch = await agent
+      .patch('/v1/auth/me')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ preferred_language: 'hi' });
+    expect(patch.status).toBe(200);
+    expect(patch.body.data.user.preferred_language).toBe('hi');
+
+    // Persisted in DB
+    const me = await agent.get('/v1/auth/me').set('Authorization', `Bearer ${token}`);
+    expect(me.body.data.preferred_language).toBe('hi');
+
+    // Audit row written
+    const rows = await drizzle.dbRead.execute(
+      sql`SELECT after->>'event_kind' AS event_kind
+          FROM audit_logs
+          WHERE entity_id = ${userId}
+            AND after->>'event_kind' = 'profile.update'`,
+    );
+    const events = (rows as unknown as Array<{ event_kind: string }>).map((r) => r.event_kind);
+    expect(events).toContain('profile.update');
+  });
+
+  // 12 — PATCH /v1/auth/me rejects invalid language code with 422
+  it('12. PATCH /v1/auth/me with invalid preferred_language returns 422', async () => {
+    const phone = nextTestPhone();
+    const agent = makeAgent(app);
+    await agent.post('/v1/auth/otp/send').send({ phone });
+    const verify = await agent
+      .post('/v1/auth/otp/verify')
+      .send({ phone, code: lastOtpFor(phone), device: { device_id: 'dev-Q', platform: 'ios' } });
+    const token = verify.body.data.tokens.access_token;
+
+    const resp = await agent
+      .patch('/v1/auth/me')
+      .set('Authorization', `Bearer ${token}`)
+      .send({ preferred_language: 'fr' });
+    expect(resp.status).toBe(422);
+    expect(resp.body.error.code).toBe('ERR_VALIDATION_FAILED');
+  });
 });
 
 // Test-local helpers are inlined in each `it(...)` block where they help —
