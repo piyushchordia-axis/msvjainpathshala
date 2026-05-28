@@ -45,7 +45,7 @@ app/                       Expo Router file-based routes
 ├── (auth)/{phone,otp}.tsx Login flow
 └── (tabs)/<role>/         One folder per role (8 total)
 src/
-├── api/                   ky client + endpoint wrappers
+├── api/                   axios client + endpoint wrappers
 ├── components/            Shared UI (jp-design-system components copied in)
 ├── constants/             Re-export of @jp/design-tokens
 ├── features/              Per-feature code (auth, language, …)

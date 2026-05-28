@@ -1,21 +1,22 @@
 /**
- * ky-based API client.
+ * axios-based API client (SPEC §4.3).
  *
  *   - Base URL from `EXPO_PUBLIC_API_BASE_URL` (Constants.expoConfig.extra
  *     fallback). Android emulator users must set http://10.0.2.2:3000.
  *   - Bearer token from `authStore.getAccessToken()` (memory). When that
  *     returns null we attach no Authorization header — callers handle 401.
  *   - `Idempotency-Key: <ULID>` injected for any non-GET request.
- *   - 30s timeout, 2 network retries with 1s/3s backoff.
+ *   - 30s timeout.
  *   - Single-flight refresh on `ERR_AUTH_TOKEN_EXPIRED`: a shared
  *     `Promise<string>` cached at module scope so 50 concurrent stale
  *     requests result in one /v1/auth/refresh call.
- *   - Unwraps the `{ data, meta }` envelope on success and re-throws
- *     `AppErrorLike` shaped errors so callers can `try / catch` cleanly.
+ *   - Translates `AxiosError` into envelope-aware `ApiError` so callers
+ *     can `catch (err) { if (err instanceof ApiError) … }` without
+ *     inspecting raw `response.data.error`.
  */
 
+import axios, { type AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
 import Constants from 'expo-constants';
-import ky, { HTTPError, type KyInstance, type ResponsePromise } from 'ky';
 import { ulid } from 'ulid';
 
 import { authStore } from '@/storage/stores/auth.store';
@@ -62,7 +63,7 @@ let refreshFnRef: RefreshFn | null = null;
 /**
  * Hook the refresh implementation in here at boot. Defined in
  * `endpoints/auth.ts` to avoid a circular import (refresh itself uses
- * the ky client).
+ * the axios client).
  */
 export function setRefreshHandler(fn: RefreshFn): void {
   refreshFnRef = fn;
@@ -81,81 +82,80 @@ async function runRefresh(): Promise<string> {
   return refreshInFlight;
 }
 
-// ---- Body unwrap ----------------------------------------------------------
-async function readErrorEnvelope(res: Response): Promise<ApiErrorEnvelope['error'] | null> {
-  try {
-    const body = (await res.clone().json()) as Partial<ApiErrorEnvelope>;
-    return body?.error ?? null;
-  } catch {
-    return null;
-  }
-}
-
-// ---- ky instance ----------------------------------------------------------
-export function createApiClient(): KyInstance {
-  return ky.create({
-    prefixUrl: API_BASE_URL,
-    timeout: DEFAULT_TIMEOUT_MS,
-    retry: {
-      limit: 2,
-      methods: ['get', 'put', 'head', 'delete', 'options', 'trace'],
-      backoffLimit: 3_000,
-    },
-    hooks: {
-      beforeRequest: [
-        (request) => {
-          const access = authStore.getAccessToken();
-          if (access) {
-            request.headers.set('Authorization', `Bearer ${access}`);
-          }
-          if (request.method !== 'GET') {
-            request.headers.set('Idempotency-Key', ulid());
-          }
-          if (!request.headers.has('Content-Type') && request.method !== 'GET') {
-            request.headers.set('Content-Type', 'application/json');
-          }
-          request.headers.set('Accept', 'application/json');
-        },
-      ],
-      afterResponse: [
-        async (request, _options, response) => {
-          // Single-flight refresh on token-expired
-          if (response.status === 401) {
-            const env = await readErrorEnvelope(response);
-            if (env?.code === 'ERR_AUTH_TOKEN_EXPIRED') {
-              try {
-                const newToken = await runRefresh();
-                const retry = new Request(request, {
-                  headers: new Headers(request.headers),
-                });
-                retry.headers.set('Authorization', `Bearer ${newToken}`);
-                return await fetch(retry);
-              } catch (err) {
-                // Refresh failed → propagate the original 401
-                await authStore.logout().catch(() => undefined);
-                throw err instanceof Error
-                  ? err
-                  : new ApiError('ERR_AUTH_TOKEN_EXPIRED', 'Session expired', 401);
-              }
-            }
-          }
-          return response;
-        },
-      ],
-    },
-  });
-}
-
-/** Translate ky's HTTPError into our envelope-aware ApiError. */
-async function toApiError(err: unknown): Promise<never> {
-  if (err instanceof HTTPError) {
-    const env = await readErrorEnvelope(err.response);
-    if (env) {
-      throw new ApiError(env.code, env.message, err.response.status, env.details, env.request_id);
+// ---- Error translation ---------------------------------------------------
+function toApiError(err: unknown): ApiError {
+  if (err instanceof ApiError) return err;
+  if (axios.isAxiosError(err)) {
+    const envelope = (err.response?.data as Partial<ApiErrorEnvelope> | undefined)?.error;
+    const status = err.response?.status ?? 0;
+    if (envelope) {
+      return new ApiError(
+        envelope.code,
+        envelope.message,
+        status,
+        envelope.details,
+        envelope.request_id,
+      );
     }
-    throw new ApiError('ERR_INTERNAL', err.message || 'Request failed', err.response.status);
+    return new ApiError(
+      status === 0 ? 'ERR_NETWORK' : 'ERR_INTERNAL',
+      err.message || 'Request failed',
+      status,
+    );
   }
-  throw err;
+  return new ApiError('ERR_INTERNAL', err instanceof Error ? err.message : String(err), 0);
+}
+
+// ---- axios instance ------------------------------------------------------
+type RetryFlaggedConfig = InternalAxiosRequestConfig & { _jpRetried?: boolean };
+
+export function createApiClient(): AxiosInstance {
+  const instance = axios.create({
+    baseURL: API_BASE_URL,
+    timeout: DEFAULT_TIMEOUT_MS,
+    headers: { Accept: 'application/json' },
+  });
+
+  instance.interceptors.request.use((config) => {
+    const access = authStore.getAccessToken();
+    if (access) {
+      config.headers.set('Authorization', `Bearer ${access}`);
+    }
+    const method = (config.method ?? 'get').toLowerCase();
+    if (method !== 'get') {
+      config.headers.set('Idempotency-Key', ulid());
+      if (!config.headers.has('Content-Type')) {
+        config.headers.set('Content-Type', 'application/json');
+      }
+    }
+    return config;
+  });
+
+  instance.interceptors.response.use(
+    (response) => response,
+    async (err: AxiosError<Partial<ApiErrorEnvelope>>) => {
+      const status = err.response?.status;
+      const code = err.response?.data?.error?.code;
+      const original = err.config as RetryFlaggedConfig | undefined;
+
+      // Single-flight refresh on expired access token. Retry the original
+      // request once with the new bearer; further failures propagate.
+      if (status === 401 && code === 'ERR_AUTH_TOKEN_EXPIRED' && original && !original._jpRetried) {
+        try {
+          const newToken = await runRefresh();
+          original._jpRetried = true;
+          original.headers.set('Authorization', `Bearer ${newToken}`);
+          return await instance.request(original);
+        } catch (refreshErr) {
+          await authStore.logout().catch(() => undefined);
+          return Promise.reject(toApiError(refreshErr));
+        }
+      }
+      return Promise.reject(toApiError(err));
+    },
+  );
+
+  return instance;
 }
 
 export const api = createApiClient();
@@ -163,15 +163,17 @@ export const api = createApiClient();
 /**
  * Type-safe `{ data, meta }` envelope unwrap. Use in endpoint wrappers:
  *
- *   const user = await unwrap<User>(api.get('v1/auth/me'));
+ *   const user = await unwrap<User>(api.get('/v1/auth/me'));
+ *
+ * Axios already gives us `{ data: <server-body> }`; the server body is
+ * `{ data: T, meta }`. We accept either the doubly-wrapped or the bare
+ * shape so test fixtures don't have to mimic the envelope exactly.
  */
-export async function unwrap<T>(req: ResponsePromise<unknown> | Promise<Response>): Promise<T> {
-  try {
-    const res = await req;
-    const body = (await res.json()) as { data: T };
-    return body.data;
-  } catch (err) {
-    await toApiError(err); // throws — never returns
-    throw err; // unreachable; satisfies TS narrowing
+export async function unwrap<T>(req: Promise<{ data: unknown }>): Promise<T> {
+  const res = await req;
+  const body = res.data as { data?: T } | T;
+  if (body && typeof body === 'object' && 'data' in (body as object)) {
+    return (body as { data: T }).data;
   }
+  return body as T;
 }

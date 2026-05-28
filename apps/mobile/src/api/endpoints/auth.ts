@@ -41,7 +41,7 @@ export interface OtpVerifyResponse {
 
 export const authApi = {
   async otpSend(phone: string): Promise<OtpSendResponse> {
-    return unwrap<OtpSendResponse>(api.post('v1/auth/otp/send', { json: { phone } }));
+    return unwrap<OtpSendResponse>(api.post('/v1/auth/otp/send', { phone }));
   },
 
   async otpVerify(input: {
@@ -51,42 +51,34 @@ export const authApi = {
     platform: 'ios' | 'android' | 'web';
   }): Promise<OtpVerifyResponse> {
     return unwrap<OtpVerifyResponse>(
-      api.post('v1/auth/otp/verify', {
-        json: {
-          phone: input.phone,
-          code: input.code,
-          device: { device_id: input.device_id, platform: input.platform },
-        },
+      api.post('/v1/auth/otp/verify', {
+        phone: input.phone,
+        code: input.code,
+        device: { device_id: input.device_id, platform: input.platform },
       }),
     );
   },
 
   async refresh(refreshToken: string): Promise<AuthTokens> {
-    return unwrap<AuthTokens>(
-      api.post('v1/auth/refresh', {
-        json: { refresh_token: refreshToken },
-      }),
-    );
+    return unwrap<AuthTokens>(api.post('/v1/auth/refresh', { refresh_token: refreshToken }));
   },
 
   async me(): Promise<{ user: AuthUser }> {
-    return unwrap<{ user: AuthUser }>(api.get('v1/auth/me'));
+    return unwrap<{ user: AuthUser }>(api.get('/v1/auth/me'));
   },
 
   async updateMe(patch: { preferred_language?: 'en' | 'hi' }): Promise<{ user: AuthUser }> {
-    return unwrap<{ user: AuthUser }>(api.patch('v1/auth/me', { json: patch }));
+    return unwrap<{ user: AuthUser }>(api.patch('/v1/auth/me', patch));
   },
 
   async logout(): Promise<void> {
-    await api.post('v1/auth/logout').catch(() => undefined);
+    await api.post('/v1/auth/logout').catch(() => undefined);
     await authStore.logout();
   },
 
   async switchView(target: 'parent' | 'student', studentId?: string): Promise<OtpVerifyResponse> {
     return unwrap<OtpVerifyResponse>(
-      api.post('v1/auth/switch-view', {
-        json: studentId ? { target, student_id: studentId } : { target },
-      }),
+      api.post('/v1/auth/switch-view', studentId ? { target, student_id: studentId } : { target }),
     );
   },
 };
