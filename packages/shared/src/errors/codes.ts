@@ -163,6 +163,33 @@ export const ERROR_CODES = {
   ERR_GALLERY_OPT_OUT_ACTIVE: 'ERR_GALLERY_OPT_OUT_ACTIVE',
 
   // ----------------------------------------------------------------------
+  // Domain — Homework (SPEC §5.9, §6.12)
+  // ----------------------------------------------------------------------
+  ERR_HOMEWORK_NOT_FOUND: 'ERR_HOMEWORK_NOT_FOUND',
+  ERR_HOMEWORK_ALREADY_GRADED: 'ERR_HOMEWORK_ALREADY_GRADED',
+  ERR_HOMEWORK_STUDENT_NOT_IN_BATCH: 'ERR_HOMEWORK_STUDENT_NOT_IN_BATCH',
+  ERR_HOMEWORK_SUBMISSION_NOT_FOUND: 'ERR_HOMEWORK_SUBMISSION_NOT_FOUND',
+
+  // ----------------------------------------------------------------------
+  // Domain — Notices (SPEC §5.10, §6.13, §8.7)
+  // ----------------------------------------------------------------------
+  ERR_NOTICE_NOT_FOUND: 'ERR_NOTICE_NOT_FOUND',
+  ERR_NOTICE_NOT_PUBLISHED: 'ERR_NOTICE_NOT_PUBLISHED',
+  ERR_NOTICE_SMS_CAP_EXCEEDED: 'ERR_NOTICE_SMS_CAP_EXCEEDED',
+  ERR_NOTICE_SCHEDULED_IN_PAST: 'ERR_NOTICE_SCHEDULED_IN_PAST',
+
+  // ----------------------------------------------------------------------
+  // Domain — Competitions (SPEC §5.12, §6.15)
+  // ----------------------------------------------------------------------
+  ERR_COMPETITION_NOT_FOUND: 'ERR_COMPETITION_NOT_FOUND',
+  ERR_COMPETITION_REGISTRATION_CLOSED: 'ERR_COMPETITION_REGISTRATION_CLOSED',
+  ERR_COMPETITION_FULL: 'ERR_COMPETITION_FULL',
+  ERR_COMPETITION_NOT_ELIGIBLE: 'ERR_COMPETITION_NOT_ELIGIBLE',
+  ERR_COMPETITION_RESULTS_ALREADY_PUBLISHED: 'ERR_COMPETITION_RESULTS_ALREADY_PUBLISHED',
+  ERR_COMPETITION_RESULTS_NOT_ENTERED: 'ERR_COMPETITION_RESULTS_NOT_ENTERED',
+  ERR_COMPETITION_ALREADY_REGISTERED: 'ERR_COMPETITION_ALREADY_REGISTERED',
+
+  // ----------------------------------------------------------------------
   // AI service (SPEC §3.5)
   // ----------------------------------------------------------------------
   ERR_AI_UNAVAILABLE: 'ERR_AI_UNAVAILABLE',

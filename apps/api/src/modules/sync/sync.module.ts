@@ -25,6 +25,8 @@ import {
   UsersRepository,
 } from '../../db/repositories';
 import { AttendanceModule } from '../attendance/attendance.module';
+import { HomeworkSubmissionSyncHandler } from '../homework/handlers/homework-submission.handler';
+import { HomeworkModule } from '../homework/homework.module';
 import { NiyamSubmissionSyncHandler } from '../niyams/handlers/niyam-submission.handler';
 import { NiyamsModule } from '../niyams/niyams.module';
 import { ShivirScanSyncHandler } from '../shivirs/handlers/shivir-scan.handler';
@@ -36,7 +38,7 @@ import { SyncController } from './sync.controller';
 import { SyncService } from './sync.service';
 
 @Module({
-  imports: [AttendanceModule, ShivirsModule, NiyamsModule],
+  imports: [AttendanceModule, ShivirsModule, NiyamsModule, HomeworkModule],
   controllers: [SyncController],
   providers: [
     SyncService,
@@ -63,8 +65,14 @@ import { SyncService } from './sync.service';
         attendanceMark: AttendanceMarkSyncHandler,
         shivirScan: ShivirScanSyncHandler,
         niyamSubmission: NiyamSubmissionSyncHandler,
-      ): SyncOpHandler[] => [attendanceMark, shivirScan, niyamSubmission],
-      inject: [AttendanceMarkSyncHandler, ShivirScanSyncHandler, NiyamSubmissionSyncHandler],
+        homeworkSubmission: HomeworkSubmissionSyncHandler,
+      ): SyncOpHandler[] => [attendanceMark, shivirScan, niyamSubmission, homeworkSubmission],
+      inject: [
+        AttendanceMarkSyncHandler,
+        ShivirScanSyncHandler,
+        NiyamSubmissionSyncHandler,
+        HomeworkSubmissionSyncHandler,
+      ],
     },
   ],
   exports: [SyncService],

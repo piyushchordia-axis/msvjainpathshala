@@ -81,6 +81,12 @@ const TEMPLATES: Record<NotificationEvent, Renderer> = {
     body_en: `Punya +${asNumber(d.punya, 0)} credited.`,
     body_hi: `Punya +${asNumber(d.punya, 0)} जोड़े गए।`,
   }),
+  'homework.late': (d) => ({
+    title_en: `Homework overdue: ${asString(d.title, 'see details')}`,
+    title_hi: `गृहकार्य की अंतिम तिथि निकल गई: ${asString(d.title_hi, 'विवरण देखें')}`,
+    body_en: 'Submit as soon as you can — Guruji is waiting.',
+    body_hi: 'जल्द से जल्द जमा करें — Guruji प्रतीक्षा कर रहे हैं।',
+  }),
   'notice.published': (d) => ({
     title_en: asString(d.title, 'New notice'),
     title_hi: asString(d.title_hi, 'नई सूचना'),
@@ -152,6 +158,12 @@ const TEMPLATES: Record<NotificationEvent, Renderer> = {
     title_hi: 'आज की कक्षा रद्द',
     body_en: asString(d.reason, "Today's class has been cancelled."),
     body_hi: asString(d.reason_hi, 'आज की कक्षा रद्द कर दी गई है।'),
+  }),
+  'competition.registered': (d) => ({
+    title_en: 'Competition registration confirmed',
+    title_hi: 'प्रतियोगिता पंजीकरण की पुष्टि',
+    body_en: `${asString(d.full_name, 'You')} are registered for ${asString(d.competition_name, 'the competition')}.`,
+    body_hi: `${asString(d.full_name, 'आप')} ${asString(d.competition_name_hi, 'प्रतियोगिता')} के लिए पंजीकृत हैं।`,
   }),
   'competition.result': (d) => ({
     title_en: 'Competition result',

@@ -85,6 +85,13 @@
       "when": 1779964367357,
       "tag": "0012_step17_niyams_gallery",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1779964367358,
+      "tag": "0013_step18_homework_notices_competitions",
+      "breakpoints": true
     }
   ]
 }

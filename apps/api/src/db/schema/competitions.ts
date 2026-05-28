@@ -35,8 +35,12 @@ export const competitions = pgTable('competitions', {
   event_date: date('event_date'),
   winner_points: integer('winner_points').notNull().default(0),
   participant_points: integer('participant_points').notNull().default(0),
+  // Optional capacity cap — nullable means "no cap". Enforced at registration time.
+  max_participants: integer('max_participants'),
   // 'draft' | 'open' | 'closed' | 'results_published'
   status: text('status').notNull().default('draft'),
+  /** Set on POST /v1/admin/competitions/:id/publish-results. */
+  results_published_at: timestamp('results_published_at', { withTimezone: true }),
   ...timestamps(),
   ...auditedBy(() => users.id),
 });
