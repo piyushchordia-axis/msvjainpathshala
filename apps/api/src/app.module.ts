@@ -15,6 +15,11 @@ import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
 import { RolesGuard } from './modules/auth/guards/roles.guard';
 import { ScopeGuard } from './modules/auth/guards/scope.guard';
+import { BatchesModule } from './modules/batches/batches.module';
+import { CentreHolidaysModule } from './modules/centre-holidays/centre-holidays.module';
+import { CentresModule } from './modules/centres/centres.module';
+import { FormConfigsModule } from './modules/form-configs/form-configs.module';
+import { GeographyModule } from './modules/geography/geography.module';
 
 /**
  * Root HTTP module. Domain modules from `src/modules/*` land here per step.
@@ -32,6 +37,11 @@ import { ScopeGuard } from './modules/auth/guards/scope.guard';
     SystemConfigModule,
     AuditModule,
     AuthModule,
+    GeographyModule,
+    CentresModule,
+    BatchesModule,
+    CentreHolidaysModule,
+    FormConfigsModule,
     HealthModule,
   ],
   providers: [

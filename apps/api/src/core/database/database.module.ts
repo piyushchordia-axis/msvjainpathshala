@@ -2,10 +2,16 @@ import { Global, Module } from '@nestjs/common';
 
 import {
   BatchesRepository,
+  CentreHolidaysRepository,
+  CentresRepository,
   DeviceSessionsRepository,
+  FormConfigsRepository,
+  GeographyRepository,
   PhoneOtpAttemptsRepository,
   PunyaTransactionsRepository,
   RefreshTokenFamiliesRepository,
+  SanchalakAssignmentsRepository,
+  ShikshakAssignmentsRepository,
   SystemConfigRepository,
   UsersRepository,
 } from '../../db/repositories';
@@ -21,10 +27,25 @@ import {
   buildPools,
 } from './drizzle.service';
 
+const REPOSITORIES = [
+  UsersRepository,
+  BatchesRepository,
+  PunyaTransactionsRepository,
+  DeviceSessionsRepository,
+  PhoneOtpAttemptsRepository,
+  RefreshTokenFamiliesRepository,
+  SystemConfigRepository,
+  GeographyRepository,
+  CentresRepository,
+  CentreHolidaysRepository,
+  SanchalakAssignmentsRepository,
+  ShikshakAssignmentsRepository,
+  FormConfigsRepository,
+] as const;
+
 /**
  * Global database module — constructs the read + write Postgres clients ONCE,
- * exposes `DrizzleService`, and ships the Step 4 repository layer
- * (UsersRepository / BatchesRepository / PunyaTransactionsRepository).
+ * exposes `DrizzleService`, and ships every repository in the @jp/api project.
  *
  * Both pools share a graceful-shutdown hook (DrizzleService.onModuleDestroy).
  */
@@ -58,23 +79,8 @@ import {
       inject: ['JP_POOLS'],
     },
     DrizzleService,
-    UsersRepository,
-    BatchesRepository,
-    PunyaTransactionsRepository,
-    DeviceSessionsRepository,
-    PhoneOtpAttemptsRepository,
-    RefreshTokenFamiliesRepository,
-    SystemConfigRepository,
+    ...REPOSITORIES,
   ],
-  exports: [
-    DrizzleService,
-    UsersRepository,
-    BatchesRepository,
-    PunyaTransactionsRepository,
-    DeviceSessionsRepository,
-    PhoneOtpAttemptsRepository,
-    RefreshTokenFamiliesRepository,
-    SystemConfigRepository,
-  ],
+  exports: [DrizzleService, ...REPOSITORIES],
 })
 export class DatabaseModule {}

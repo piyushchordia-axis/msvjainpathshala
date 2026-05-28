@@ -1,17 +1,18 @@
 /**
- * BatchesRepository — thin typed query helpers for the `batches` table.
+ * BatchesRepository — typed query helpers for the `batches` table.
  *
- * Used by Step 6's enrolment service to check capacity, list batches by
- * centre / shikshak, and resolve a batch by id.
+ * Step 4 shipped: findById, listByCentre, listByShikshak, assertCapacityRemaining.
+ * Step 6 adds: scoped-list selectors, capacity-aware update, deactivate guards,
+ * a resolver helper for ScopeGuard.
  */
 
 import { Injectable } from '@nestjs/common';
-import { and, count, eq, isNull } from 'drizzle-orm';
+import { and, asc, count, eq, isNull, sql } from 'drizzle-orm';
 
 import { DrizzleService } from '../../core/database/drizzle.service';
-import { batches, shikshak_batch_assignments, students } from '../schema';
+import { batches, centres, cities, shikshak_batch_assignments, students } from '../schema';
 
-import type { Batch } from '../schema';
+import type { Batch, NewBatch } from '../schema';
 
 interface CapacityInfo {
   capacity: number;
@@ -32,6 +33,24 @@ export class BatchesRepository {
     return rows[0] ?? null;
   }
 
+  /** Used by ScopeGuard's BatchResolver. */
+  async findScopeById(
+    id: string,
+  ): Promise<{ centre_id: string; city_id: string; state_id: string } | null> {
+    const rows = await this.drizzle.dbRead
+      .select({
+        centre_id: batches.centre_id,
+        city_id: centres.city_id,
+        state_id: cities.state_id,
+      })
+      .from(batches)
+      .innerJoin(centres, eq(centres.id, batches.centre_id))
+      .innerJoin(cities, eq(cities.id, centres.city_id))
+      .where(and(eq(batches.id, id), isNull(batches.deleted_at)))
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
   async listByCentre(
     centreId: string,
     opts?: { status?: 'active' | 'inactive' },
@@ -43,7 +62,8 @@ export class BatchesRepository {
     return this.drizzle.dbRead
       .select()
       .from(batches)
-      .where(and(...filters));
+      .where(and(...filters))
+      .orderBy(asc(batches.name));
   }
 
   /**
@@ -65,6 +85,7 @@ export class BatchesRepository {
         academic_year: batches.academic_year,
         status: batches.status,
         capacity: batches.capacity,
+        language_preference: batches.language_preference,
         deleted_at: batches.deleted_at,
         created_at: batches.created_at,
         updated_at: batches.updated_at,
@@ -82,10 +103,30 @@ export class BatchesRepository {
       );
   }
 
-  /**
-   * Used by the enrolment-approval workflow (Step 6) — returns capacity,
-   * current active-student count, and the difference.
-   */
+  async create(input: NewBatch): Promise<Batch> {
+    const [row] = await this.drizzle.db.insert(batches).values(input).returning();
+    if (!row) throw new Error('[Batches.create] insert returned no row');
+    return row;
+  }
+
+  async update(id: string, patch: Partial<NewBatch>): Promise<Batch> {
+    const [row] = await this.drizzle.db
+      .update(batches)
+      .set({ ...patch, updated_at: new Date() })
+      .where(eq(batches.id, id))
+      .returning();
+    if (!row) throw new Error('[Batches.update] update returned no row');
+    return row;
+  }
+
+  async setStatus(id: string, status: 'active' | 'inactive'): Promise<void> {
+    await this.drizzle.db
+      .update(batches)
+      .set({ status, updated_at: new Date() })
+      .where(eq(batches.id, id));
+  }
+
+  /** Used by Step 6's enrolment service. */
   async assertCapacityRemaining(batchId: string): Promise<CapacityInfo> {
     const batch = await this.findById(batchId);
     if (!batch) {
@@ -100,5 +141,14 @@ export class BatchesRepository {
       enrolled,
       remaining: batch.capacity - enrolled,
     };
+  }
+
+  /** Active student count alone — used by PATCH guards in Step 6. */
+  async countActiveEnrolments(batchId: string): Promise<number> {
+    const rows = await this.drizzle.dbRead
+      .select({ c: sql<number>`COUNT(*)::int` })
+      .from(students)
+      .where(and(eq(students.batch_id, batchId), eq(students.status, 'active')));
+    return rows[0]?.c ?? 0;
   }
 }

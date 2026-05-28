@@ -17,7 +17,7 @@
     "db:generate": "tsx --env-file=.env.development node_modules/drizzle-kit/bin.cjs generate --config drizzle.config.ts",
     "db:migrate": "tsx --env-file=.env.development src/db/migrate.ts",
     "db:studio": "tsx --env-file=.env.development node_modules/drizzle-kit/bin.cjs studio --config drizzle.config.ts",
-    "db:seed:dev": "echo \"db:seed:dev lands in Step 4\" && exit 0",
+    "db:seed:dev": "tsx --env-file=.env.development src/db/seed.ts",
     "clean": "rm -rf dist .turbo"
   },
   "dependencies": {

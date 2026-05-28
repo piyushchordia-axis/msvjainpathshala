@@ -43,7 +43,8 @@ export const centres = pgTable('centres', {
   lat: numeric('lat', { precision: 10, scale: 7 }),
   lng: numeric('lng', { precision: 10, scale: 7 }),
   // GPS check-in radius (metres) — SPEC §8.2.
-  gps_radius_m: integer('gps_radius_m').notNull().default(150),
+  // Default raised to 500 in migration 0006 per Step 6 prompt.
+  gps_radius_m: integer('gps_radius_m').notNull().default(500),
   contact_phone: varchar('contact_phone', { length: 15 }),
   contact_email: varchar('contact_email', { length: 255 }),
   // 'active' | 'inactive' — plain text per spec (no enum required).
@@ -73,6 +74,9 @@ export const batches = pgTable('batches', {
   academic_year: text('academic_year'),
   status: text('status').notNull().default('active'),
   capacity: integer('capacity').notNull().default(50),
+  // Language hint from Step 6 prompt — 'hi' | 'en' | 'mixed' etc. (free-form
+  // text so cities can introduce regional variants without a migration).
+  language_preference: text('language_preference'),
   ...softDelete(),
   ...timestamps(),
   ...auditedBy(() => users.id),

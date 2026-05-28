@@ -36,6 +36,13 @@
       "when": 1779964367350,
       "tag": "0005_system_config",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1779964367351,
+      "tag": "0006_step6_extras",
+      "breakpoints": true
     }
   ]
 }
