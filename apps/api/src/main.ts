@@ -30,10 +30,43 @@ async function bootstrap(): Promise<void> {
   //    wraps every module it brings in (pg, ioredis, express, ...).
   const { AppModule } = await import('./app.module');
 
+  /**
+   * CORS rules:
+   *   - Production: only the explicit list from CORS_ALLOWED_ORIGINS.
+   *   - Development: explicit list PLUS any `http://localhost:*` or
+   *     `http://127.0.0.1:*` origin. This is a developer-ergonomics
+   *     concession so Metro web (random ports), Next.js (3001), Expo
+   *     (19006), Storybook, etc. all "just work" without re-editing
+   *     `.env.development` every time a tool picks a new port.
+   *
+   * The `origin` callback signature is what Nest+Express expects:
+   *   (origin, cb) → cb(error, allow: boolean)
+   */
+  const isDev = env.NODE_ENV === 'development';
+  const explicitAllowlist = new Set(env.CORS_ALLOWED_ORIGINS);
+  const localhostHostnames = new Set(['localhost', '127.0.0.1', '0.0.0.0']);
+  const corsOrigin = (
+    origin: string | undefined,
+    cb: (err: Error | null, allow?: boolean) => void,
+  ): void => {
+    // Same-origin / curl / native fetch with no Origin header.
+    if (!origin) return cb(null, true);
+    if (explicitAllowlist.has(origin)) return cb(null, true);
+    if (isDev) {
+      try {
+        const u = new URL(origin);
+        if (localhostHostnames.has(u.hostname)) return cb(null, true);
+      } catch {
+        // fall through to reject
+      }
+    }
+    return cb(null, false);
+  };
+
   const app = await NestFactory.create(AppModule, {
     bufferLogs: true, // Defer Logger output until nestjs-pino is wired
     cors: {
-      origin: env.CORS_ALLOWED_ORIGINS.length > 0 ? env.CORS_ALLOWED_ORIGINS : false,
+      origin: corsOrigin,
       credentials: true,
     },
   });

@@ -70,6 +70,18 @@ export const envSchema = z
     OTP_REQUEST_LIMIT_PER_HOUR: numberFromString.default(10),
     OTP_REQUEST_LIMIT_PER_DAY: numberFromString.default(30),
     OTP_MAX_VERIFY_ATTEMPTS: numberFromString.default(5),
+    /**
+     * Dev-only master OTP. When set AND `NODE_ENV='development'`, any
+     * phone can verify with this code. The OtpService ignores it in
+     * staging / production. Useful for local QA so you don't have to
+     * scrape OTPs from the API log on every test login.
+     *
+     * Must be 6 digits when set. Empty string disables the feature.
+     */
+    JP_DEV_MASTER_OTP: z
+      .string()
+      .regex(/^\d{6}$|^$/, 'JP_DEV_MASTER_OTP must be 6 digits or empty')
+      .default(''),
 
     // ----- Storage ------------------------------------------------------
     STORAGE_DRIVER: z.enum(['noop', 'minio', 'r2', 's3']).default('noop'),

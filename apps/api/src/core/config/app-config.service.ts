@@ -97,6 +97,12 @@ export class AppConfigService {
       requestLimitPerHour: this.env.OTP_REQUEST_LIMIT_PER_HOUR,
       requestLimitPerDay: this.env.OTP_REQUEST_LIMIT_PER_DAY,
       maxVerifyAttempts: this.env.OTP_MAX_VERIFY_ATTEMPTS,
+      /**
+       * Master OTP that any phone can verify with. Honoured ONLY in
+       * `NODE_ENV='development'` — the OtpService re-checks the env so
+       * a leaked staging/prod env var can't accidentally enable it.
+       */
+      devMasterOtp: this.env.JP_DEV_MASTER_OTP,
     };
   }
 

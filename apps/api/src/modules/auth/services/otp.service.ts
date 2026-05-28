@@ -29,6 +29,7 @@ import { ulid } from 'ulid';
 
 import { AppError, ERROR_CODES } from '@jp/shared';
 
+import { AppConfigService } from '../../../core/config/app-config.service';
 import { RedisService } from '../../../core/redis/redis.service';
 import { SystemConfigService } from '../../../core/system-config/system-config.service';
 import { PhoneOtpAttemptsRepository } from '../../../db/repositories';
@@ -54,8 +55,17 @@ export class OtpService {
     private readonly redis: RedisService,
     private readonly config: SystemConfigService,
     private readonly attempts: PhoneOtpAttemptsRepository,
+    private readonly appConfig: AppConfigService,
     @Inject(SMS_PROVIDER_TOKEN) private readonly sms: SmsProvider,
-  ) {}
+  ) {
+    const master = this.appConfig.otp.devMasterOtp;
+    if (master && this.appConfig.isDevelopment) {
+      this.logger.warn(
+        `dev-only: JP_DEV_MASTER_OTP is set — ANY phone can verify with ${master}. ` +
+          'This is a developer-ergonomics escape hatch; never set it in staging/prod.',
+      );
+    }
+  }
 
   /**
    * Request an OTP: rate-limit, generate, hash, store, persist audit row,
@@ -106,6 +116,37 @@ export class OtpService {
    * AppError on rate-limit / lockout / invalid OTP.
    */
   async verify(phone: string, code: string): Promise<OtpVerifyOutcome> {
+    // Dev-only master OTP shortcut. Bypasses Redis (so it works even
+    // when the user hasn't called /otp/send first) but ONLY when:
+    //   - NODE_ENV === 'development'
+    //   - JP_DEV_MASTER_OTP is set
+    //   - The submitted code matches the master
+    // Failure here falls through to the normal Redis path so a wrong
+    // guess in dev still goes through the rate-limit / lockout machine.
+    const masterOtp = this.appConfig.otp.devMasterOtp;
+    if (masterOtp && this.appConfig.isDevelopment && code === masterOtp) {
+      this.logger.warn(`dev-master-otp accepted for ${phone}`);
+      // Re-use an existing active attempt row when present; otherwise
+      // synthesise one so the audit trail joins still work. The shape
+      // mirrors what otp/send would have produced.
+      const active = await this.attempts.findActiveByPhone(phone);
+      if (active) {
+        await this.attempts.markSucceeded(active.id);
+        // Clear any pending hash so subsequent normal verifies are clean.
+        await this.invalidate(phone);
+        return { ok: true, attempt_id: active.id };
+      }
+      const ttl = await this.config.getNumber('otp.ttl_seconds');
+      const created = await this.attempts.insertForPhone({
+        phone,
+        otp_hash: `dev-master:${ulid()}`,
+        expires_at: new Date(Date.now() + ttl * 1000),
+        ip: null,
+      });
+      await this.attempts.markSucceeded(created.id);
+      return { ok: true, attempt_id: created.id };
+    }
+
     const hash = await this.redis.cacheClient.get(otpKey(phone));
     if (!hash) {
       throw new AppError({
