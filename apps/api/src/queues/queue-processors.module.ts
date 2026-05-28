@@ -19,6 +19,9 @@ import {
   CentresRepository,
   DeviceTokensRepository,
   MediaAssetsRepository,
+  NiyamsRepository,
+  NiyamStreaksRepository,
+  NiyamSubmissionsRepository,
   NotificationsRepository,
   PunyaFeaturesRepository,
   PunyaTransactionsRepository,
@@ -36,6 +39,7 @@ import { AttendancePostProcessProcessor } from './processors/attendance-post-pro
 import { DebugEchoProcessor } from './processors/debug-echo.processor';
 import { IdCardGenerationProcessor } from './processors/idcard-generation.processor';
 import { MediaProcessingProcessor } from './processors/media-processing.processor';
+import { NiyamStreakRecomputeProcessor } from './processors/niyam-streak-recompute.processor';
 import { NotificationEmailProcessor } from './processors/notification-email.processor';
 import { NotificationFanoutProcessor } from './processors/notification-fanout.processor';
 import { NotificationPushProcessor } from './processors/notification-push.processor';
@@ -61,6 +65,8 @@ import { PunyaReconcileProcessor } from './processors/punya-reconcile.processor'
     PunyaLeaderboardRefreshProcessor,
     PunyaReconcileProcessor,
 
+    NiyamStreakRecomputeProcessor,
+
     // repos used by processors
     MediaAssetsRepository,
     NotificationsRepository,
@@ -75,6 +81,9 @@ import { PunyaReconcileProcessor } from './processors/punya-reconcile.processor'
     StudentNotesRepository,
     StudentsRepository,
     UsersRepository,
+    NiyamsRepository,
+    NiyamSubmissionsRepository,
+    NiyamStreaksRepository,
   ],
   exports: [
     DebugEchoProcessor,
@@ -88,6 +97,7 @@ import { PunyaReconcileProcessor } from './processors/punya-reconcile.processor'
     AttendanceConsecutiveCheckProcessor,
     PunyaLeaderboardRefreshProcessor,
     PunyaReconcileProcessor,
+    NiyamStreakRecomputeProcessor,
   ],
 })
 export class QueueProcessorsModule {}

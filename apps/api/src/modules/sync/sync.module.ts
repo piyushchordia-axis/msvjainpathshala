@@ -25,6 +25,8 @@ import {
   UsersRepository,
 } from '../../db/repositories';
 import { AttendanceModule } from '../attendance/attendance.module';
+import { NiyamSubmissionSyncHandler } from '../niyams/handlers/niyam-submission.handler';
+import { NiyamsModule } from '../niyams/niyams.module';
 import { ShivirScanSyncHandler } from '../shivirs/handlers/shivir-scan.handler';
 import { ShivirsModule } from '../shivirs/shivirs.module';
 
@@ -34,7 +36,7 @@ import { SyncController } from './sync.controller';
 import { SyncService } from './sync.service';
 
 @Module({
-  imports: [AttendanceModule, ShivirsModule],
+  imports: [AttendanceModule, ShivirsModule, NiyamsModule],
   controllers: [SyncController],
   providers: [
     SyncService,
@@ -53,14 +55,16 @@ import { SyncService } from './sync.service';
     AttendanceMarkSyncHandler,
 
     // The registry — collect every concrete handler into a single array.
-    // ShivirScanSyncHandler is provided by ShivirsModule; we just inject it.
+    // ShivirScanSyncHandler is provided by ShivirsModule; NiyamSubmissionSyncHandler
+    // by NiyamsModule. We just inject them.
     {
       provide: SYNC_OP_HANDLERS,
       useFactory: (
         attendanceMark: AttendanceMarkSyncHandler,
         shivirScan: ShivirScanSyncHandler,
-      ): SyncOpHandler[] => [attendanceMark, shivirScan],
-      inject: [AttendanceMarkSyncHandler, ShivirScanSyncHandler],
+        niyamSubmission: NiyamSubmissionSyncHandler,
+      ): SyncOpHandler[] => [attendanceMark, shivirScan, niyamSubmission],
+      inject: [AttendanceMarkSyncHandler, ShivirScanSyncHandler, NiyamSubmissionSyncHandler],
     },
   ],
   exports: [SyncService],

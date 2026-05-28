@@ -23,9 +23,11 @@ import { CentreHolidaysModule } from './modules/centre-holidays/centre-holidays.
 import { CentresModule } from './modules/centres/centres.module';
 import { EnrolmentsModule } from './modules/enrolments/enrolments.module';
 import { FormConfigsModule } from './modules/form-configs/form-configs.module';
+import { GalleryModule } from './modules/gallery/gallery.module';
 import { GeographyModule } from './modules/geography/geography.module';
 import { MediaModule } from './modules/media/media.module';
 import { MsvModule } from './modules/msv/msv.module';
+import { NiyamsModule } from './modules/niyams/niyams.module';
 import { AdminBroadcastModule } from './modules/notifications/admin-broadcast.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { PunyaModule } from './modules/punya/punya.module';
@@ -70,6 +72,8 @@ import { RealtimeModule } from './realtime/realtime.module';
     AttendanceModule,
     ShivirsModule,
     PunyaModule,
+    NiyamsModule,
+    GalleryModule,
     SyncModule,
     RealtimeModule,
     AdminQueuesModule,

@@ -83,6 +83,27 @@ export class UsersRepository {
   }
 
   /**
+   * Generic update for columns the auth-self-service path doesn't cover.
+   * Currently used by GalleryService for the Q6 visibility toggle.
+   */
+  async update(
+    id: string,
+    patch: Partial<Pick<NewUser, 'gallery_visibility_opt_in' | 'is_active'>>,
+  ): Promise<User | null> {
+    const updates: Record<string, unknown> = { updated_at: new Date() };
+    if (patch.gallery_visibility_opt_in !== undefined)
+      updates.gallery_visibility_opt_in = patch.gallery_visibility_opt_in;
+    if (patch.is_active !== undefined) updates.is_active = patch.is_active;
+    if (Object.keys(updates).length === 1) return this.findById(id);
+    const [row] = await this.drizzle.db
+      .update(users)
+      .set(updates)
+      .where(and(eq(users.id, id), isNull(users.deleted_at)))
+      .returning();
+    return row ?? null;
+  }
+
+  /**
    * Look up active users by role + city. Used by the attendance
    * consecutive-absence cron to notify city_admins.
    */
