@@ -1,0 +1,327 @@
+{
+  "common": {
+    "app_name": "जैन पाठशाला",
+    "yes": "हाँ",
+    "no": "नहीं",
+    "ok": "ठीक है",
+    "cancel": "रद्द करें",
+    "save": "सहेजें",
+    "delete": "हटाएँ",
+    "edit": "संपादित करें",
+    "back": "वापस",
+    "next": "आगे",
+    "submit": "जमा करें",
+    "close": "बंद करें",
+    "loading": "लोड हो रहा है…",
+    "today": "आज",
+    "tomorrow": "कल",
+    "yesterday": "बीता कल",
+    "search": "खोजें",
+    "filter": "छाँटें",
+    "all": "सभी",
+    "none": "कोई नहीं",
+    "select": "चुनें",
+    "required": "आवश्यक",
+    "optional": "वैकल्पिक"
+  },
+
+  "roles": {
+    "super_admin": "मुख्य प्रशासक",
+    "state_admin": "राज्य प्रशासक",
+    "city_admin": "शहर प्रशासक",
+    "sanchalak": "संचालक",
+    "shikshak": "गुरुजी",
+    "shikshak_male": "गुरुजी",
+    "shikshak_female": "दीदी",
+    "parent": "अभिभावक",
+    "student": "विद्यार्थी",
+    "guest": "अतिथि"
+  },
+
+  "age_groups": {
+    "bal": "बाल",
+    "kishor": "किशोर",
+    "tarun": "तरुण",
+    "yuva": "युवा"
+  },
+
+  "auth": {
+    "login_title": "स्वागत है",
+    "login_subtitle": "जारी रखने के लिए अपना मोबाइल नंबर दर्ज करें",
+    "phone_label": "मोबाइल नंबर",
+    "phone_placeholder": "+91…",
+    "send_otp": "OTP भेजें",
+    "otp_title": "OTP दर्ज करें",
+    "otp_subtitle": "हमने {phone} पर 6 अंकों का कोड भेजा है",
+    "otp_label": "6 अंकों का OTP",
+    "verify": "सत्यापित करें",
+    "resend_otp": "OTP फिर से भेजें",
+    "resend_in": "{seconds} सेकंड में फिर भेज सकेंगे",
+    "logout": "लॉग आउट",
+    "switch_view_to_student": "विद्यार्थी दृश्य पर जाएँ",
+    "switch_view_to_parent": "अभिभावक दृश्य पर लौटें"
+  },
+
+  "attendance": {
+    "title": "उपस्थिति",
+    "mark_present": "उपस्थित दर्ज करें",
+    "mark_absent": "अनुपस्थित दर्ज करें",
+    "mark_late": "देर से आए — दर्ज करें",
+    "marked_today": "आज की उपस्थिति दर्ज है",
+    "session_not_started": "सत्र अभी शुरू नहीं हुआ",
+    "session_cancelled": "सत्र रद्द किया गया है",
+    "out_of_range": "आप केंद्र से बहुत दूर हैं — उपस्थिति दर्ज नहीं हो सकती",
+    "today_count": "आज {total} में से {present} उपस्थित",
+    "monthly_summary": "इस माह {total} में से {present}",
+    "streak_days": "{days} दिनों की निरंतरता"
+  },
+
+  "punya": {
+    "title": "पुण्य",
+    "balance": "{points} पुण्य",
+    "points": "{points} पुण्य",
+    "awarded_for": "{reason} के लिए पुण्य +{points}",
+    "reversed": "पुण्य −{points} वापस लिए गए: {reason}",
+    "leaderboard": "अग्रणी सूची",
+    "rank": "क्रम #{rank}",
+    "tiers": {
+      "jigyasu": "जिज्ञासु",
+      "shravak": "श्रावक",
+      "sadhak": "साधक",
+      "shraman": "श्रमण",
+      "tirthankar": "तीर्थंकर"
+    },
+    "tier_progress": "श्रेणी {tier} · अगली श्रेणी के लिए {points} / {next}"
+  },
+
+  "niyams": {
+    "title": "नियम",
+    "submit": "नियम जमा करें",
+    "submitted": "नियम जमा हो गया",
+    "auto_approved": "स्वतः स्वीकृत · पुण्य +{points}",
+    "rejected": "अस्वीकृत: {reason}",
+    "streak_title": "नियम की निरंतरता",
+    "streak_day": "दिन {day}",
+    "streak_broken": "आपकी निरंतरता {day} दिन पर समाप्त हुई। आज से नई शुरुआत करें।",
+    "proof_photo": "एक चित्र जोड़ें",
+    "proof_video": "एक वीडियो जोड़ें",
+    "proof_required": "इस नियम के लिए प्रमाण आवश्यक है",
+    "rejection_window_expired": "यह नियम {days} दिनों से अधिक पुराना है और अब इसे अस्वीकृत नहीं किया जा सकता।",
+    "types": {
+      "daily": "प्रतिदिन",
+      "weekly": "साप्ताहिक",
+      "monthly": "मासिक"
+    }
+  },
+
+  "homework": {
+    "title": "गृहकार्य",
+    "due": "अंतिम तिथि {date}",
+    "submit": "गृहकार्य जमा करें",
+    "submitted": "जमा हो गया",
+    "approved": "गुरुजी द्वारा स्वीकृत",
+    "starred": "गुरुजी ने सराहा",
+    "late": "विलंब से",
+    "feedback": "गुरुजी की टिप्पणी"
+  },
+
+  "notices": {
+    "title": "सूचनाएँ",
+    "from": "{author} की ओर से",
+    "audience_batch": "आपका वर्ग",
+    "audience_centre": "आपका केंद्र",
+    "audience_city": "आपका शहर",
+    "audience_state": "पूरे राज्य के लिए",
+    "audience_national": "सभी केंद्रों के लिए",
+    "audience_msv": "मेघ संस्कार वाटिका कार्यक्रम",
+    "ack": "मैंने पढ़ लिया",
+    "acked": "स्वीकार किया गया",
+    "critical_badge": "महत्त्वपूर्ण"
+  },
+
+  "shivirs": {
+    "title": "शिविर",
+    "upcoming": "आगामी",
+    "ongoing": "चल रहे",
+    "past": "बीते",
+    "register": "पंजीकरण करें",
+    "registered": "पंजीकृत",
+    "check_in": "प्रवेश दर्ज करें",
+    "check_out": "प्रस्थान दर्ज करें",
+    "present_scan": "उपस्थिति स्कैन",
+    "scan_camera": "स्कैनर खोलें",
+    "participant_not_found": "वह प्रतिभागी इस शिविर में नहीं मिला",
+    "scan_out_of_order": "स्कैन का क्रम सही नहीं है (प्रवेश → प्रस्थान)"
+  },
+
+  "competitions": {
+    "title": "प्रतियोगिताएँ",
+    "open": "खुली है",
+    "closed": "बंद",
+    "enter": "प्रतियोगिता में भाग लें",
+    "entered": "प्रवेश हो गया",
+    "reward": "पूर्ण होने पर {points} पुण्य"
+  },
+
+  "exams": {
+    "title": "परीक्षा",
+    "start": "परीक्षा शुरू करें",
+    "submit": "परीक्षा जमा करें",
+    "time_remaining": "{minutes} मिनट शेष",
+    "otp_label": "गुरुजी से प्राप्त परीक्षा OTP",
+    "otp_invalid": "परीक्षा OTP सही नहीं है — गुरुजी से पुनः लें",
+    "window_closed": "यह परीक्षा अब बंद है",
+    "submitted": "जमा हो गई",
+    "result_pending": "परिणाम प्रतीक्षित"
+  },
+
+  "quizzes": {
+    "title": "लाइव प्रश्नोत्तरी",
+    "live_now": "अभी चल रही · {seconds} सेकंड",
+    "answer": "उत्तर दें",
+    "submitted": "जमा हो गया",
+    "expired": "प्रश्नोत्तरी समाप्त",
+    "reward": "पुण्य +{points}"
+  },
+
+  "library": {
+    "title": "पुस्तकालय",
+    "filter_pdf": "PDF",
+    "filter_video": "वीडियो",
+    "filter_audio": "ऑडियो",
+    "filter_image": "चित्र",
+    "tier_public": "सार्वजनिक",
+    "tier_student": "विद्यार्थियों के लिए",
+    "tier_msv": "मेघ संस्कार वाटिका",
+    "tier_shikshak": "केवल गुरुजी के लिए",
+    "play_video": "चलाएँ",
+    "open_pdf": "PDF खोलें"
+  },
+
+  "donations": {
+    "title": "दान",
+    "give_now": "अभी दान दें",
+    "amount_inr": "₹{amount}",
+    "purpose_general": "सामान्य",
+    "purpose_shivir": "शिविर हेतु",
+    "purpose_scholarship": "छात्रवृत्ति हेतु",
+    "purpose_infrastructure": "अधोसंरचना हेतु",
+    "receipt": "रसीद डाउनलोड करें",
+    "eighty_g_cert": "80G प्रमाणपत्र डाउनलोड करें",
+    "eighty_g_disabled": "इस संस्था के लिए अभी 80G प्रमाणपत्र उपलब्ध नहीं है",
+    "thank_you": "आपके योगदान के लिए हार्दिक आभार"
+  },
+
+  "services": {
+    "title": "सहायता एवं समर्थन",
+    "new_request": "नया अनुरोध",
+    "status_submitted": "जमा हुआ",
+    "status_in_review": "समीक्षाधीन",
+    "status_resolved": "हल हो गया",
+    "category_account": "खाता",
+    "category_enrolment": "पंजीकरण",
+    "category_attendance": "उपस्थिति",
+    "category_payment": "भुगतान",
+    "category_other": "अन्य"
+  },
+
+  "gallery": {
+    "title": "चित्र संग्रह",
+    "consent_title": "मेरे बच्चों के चित्र संग्रह में दिखाएँ",
+    "consent_help": "बंद करने पर, आपके बच्चों के चित्र किसी अन्य परिवार के लिए नहीं दिखाई देंगे। मौजूदा चित्र भी छिप जाएँगे।",
+    "no_items": "अभी कोई चित्र नहीं हैं",
+    "featured": "विशेष"
+  },
+
+  "validation": {
+    "required": "{field} आवश्यक है",
+    "min_length": "{field} में कम से कम {min} अक्षर होने चाहिए",
+    "max_length": "{field} में अधिकतम {max} अक्षर हो सकते हैं",
+    "phone_format": "मोबाइल नंबर देश कोड के साथ होना चाहिए (जैसे +91…)",
+    "uuid_format": "यह पहचान संख्या मान्य नहीं है",
+    "datetime_format": "तिथि/समय ISO 8601 प्रारूप में होना चाहिए",
+    "bilingual_required": "अंग्रेज़ी और हिंदी — दोनों आवश्यक हैं",
+    "embed_url_invalid": "वीडियो के लिए केवल YouTube या Vimeo लिंक स्वीकार्य हैं"
+  },
+
+  "errors": {
+    "ERR_AUTH_INVALID_OTP": "OTP सही नहीं है — कृपया अपना SMS देखकर पुनः प्रयास करें",
+    "ERR_AUTH_OTP_EXPIRED": "यह OTP समाप्त हो चुका है — कृपया नया OTP मँगवाएँ",
+    "ERR_AUTH_OTP_MAX_ATTEMPTS": "गलत प्रयास बहुत हो गए हैं — कृपया नया OTP मँगवाएँ",
+    "ERR_AUTH_PHONE_INVALID": "मोबाइल नंबर का प्रारूप सही नहीं है",
+    "ERR_AUTH_USER_NOT_FOUND": "इस मोबाइल नंबर से कोई खाता नहीं मिला",
+    "ERR_AUTH_TOKEN_INVALID": "कृपया पुनः साइन इन करें",
+    "ERR_AUTH_TOKEN_EXPIRED": "आपका सत्र समाप्त हो चुका है — कृपया पुनः साइन इन करें",
+    "ERR_AUTH_REFRESH_REUSE_DETECTED": "सुरक्षा के लिए हमने सभी जगह से लॉग आउट कर दिया है — कृपया पुनः साइन इन करें",
+    "ERR_AUTH_SESSION_LIMIT_REACHED": "आप एक साथ बहुत सारे उपकरणों पर साइन इन हैं — एक से लॉग आउट करके पुनः प्रयास करें",
+    "ERR_AUTH_STUDENT_VIEW_UNDERAGE": "विद्यार्थी दृश्य 13 वर्ष से उपलब्ध होता है",
+    "ERR_AUTH_STUDENT_VIEW_DISABLED": "इस बच्चे के लिए विद्यार्थी दृश्य बंद है",
+    "ERR_AUTH_IMPERSONATION_DENIED": "केवल मुख्य प्रशासक ही किसी अन्य उपयोगकर्ता के रूप में कार्य कर सकते हैं",
+
+    "ERR_RBAC_FORBIDDEN": "आपके पास यह करने की अनुमति नहीं है",
+    "ERR_RBAC_OUT_OF_SCOPE": "यह किसी दूसरे केंद्र या वर्ग का है",
+    "ERR_RBAC_FORBIDDEN_MSV_CURRICULUM": "मेघ संस्कार वाटिका पाठ्यक्रम केवल मुख्य प्रशासक संपादित कर सकते हैं",
+
+    "ERR_VALIDATION_FAILED": "कृपया चिह्नित जानकारी सुधारें और पुनः प्रयास करें",
+    "ERR_VALIDATION_BILINGUAL_REQUIRED": "अंग्रेज़ी और हिंदी — दोनों आवश्यक हैं",
+    "ERR_VALIDATION_PHONE_FORMAT": "मोबाइल नंबर देश कोड के साथ होना चाहिए (जैसे +91…)",
+    "ERR_VALIDATION_UUID_FORMAT": "यह पहचान संख्या मान्य नहीं है",
+    "ERR_VALIDATION_DATETIME_FORMAT": "तिथि/समय ISO 8601 प्रारूप में होना चाहिए",
+    "ERR_VALIDATION_EMBED_URL_INVALID": "केवल YouTube या Vimeo लिंक स्वीकार्य हैं",
+
+    "ERR_RESOURCE_NOT_FOUND": "जो आप ढूँढ रहे थे वह नहीं मिला",
+    "ERR_RESOURCE_DELETED": "यह हटा दिया गया है",
+    "ERR_RESOURCE_INACTIVE": "यह अब सक्रिय नहीं है",
+
+    "ERR_CONFLICT": "इस बदलाव में किसी अन्य बदलाव से टकराव है — पृष्ठ ताज़ा करें और पुनः प्रयास करें",
+    "ERR_CONFLICT_STATE_TRANSITION": "वर्तमान स्थिति में यह कार्य संभव नहीं है",
+    "ERR_DUPLICATE_RESOURCE": "यह पहले से मौजूद है",
+    "ERR_DUPLICATE_STUDENT": "इन विवरणों वाला विद्यार्थी पहले से मौजूद है",
+
+    "ERR_RATE_LIMITED": "बहुत सारे अनुरोध — कृपया कुछ क्षण रुककर पुनः प्रयास करें",
+
+    "ERR_NIYAM_REVERSAL_WINDOW_EXPIRED": "यह नियम अब अस्वीकृत नहीं किया जा सकता — 30 दिन से अधिक बीत चुके हैं",
+    "ERR_NIYAM_SUBMISSION_LOCKED": "यह नियम-प्रस्तुति बंद कर दी गई है",
+    "ERR_NIYAM_PROOF_REQUIRED": "प्रमाण के लिए चित्र या वीडियो जोड़ें",
+
+    "ERR_PUNYA_REVERSAL_WINDOW_EXPIRED": "पुण्य वापस लेने की अवधि समाप्त हो चुकी है",
+    "ERR_PUNYA_IDEMPOTENCY_REQUIRED": "आंतरिक त्रुटि — पुण्य बिना idempotency key के दिया गया",
+    "ERR_PUNYA_INVALID_FEATURE": "अज्ञात पुण्य श्रेणी",
+
+    "ERR_BATCH_OVER_CAPACITY": "यह वर्ग भर चुका है",
+    "ERR_BATCH_SHIKSHAK_REQUIRED": "पहले इस वर्ग में कम से कम एक गुरुजी या दीदी नियुक्त करें",
+    "ERR_ENROLMENT_ALREADY_DECIDED": "इस पंजीकरण पर निर्णय पहले ही हो चुका है",
+
+    "ERR_ATTENDANCE_SESSION_NOT_OPEN": "सत्र अभी शुरू नहीं हुआ",
+    "ERR_ATTENDANCE_SESSION_CANCELLED": "यह सत्र रद्द कर दिया गया है",
+    "ERR_ATTENDANCE_OUT_OF_GPS_RANGE": "आप केंद्र से बहुत दूर हैं — उपस्थिति दर्ज नहीं हो सकती",
+    "ERR_ATTENDANCE_ALREADY_MARKED": "इस विद्यार्थी की उपस्थिति पहले ही दर्ज है",
+
+    "ERR_SHIVIR_SCAN_OUT_OF_ORDER": "स्कैन का क्रम सही नहीं है — कृपया प्रतिभागी का पिछला स्कैन देखें",
+    "ERR_SHIVIR_PARTICIPANT_NOT_FOUND": "इस शिविर में वह प्रतिभागी नहीं मिला",
+
+    "ERR_EXAM_OTP_INVALID": "परीक्षा OTP सही नहीं है — गुरुजी से पुनः लें",
+    "ERR_EXAM_WINDOW_CLOSED": "यह परीक्षा अब बंद है",
+
+    "ERR_DONATION_80G_DISABLED": "अभी 80G प्रमाणपत्र चालू नहीं हैं",
+    "ERR_DONATION_80G_PREREQS_MISSING": "पहले 80G पंजीकरण संख्या और PAN सेट करें",
+    "ERR_DONATION_WEBHOOK_SIGNATURE": "वेबहुक हस्ताक्षर मेल नहीं खाया — अनुरोध अस्वीकृत",
+
+    "ERR_MEDIA_UPLOAD_FAILED": "अपलोड असफल — अपना कनेक्शन देखकर पुनः प्रयास करें",
+    "ERR_MEDIA_QUARANTINED": "यह फ़ाइल हमारी सुरक्षा जाँच में उत्तीर्ण नहीं हुई",
+    "ERR_MEDIA_TOO_LARGE": "फ़ाइल का आकार बहुत बड़ा है",
+    "ERR_MEDIA_UNSUPPORTED_TYPE": "यह फ़ाइल प्रकार स्वीकार्य नहीं है",
+
+    "ERR_SYNC_DUPLICATE_OP": "यह कार्य पहले ही सहेजा जा चुका है",
+    "ERR_SYNC_UNKNOWN_OP_KIND": "अज्ञात सिंक कार्य — कृपया ऐप अपडेट करें",
+    "ERR_SYNC_DEAD_LETTERED": "हम इसे सहेज नहीं सके — कृपया सहायता एवं समर्थन से सूचित करें",
+
+    "ERR_GALLERY_OPT_OUT_ACTIVE": "इस बच्चे के लिए चित्र संग्रह की दृश्यता बंद है",
+
+    "ERR_AI_UNAVAILABLE": "AI सेवाएँ अभी उपलब्ध नहीं हैं — कृपया कुछ देर में पुनः प्रयास करें",
+    "ERR_AI_MODERATION_FLAGGED": "यह सामग्री समीक्षा में उत्तीर्ण नहीं हुई",
+
+    "ERR_INTERNAL": "हमारी ओर से कुछ गड़बड़ी हुई — हमें सूचना मिल गई है",
+    "ERR_NOT_IMPLEMENTED": "यह सुविधा अभी उपलब्ध नहीं है"
+  }
+}

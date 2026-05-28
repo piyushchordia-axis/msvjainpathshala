@@ -2,9 +2,28 @@
   "name": "@jp/design-tokens",
   "version": "0.0.0",
   "private": true,
-  "description": "Design tokens (W3C JSON + typed exports) consumed by Jain Pathshala web and mobile (built in Step 2).",
+  "description": "Jain Pathshala — design tokens (W3C JSON + typed TS exports) consumed by web (Tailwind) and mobile (StyleSheet).",
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./tokens.json": "./tokens.json",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "tokens.json",
+    "src"
+  ],
   "scripts": {
-    "lint": "echo \"@jp/design-tokens: lint not yet configured (Step 2)\" && exit 0",
-    "typecheck": "echo \"@jp/design-tokens: typecheck not yet configured (Step 2)\" && exit 0"
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean --target es2022",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --max-warnings=0",
+    "clean": "rm -rf dist .turbo"
   }
 }
