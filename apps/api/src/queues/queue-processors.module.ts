@@ -20,6 +20,7 @@ import {
   DeviceTokensRepository,
   MediaAssetsRepository,
   NotificationsRepository,
+  PunyaFeaturesRepository,
   PunyaTransactionsRepository,
   SanchalakAssignmentsRepository,
   SmsLogsRepository,
@@ -28,6 +29,7 @@ import {
   UsersRepository,
 } from '../db/repositories';
 import { NotificationsModule } from '../modules/notifications/notifications.module';
+import { PunyaModule } from '../modules/punya/punya.module';
 
 import { AttendanceConsecutiveCheckProcessor } from './processors/attendance-consecutive-check.processor';
 import { AttendancePostProcessProcessor } from './processors/attendance-post-process.processor';
@@ -38,9 +40,11 @@ import { NotificationEmailProcessor } from './processors/notification-email.proc
 import { NotificationFanoutProcessor } from './processors/notification-fanout.processor';
 import { NotificationPushProcessor } from './processors/notification-push.processor';
 import { NotificationSmsProcessor } from './processors/notification-sms.processor';
+import { PunyaLeaderboardRefreshProcessor } from './processors/punya-leaderboard-refresh.processor';
+import { PunyaReconcileProcessor } from './processors/punya-reconcile.processor';
 
 @Module({
-  imports: [RedisModule, NotificationsModule],
+  imports: [RedisModule, NotificationsModule, PunyaModule],
   providers: [
     DebugEchoProcessor,
     MediaProcessingProcessor,
@@ -54,6 +58,9 @@ import { NotificationSmsProcessor } from './processors/notification-sms.processo
     AttendancePostProcessProcessor,
     AttendanceConsecutiveCheckProcessor,
 
+    PunyaLeaderboardRefreshProcessor,
+    PunyaReconcileProcessor,
+
     // repos used by processors
     MediaAssetsRepository,
     NotificationsRepository,
@@ -62,6 +69,7 @@ import { NotificationSmsProcessor } from './processors/notification-sms.processo
     AttendanceRepository,
     BatchesRepository,
     CentresRepository,
+    PunyaFeaturesRepository,
     PunyaTransactionsRepository,
     SanchalakAssignmentsRepository,
     StudentNotesRepository,
@@ -78,6 +86,8 @@ import { NotificationSmsProcessor } from './processors/notification-sms.processo
     NotificationEmailProcessor,
     AttendancePostProcessProcessor,
     AttendanceConsecutiveCheckProcessor,
+    PunyaLeaderboardRefreshProcessor,
+    PunyaReconcileProcessor,
   ],
 })
 export class QueueProcessorsModule {}

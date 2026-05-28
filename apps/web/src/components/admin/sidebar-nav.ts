@@ -12,6 +12,7 @@
  */
 
 import {
+  Award,
   BarChart3,
   Building2,
   CalendarDays,
@@ -72,6 +73,9 @@ export const ADMIN_NAV: NavGroup[] = [
       { href: '/admin/curriculum', label: 'Curriculum', icon: ScrollText, min: 'city_admin' },
       { href: '/admin/niyams', label: 'Niyams', icon: Flame, min: 'shikshak' },
       { href: '/admin/shivirs', label: 'Shivirs', icon: CalendarDays, min: 'city_admin' },
+      { href: '/admin/punya/manual-award', label: 'Award Punya', icon: Award, min: 'shikshak' },
+      { href: '/admin/punya/configs', label: 'Punya configs', icon: Settings, min: 'city_admin' },
+      { href: '/admin/punya/audit', label: 'Punya audit', icon: History, min: 'city_admin' },
     ],
   },
   {

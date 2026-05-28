@@ -28,6 +28,7 @@ import { MediaModule } from './modules/media/media.module';
 import { MsvModule } from './modules/msv/msv.module';
 import { AdminBroadcastModule } from './modules/notifications/admin-broadcast.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { PunyaModule } from './modules/punya/punya.module';
 import { SessionsModule } from './modules/sessions/sessions.module';
 import { ShivirsModule } from './modules/shivirs/shivirs.module';
 import { StudentsModule } from './modules/students/students.module';
@@ -68,6 +69,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     SessionsModule,
     AttendanceModule,
     ShivirsModule,
+    PunyaModule,
     SyncModule,
     RealtimeModule,
     AdminQueuesModule,

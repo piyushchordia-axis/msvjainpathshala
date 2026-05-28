@@ -84,6 +84,16 @@ export const ERROR_CODES = {
   ERR_PUNYA_REVERSAL_WINDOW_EXPIRED: 'ERR_PUNYA_REVERSAL_WINDOW_EXPIRED',
   ERR_PUNYA_IDEMPOTENCY_REQUIRED: 'ERR_PUNYA_IDEMPOTENCY_REQUIRED',
   ERR_PUNYA_INVALID_FEATURE: 'ERR_PUNYA_INVALID_FEATURE',
+  /** Manual-award amount fell outside the catalogue / city-override bounds. */
+  ERR_PUNYA_AMOUNT_OUT_OF_BOUNDS: 'ERR_PUNYA_AMOUNT_OUT_OF_BOUNDS',
+  /** Reversal target txn was already reversed (`reversal_of IS NOT NULL`). */
+  ERR_PUNYA_ALREADY_REVERSED: 'ERR_PUNYA_ALREADY_REVERSED',
+  /** Reversal targets a row that does not exist. */
+  ERR_PUNYA_TRANSACTION_NOT_FOUND: 'ERR_PUNYA_TRANSACTION_NOT_FOUND',
+  /** Manual award without a reason when the feature requires one. */
+  ERR_PUNYA_REASON_REQUIRED: 'ERR_PUNYA_REASON_REQUIRED',
+  /** Per-city override exceeds the super_admin-set bounds on the feature. */
+  ERR_PUNYA_CONFIG_OUT_OF_BOUNDS: 'ERR_PUNYA_CONFIG_OUT_OF_BOUNDS',
 
   // ----------------------------------------------------------------------
   // Domain — Batches & enrolment

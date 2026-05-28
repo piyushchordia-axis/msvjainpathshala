@@ -10,6 +10,7 @@ import {
   GeographyRepository,
   MsvEnrolmentsRepository,
   PhoneOtpAttemptsRepository,
+  PunyaFeaturesRepository,
   PunyaTransactionsRepository,
   RefreshTokenFamiliesRepository,
   SanchalakAssignmentsRepository,
@@ -33,6 +34,7 @@ import {
 const REPOSITORIES = [
   UsersRepository,
   BatchesRepository,
+  PunyaFeaturesRepository,
   PunyaTransactionsRepository,
   DeviceSessionsRepository,
   PhoneOtpAttemptsRepository,

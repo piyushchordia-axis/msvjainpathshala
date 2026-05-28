@@ -85,6 +85,16 @@ export const CRON_JOBS: readonly CronJobDefinition[] = [
     description: 'Leaderboard ZSET refresh — every 5 minutes',
   },
   {
+    id: 'punya.leaderboard.monthly_reset',
+    queue: QUEUES.PUNYA_LEADERBOARD_REFRESH,
+    // 5 minutes past midnight on the 1st of each month — gives the prior
+    // month's last awards 5 minutes of grace to land in the ledger before
+    // we snapshot.
+    pattern: '5 0 1 * *',
+    description: 'Snapshot previous-month leaderboard ZSETs into leaderboard_snapshots',
+    data: { job_kind: 'monthly_reset' },
+  },
+  {
     id: 'punya.reconcile.daily',
     queue: QUEUES.PUNYA_RECONCILE,
     pattern: '0 3 * * *',

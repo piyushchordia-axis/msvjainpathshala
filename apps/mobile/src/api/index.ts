@@ -7,6 +7,25 @@ export type {
   NotificationFeedPage,
   NotificationPreferences,
 } from './endpoints/notifications';
+export {
+  punyaApi,
+  TIER_BG,
+  TIER_COLORS,
+  TIER_LABEL,
+  TIER_LABEL_HI,
+  TIER_SUBTITLE,
+} from './endpoints/punya';
+export type {
+  LeaderboardEntryDto,
+  LeaderboardResponse,
+  LeaderboardScope,
+  PunyaBalanceDto,
+  PunyaBalanceResponse,
+  PunyaTransactionDto,
+  PunyaTransactionsResponse,
+  Tier,
+  TierProgressDto,
+} from './endpoints/punya';
 export { uploadFile, getMediaAsset } from './media';
 export type {
   UploadableAsset,

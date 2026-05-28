@@ -22,6 +22,7 @@ export { MediaAssetsRepository } from './media-assets.repository';
 export { MsvEnrolmentsRepository } from './msv-enrolments.repository';
 export { NotificationsRepository } from './notifications.repository';
 export { PhoneOtpAttemptsRepository } from './phone-otp-attempts.repository';
+export { PunyaFeaturesRepository } from './punya-features.repository';
 export { PunyaTransactionsRepository } from './punya-transactions.repository';
 export { RefreshTokenFamiliesRepository } from './refresh-token-families.repository';
 export { SanchalakAssignmentsRepository } from './sanchalak-assignments.repository';
