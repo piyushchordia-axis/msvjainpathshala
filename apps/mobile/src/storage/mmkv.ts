@@ -61,6 +61,7 @@ const instances = new Map<string, MmkvLike>();
 export type MMKVInstanceId =
   | 'jp.auth'
   | 'jp.profile'
+  | 'jp.notifications'
   | 'jp.queue.attendance'
   | 'jp.queue.shivir_scans'
   | 'jp.queue.niyam_submissions'

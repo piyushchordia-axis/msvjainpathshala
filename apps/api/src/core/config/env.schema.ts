@@ -113,6 +113,12 @@ export const envSchema = z
     MSG91_OTP_TEMPLATE_ID: z.string().default(''),
     MSG91_NOTICE_TEMPLATE_ID: z.string().default(''),
     MSG91_DLT_ENTITY_ID: z.string().default(''),
+    // Monthly INR spend cap — when the running total in `sms_logs` for the
+    // current month exceeds this value, the SMS delivery worker rejects new
+    // notice SMS jobs (OTP SMS bypasses the cap — it is operational, not
+    // promotional). 0 disables the cap.
+    SMS_MONTHLY_CAP_INR: numberFromString.default(5_000),
+    SMS_COST_PER_SEGMENT_PAISE: numberFromString.default(25),
 
     // ----- Resend -------------------------------------------------------
     RESEND_API_KEY: z.string().default(''),
@@ -142,6 +148,14 @@ export const envSchema = z
     // ----- CORS / metrics -----------------------------------------------
     CORS_ALLOWED_ORIGINS: csvFromString.default(''),
     METRICS_INTERNAL_KEY: z.string().default(''),
+
+    // ----- Socket.IO -----------------------------------------------------
+    // CORS list for Socket.IO websocket transport. In dev we mirror the
+    // permissive `CORS_ALLOWED_ORIGINS` localhost rule so the Next.js admin
+    // dashboard and the Expo web target both connect without a
+    // .env.development edit.
+    SOCKETIO_ENABLED: booleanFromString.default(true),
+    SOCKETIO_CORS_ORIGINS: csvFromString.default(''),
 
     // ----- Worker -------------------------------------------------------
     WORKER_KIND: z.enum(['all', 'notifications', 'media', 'reports', 'analytics']).default('all'),

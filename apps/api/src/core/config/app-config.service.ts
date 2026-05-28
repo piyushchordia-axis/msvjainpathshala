@@ -129,6 +129,38 @@ export class AppConfigService {
     };
   }
 
+  // ----- Notifications --------------------------------------------------
+  get notifications() {
+    return {
+      fcm: {
+        projectId: this.env.FCM_PROJECT_ID,
+        serviceAccountJson: this.env.FCM_SERVICE_ACCOUNT_JSON,
+        batchSize: this.env.FCM_BATCH_SIZE,
+      },
+      sms: {
+        authKey: this.env.MSG91_AUTH_KEY,
+        senderId: this.env.MSG91_SENDER_ID,
+        otpTemplateId: this.env.MSG91_OTP_TEMPLATE_ID,
+        noticeTemplateId: this.env.MSG91_NOTICE_TEMPLATE_ID,
+        dltEntityId: this.env.MSG91_DLT_ENTITY_ID,
+        monthlyCapInr: this.env.SMS_MONTHLY_CAP_INR,
+        costPerSegmentPaise: this.env.SMS_COST_PER_SEGMENT_PAISE,
+      },
+      email: {
+        apiKey: this.env.RESEND_API_KEY,
+        from: this.env.RESEND_FROM,
+      },
+    };
+  }
+
+  // ----- Socket.IO ------------------------------------------------------
+  get socketio() {
+    return {
+      enabled: this.env.SOCKETIO_ENABLED,
+      corsOrigins: this.env.SOCKETIO_CORS_ORIGINS,
+    };
+  }
+
   /** Escape hatch for code that genuinely needs the raw shape. Avoid where possible. */
   get raw(): AppEnv {
     return this.env;

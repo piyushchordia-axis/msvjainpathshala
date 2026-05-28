@@ -17,6 +17,7 @@
 import {
   boolean,
   integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
@@ -55,6 +56,14 @@ export const users = pgTable(
     last_login_at: timestamp('last_login_at', { withTimezone: true }),
     // CLAUDE.md Q6 — blanket per-parent gallery visibility opt-in covering all children.
     gallery_visibility_opt_in: boolean('gallery_visibility_opt_in').notNull().default(false),
+    // Per-user notification preferences (SPEC §5.18 / Step 12). JSONB so we can
+    // add new channels without a migration; shape validated against the
+    // `notificationPreferencesSchema` in `@jp/shared` at write time. Default
+    // value matches the schema: every channel ON.
+    notification_preferences: jsonb('notification_preferences')
+      .$type<{ push: boolean; sms: boolean; email: boolean; in_app: boolean }>()
+      .notNull()
+      .default({ push: true, sms: true, email: true, in_app: true }),
     ...softDelete(),
     ...timestamps(),
     // Self-referencing audit cols (created_by / updated_by → users.id).
@@ -101,6 +110,9 @@ export const device_tokens = pgTable(
       .references(() => users.id, { onDelete: 'cascade' }),
     platform: text('platform').notNull(),
     token: text('token').notNull(),
+    // Optional client-side device_id — lets a logout invalidate the matching
+    // push token without the client having to remember its own row id.
+    device_id: text('device_id'),
     last_seen_at: timestamp('last_seen_at', { withTimezone: true }),
     revoked_at: timestamp('revoked_at', { withTimezone: true }),
     ...timestamps(),

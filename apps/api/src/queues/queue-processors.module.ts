@@ -5,28 +5,56 @@
  * `pnpm dev:worker` / `node dist/worker.js`). The HTTP entrypoint mounts
  * only the producer side via `QueuesModule.forRoot()`.
  *
- * As more processors land (notifications.* in Step 12, media.processing
- * in Step 11, etc.) they get added here. The `@Processor` decorator on
- * each class wires it to its queue name via @nestjs/bullmq.
+ * Step 12 adds the four notification processors: fanout (resolves
+ * recipients → splits into per-channel jobs), push (FCM), sms (MSG91 with
+ * Devanagari segment math + spend cap), and email (Resend / console).
  */
 
 import { Module } from '@nestjs/common';
 
 import { RedisModule } from '../core/redis/redis.module';
-import { MediaAssetsRepository } from '../db/repositories';
+import {
+  DeviceTokensRepository,
+  MediaAssetsRepository,
+  NotificationsRepository,
+  SmsLogsRepository,
+} from '../db/repositories';
+import { NotificationsModule } from '../modules/notifications/notifications.module';
 
 import { DebugEchoProcessor } from './processors/debug-echo.processor';
 import { IdCardGenerationProcessor } from './processors/idcard-generation.processor';
 import { MediaProcessingProcessor } from './processors/media-processing.processor';
+import { NotificationEmailProcessor } from './processors/notification-email.processor';
+import { NotificationFanoutProcessor } from './processors/notification-fanout.processor';
+import { NotificationPushProcessor } from './processors/notification-push.processor';
+import { NotificationSmsProcessor } from './processors/notification-sms.processor';
 
 @Module({
-  imports: [RedisModule],
+  imports: [RedisModule, NotificationsModule],
   providers: [
     DebugEchoProcessor,
     MediaProcessingProcessor,
     IdCardGenerationProcessor,
+
+    NotificationFanoutProcessor,
+    NotificationPushProcessor,
+    NotificationSmsProcessor,
+    NotificationEmailProcessor,
+
+    // repos used by processors
     MediaAssetsRepository,
+    NotificationsRepository,
+    DeviceTokensRepository,
+    SmsLogsRepository,
   ],
-  exports: [DebugEchoProcessor, MediaProcessingProcessor, IdCardGenerationProcessor],
+  exports: [
+    DebugEchoProcessor,
+    MediaProcessingProcessor,
+    IdCardGenerationProcessor,
+    NotificationFanoutProcessor,
+    NotificationPushProcessor,
+    NotificationSmsProcessor,
+    NotificationEmailProcessor,
+  ],
 })
 export class QueueProcessorsModule {}

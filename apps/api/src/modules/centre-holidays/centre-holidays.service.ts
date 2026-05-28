@@ -114,12 +114,15 @@ export class CentreHolidaysService {
       await this.fanoutQueue.add(
         'centre_holiday_announced',
         {
-          kind: 'centre_holiday_announced',
-          centre_id: row.centre_id,
-          holiday_id: row.id,
-          start_date: row.start_date,
-          end_date: row.end_date,
-          name: row.name,
+          // Step 12 fanout shape — recipient resolution happens in the worker.
+          event: 'centre_holiday_announced',
+          scope: { kind: 'centre', id: row.centre_id },
+          source: { kind: 'centre_holiday', id: row.id },
+          data: {
+            name: row.name,
+            start_date: row.start_date,
+            end_date: row.end_date,
+          },
         },
         { attempts: 3, backoff: { type: 'exponential', delay: 2000 } },
       );

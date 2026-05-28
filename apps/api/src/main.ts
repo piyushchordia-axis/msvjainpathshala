@@ -85,6 +85,13 @@ async function bootstrap(): Promise<void> {
 
   await app.listen(env.PORT, '0.0.0.0');
 
+  // Attach Socket.IO to the now-running HTTP server (Step 12 — realtime).
+  // We resolve via dynamic import so workers — which never call bootstrap —
+  // don't pay the import cost.
+  const { RealtimeGateway } = await import('./realtime/realtime.gateway');
+  const httpServer = app.getHttpServer() as import('node:http').Server;
+  app.get(RealtimeGateway).attach(httpServer);
+
   const log = app.get(PinoNestLogger);
   log.log(
     `apps/api ready — http://0.0.0.0:${env.PORT}  (env=${env.NODE_ENV}, log_level=${env.LOG_LEVEL})`,

@@ -43,6 +43,13 @@
       "when": 1779964367351,
       "tag": "0006_step6_extras",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1779964367352,
+      "tag": "0007_step12_notifications",
+      "breakpoints": true
     }
   ]
 }

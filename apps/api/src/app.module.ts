@@ -25,9 +25,12 @@ import { FormConfigsModule } from './modules/form-configs/form-configs.module';
 import { GeographyModule } from './modules/geography/geography.module';
 import { MediaModule } from './modules/media/media.module';
 import { MsvModule } from './modules/msv/msv.module';
+import { AdminBroadcastModule } from './modules/notifications/admin-broadcast.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 import { StudentsModule } from './modules/students/students.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { QueuesModule } from './queues/queues.module';
+import { RealtimeModule } from './realtime/realtime.module';
 
 /**
  * Root HTTP module. Domain modules from `src/modules/*` land here per step.
@@ -56,6 +59,9 @@ import { QueuesModule } from './queues/queues.module';
     StudentsModule,
     MsvModule,
     MediaModule,
+    NotificationsModule,
+    AdminBroadcastModule,
+    RealtimeModule,
     AdminQueuesModule,
     HealthModule,
     ObservabilityModule,

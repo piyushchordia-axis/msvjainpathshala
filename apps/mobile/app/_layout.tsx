@@ -45,6 +45,7 @@ import '@/api/endpoints/auth';
 import { AppOfflineBanner } from '@/components/AppOfflineBanner';
 import { JPColors } from '@/constants/colors';
 import { AuthProvider } from '@/features/auth/auth-context';
+import { InAppToast } from '@/notifications/InAppToast';
 import { useNetworkStore } from '@/stores/network.store';
 import { JPNavTheme } from '@/theme/theme';
 
@@ -100,6 +101,7 @@ export default function RootLayout() {
               <ThemeProvider value={JPNavTheme}>
                 <StatusBar style="dark" backgroundColor={JPColors.cream} />
                 <AppOfflineBanner />
+                <InAppToast />
                 <Stack
                   screenOptions={{
                     headerShown: false,

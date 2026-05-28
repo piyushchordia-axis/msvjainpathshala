@@ -44,6 +44,7 @@ import {
   UsersRepository,
 } from '../../db/repositories';
 import { batches, enrolments, registration_form_responses, students, users } from '../../db/schema';
+import { RealtimeGateway } from '../../realtime/realtime.gateway';
 import { AuditService } from '../audit/audit.service';
 
 import type { Enrolment, Student } from '../../db/schema';
@@ -104,6 +105,7 @@ export class EnrolmentsService {
     private readonly usersRepo: UsersRepository,
     private readonly formConfigsRepo: FormConfigsRepository,
     private readonly audit: AuditService,
+    private readonly realtime: RealtimeGateway,
     redis: RedisService,
   ) {
     this.fanoutQueue = new Queue(QUEUES.NOTIFICATIONS_FANOUT, {
@@ -257,19 +259,37 @@ export class EnrolmentsService {
       })
       .catch(() => undefined);
 
-    // Notify centre's sanchalak + the batch's shikshak. Real fanout
-    // lands in Step 12 — for Step 10 the job is enqueued so we have a
-    // breadcrumb.
+    // Step 12 — real fanout. The fanout worker resolves recipients from
+    // the centre scope (sanchalaks + shikshaks of the centre) and inserts
+    // in-app / push / email jobs as appropriate.
     await this.fanoutQueue
       .add('enrolment.submitted', {
         event: 'enrolment.submitted',
-        enrolment_id: enrolment.id,
-        centre_id: input.requested_centre_id,
-        batch_id: input.requested_batch_id,
+        scope: { kind: 'centre', id: input.requested_centre_id },
+        source: { kind: 'enrolment', id: enrolment.id },
+        data: {
+          full_name: input.full_name,
+          age_group: input.age_group,
+          centre_id: input.requested_centre_id,
+          batch_id: input.requested_batch_id,
+        },
+        deep_link: `/admin/enrolments/${enrolment.id}`,
       })
       .catch((err) =>
         this.logger.warn(`notifications.fanout enqueue failed: ${(err as Error).message}`),
       );
+
+    // Live admin dashboard event (Step 12). City-scoped so the city_admin
+    // dashboard shows the activity feed update without a page refresh.
+    this.realtime.emitToAdminDashboard(centre.city_id, {
+      event: 'enrolment.submitted',
+      city_id: centre.city_id,
+      summary_en: `${input.full_name} enrolled at ${centre.name}`,
+      summary_hi: `${input.full_name} ने ${centre.name} में प्रवेश आवेदन किया`,
+      source_entity_kind: 'enrolment',
+      source_entity_id: enrolment.id,
+      at: new Date().toISOString(),
+    });
 
     return dupStudentId
       ? {
@@ -441,14 +461,37 @@ export class EnrolmentsService {
       .catch((err) =>
         this.logger.warn(`idcard.generation enqueue failed: ${(err as Error).message}`),
       );
+    // Step 12 — push + email + in-app to the parent.
     await this.fanoutQueue
       .add('enrolment.approved', {
         event: 'enrolment.approved',
-        enrolment_id: enrolment.id,
-        student_id: result.student.id,
-        parent_user_id: enrolment.parent_user_id,
+        recipient_user_ids: [enrolment.parent_user_id],
+        source: { kind: 'enrolment', id: enrolment.id },
+        data: {
+          full_name: result.student.full_name,
+          student_code: result.student.student_code,
+          student_id: result.student.id,
+        },
+        deep_link: `/students/${result.student.id}`,
       })
       .catch(() => undefined);
+
+    // Live admin dashboard event for the centre's city.
+    {
+      const centreRow = await this.centresRepo.findById(enrolment.requested_centre_id);
+      if (centreRow) {
+        this.realtime.emitToAdminDashboard(centreRow.city_id, {
+          event: 'enrolment.approved',
+          city_id: centreRow.city_id,
+          actor_role: actor.role,
+          summary_en: `${result.student.full_name} approved at ${centreRow.name}`,
+          summary_hi: `${result.student.full_name} का ${centreRow.name} में प्रवेश स्वीकृत हुआ`,
+          source_entity_kind: 'enrolment',
+          source_entity_id: enrolment.id,
+          at: new Date().toISOString(),
+        });
+      }
+    }
 
     await this.audit
       .emit({
@@ -512,9 +555,9 @@ export class EnrolmentsService {
     await this.fanoutQueue
       .add('enrolment.rejected', {
         event: 'enrolment.rejected',
-        enrolment_id: enrolment.id,
-        parent_user_id: enrolment.parent_user_id,
-        reason,
+        recipient_user_ids: [enrolment.parent_user_id],
+        source: { kind: 'enrolment', id: enrolment.id },
+        data: { reason },
       })
       .catch(() => undefined);
     await this.audit
@@ -568,8 +611,8 @@ export class EnrolmentsService {
     await this.fanoutQueue
       .add('enrolment.waitlisted', {
         event: 'enrolment.waitlisted',
-        enrolment_id: enrolment.id,
-        parent_user_id: enrolment.parent_user_id,
+        recipient_user_ids: [enrolment.parent_user_id],
+        source: { kind: 'enrolment', id: enrolment.id },
       })
       .catch(() => undefined);
     await this.audit

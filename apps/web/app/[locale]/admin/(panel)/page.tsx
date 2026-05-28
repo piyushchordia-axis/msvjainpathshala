@@ -13,6 +13,7 @@
 
 import { CheckCircle2, Flame, GraduationCap, Sparkles } from 'lucide-react';
 
+import { LiveActivityCard } from '@/components/admin/LiveActivityCard';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
@@ -141,6 +142,12 @@ export default async function AdminDashboard() {
             ))}
           </CardContent>
         </Card>
+      </section>
+
+      {/* Step 12 — live activity over Socket.IO. Subscribes to the
+          /admin-dashboard/:cityId namespace and renders the last 20 events. */}
+      <section>
+        <LiveActivityCard />
       </section>
     </div>
   );

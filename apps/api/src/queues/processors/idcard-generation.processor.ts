@@ -23,8 +23,9 @@ import { createHmac } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { Processor } from '@nestjs/bullmq';
+import { InjectQueue, Processor } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
+import { Queue } from 'bullmq';
 import { eq, sql } from 'drizzle-orm';
 import Handlebars from 'handlebars';
 import * as QRCode from 'qrcode';
@@ -86,9 +87,7 @@ const PNG_HEIGHT = 1700;
 interface PuppeteerPage {
   setViewport(opts: { width: number; height: number; deviceScaleFactor?: number }): Promise<void>;
   setContent(html: string, opts?: { waitUntil?: string }): Promise<void>;
-  $(
-    selector: string,
-  ): Promise<{
+  $(selector: string): Promise<{
     screenshot: (opts: { type: 'png'; omitBackground?: boolean }) => Promise<Buffer | Uint8Array>;
   } | null>;
   screenshot(opts: { type: 'png'; fullPage?: boolean }): Promise<Buffer | Uint8Array>;
@@ -170,6 +169,7 @@ export class IdCardGenerationProcessor extends BaseProcessor<
     private readonly storage: StorageService,
     private readonly cfg: AppConfigService,
     private readonly mediaRepo: MediaAssetsRepository,
+    @InjectQueue(QUEUES.NOTIFICATIONS_FANOUT) private readonly fanoutQueue: Queue,
   ) {
     super(QUEUES.ID_CARD_GENERATION, redis);
   }
@@ -319,6 +319,25 @@ export class IdCardGenerationProcessor extends BaseProcessor<
     this.localLogger.log(
       `id card v${card.version_no} for ${student.student_code} (${png.length} bytes) uploaded to ${objectKey}`,
     );
+
+    // Step 12 — notify the parent that their child's digital ID is ready.
+    // Best-effort; an enqueue failure must not roll back the generated card.
+    await this.fanoutQueue
+      .add('idcard.ready', {
+        event: 'idcard.ready',
+        recipient_user_ids: [student.parent_user_id],
+        source: { kind: 'digital_id_card', id: card.id },
+        data: {
+          full_name: student.full_name,
+          student_code: student.student_code,
+          student_id: student.id,
+          version_no: card.version_no,
+        },
+        deep_link: `/students/${student.id}/id-card`,
+      })
+      .catch((err) =>
+        this.localLogger.warn(`idcard.ready fanout enqueue failed: ${(err as Error).message}`),
+      );
 
     return {
       card_id: card.id,

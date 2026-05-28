@@ -20,6 +20,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 
 import { authApi, type AuthUser, type OtpVerifyResponse } from '@/api/endpoints/auth';
+import { registerDeviceToken, unregisterDeviceToken } from '@/notifications/device-token';
 import { authStore } from '@/storage/stores/auth.store';
 import { profileStore } from '@/storage/stores/profile.store';
 import { syncEngine } from '@/sync/sync-engine';
@@ -81,6 +82,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     }
     setStatus('authenticated');
+    // Refresh the device's push token on every cold-start (FCM rotates).
+    void registerDeviceToken();
   }, []);
 
   useEffect(() => {
@@ -115,9 +118,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(response.user);
     setView(snap.view);
     setStatus('authenticated');
+    // Step 12 — register the device's push token now that we have a JWT.
+    // Best-effort; failure surfaces in the dev log but never blocks sign-in.
+    void registerDeviceToken();
   }, []);
 
   const signOut = useCallback(async () => {
+    await unregisterDeviceToken().catch(() => undefined);
     await authApi.logout().catch(() => undefined);
     setUser(null);
     setView(null);
