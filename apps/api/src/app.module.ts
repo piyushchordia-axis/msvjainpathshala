@@ -30,6 +30,7 @@ import { AdminBroadcastModule } from './modules/notifications/admin-broadcast.mo
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { SessionsModule } from './modules/sessions/sessions.module';
 import { StudentsModule } from './modules/students/students.module';
+import { SyncModule } from './modules/sync/sync.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { QueuesModule } from './queues/queues.module';
 import { RealtimeModule } from './realtime/realtime.module';
@@ -65,6 +66,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     AdminBroadcastModule,
     SessionsModule,
     AttendanceModule,
+    SyncModule,
     RealtimeModule,
     AdminQueuesModule,
     HealthModule,

@@ -2,7 +2,7 @@
 
 import { z } from 'zod';
 
-import { SYNC_OP_KINDS, SYNC_OP_STATUSES } from '../enums/sync.js';
+import { SYNC_OP_KINDS, SYNC_RESULT_STATUSES } from '../enums/sync.js';
 
 import { idempotencyKey, isoDatetime, uuid } from './common.js';
 
@@ -23,14 +23,17 @@ export type SyncBatchDto = z.infer<typeof syncBatchSchema>;
 
 export const syncResultSchema = z.object({
   client_op_id: idempotencyKey,
-  status: z.enum(SYNC_OP_STATUSES),
+  /** Subset of SYNC_OP_STATUSES — `processing` never reaches the wire. */
+  status: z.enum(SYNC_RESULT_STATUSES),
   result: z.record(z.string(), z.unknown()).optional(),
   error_code: z.string().optional(),
+  error_message: z.string().optional(),
 });
 export type SyncResultDto = z.infer<typeof syncResultSchema>;
 
 export const syncBatchResponseSchema = z.object({
   results: z.array(syncResultSchema),
+  server_timestamp: isoDatetime,
 });
 export type SyncBatchResponse = z.infer<typeof syncBatchResponseSchema>;
 

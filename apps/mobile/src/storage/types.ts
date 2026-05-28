@@ -46,4 +46,7 @@ export interface AuthSnapshot {
 export interface ProfileSnapshot {
   preferred_language: 'en' | 'hi';
   last_login_phone?: string;
+  /** ISO datetime of the most recent successful `/v1/sync/delta` (Step 14).
+   *  The sync engine uses this as the `since` parameter; cleared on logout. */
+  last_sync_at?: string;
 }

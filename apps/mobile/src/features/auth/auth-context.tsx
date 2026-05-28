@@ -20,18 +20,33 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 
 import { authApi, type AuthUser, type OtpVerifyResponse } from '@/api/endpoints/auth';
-import { attendanceDrain } from '@/features/attendance/attendance-drain';
 import { registerDeviceToken, unregisterDeviceToken } from '@/notifications/device-token';
 import { authStore } from '@/storage/stores/auth.store';
 import { profileStore } from '@/storage/stores/profile.store';
-import { registerDrain, syncEngine } from '@/sync/sync-engine';
+import { syncEngine } from '@/sync/sync-engine';
+import { syncApi } from '@/sync/sync.api';
 
 import type { AuthSnapshot } from '@/storage/types';
 
-// Wire the attendance drain into the sync engine once at module load.
-// Drain registration is idempotent — re-registering with the same key
-// overwrites the previous fn, which is fine.
-registerDrain('attendance', attendanceDrain);
+/** 24h — after this, cold-start prefers a full bootstrap over a delta. */
+const BOOTSTRAP_REFRESH_AFTER_MS = 24 * 60 * 60 * 1000;
+
+async function hydrateOfflineCache(): Promise<void> {
+  const last = profileStore.get().last_sync_at;
+  const lastMs = last ? Date.parse(last) : 0;
+  const stale = !last || Date.now() - lastMs > BOOTSTRAP_REFRESH_AFTER_MS;
+  try {
+    if (stale) {
+      const bootstrap = await syncApi.bootstrap();
+      profileStore.set({ last_sync_at: bootstrap.generated_at });
+    } else {
+      const delta = await syncApi.delta(last!);
+      profileStore.set({ last_sync_at: delta.generated_at });
+    }
+  } catch {
+    // Best-effort — first launch on a flaky network shouldn't block sign-in.
+  }
+}
 
 export type AuthStatus = 'booting' | 'unauthenticated' | 'authenticated';
 
@@ -90,6 +105,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setStatus('authenticated');
     // Refresh the device's push token on every cold-start (FCM rotates).
     void registerDeviceToken();
+    // Step 14 — pull the latest working set (delta if recent, full bootstrap
+    // otherwise). Non-blocking; the UI renders from MMKV caches in the meantime.
+    void hydrateOfflineCache();
   }, []);
 
   useEffect(() => {
@@ -127,11 +145,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Step 12 — register the device's push token now that we have a JWT.
     // Best-effort; failure surfaces in the dev log but never blocks sign-in.
     void registerDeviceToken();
+    // Step 14 — hydrate the offline-cache working set right after sign-in.
+    void hydrateOfflineCache();
   }, []);
 
   const signOut = useCallback(async () => {
     await unregisterDeviceToken().catch(() => undefined);
     await authApi.logout().catch(() => undefined);
+    // Force a full bootstrap on the NEXT sign-in by clearing the delta cursor.
+    profileStore.set({ last_sync_at: undefined });
     setUser(null);
     setView(null);
     setStatus('unauthenticated');

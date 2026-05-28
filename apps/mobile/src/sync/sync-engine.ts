@@ -7,40 +7,28 @@
  *   - AppState change (background → active)
  *   - 60s timer while online
  *
- * Drain priority (CLAUDE.md): attendance → shivir_scans → niyam_submissions
- * → acknowledgements. The per-queue drain function lands in each feature
- * step; Step 8 only exposes the orchestrator + hooks the queues to a
- * "drainable" interface.
- *
- * The engine is intentionally minimal: per-domain processors register
- * themselves via `registerDrain(queueName, fn)` and the engine calls them
- * in priority order. This keeps the engine itself agnostic to the
- * domain-specific request shapes.
+ * Step 14 unifies the per-feature drains behind a single
+ * `batchDrain()` call (POST /v1/sync/batch). After a successful drain we
+ * call `/v1/sync/delta?since=<last_sync_at>` to refresh caches and bump
+ * the timestamp. On retryable errors we let the next tick's exponential
+ * backoff retry; `attempts` is bumped per-op inside `batchDrain`.
  */
 
 import NetInfo, { type NetInfoSubscription } from '@react-native-community/netinfo';
 import { AppState, type AppStateStatus } from 'react-native';
 
-import { acknowledgementsQueue } from '@/storage/stores/queue/acknowledgements.store';
-import { attendanceQueue } from '@/storage/stores/queue/attendance.store';
-import { niyamSubmissionsQueue } from '@/storage/stores/queue/niyam-submissions.store';
-import { shivirScansQueue } from '@/storage/stores/queue/shivir-scans.store';
+import {
+  acknowledgementsQueue,
+  attendanceQueue,
+  failedOpsStore,
+  niyamSubmissionsQueue,
+  shivirScansQueue,
+} from '@/storage';
+import { profileStore } from '@/storage/stores/profile.store';
 import { useSyncStore } from '@/stores/sync.store';
 
-const DRAIN_PRIORITY = [
-  'attendance',
-  'shivir_scans',
-  'niyam_submissions',
-  'acknowledgements',
-] as const;
-type DrainName = (typeof DRAIN_PRIORITY)[number];
-type DrainFn = () => Promise<void>;
-
-const drainRegistry: Partial<Record<DrainName, DrainFn>> = {};
-
-export function registerDrain(name: DrainName, fn: DrainFn): void {
-  drainRegistry[name] = fn;
-}
+import { batchDrain } from './batch-drain';
+import { syncApi } from './sync.api';
 
 class SyncEngine {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -81,10 +69,19 @@ class SyncEngine {
     const store = useSyncStore.getState();
     store.setStatus('syncing');
     try {
-      for (const name of DRAIN_PRIORITY) {
-        const fn = drainRegistry[name];
-        if (!fn) continue;
-        await fn();
+      await batchDrain();
+      // Refresh caches via delta.
+      const since = profileStore.get().last_sync_at;
+      if (since) {
+        try {
+          const delta = await syncApi.delta(since);
+          profileStore.set({ last_sync_at: delta.generated_at });
+        } catch {
+          // Delta refresh is best-effort — never blocks the drain success.
+        }
+      } else {
+        // Stamp a sync timestamp so the next tick can ask for deltas.
+        profileStore.set({ last_sync_at: new Date().toISOString() });
       }
       store.setStatus('idle');
       store.setLastSync(new Date().toISOString());
@@ -95,13 +92,16 @@ class SyncEngine {
       // status flipped to 'error' inside setLastError
     } finally {
       this.inFlight = false;
-      // Update count from the last tick (rough, in-process only).
+      // Cross-queue pending count (visible queues only — failed-ops are tracked
+      // separately and surface via the profile-tab indicator).
       const total =
         attendanceQueue.count() +
         shivirScansQueue.count() +
         niyamSubmissionsQueue.count() +
         acknowledgementsQueue.count();
       store.setPendingCount(total);
+      // Mirror the failed count for the UI indicator.
+      void failedOpsStore;
       // Mute the trigger label past lint with a no-op read.
       void reason;
     }

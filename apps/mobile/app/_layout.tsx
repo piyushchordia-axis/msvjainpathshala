@@ -43,6 +43,7 @@ import '@/i18n';
 import '@/api/endpoints/auth';
 
 import { AppOfflineBanner } from '@/components/AppOfflineBanner';
+import { SyncToast } from '@/components/ui/feedback/SyncToast';
 import { JPColors } from '@/constants/colors';
 import { AuthProvider } from '@/features/auth/auth-context';
 import { InAppToast } from '@/notifications/InAppToast';
@@ -102,6 +103,7 @@ export default function RootLayout() {
                 <StatusBar style="dark" backgroundColor={JPColors.cream} />
                 <AppOfflineBanner />
                 <InAppToast />
+                <SyncToast />
                 <Stack
                   screenOptions={{
                     headerShown: false,

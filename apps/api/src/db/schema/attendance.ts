@@ -77,7 +77,9 @@ export const attendance = pgTable(
     marked_by: uuid('marked_by')
       .notNull()
       .references(() => users.id, { onDelete: 'restrict' }),
-    client_op_id: uuid('client_op_id'),
+    /** ULID/UUID — sortable client-side; backend treats as opaque string.
+     *  See migration 0009 for the text widening from the original uuid. */
+    client_op_id: text('client_op_id'),
     notes: text('notes'),
     ...timestamps(),
   },

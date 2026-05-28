@@ -4,6 +4,11 @@ export { attendanceQueue } from './stores/queue/attendance.store';
 export { shivirScansQueue } from './stores/queue/shivir-scans.store';
 export { niyamSubmissionsQueue } from './stores/queue/niyam-submissions.store';
 export { acknowledgementsQueue } from './stores/queue/acknowledgements.store';
+export {
+  failedOpsStore,
+  type FailedOp,
+  type FailedQueueName,
+} from './stores/queue/failed-ops.store';
 export { batchesCache } from './stores/cache/batches.store';
 export { studentsCache } from './stores/cache/students.store';
 export { curriculumCache } from './stores/cache/curriculum.store';

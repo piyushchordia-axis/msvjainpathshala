@@ -9,6 +9,7 @@
  */
 
 import { jsonb, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+// `text` covers the client_op_id (ULID or UUID); see migration 0009.
 
 import { auditActionEnum, roleEnum, syncOpStatusEnum } from './enums';
 import { users } from './identity';
@@ -37,7 +38,7 @@ export const sync_operations = pgTable(
     user_id: uuid('user_id')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
-    client_op_id: uuid('client_op_id').notNull(),
+    client_op_id: text('client_op_id').notNull(),
     op_kind: text('op_kind').notNull(),
     request_payload: jsonb('request_payload'),
     response_payload: jsonb('response_payload'),

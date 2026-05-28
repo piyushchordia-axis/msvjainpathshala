@@ -31,5 +31,6 @@ export { ShikshakAssignmentsRepository } from './shikshak-assignments.repository
 export { SmsLogsRepository } from './sms-logs.repository';
 export { StudentNotesRepository } from './student-notes.repository';
 export { StudentsRepository } from './students.repository';
+export { SyncOperationsRepository } from './sync-operations.repository';
 export { SystemConfigRepository } from './system-config.repository';
 export { UsersRepository } from './users.repository';
