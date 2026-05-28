@@ -38,12 +38,11 @@ export default function PhoneScreen() {
     setError(null);
     setBusy(true);
     try {
-      // We discard otp_token from the response — the backend's verify
-      // endpoint binds by phone, not by token (see auth.controller.ts
-      // otpVerifySendShape). The token is returned only as a hint for the
-      // resend-countdown UX.
-      await authApi.otpSend(e164);
-      router.push({ pathname: '/(auth)/otp', params: { phone: e164 } });
+      // The verify endpoint binds by otp_token (shared otpVerifySchema,
+      // SPEC §7.1). We forward the token + phone — phone is for display
+      // and the resend CTA; the token is what the server matches against.
+      const { otp_token } = await authApi.otpSend(e164);
+      router.push({ pathname: '/(auth)/otp', params: { phone: e164, otp_token } });
     } catch (err) {
       setError(
         err instanceof ApiError

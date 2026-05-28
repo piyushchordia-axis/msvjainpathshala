@@ -19,7 +19,13 @@
 import { Body, Controller, HttpCode, Param, Patch, Post, Get, Req } from '@nestjs/common';
 import { z } from 'zod';
 
-import { otpRequestSchema, refreshSchema, switchViewSchema, logoutSchema } from '@jp/shared';
+import {
+  otpRequestSchema,
+  otpVerifySchema,
+  refreshSchema,
+  switchViewSchema,
+  logoutSchema,
+} from '@jp/shared';
 import { AppError, ERROR_CODES, type Role, type ScopeContext } from '@jp/shared';
 
 import { getRequestContext } from '../../common/context/request-context';
@@ -45,18 +51,6 @@ import type { Request } from 'express';
 
 // Step 5 prompt names the endpoint /otp/send and includes device fields on verify.
 const otpSendSchema = otpRequestSchema; // alias for clarity at the call site
-
-const otpVerifySendShape = z.object({
-  phone: z.string().regex(/^\+[1-9]\d{6,14}$/, 'Phone must be E.164 (+91…)'),
-  code: z
-    .string()
-    .length(6)
-    .regex(/^\d{6}$/, 'OTP must be 6 digits'),
-  device: z.object({
-    device_id: z.string().min(1).max(128),
-    platform: z.enum(['ios', 'android', 'web']),
-  }),
-});
 
 const impersonateBodySchema = z.object({
   reason: z.string().min(1).max(500).optional(),
@@ -107,13 +101,13 @@ export class AuthController {
   @Post('/auth/otp/verify')
   @HttpCode(200)
   async verifyOtp(
-    @Body(new ZodValidationPipe(otpVerifySendShape))
-    body: z.infer<typeof otpVerifySendShape>,
+    @Body(new ZodValidationPipe(otpVerifySchema))
+    body: z.infer<typeof otpVerifySchema>,
     @Req() req: Request,
   ) {
     const ip = (req.ip ?? '').replace(/^::ffff:/, '') || null;
     return this.authService.verifyOtpAndIssue({
-      phone: body.phone,
+      otpToken: body.otp_token,
       code: body.code,
       deviceId: body.device.device_id,
       platform: body.device.platform,

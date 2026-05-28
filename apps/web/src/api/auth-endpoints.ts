@@ -47,14 +47,20 @@ export async function otpSend(phone: string): Promise<OtpSendResponse> {
   return unwrap<OtpSendResponse>(res.data);
 }
 
+/**
+ * Verify the OTP. The backend binds the verify call to the prior /otp/send
+ * via the opaque `otp_token`, NOT by phone (SPEC §7.1 + the shared
+ * `otpVerifySchema`). The token comes from the otpSend response and must
+ * be carried across both phases by the caller.
+ */
 export async function otpVerify(input: {
-  phone: string;
+  otp_token: string;
   code: string;
   device_id: string;
   platform: 'web';
 }): Promise<OtpVerifyResponse> {
   const res = await anonServerClient.post('/v1/auth/otp/verify', {
-    phone: input.phone,
+    otp_token: input.otp_token,
     code: input.code,
     device: { device_id: input.device_id, platform: input.platform },
   });

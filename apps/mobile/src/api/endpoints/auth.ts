@@ -45,21 +45,20 @@ export const authApi = {
   },
 
   /**
-   * Verify the OTP. The verify body is `{phone, code, device}` — the backend
-   * controller (auth.controller.ts otpVerifySendShape) resolves the active
-   * attempt by phone, not by otp_token. The shared schema in @jp/shared has
-   * an aspirational otp_token-binding version, but that's not the one wired
-   * up; the controller's local schema is the source of truth.
+   * Verify the OTP. The verify body is `{otp_token, code, device}` matching
+   * the single shared `otpVerifySchema` from `@jp/shared` — the backend
+   * resolves the phone via the opaque token issued by /otp/send and matches
+   * the code against the Redis-stored hash (SPEC §7.1 step 2).
    */
   async otpVerify(input: {
-    phone: string;
+    otp_token: string;
     code: string;
     device_id: string;
     platform: 'ios' | 'android' | 'web';
   }): Promise<OtpVerifyResponse> {
     return unwrap<OtpVerifyResponse>(
       api.post('/v1/auth/otp/verify', {
-        phone: input.phone,
+        otp_token: input.otp_token,
         code: input.code,
         device: { device_id: input.device_id, platform: input.platform },
       }),
@@ -70,22 +69,46 @@ export const authApi = {
     return unwrap<AuthTokens>(api.post('/v1/auth/refresh', { refresh_token: refreshToken }));
   },
 
-  async me(): Promise<{ user: AuthUser }> {
-    return unwrap<{ user: AuthUser }>(api.get('/v1/auth/me'));
+  /**
+   * GET /v1/auth/me returns the user fields FLAT inside `data` (id, phone,
+   * role, full_name, preferred_language, view_context, scope, …) — NOT
+   * nested under a `user` key. The web client and the controller's
+   * integration tests both expect the flat shape. Earlier wrapper code
+   * deconstructed `{ user }` and silently received `undefined`.
+   */
+  async me(): Promise<AuthUser> {
+    return unwrap<AuthUser>(api.get('/v1/auth/me'));
   },
 
+  /** PATCH /v1/auth/me returns `{ user: {...} }` — different from GET. */
   async updateMe(patch: { preferred_language?: 'en' | 'hi' }): Promise<{ user: AuthUser }> {
     return unwrap<{ user: AuthUser }>(api.patch('/v1/auth/me', patch));
   },
 
   async logout(): Promise<void> {
-    await api.post('/v1/auth/logout').catch(() => undefined);
+    // Send an explicit empty body — `logoutSchema` is `z.object({...})` and
+    // some Nest pipe configurations reject `undefined` rather than coercing
+    // it to `{}`.
+    await api.post('/v1/auth/logout', {}).catch(() => undefined);
     await authStore.logout();
   },
 
-  async switchView(target: 'parent' | 'student', studentId?: string): Promise<OtpVerifyResponse> {
+  /**
+   * The backend's `switchViewSchema` (packages/shared/src/schemas/auth.ts)
+   * uses `view_context`, not `target`. An older wrapper sent `target` and
+   * was 422'd on every call.
+   */
+  async switchView(
+    viewContext: 'parent' | 'student',
+    studentId?: string,
+  ): Promise<OtpVerifyResponse> {
     return unwrap<OtpVerifyResponse>(
-      api.post('/v1/auth/switch-view', studentId ? { target, student_id: studentId } : { target }),
+      api.post(
+        '/v1/auth/switch-view',
+        studentId
+          ? { view_context: viewContext, student_id: studentId }
+          : { view_context: viewContext },
+      ),
     );
   },
 };

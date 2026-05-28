@@ -41,9 +41,10 @@ async function mintAccessAs(opts: {
 
   const phone = nextTestPhone();
   const agent = makeAgent(app);
-  await agent.post('/v1/auth/otp/send').send({ phone });
+  const send = await agent.post('/v1/auth/otp/send').send({ phone });
+  const otp_token = send.body.data.otp_token;
   const verify = await agent.post('/v1/auth/otp/verify').send({
-    phone,
+    otp_token,
     code: lastOtpFor(phone),
     device: { device_id: `dev-${role}-${Date.now()}`, platform: 'ios' },
   });

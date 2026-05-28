@@ -44,6 +44,12 @@ export interface OtpVerifyOutcome {
   ok: boolean;
   /** Set when ok=true; null otherwise. Caller resolves the user. */
   attempt_id: string | null;
+  /**
+   * The E.164 phone the verified OTP belongs to. The token→phone mapping
+   * is established at /otp/send time so /otp/verify can issue the right
+   * user's session without trusting any phone field from the client.
+   */
+  phone: string;
   reason?: string;
 }
 
@@ -83,6 +89,11 @@ export class OtpService {
     await this.redis.cacheClient.set(otpKey(phone), hash, 'EX', ttl);
     await this.redis.cacheClient.del(attemptsKey(phone));
 
+    // Mint an opaque token that binds this send to a future verify call.
+    // The client cannot synthesise it from knowledge of the phone alone.
+    const token = ulid();
+    await this.redis.cacheClient.set(tokenKey(token), phone, 'EX', ttl);
+
     await this.attempts.insertForPhone({
       phone,
       ip: ip ?? null,
@@ -105,19 +116,33 @@ export class OtpService {
     }
 
     return {
-      otp_token: ulid(),
+      otp_token: token,
       expires_in_seconds: ttl,
     };
   }
 
   /**
-   * Verify an OTP. Returns {ok: true, attempt_id} on success so the caller
-   * (AuthService) can chain user resolution + session creation. Throws
-   * AppError on rate-limit / lockout / invalid OTP.
+   * Verify an OTP. The caller passes the `otp_token` returned by /otp/send;
+   * we look up the associated phone in Redis and proceed. Returns
+   * `{ ok: true, attempt_id, phone }` on success so AuthService can chain
+   * user resolution + session creation. Throws AppError on token expiry,
+   * rate-limit, lockout, or invalid OTP.
    */
-  async verify(phone: string, code: string): Promise<OtpVerifyOutcome> {
-    // Dev-only master OTP shortcut. Bypasses Redis (so it works even
-    // when the user hasn't called /otp/send first) but ONLY when:
+  async verify(otpToken: string, code: string): Promise<OtpVerifyOutcome> {
+    // Resolve the phone the token was minted for. An expired or unknown
+    // token returns null; we treat that as "OTP expired" rather than
+    // "invalid token" so we don't leak token validity to an attacker.
+    const phone = await this.redis.cacheClient.get(tokenKey(otpToken));
+    if (!phone) {
+      throw new AppError({
+        code: ERROR_CODES.ERR_AUTH_OTP_EXPIRED,
+        message: 'This OTP has expired — request a new one',
+        statusCode: 401,
+      });
+    }
+
+    // Dev-only master OTP shortcut. Bypasses Redis OTP-hash lookup (so it
+    // works even when the configured SMS provider is silent) but ONLY when:
     //   - NODE_ENV === 'development'
     //   - JP_DEV_MASTER_OTP is set
     //   - The submitted code matches the master
@@ -126,15 +151,12 @@ export class OtpService {
     const masterOtp = this.appConfig.otp.devMasterOtp;
     if (masterOtp && this.appConfig.isDevelopment && code === masterOtp) {
       this.logger.warn(`dev-master-otp accepted for ${phone}`);
-      // Re-use an existing active attempt row when present; otherwise
-      // synthesise one so the audit trail joins still work. The shape
-      // mirrors what otp/send would have produced.
       const active = await this.attempts.findActiveByPhone(phone);
       if (active) {
         await this.attempts.markSucceeded(active.id);
-        // Clear any pending hash so subsequent normal verifies are clean.
         await this.invalidate(phone);
-        return { ok: true, attempt_id: active.id };
+        await this.redis.cacheClient.del(tokenKey(otpToken));
+        return { ok: true, attempt_id: active.id, phone };
       }
       const ttl = await this.config.getNumber('otp.ttl_seconds');
       const created = await this.attempts.insertForPhone({
@@ -144,7 +166,8 @@ export class OtpService {
         ip: null,
       });
       await this.attempts.markSucceeded(created.id);
-      return { ok: true, attempt_id: created.id };
+      await this.redis.cacheClient.del(tokenKey(otpToken));
+      return { ok: true, attempt_id: created.id, phone };
     }
 
     const hash = await this.redis.cacheClient.get(otpKey(phone));
@@ -202,9 +225,10 @@ export class OtpService {
     // Success — wipe Redis keys + mark attempt row succeeded.
     const active = await this.attempts.findActiveByPhone(phone);
     await this.invalidate(phone);
+    await this.redis.cacheClient.del(tokenKey(otpToken));
     if (active) await this.attempts.markSucceeded(active.id);
 
-    return { ok: true, attempt_id: active?.id ?? null };
+    return { ok: true, attempt_id: active?.id ?? null, phone };
   }
 
   // ------------------------------------------------------------------------
@@ -268,3 +292,5 @@ function generateCode(digits: number): string {
 
 const otpKey = (phone: string): string => `otp:${phone}`;
 const attemptsKey = (phone: string): string => `otp:attempts:${phone}`;
+/** Maps the opaque `otp_token` issued by /otp/send to its phone. */
+const tokenKey = (token: string): string => `otp:token:${token}`;

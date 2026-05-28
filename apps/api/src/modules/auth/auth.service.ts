@@ -3,7 +3,7 @@
  * token mint → audit emit. Each step lives in its own service; this is the
  * conductor.
  *
- *   1. OtpService.verify(phone, code)         — throws on failure
+ *   1. OtpService.verify(otp_token, code)     — throws on failure; returns phone
  *   2. UsersRepository.findByPhone / createGuest
  *   3. Generate sessionId UUID                — used by both JWT + session row
  *   4. TokenRotationService.issueInitialPair  — mints JWTs, inserts family,
@@ -28,7 +28,12 @@ import { OtpService } from './services/otp.service';
 import { TokenRotationService } from './services/token-rotation.service';
 
 export interface VerifyOtpInput {
-  phone: string;
+  /**
+   * Opaque token returned by /v1/auth/otp/send. AuthService passes it
+   * straight to OtpService.verify which resolves the phone from Redis.
+   * Phone is NOT taken from the client request body.
+   */
+  otpToken: string;
   code: string;
   deviceId: string;
   platform: 'ios' | 'android' | 'web';
@@ -66,14 +71,17 @@ export class AuthService {
   ) {}
 
   async verifyOtpAndIssue(input: VerifyOtpInput): Promise<VerifyOtpResult> {
-    // 1. Verify the OTP (throws AppError on failure — caller's filter renders).
-    await this.otp.verify(input.phone, input.code);
+    // 1. Verify the OTP and resolve the phone from the token in one shot.
+    //    Throws AppError on token expiry / lockout / wrong code; the global
+    //    exception filter renders the envelope.
+    const outcome = await this.otp.verify(input.otpToken, input.code);
+    const phone = outcome.phone;
 
     // 2. Resolve or create the user.
-    let user = await this.users.findByPhone(input.phone);
+    let user = await this.users.findByPhone(phone);
     let newGuest = false;
     if (!user) {
-      user = await this.users.createGuest(input.phone);
+      user = await this.users.createGuest(phone);
       newGuest = true;
     }
     const userRole = user.role as Role;
@@ -122,7 +130,7 @@ export class AuthService {
         action: 'user.created.guest',
         entity_kind: 'user',
         entity_id: user.id,
-        after: { phone: input.phone, role: 'guest' },
+        after: { phone, role: 'guest' },
         ip: input.ip ?? null,
         user_agent: input.userAgent ?? null,
         request_id: input.requestId ?? null,

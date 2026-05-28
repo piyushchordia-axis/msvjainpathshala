@@ -75,8 +75,9 @@ export default function OtpScreen() {
   const router = useRouter();
   const { t } = useTranslation();
   const { signIn } = useAuth();
-  const params = useLocalSearchParams<{ phone?: string }>();
+  const params = useLocalSearchParams<{ phone?: string; otp_token?: string }>();
   const phone = params.phone ?? '';
+  const otpToken = params.otp_token ?? '';
 
   const [cells, setCells] = useState<string[]>(() => Array(CELL_COUNT).fill(''));
   const [focused, setFocused] = useState(0);
@@ -141,9 +142,9 @@ export default function OtpScreen() {
 
   const verify = useCallback(async () => {
     if (!canSubmit) return;
-    if (!phone) {
+    if (!otpToken) {
       setError(
-        t('auth.otp.errors.missing_phone', {
+        t('auth.otp.errors.missing_token', {
           defaultValue: 'Session expired. Please go back and request a new OTP.',
         }),
       );
@@ -153,9 +154,9 @@ export default function OtpScreen() {
     setBusy(true);
     try {
       // eslint-disable-next-line no-console
-      console.log('[auth] verifying OTP', { phone });
+      console.log('[auth] verifying OTP', { phone, otpToken: `${otpToken.slice(0, 6)}…` });
       const resp = await authApi.otpVerify({
-        phone,
+        otp_token: otpToken,
         code,
         device_id: deviceId(),
         platform: devicePlatform(),

@@ -126,7 +126,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const refreshMe = useCallback(async () => {
     try {
-      const { user: u } = await authApi.me();
+      // GET /v1/auth/me returns the user fields flat in `data`, not wrapped
+      // in `{ user }`. See authApi.me() docstring.
+      const u = await authApi.me();
       setUser(u);
       const snap = authStore.getSnapshot();
       if (snap) authStore.setSnapshot({ ...snap, user: u });

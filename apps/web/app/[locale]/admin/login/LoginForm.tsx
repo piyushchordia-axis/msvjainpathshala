@@ -45,6 +45,9 @@ export function LoginForm({ nextPath }: Props) {
   const [phase, setPhase] = useState<Phase>('phone');
   const [digits, setDigits] = useState('');
   const [otp, setOtp] = useState('');
+  // Captured from the send-phase response and replayed in the verify body.
+  // The backend binds verify to the send via this opaque token.
+  const [otpToken, setOtpToken] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -72,6 +75,14 @@ export function LoginForm({ nextPath }: Props) {
         } | null;
         throw new Error(body?.error?.message ?? 'Could not send the OTP.');
       }
+      const body = (await res.json().catch(() => null)) as {
+        data?: { otp_token?: string };
+      } | null;
+      const token = body?.data?.otp_token;
+      if (!token) {
+        throw new Error('Could not start OTP verification. Try again.');
+      }
+      setOtpToken(token);
       setPhase('otp');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not send the OTP.');
@@ -82,6 +93,11 @@ export function LoginForm({ nextPath }: Props) {
 
   const verifyOtp = async () => {
     if (!otpValid) return;
+    if (!otpToken) {
+      setError('Session expired. Please request a new OTP.');
+      setPhase('phone');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -90,7 +106,7 @@ export function LoginForm({ nextPath }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           phase: 'verify',
-          phone: e164,
+          otp_token: otpToken,
           code: otp,
           device_id: getDeviceId(),
         }),

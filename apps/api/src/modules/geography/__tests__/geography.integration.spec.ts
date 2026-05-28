@@ -62,9 +62,10 @@ describe('Geography module — integration', () => {
 
     // Acquire any-role token, then mint a super_admin token via JwtService.
     const phone = nextTestPhone();
-    await agent.post('/v1/auth/otp/send').send({ phone });
+    const send = await agent.post('/v1/auth/otp/send').send({ phone });
+    const otp_token = send.body.data.otp_token;
     const verify = await agent.post('/v1/auth/otp/verify').send({
-      phone,
+      otp_token,
       code: lastOtpFor(phone),
       device: { device_id: 'dev-G', platform: 'ios' },
     });

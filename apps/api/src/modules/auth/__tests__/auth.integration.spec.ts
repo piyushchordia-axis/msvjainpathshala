@@ -43,12 +43,14 @@ describe('Auth module — integration', () => {
     const agent = makeAgent(app);
     const send = await agent.post('/v1/auth/otp/send').send({ phone });
     expect(send.status).toBe(202);
+    const otp_token = send.body.data.otp_token as string;
+    expect(otp_token).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
     const code = lastOtpFor(phone);
     expect(code).toMatch(/^\d{6}$/);
 
     const verify = await agent
       .post('/v1/auth/otp/verify')
-      .send({ phone, code, device: { device_id: 'dev-A', platform: 'ios' } });
+      .send({ otp_token, code, device: { device_id: 'dev-A', platform: 'ios' } });
     expect(verify.status).toBe(200);
     expect(verify.body.data.tokens.access_token).toMatch(/^eyJ/);
     expect(verify.body.data.tokens.refresh_token).toMatch(/^eyJ/);
@@ -59,13 +61,15 @@ describe('Auth module — integration', () => {
   it('2. Expired OTP returns ERR_AUTH_OTP_EXPIRED', async () => {
     const phone = nextTestPhone();
     const agent = makeAgent(app);
-    await agent.post('/v1/auth/otp/send').send({ phone });
+    const send = await agent.post('/v1/auth/otp/send').send({ phone });
+    const otp_token = send.body.data.otp_token as string;
     const code = lastOtpFor(phone)!;
-    // Manually expire the Redis key.
+    // Manually expire the Redis OTP hash for the phone; the token reverse
+    // map is still alive, so the verify resolves to phone but finds no hash.
     await redis.cacheClient.del(`otp:${phone}`);
     const verify = await agent
       .post('/v1/auth/otp/verify')
-      .send({ phone, code, device: { device_id: 'dev-A', platform: 'ios' } });
+      .send({ otp_token, code, device: { device_id: 'dev-A', platform: 'ios' } });
     expect(verify.status).toBe(401);
     expect(verify.body.error.code).toBe('ERR_AUTH_OTP_EXPIRED');
   });
@@ -74,18 +78,22 @@ describe('Auth module — integration', () => {
   it('3. Wrong code 3 times → ERR_AUTH_OTP_MAX_ATTEMPTS, OTP key purged', async () => {
     const phone = nextTestPhone();
     const agent = makeAgent(app);
-    await agent.post('/v1/auth/otp/send').send({ phone });
+    const send = await agent.post('/v1/auth/otp/send').send({ phone });
+    const otp_token = send.body.data.otp_token as string;
     expect(await redis.cacheClient.get(`otp:${phone}`)).not.toBeNull();
+    // JP_DEV_MASTER_OTP is set in dev — pick a code that's not equal to it
+    // so the master-OTP shortcut doesn't accidentally succeed.
+    const wrongCode = '111111';
     for (let i = 0; i < 2; i++) {
       const r = await agent
         .post('/v1/auth/otp/verify')
-        .send({ phone, code: '000000', device: { device_id: 'd', platform: 'ios' } });
+        .send({ otp_token, code: wrongCode, device: { device_id: 'd', platform: 'ios' } });
       expect(r.status).toBe(401);
       expect(r.body.error.code).toBe('ERR_AUTH_INVALID_OTP');
     }
     const r3 = await agent
       .post('/v1/auth/otp/verify')
-      .send({ phone, code: '000000', device: { device_id: 'd', platform: 'ios' } });
+      .send({ otp_token, code: wrongCode, device: { device_id: 'd', platform: 'ios' } });
     expect(r3.status).toBe(401);
     expect(r3.body.error.code).toBe('ERR_AUTH_OTP_MAX_ATTEMPTS');
     expect(await redis.cacheClient.get(`otp:${phone}`)).toBeNull();
@@ -140,11 +148,12 @@ describe('Auth module — integration', () => {
   it('6. Refresh rotates; replay of old token returns ERR_AUTH_REFRESH_REUSE_DETECTED', async () => {
     const phone = nextTestPhone();
     const agent = makeAgent(app);
-    await agent.post('/v1/auth/otp/send').send({ phone });
+    const send = await agent.post('/v1/auth/otp/send').send({ phone });
+    const otp_token = send.body.data.otp_token as string;
     const code = lastOtpFor(phone)!;
     const verify = await agent
       .post('/v1/auth/otp/verify')
-      .send({ phone, code, device: { device_id: 'dev-A', platform: 'ios' } });
+      .send({ otp_token, code, device: { device_id: 'dev-A', platform: 'ios' } });
     expect(verify.status).toBe(200);
     const oldRefresh = verify.body.data.tokens.refresh_token;
 
@@ -166,12 +175,13 @@ describe('Auth module — integration', () => {
       // Clear per-phone rate-limit ZSets so 6 logins in a row don't trip 3/min.
       await redis.cacheClient.del(`otp:rl:phone:m1:${phone}`);
       await redis.cacheClient.del(`otp:rl:phone:h1:${phone}`);
-      await agent.post('/v1/auth/otp/send').send({ phone });
+      const send = await agent.post('/v1/auth/otp/send').send({ phone });
+      const otp_token = send.body.data.otp_token as string;
       const code = lastOtpFor(phone);
       if (!code) throw new Error(`No OTP captured for ${phone}`);
       const r = await agent
         .post('/v1/auth/otp/verify')
-        .send({ phone, code, device: { device_id: deviceId, platform: 'ios' } });
+        .send({ otp_token, code, device: { device_id: deviceId, platform: 'ios' } });
       if (!r.body.data?.tokens) {
         throw new Error(`verify failed (status=${r.status}): ${JSON.stringify(r.body)}`);
       }
@@ -200,11 +210,12 @@ describe('Auth module — integration', () => {
 
     const phone = nextTestPhone();
     const agent = makeAgent(app);
-    await agent.post('/v1/auth/otp/send').send({ phone });
+    const send = await agent.post('/v1/auth/otp/send').send({ phone });
+    const otp_token = send.body.data.otp_token as string;
     const code = lastOtpFor(phone)!;
     const verify = await agent
       .post('/v1/auth/otp/verify')
-      .send({ phone, code, device: { device_id: 'dev-A', platform: 'ios' } });
+      .send({ otp_token, code, device: { device_id: 'dev-A', platform: 'ios' } });
     const userId = verify.body.data.user.id;
     const sessionId = JSON.parse(
       Buffer.from(verify.body.data.tokens.access_token.split('.')[1], 'base64url').toString(),
@@ -272,17 +283,19 @@ describe('Auth module — integration', () => {
     const targetPhone = nextTestPhone();
     const actorPhone = nextTestPhone();
     const agent = makeAgent(app);
-    await agent.post('/v1/auth/otp/send').send({ phone: targetPhone });
+    const targetSend = await agent.post('/v1/auth/otp/send').send({ phone: targetPhone });
+    const targetOtpToken = targetSend.body.data.otp_token as string;
     const targetVerify = await agent.post('/v1/auth/otp/verify').send({
-      phone: targetPhone,
+      otp_token: targetOtpToken,
       code: lastOtpFor(targetPhone),
       device: { device_id: 'dev-T', platform: 'ios' },
     });
     const targetUserId = targetVerify.body.data.user.id;
 
-    await agent.post('/v1/auth/otp/send').send({ phone: actorPhone });
+    const actorSend = await agent.post('/v1/auth/otp/send').send({ phone: actorPhone });
+    const actorOtpToken = actorSend.body.data.otp_token as string;
     const actorVerify = await agent.post('/v1/auth/otp/verify').send({
-      phone: actorPhone,
+      otp_token: actorOtpToken,
       code: lastOtpFor(actorPhone),
       device: { device_id: 'dev-A', platform: 'ios' },
     });
@@ -338,10 +351,15 @@ describe('Auth module — integration', () => {
   it('11. PATCH /v1/auth/me { preferred_language: "hi" } persists and audits', async () => {
     const phone = nextTestPhone();
     const agent = makeAgent(app);
-    await agent.post('/v1/auth/otp/send').send({ phone });
+    const send = await agent.post('/v1/auth/otp/send').send({ phone });
+    const otp_token = send.body.data.otp_token as string;
     const verify = await agent
       .post('/v1/auth/otp/verify')
-      .send({ phone, code: lastOtpFor(phone), device: { device_id: 'dev-P', platform: 'ios' } });
+      .send({
+        otp_token,
+        code: lastOtpFor(phone),
+        device: { device_id: 'dev-P', platform: 'ios' },
+      });
     const token = verify.body.data.tokens.access_token;
     const userId = verify.body.data.user.id;
 
@@ -371,10 +389,15 @@ describe('Auth module — integration', () => {
   it('12. PATCH /v1/auth/me with invalid preferred_language returns 422', async () => {
     const phone = nextTestPhone();
     const agent = makeAgent(app);
-    await agent.post('/v1/auth/otp/send').send({ phone });
+    const send = await agent.post('/v1/auth/otp/send').send({ phone });
+    const otp_token = send.body.data.otp_token as string;
     const verify = await agent
       .post('/v1/auth/otp/verify')
-      .send({ phone, code: lastOtpFor(phone), device: { device_id: 'dev-Q', platform: 'ios' } });
+      .send({
+        otp_token,
+        code: lastOtpFor(phone),
+        device: { device_id: 'dev-Q', platform: 'ios' },
+      });
     const token = verify.body.data.tokens.access_token;
 
     const resp = await agent

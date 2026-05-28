@@ -28,28 +28,36 @@ export const otpRequestSchema = z.object({
 export type OtpRequestDto = z.infer<typeof otpRequestSchema>;
 
 export const otpRequestResponseSchema = z.object({
-  /** Opaque token that binds the verify call to this request. */
+  /**
+   * Opaque token returned by the server. The client must echo this back on
+   * `POST /v1/auth/otp/verify` — verify binds by token, not phone, so an
+   * attacker who only knows the victim's phone cannot race a verify
+   * against a legitimate send (SPEC §7.1 step 2; see `otpVerifySchema`).
+   */
   otp_token: z.string().min(16),
-  /** Server-suggested resend window in seconds. */
-  resend_after_seconds: z.number().int().nonnegative(),
+  /** Time-to-live of the OTP in seconds (5 minutes by default). */
+  expires_in_seconds: z.number().int().nonnegative(),
 });
 export type OtpRequestResponse = z.infer<typeof otpRequestResponseSchema>;
 
 export const otpVerifySchema = z.object({
+  /**
+   * Opaque token returned by `POST /v1/auth/otp/send`. Binds the verify call
+   * to the prior send so an attacker who knows only the victim's phone
+   * cannot race a verify against a legitimate send (SPEC §7.1 step 2).
+   */
   otp_token: z.string().min(16),
   /** 6-digit code. */
   code: z
     .string()
     .length(OTP_LENGTH, `OTP must be ${OTP_LENGTH} digits`)
     .regex(/^\d+$/, 'OTP must be digits only'),
-  /** Device-bound metadata persisted in `device_sessions`. */
-  device: z
-    .object({
-      device_id: z.string().min(1).max(128),
-      platform: z.enum(['ios', 'android', 'web']),
-      app_version: z.string().min(1).max(32).optional(),
-    })
-    .optional(),
+  /** Device-bound metadata persisted in `device_sessions`. Required, not optional. */
+  device: z.object({
+    device_id: z.string().min(1).max(128),
+    platform: z.enum(['ios', 'android', 'web']),
+    app_version: z.string().min(1).max(32).optional(),
+  }),
 });
 export type OtpVerifyDto = z.infer<typeof otpVerifySchema>;
 

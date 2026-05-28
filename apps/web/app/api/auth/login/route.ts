@@ -3,8 +3,8 @@
  *
  * Two-step OTP flow proxied to the backend:
  *
- *   { phase: 'send', phone }                     → 202 + otp_token
- *   { phase: 'verify', phone, code, device_id }  → 200 + sets cookies
+ *   { phase: 'send', phone }                          → 202 + otp_token
+ *   { phase: 'verify', otp_token, code, device_id }   → 200 + sets cookies
  *
  * Combining both phases under one handler keeps the client component
  * small (a single `fetch('/api/auth/login', …)`). On verify success we
@@ -25,7 +25,9 @@ const sendBody = z.object({
 });
 const verifyBody = z.object({
   phase: z.literal('verify'),
-  phone: z.string().regex(/^\+[1-9]\d{6,14}$/),
+  // `otp_token` returned by the send phase. The client (LoginForm) holds it
+  // in component state between the two phases and submits it here.
+  otp_token: z.string().min(16),
   code: z
     .string()
     .length(6)
@@ -71,7 +73,7 @@ export async function POST(req: Request): Promise<NextResponse> {
     }
     // verify
     const verified = await otpVerify({
-      phone: parsed.phone,
+      otp_token: parsed.otp_token,
       code: parsed.code,
       device_id: parsed.device_id,
       platform: 'web',
