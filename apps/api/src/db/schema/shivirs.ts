@@ -120,7 +120,12 @@ export const shivir_attendance_scans = pgTable(
       .references(() => users.id, { onDelete: 'restrict' }),
     scan_kind: shivirScanKindEnum('scan_kind').notNull(),
     scanned_at: timestamp('scanned_at', { withTimezone: true }).notNull(),
-    client_op_id: uuid('client_op_id'),
+    /**
+     * Offline idempotency key. Stored as `text` (not `uuid`) so the mobile
+     * MMKV queue's ULID (Crockford base32, 26 chars) lands directly. Step 15
+     * migration 0010 widens this in line with attendance + sync_operations.
+     */
+    client_op_id: text('client_op_id'),
     device_offline: boolean('device_offline').notNull().default(false),
     ...timestamps(),
   },

@@ -28,7 +28,14 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ZodError } from 'zod';
 
-import { AppError, ERROR_CODES, type Role, type SyncOpKind, type SyncResultDto } from '@jp/shared';
+import {
+  AppError,
+  ERROR_CODES,
+  type Role,
+  type SyncOpKind,
+  type SyncResultDto,
+  SyncOperationDto,
+} from '@jp/shared';
 
 import { RedisService } from '../../core/redis/redis.service';
 import {
@@ -44,8 +51,6 @@ import {
 import { type ScopedActor } from '../attendance/attendance.service';
 
 import { SYNC_OP_HANDLERS, type SyncOpContext, type SyncOpHandler } from './handlers/op-handler';
-
-import type { SyncOperationDto } from '@jp/shared';
 
 export interface ApplyBatchResponse {
   results: SyncResultDto[];
@@ -201,7 +206,7 @@ export class SyncService {
     }
 
     // ---- Insert `processing` row (idempotent on race) ------------------------
-    let row = await this.syncOps.insertProcessing({
+    const row = await this.syncOps.insertProcessing({
       user_id: actor.user_id,
       client_op_id: op.client_op_id,
       op_kind: op.op_kind,

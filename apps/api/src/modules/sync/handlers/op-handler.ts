@@ -17,10 +17,9 @@
  * 5xx throws bubble up unchanged so the global filter logs them.
  */
 
+import type { ScopedActor } from '../../attendance/attendance.service';
 import type { Role, SyncOpKind } from '@jp/shared';
 import type { ZodSchema } from 'zod';
-
-import type { ScopedActor } from '../../attendance/attendance.service';
 
 export interface SyncOpContext {
   actor: ScopedActor;

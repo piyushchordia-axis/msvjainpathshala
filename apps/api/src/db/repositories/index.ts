@@ -28,6 +28,7 @@ export { SanchalakAssignmentsRepository } from './sanchalak-assignments.reposito
 export { SessionCancellationsRepository } from './session-cancellations.repository';
 export { SessionsRepository } from './sessions.repository';
 export { ShikshakAssignmentsRepository } from './shikshak-assignments.repository';
+export { ShivirsRepository } from './shivirs.repository';
 export { SmsLogsRepository } from './sms-logs.repository';
 export { StudentNotesRepository } from './student-notes.repository';
 export { StudentsRepository } from './students.repository';

@@ -29,6 +29,7 @@ import { MsvModule } from './modules/msv/msv.module';
 import { AdminBroadcastModule } from './modules/notifications/admin-broadcast.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { SessionsModule } from './modules/sessions/sessions.module';
+import { ShivirsModule } from './modules/shivirs/shivirs.module';
 import { StudentsModule } from './modules/students/students.module';
 import { SyncModule } from './modules/sync/sync.module';
 import { ObservabilityModule } from './observability/observability.module';
@@ -66,6 +67,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     AdminBroadcastModule,
     SessionsModule,
     AttendanceModule,
+    ShivirsModule,
     SyncModule,
     RealtimeModule,
     AdminQueuesModule,
