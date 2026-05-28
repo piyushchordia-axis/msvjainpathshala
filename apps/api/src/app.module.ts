@@ -22,7 +22,9 @@ import { BatchesModule } from './modules/batches/batches.module';
 import { CentreHolidaysModule } from './modules/centre-holidays/centre-holidays.module';
 import { CentresModule } from './modules/centres/centres.module';
 import { CompetitionsModule } from './modules/competitions/competitions.module';
+import { CurriculumModule } from './modules/curriculum/curriculum.module';
 import { EnrolmentsModule } from './modules/enrolments/enrolments.module';
+import { ExamsModule } from './modules/exams/exams.module';
 import { FormConfigsModule } from './modules/form-configs/form-configs.module';
 import { GalleryModule } from './modules/gallery/gallery.module';
 import { GeographyModule } from './modules/geography/geography.module';
@@ -80,6 +82,8 @@ import { RealtimeModule } from './realtime/realtime.module';
     HomeworkModule,
     NoticesModule,
     CompetitionsModule,
+    CurriculumModule,
+    ExamsModule,
     SyncModule,
     RealtimeModule,
     AdminQueuesModule,

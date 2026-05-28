@@ -92,6 +92,13 @@
       "when": 1779964367358,
       "tag": "0013_step18_homework_notices_competitions",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1779964367359,
+      "tag": "0014_step19_curriculum_exams",
+      "breakpoints": true
     }
   ]
 }

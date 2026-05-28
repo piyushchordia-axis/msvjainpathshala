@@ -66,6 +66,7 @@ export type MMKVInstanceId =
   | 'jp.queue.shivir_scans'
   | 'jp.queue.niyam_submissions'
   | 'jp.queue.acknowledgements'
+  | 'jp.queue.exam_answers'
   | 'jp.queue.failed_ops'
   | 'jp.cache.batches'
   | 'jp.cache.students'
