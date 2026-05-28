@@ -1,0 +1,196 @@
+/* ============================================================
+   Jain Pathshala — Colors & Type tokens
+   Web-side authoring tokens. Mirror in constants/colors.ts for
+   the Expo app. Dark mode variables defined under [data-theme="dark"].
+   ============================================================ */
+
+/* ---- Fonts ---- */
+/* Display: Tiro Devanagari Sanskrit — dignified serif w/ excellent Devanagari support
+   Body:    Mukta — humanist sans, covers Devanagari + Gujarati + Latin
+   Mono:    JetBrains Mono — code snippets only */
+@import url("https://fonts.googleapis.com/css2?family=Tiro+Devanagari+Sanskrit:ital@0;1&family=Mukta:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap");
+
+:root {
+  /* ===== Brand palette (locked) ===== */
+  --jp-saffron:        #D4621A;
+  --jp-saffron-700:    #B5521A;   /* pressed */
+  --jp-saffron-300:    #E8A06A;   /* hover wash / chip bg */
+  --jp-saffron-50:     #FCEFE3;   /* tint */
+
+  --jp-maroon:         #7A1818;
+  --jp-maroon-700:     #5C1010;
+  --jp-maroon-300:     #B45C5C;
+  --jp-maroon-50:      #F4E6E6;
+
+  --jp-cream:          #FDF8F2;   /* page bg */
+  --jp-cream-dark:     #F5EDE0;   /* card surface */
+  --jp-cream-deeper:   #ECE0CC;   /* divider, subtle line */
+
+  --jp-text-primary:   #1A0A00;
+  --jp-text-sub:       #8B6F5E;
+  --jp-text-dim:       #C4A882;
+
+  /* gold accent for tirthankar tier & MSV branding */
+  --jp-gold:           #C8941F;
+  --jp-gold-300:       #E6C26B;
+  --jp-gold-50:        #FAF1DC;
+
+  /* ===== Age group coding (locked) ===== */
+  --jp-age-bal:        #B91C1C;  /* youngest, red */
+  --jp-age-kishor:     #854D0E;  /* amber */
+  --jp-age-tarun:      #166534;  /* green */
+  --jp-age-yuva:       #1E3A8A;  /* oldest, blue */
+
+  --jp-age-bal-bg:     #FBE5E5;
+  --jp-age-kishor-bg:  #F6ECD6;
+  --jp-age-tarun-bg:   #DCEEDD;
+  --jp-age-yuva-bg:    #DDE3F4;
+
+  /* ===== Spiritual tier (Punya) ===== */
+  --jp-tier-jigyasu:    #8B6F5E;  /* learner — earth */
+  --jp-tier-shravak:    #166534;  /* listener — green */
+  --jp-tier-sadhak:     #1E3A8A;  /* seeker — blue */
+  --jp-tier-shraman:    #7A1818;  /* ascetic — maroon */
+  --jp-tier-tirthankar: #C8941F;  /* enlightened — gold */
+
+  /* ===== Semantic ===== */
+  --jp-success:        #166534;
+  --jp-success-bg:     #DCEEDD;
+  --jp-warning:        #B45309;
+  --jp-warning-bg:     #FBEED0;
+  --jp-error:          #B91C1C;
+  --jp-error-bg:       #FBE5E5;
+  --jp-info:           #1E3A8A;
+  --jp-info-bg:        #DDE3F4;
+
+  /* ===== Surfaces & interaction (light) ===== */
+  --jp-bg:             var(--jp-cream);
+  --jp-surface:        #FFFFFF;
+  --jp-surface-2:      var(--jp-cream-dark);   /* elevated card on cream page */
+  --jp-surface-3:      #FFFFFF;                /* modal / overlay card */
+  --jp-overlay:        rgba(26, 10, 0, 0.55);
+  --jp-divider:        var(--jp-cream-deeper);
+  --jp-border:         #E6D8C2;
+  --jp-focus-ring:     #D4621A;
+
+  /* state mods (apply via color-mix or pre-baked vars) */
+  --jp-hover-tint:     rgba(212, 98, 26, 0.08);
+  --jp-pressed-tint:   rgba(122, 24, 24, 0.12);
+  --jp-disabled-fg:    var(--jp-text-dim);
+  --jp-disabled-bg:    #EFE6D5;
+
+  /* ===== Spacing scale (4px base) ===== */
+  --sp-0: 0px;
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-7: 32px;
+  --sp-8: 40px;
+  --sp-9: 48px;
+  --sp-10: 64px;
+  --sp-11: 80px;
+
+  /* ===== Radii ===== */
+  --r-xs: 4px;
+  --r-sm: 8px;
+  --r-md: 12px;   /* default card */
+  --r-lg: 16px;   /* elevated card */
+  --r-xl: 24px;
+  --r-pill: 999px;
+
+  /* ===== Elevation (warm, low) =====
+     We avoid the cool gray "Material" drop; shadows are tinted
+     toward maroon so they sit naturally on cream. */
+  --sh-1: 0 1px 2px rgba(122, 24, 24, 0.06);
+  --sh-2: 0 2px 6px rgba(122, 24, 24, 0.08), 0 1px 2px rgba(122, 24, 24, 0.06);
+  --sh-3: 0 8px 24px rgba(122, 24, 24, 0.10), 0 2px 6px rgba(122, 24, 24, 0.06);
+  --sh-4: 0 20px 48px rgba(122, 24, 24, 0.16), 0 4px 12px rgba(122, 24, 24, 0.08);
+  --sh-focus: 0 0 0 3px rgba(212, 98, 26, 0.28);
+
+  /* ===== Type tokens =====
+     Mobile-first. Sizes in px so they map directly to RN. */
+  --font-display: "Tiro Devanagari Sanskrit", "Mukta", Georgia, serif;
+  --font-body:    "Mukta", -apple-system, "Segoe UI", system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --fs-h1: 32px; --lh-h1: 40px; --fw-h1: 600;
+  --fs-h2: 26px; --lh-h2: 34px; --fw-h2: 600;
+  --fs-h3: 20px; --lh-h3: 28px; --fw-h3: 600;
+  --fs-h4: 17px; --lh-h4: 24px; --fw-h4: 600;
+  --fs-body-lg: 17px; --lh-body-lg: 26px; --fw-body-lg: 400;
+  --fs-body:    15px; --lh-body:    22px; --fw-body:    400;
+  --fs-label:   14px; --lh-label:   20px; --fw-label:   500;
+  --fs-caption: 12px; --lh-caption: 16px; --fw-caption: 500;
+  --fs-overline:11px; --lh-overline:14px; --fw-overline:600;
+
+  /* ===== Motion ===== */
+  --ease-standard: cubic-bezier(.2, .8, .2, 1);
+  --ease-emphasis: cubic-bezier(.34, 1.56, .64, 1);   /* slight overshoot for celebrations */
+  --dur-quick: 140ms;
+  --dur-base:  220ms;
+  --dur-slow:  360ms;
+}
+
+/* ============= Dark mode ============= */
+[data-theme="dark"] {
+  --jp-bg:           #1A0F08;
+  --jp-surface:      #261A11;
+  --jp-surface-2:    #2F2117;
+  --jp-surface-3:    #3A2A1E;
+  --jp-overlay:      rgba(0, 0, 0, 0.7);
+  --jp-divider:      #3D2C20;
+  --jp-border:       #4A3727;
+
+  --jp-text-primary: #FDF8F2;
+  --jp-text-sub:     #C4A882;
+  --jp-text-dim:     #8B6F5E;
+
+  --jp-saffron-50:   #3A1E0A;
+  --jp-maroon-50:    #3A1414;
+  --jp-gold-50:      #3A2A0A;
+
+  --jp-age-bal-bg:    #3A1414;
+  --jp-age-kishor-bg: #3A2A0F;
+  --jp-age-tarun-bg:  #0F2A18;
+  --jp-age-yuva-bg:   #15203F;
+
+  --jp-success-bg:   #0F2A18;
+  --jp-warning-bg:   #3A2A0F;
+  --jp-error-bg:     #3A1414;
+  --jp-info-bg:      #15203F;
+
+  --jp-hover-tint:   rgba(232, 160, 106, 0.10);
+  --jp-pressed-tint: rgba(180, 92, 92, 0.14);
+  --jp-disabled-bg:  #2A1F15;
+
+  --sh-1: 0 1px 2px rgba(0,0,0,0.5);
+  --sh-2: 0 2px 6px rgba(0,0,0,0.5), 0 1px 2px rgba(0,0,0,0.4);
+  --sh-3: 0 8px 24px rgba(0,0,0,0.55), 0 2px 6px rgba(0,0,0,0.4);
+  --sh-4: 0 20px 48px rgba(0,0,0,0.6), 0 4px 12px rgba(0,0,0,0.45);
+}
+
+/* ============= Semantic element styles ============= */
+.jp-h1 { font-family: var(--font-display); font-size: var(--fs-h1); line-height: var(--lh-h1); font-weight: var(--fw-h1); color: var(--jp-maroon); letter-spacing: -0.01em; }
+.jp-h2 { font-family: var(--font-display); font-size: var(--fs-h2); line-height: var(--lh-h2); font-weight: var(--fw-h2); color: var(--jp-maroon); letter-spacing: -0.005em; }
+.jp-h3 { font-family: var(--font-body);    font-size: var(--fs-h3); line-height: var(--lh-h3); font-weight: var(--fw-h3); color: var(--jp-text-primary); }
+.jp-h4 { font-family: var(--font-body);    font-size: var(--fs-h4); line-height: var(--lh-h4); font-weight: var(--fw-h4); color: var(--jp-text-primary); }
+
+.jp-body-lg  { font-family: var(--font-body); font-size: var(--fs-body-lg); line-height: var(--lh-body-lg); color: var(--jp-text-primary); }
+.jp-body     { font-family: var(--font-body); font-size: var(--fs-body);    line-height: var(--lh-body);    color: var(--jp-text-primary); }
+.jp-label    { font-family: var(--font-body); font-size: var(--fs-label);   line-height: var(--lh-label);   font-weight: var(--fw-label); color: var(--jp-text-sub); }
+.jp-caption  { font-family: var(--font-body); font-size: var(--fs-caption); line-height: var(--lh-caption); color: var(--jp-text-sub); }
+.jp-overline { font-family: var(--font-body); font-size: var(--fs-overline);line-height: var(--lh-overline);font-weight: var(--fw-overline); letter-spacing: 0.12em; text-transform: uppercase; color: var(--jp-text-sub); }
+
+/* Page baseline (use in standalone HTML) */
+.jp-page {
+  background: var(--jp-bg);
+  color: var(--jp-text-primary);
+  font-family: var(--font-body);
+  font-size: var(--fs-body);
+  line-height: var(--lh-body);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}

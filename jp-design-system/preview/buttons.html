@@ -1,0 +1,31 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><link rel="stylesheet" href="_card.css"></head>
+<body>
+<div class="card">
+  <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap:10px; align-items:center;">
+    <!-- Primary -->
+    <div style="display:flex; align-items:center; justify-content:center; height:48px; background:#D4621A; color:#FFFFFF; border-radius:12px; font-weight:600; font-size:15px; box-shadow:0 2px 6px rgba(122,24,24,.08);">Mark Present</div>
+    <div style="display:flex; align-items:center; justify-content:center; height:48px; background:#B5521A; color:#FFFFFF; border-radius:12px; font-weight:600; font-size:15px; transform:scale(.98);">Pressed</div>
+    <div style="display:flex; align-items:center; justify-content:center; height:48px; background:#EFE6D5; color:#C4A882; border-radius:12px; font-weight:600; font-size:15px;">Disabled</div>
+    <div style="display:flex; align-items:center; justify-content:center; gap:8px; height:48px; background:#D4621A; color:#FFFFFF; border-radius:12px; font-weight:600; font-size:15px;">
+      <div style="width:14px;height:14px;border:2px solid rgba(255,255,255,.4); border-top-color:#FFFFFF; border-radius:50%; animation:spin 1s linear infinite;"></div>
+      Loading
+    </div>
+  </div>
+  <div class="mono" style="margin-top:8px;">Primary · default / pressed / disabled / loading</div>
+
+  <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:10px; margin-top:14px;">
+    <div style="display:flex; align-items:center; justify-content:center; height:46px; background:transparent; color:#7A1818; border:1.5px solid #7A1818; border-radius:12px; font-weight:600; font-size:15px;">View Notice</div>
+    <div style="display:flex; align-items:center; justify-content:center; height:46px; background:#F4E6E6; color:#5C1010; border:1.5px solid #5C1010; border-radius:12px; font-weight:600; font-size:15px;">Pressed</div>
+    <div style="display:flex; align-items:center; justify-content:center; height:46px; background:transparent; color:#C4A882; border:1.5px solid #C4A882; border-radius:12px; font-weight:600; font-size:15px;">Disabled</div>
+  </div>
+  <div class="mono" style="margin-top:8px;">Secondary · maroon outline</div>
+
+  <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:10px; margin-top:14px;">
+    <div style="display:flex; align-items:center; justify-content:center; height:44px; background:transparent; color:#D4621A; border-radius:12px; font-weight:600; font-size:15px;">Skip</div>
+    <div style="display:flex; align-items:center; justify-content:center; height:44px; background:rgba(212,98,26,.08); color:#B5521A; border-radius:12px; font-weight:600; font-size:15px;">Pressed</div>
+    <div style="display:flex; align-items:center; justify-content:center; height:44px; background:transparent; color:#C4A882; border-radius:12px; font-weight:600; font-size:15px;">Disabled</div>
+  </div>
+  <div class="mono" style="margin-top:8px;">Ghost · text-only</div>
+</div>
+<style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+</body></html>

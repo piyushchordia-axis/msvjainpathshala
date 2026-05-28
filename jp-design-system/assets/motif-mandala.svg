@@ -1,0 +1,38 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="240" height="240" fill="none" stroke="currentColor" stroke-width="1.2">
+  <circle cx="120" cy="120" r="8"></circle>
+  <circle cx="120" cy="120" r="28"></circle>
+  <circle cx="120" cy="120" r="56"></circle>
+  <circle cx="120" cy="120" r="88"></circle>
+  <circle cx="120" cy="120" r="116"></circle>
+  <g>
+    
+    <g id="petal"><path d="M120 32 C 112 64 112 96 120 120 C 128 96 128 64 120 32 Z"></path></g>
+    <use href="#petal" transform="rotate(45 120 120)"></use>
+    <use href="#petal" transform="rotate(90 120 120)"></use>
+    <use href="#petal" transform="rotate(135 120 120)"></use>
+    <use href="#petal" transform="rotate(180 120 120)"></use>
+    <use href="#petal" transform="rotate(225 120 120)"></use>
+    <use href="#petal" transform="rotate(270 120 120)"></use>
+    <use href="#petal" transform="rotate(315 120 120)"></use>
+  </g>
+  
+  <g>
+    <g id="ray"><path d="M120 4 L120 32"></path></g>
+    <use href="#ray" transform="rotate(22.5 120 120)"></use>
+    <use href="#ray" transform="rotate(45 120 120)"></use>
+    <use href="#ray" transform="rotate(67.5 120 120)"></use>
+    <use href="#ray" transform="rotate(90 120 120)"></use>
+    <use href="#ray" transform="rotate(112.5 120 120)"></use>
+    <use href="#ray" transform="rotate(135 120 120)"></use>
+    <use href="#ray" transform="rotate(157.5 120 120)"></use>
+    <use href="#ray" transform="rotate(180 120 120)"></use>
+    <use href="#ray" transform="rotate(202.5 120 120)"></use>
+    <use href="#ray" transform="rotate(225 120 120)"></use>
+    <use href="#ray" transform="rotate(247.5 120 120)"></use>
+    <use href="#ray" transform="rotate(270 120 120)"></use>
+    <use href="#ray" transform="rotate(292.5 120 120)"></use>
+    <use href="#ray" transform="rotate(315 120 120)"></use>
+    <use href="#ray" transform="rotate(337.5 120 120)"></use>
+  </g>
+</svg>

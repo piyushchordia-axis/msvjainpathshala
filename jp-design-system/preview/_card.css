@@ -1,0 +1,50 @@
+/* shared chrome for every preview card */
+@import url("../tokens.css");
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--jp-cream);
+  color: var(--jp-text-primary);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+.card {
+  width: 700px;
+  padding: 20px 24px;
+  background: var(--jp-cream);
+}
+.card.surface {
+  background: var(--jp-surface);
+}
+.swatch-grid {
+  display: grid;
+  gap: 12px;
+}
+.swatch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.swatch .chip {
+  border-radius: 10px;
+  border: 1px solid var(--jp-border);
+  box-shadow: var(--sh-1);
+  aspect-ratio: 1.6 / 1;
+}
+.swatch .name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--jp-text-primary);
+  line-height: 1.2;
+}
+.swatch .hex {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--jp-text-sub);
+}
+.row { display: flex; align-items: center; gap: 14px; }
+.spacer { flex: 1; }
+.divider { height: 1px; background: var(--jp-divider); width: 100%; }
+.mono { font-family: var(--font-mono); font-size: 11.5px; color: var(--jp-text-sub); }
