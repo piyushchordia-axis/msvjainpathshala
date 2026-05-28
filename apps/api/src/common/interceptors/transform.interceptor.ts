@@ -23,6 +23,13 @@ import type { CallHandler, ExecutionContext, NestInterceptor } from '@nestjs/com
 export const BYPASS_ENVELOPE = Symbol.for('jp.bypassEnvelope');
 
 const PAGINATION_KEYS = new Set(['page', 'page_size', 'total', 'next_cursor', 'prev_cursor']);
+/**
+ * Non-pagination keys we lift from the controller's payload into `meta`.
+ * Step 10 adds `warning` + `duplicate_of_student_id` for enrolment
+ * duplicate detection (SPEC §8.1 — same name+dob+parent surfaces a
+ * non-blocking warning).
+ */
+const META_LIFT_KEYS = new Set(['warning', 'duplicate_of_student_id']);
 
 @Injectable()
 export class TransformInterceptor<T = unknown> implements NestInterceptor<T> {
@@ -35,25 +42,29 @@ export class TransformInterceptor<T = unknown> implements NestInterceptor<T> {
 
         const requestId = getRequestContext()?.request_id;
 
-        // Lift pagination fields off the payload into meta when present.
+        // Lift pagination + meta fields off the payload into meta when present.
         let data: unknown = payload;
         const meta: Record<string, unknown> = {
           request_id: requestId,
           timestamp: new Date().toISOString(),
         };
-        if (payload && typeof payload === 'object' && 'items' in (payload as object)) {
+        if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
           const obj = payload as Record<string, unknown>;
+          const isList = 'items' in obj;
           const lifted: Record<string, unknown> = {};
-          for (const key of PAGINATION_KEYS) {
-            if (key in obj) {
-              lifted[key] = obj[key];
+          for (const key of META_LIFT_KEYS) {
+            if (key in obj) lifted[key] = obj[key];
+          }
+          if (isList) {
+            for (const key of PAGINATION_KEYS) {
+              if (key in obj) lifted[key] = obj[key];
             }
           }
           if (Object.keys(lifted).length > 0) {
-            // Don't mutate the controller's object — clone with pagination keys stripped.
+            // Don't mutate the controller's object — clone with lifted keys stripped.
             const remaining: Record<string, unknown> = {};
             for (const [k, v] of Object.entries(obj)) {
-              if (!PAGINATION_KEYS.has(k)) remaining[k] = v;
+              if (!PAGINATION_KEYS.has(k) && !META_LIFT_KEYS.has(k)) remaining[k] = v;
             }
             data = remaining;
             Object.assign(meta, lifted);

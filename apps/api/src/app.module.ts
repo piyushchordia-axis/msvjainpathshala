@@ -19,8 +19,11 @@ import { ScopeGuard } from './modules/auth/guards/scope.guard';
 import { BatchesModule } from './modules/batches/batches.module';
 import { CentreHolidaysModule } from './modules/centre-holidays/centre-holidays.module';
 import { CentresModule } from './modules/centres/centres.module';
+import { EnrolmentsModule } from './modules/enrolments/enrolments.module';
 import { FormConfigsModule } from './modules/form-configs/form-configs.module';
 import { GeographyModule } from './modules/geography/geography.module';
+import { MsvModule } from './modules/msv/msv.module';
+import { StudentsModule } from './modules/students/students.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { QueuesModule } from './queues/queues.module';
 
@@ -46,6 +49,9 @@ import { QueuesModule } from './queues/queues.module';
     BatchesModule,
     CentreHolidaysModule,
     FormConfigsModule,
+    EnrolmentsModule,
+    StudentsModule,
+    MsvModule,
     AdminQueuesModule,
     HealthModule,
     ObservabilityModule,

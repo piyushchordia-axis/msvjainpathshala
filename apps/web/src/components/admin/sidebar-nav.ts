@@ -56,6 +56,12 @@ export const ADMIN_NAV: NavGroup[] = [
     items: [
       { href: '/admin/students', label: 'Students', icon: Users, min: 'shikshak' },
       { href: '/admin/enrolments', label: 'Enrolments', icon: ListChecks, min: 'sanchalak' },
+      {
+        href: '/admin/msv-enrolments',
+        label: 'MSV applications',
+        icon: Sparkles,
+        min: 'city_admin',
+      },
       { href: '/admin/shikshaks', label: 'Shikshaks', icon: Sparkles, min: 'sanchalak' },
     ],
   },

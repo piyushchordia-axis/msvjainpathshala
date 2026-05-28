@@ -5,13 +5,16 @@ import {
   CentreHolidaysRepository,
   CentresRepository,
   DeviceSessionsRepository,
+  EnrolmentsRepository,
   FormConfigsRepository,
   GeographyRepository,
+  MsvEnrolmentsRepository,
   PhoneOtpAttemptsRepository,
   PunyaTransactionsRepository,
   RefreshTokenFamiliesRepository,
   SanchalakAssignmentsRepository,
   ShikshakAssignmentsRepository,
+  StudentsRepository,
   SystemConfigRepository,
   UsersRepository,
 } from '../../db/repositories';
@@ -41,6 +44,9 @@ const REPOSITORIES = [
   SanchalakAssignmentsRepository,
   ShikshakAssignmentsRepository,
   FormConfigsRepository,
+  StudentsRepository,
+  EnrolmentsRepository,
+  MsvEnrolmentsRepository,
 ] as const;
 
 /**
