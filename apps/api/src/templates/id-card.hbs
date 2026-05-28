@@ -1,0 +1,206 @@
+<!--
+  Jain Pathshala — Digital ID card template (Step 11).
+
+  Source: jp-design-system/preview/id-card.html — preserved exactly for
+  saffron / maroon / cream palette, layout (photo top-left, QR bottom-right,
+  MSV badge top-right when {{msv_badge}}), and the bottom strip with the
+  verify URL.
+
+  Variables provided by IdCardGenerationProcessor.buildContext():
+    {{student_name_en}}    student.full_name (Latin / fallback)
+    {{student_name_hi}}    Devanagari rendering of the same name
+    {{father_name}}        "S/o ..." prefix is added in the template
+    {{photo_url}}          data: URL of the student photo (when available)
+    {{photo_initials}}     "AR"-style initials shown when no photo
+    {{student_id}}         student.student_code (eg. JP-PUN-0428)
+    {{centre_name_en}}     centre.name
+    {{centre_name_hi}}     centre.name (Devanagari)
+    {{batch_name_en}}      batch.name + " · day · time" composed by processor
+    {{batch_name_hi}}      same in Devanagari
+    {{qr_code_url}}        data: URL of the rendered QR PNG
+    {{msv_badge}}          truthy → render the MSV pill in the top band
+    {{valid_year}}         academic year string (eg. "2025–26")
+    {{verify_url}}         visible bottom-right URL (jainpathshala.app/v/...)
+    {{tier_label_en}}      Punya tier (eg. "Sadhak"); defaults to "Jigyasu"
+    {{tier_label_hi}}      Same in Devanagari (Tier badge uses the EN label)
+    {{tier_color}}         Hex of the tier dot (defaults to #8B6F5E earth)
+    {{dob_display}}        DOB pre-formatted "DD MMM YYYY"
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Jain Pathshala — Digital ID Card</title>
+<style>
+  @page { size: 540px 340px; margin: 0; }
+  html, body { margin: 0; padding: 0; background: #FDF8F2; font-family: 'Mukta', system-ui, sans-serif; }
+  .card-frame { width: 540px; height: 340px; background: #FFFFFF; border-radius: 16px;
+                box-shadow: 0 8px 24px rgba(122,24,24,.10); overflow: hidden; position: relative;
+                border: 1px solid #E6D8C2; }
+  .band {
+    position: relative; height: 80px;
+    background: linear-gradient(135deg, #7A1818, #5C1010);
+    color: #FDF8F2; padding: 12px 18px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .logo-mark {
+    width: 36px; height: 36px;
+    background: linear-gradient(135deg, #E8A06A, #D4621A);
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+    font-size: 24px; color: #FFFFFF;
+  }
+  .brand-title {
+    font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+    font-size: 18px; line-height: 1;
+  }
+  .brand-subtitle {
+    font-size: 9px; letter-spacing: .14em; text-transform: uppercase;
+    color: #E8A06A; margin-top: 3px;
+  }
+  .msv-badge {
+    background: linear-gradient(135deg, #E6C26B, #C8941F);
+    color: #5C1010; padding: 4px 10px; border-radius: 6px;
+    font-size: 10px; font-weight: 800; letter-spacing: .12em;
+    box-shadow: 0 2px 6px rgba(200,148,31,.4);
+  }
+  .motif { position: absolute; right: -40px; top: 60px; opacity: .05; color: #D4621A; }
+  .body { position: relative; padding: 18px; display: flex; gap: 18px; }
+  .photo {
+    width: 120px; height: 144px; border-radius: 8px;
+    background: linear-gradient(135deg, #E8A06A, #D4621A);
+    background-size: cover; background-position: center;
+    display: flex; align-items: center; justify-content: center;
+    color: #FFFFFF;
+    font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+    font-size: 48px; flex-shrink: 0;
+    border: 3px solid #FDF8F2;
+    box-shadow: 0 2px 6px rgba(122,24,24,.16);
+  }
+  .photo.with-image { background-image: url("{{photo_url}}"); color: transparent; }
+  .info { flex: 1; min-width: 0; }
+  .name-en {
+    font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+    color: #7A1818; font-size: 22px; line-height: 1.1;
+  }
+  .name-hi {
+    font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+    color: #7A1818; font-size: 14px; line-height: 1.2; margin-top: 2px;
+  }
+  .meta-line { font-size: 11px; color: #8B6F5E; margin-top: 2px; }
+  .grid {
+    display: grid; grid-template-columns: auto 1fr;
+    gap: 6px 16px; margin-top: 14px; font-size: 11px;
+  }
+  .grid .lbl { color: #8B6F5E; }
+  .grid .val { font-weight: 600; color: #1A0A00; }
+  .grid .val.mono { font-family: 'JetBrains Mono', monospace; }
+  .tier { display: flex; align-items: center; gap: 4px; }
+  .tier .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+               background: {{tier_color}}; }
+  .tier .name {
+    font-weight: 600; color: {{tier_color}};
+    font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+  }
+  .qr-wrap { text-align: center; }
+  .qr-box {
+    width: 80px; height: 80px;
+    background: #FFFFFF;
+    border: 1px solid #E6D8C2;
+    border-radius: 6px; padding: 4px;
+  }
+  .qr-box img { width: 72px; height: 72px; display: block; }
+  .qr-label {
+    margin-top: 6px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 10px; color: #8B6F5E;
+  }
+  .strip {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    height: 24px; background: #F5EDE0; padding: 0 18px;
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 10px; color: #8B6F5E;
+  }
+  .strip .verify { font-family: 'JetBrains Mono', monospace; }
+</style>
+</head>
+<body>
+<div class="card-frame">
+
+  <!-- Top maroon band: logo + brand + MSV badge -->
+  <div class="band">
+    <div class="brand">
+      <div class="logo-mark">ज</div>
+      <div>
+        <div class="brand-title">Jain Pathshala</div>
+        <div class="brand-subtitle">Student Identity Card · {{valid_year}}</div>
+      </div>
+    </div>
+    {{#if msv_badge}}
+    <div class="msv-badge">MSV</div>
+    {{/if}}
+  </div>
+
+  <!-- Mandala motif background -->
+  <div class="motif">
+    <svg width="280" height="280" viewBox="0 0 240 240" fill="none" stroke="currentColor" stroke-width="1">
+      <circle cx="120" cy="120" r="50"></circle>
+      <circle cx="120" cy="120" r="80"></circle>
+      <circle cx="120" cy="120" r="110"></circle>
+      <g>
+        <path id="p" d="M120 32 C 112 64 112 96 120 120 C 128 96 128 64 120 32 Z"></path>
+        <use href="#p" transform="rotate(45 120 120)"></use>
+        <use href="#p" transform="rotate(90 120 120)"></use>
+        <use href="#p" transform="rotate(135 120 120)"></use>
+      </g>
+    </svg>
+  </div>
+
+  <!-- Body: photo + info + QR -->
+  <div class="body">
+    <div class="photo {{#if photo_url}}with-image{{/if}}">{{photo_initials}}</div>
+
+    <div class="info">
+      <div class="name-en">{{student_name_en}}</div>
+      <div class="name-hi">{{student_name_hi}}</div>
+      <div class="meta-line">{{#if father_name}}S/o {{father_name}} · {{/if}}DOB {{dob_display}}</div>
+
+      <div class="grid">
+        <div class="lbl">Student ID</div>
+        <div class="val mono">{{student_id}}</div>
+
+        <div class="lbl">Centre</div>
+        <div class="val">{{centre_name_en}}{{#if centre_name_hi}} · {{centre_name_hi}}{{/if}}</div>
+
+        <div class="lbl">Batch</div>
+        <div class="val">{{batch_name_en}}</div>
+
+        <div class="lbl">Tier</div>
+        <div class="val">
+          <span class="tier">
+            <span class="dot"></span>
+            <span class="name">{{tier_label_en}}</span>
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <div class="qr-wrap">
+      <div class="qr-box">
+        <img src="{{qr_code_url}}" alt="Verify"/>
+      </div>
+      <div class="qr-label">verify</div>
+    </div>
+  </div>
+
+  <!-- Bottom cream strip: validity + verify URL -->
+  <div class="strip">
+    <span>Valid until 31 Mar {{valid_year}} · Property of Jain Pathshala Trust</span>
+    <span class="verify">{{verify_url}}</span>
+  </div>
+
+</div>
+</body>
+</html>

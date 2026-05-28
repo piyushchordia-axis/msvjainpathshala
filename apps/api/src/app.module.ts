@@ -9,6 +9,7 @@ import { DatabaseModule } from './core/database/database.module';
 import { HealthModule } from './core/health/health.module';
 import { LoggerModule } from './core/logger/logger.module';
 import { RedisModule } from './core/redis/redis.module';
+import { StorageModule } from './core/storage/storage.module';
 import { SystemConfigModule } from './core/system-config/system-config.module';
 import { AdminQueuesModule } from './modules/admin-queues/admin-queues.module';
 import { AuditModule } from './modules/audit/audit.module';
@@ -22,6 +23,7 @@ import { CentresModule } from './modules/centres/centres.module';
 import { EnrolmentsModule } from './modules/enrolments/enrolments.module';
 import { FormConfigsModule } from './modules/form-configs/form-configs.module';
 import { GeographyModule } from './modules/geography/geography.module';
+import { MediaModule } from './modules/media/media.module';
 import { MsvModule } from './modules/msv/msv.module';
 import { StudentsModule } from './modules/students/students.module';
 import { ObservabilityModule } from './observability/observability.module';
@@ -40,6 +42,7 @@ import { QueuesModule } from './queues/queues.module';
     LoggerModule,
     DatabaseModule,
     RedisModule,
+    StorageModule,
     SystemConfigModule,
     QueuesModule.forRoot(),
     AuditModule,
@@ -52,6 +55,7 @@ import { QueuesModule } from './queues/queues.module';
     EnrolmentsModule,
     StudentsModule,
     MsvModule,
+    MediaModule,
     AdminQueuesModule,
     HealthModule,
     ObservabilityModule,

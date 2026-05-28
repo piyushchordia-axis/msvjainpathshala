@@ -15,6 +15,7 @@ export { DeviceSessionsRepository } from './device-sessions.repository';
 export { EnrolmentsRepository } from './enrolments.repository';
 export { FormConfigsRepository } from './form-configs.repository';
 export { GeographyRepository } from './geography.repository';
+export { MediaAssetsRepository } from './media-assets.repository';
 export { MsvEnrolmentsRepository } from './msv-enrolments.repository';
 export { PhoneOtpAttemptsRepository } from './phone-otp-attempts.repository';
 export { PunyaTransactionsRepository } from './punya-transactions.repository';

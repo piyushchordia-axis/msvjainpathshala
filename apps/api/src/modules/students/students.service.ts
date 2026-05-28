@@ -13,10 +13,12 @@
  *   - student-view:               only the student in view
  */
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
+import { Queue } from 'bullmq';
 
-import { AppError, ERROR_CODES, type Role, StudentStatus } from '@jp/shared';
+import { AppError, ERROR_CODES, QUEUES, type Role, StudentStatus } from '@jp/shared';
 
+import { RedisService } from '../../core/redis/redis.service';
 import { CentresRepository, StudentsRepository } from '../../db/repositories';
 import { AuditService } from '../audit/audit.service';
 
@@ -49,11 +51,19 @@ export interface UpdatableStudentFields {
 
 @Injectable()
 export class StudentsService {
+  private readonly logger = new Logger(StudentsService.name);
+  private readonly idCardQueue: Queue;
+
   constructor(
     private readonly repo: StudentsRepository,
     private readonly centresRepo: CentresRepository,
     private readonly audit: AuditService,
-  ) {}
+    redis: RedisService,
+  ) {
+    this.idCardQueue = new Queue(QUEUES.ID_CARD_GENERATION, {
+      connection: redis.bullmqClient,
+    });
+  }
 
   // ---- Reads ------------------------------------------------------------
 
@@ -102,6 +112,24 @@ export class StudentsService {
         message: 'Student not found',
         statusCode: 404,
       });
+    }
+
+    // Photo changes regenerate the ID card (Step 11 prompt — "Regenerate
+    // triggers: transfer (new batch), MSV approval, photo update").
+    if (
+      patch.profile_photo_asset_id !== undefined &&
+      patch.profile_photo_asset_id !== before.profile_photo_asset_id
+    ) {
+      await this.idCardQueue
+        .add('idcard.generation', {
+          student_id: id,
+          reason: 'photo.updated',
+        })
+        .catch((err) =>
+          this.logger.warn(
+            `idcard.generation enqueue (photo.updated) failed: ${(err as Error).message}`,
+          ),
+        );
     }
     await this.audit
       .emit({

@@ -72,6 +72,9 @@ storybook-static/
 # --- Docker volumes (local) ---
 infra/docker/volumes/
 
+# --- Step-11 smoke-test scratch dir (HTML/PNG artefacts) ---
+infra/scratch/
+
 # --- Misc ---
 .cache/
 tmp/

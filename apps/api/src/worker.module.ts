@@ -5,6 +5,7 @@ import { DatabaseModule } from './core/database/database.module';
 import { HealthModule } from './core/health/health.module';
 import { LoggerModule } from './core/logger/logger.module';
 import { RedisModule } from './core/redis/redis.module';
+import { StorageModule } from './core/storage/storage.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { QueueProcessorsModule } from './queues/queue-processors.module';
 import { QueuesModule } from './queues/queues.module';
@@ -25,6 +26,7 @@ import { SchedulerModule } from './queues/scheduler.module';
     LoggerModule,
     DatabaseModule,
     RedisModule,
+    StorageModule,
     HealthModule, // exports MetricsService used by QueueMetricsService
     QueuesModule.forRoot(),
     QueueProcessorsModule,
