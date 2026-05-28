@@ -211,6 +211,35 @@ export const ERROR_CODES = {
   ERR_COMPETITION_ALREADY_REGISTERED: 'ERR_COMPETITION_ALREADY_REGISTERED',
 
   // ----------------------------------------------------------------------
+  // Domain — Quizzes (SPEC §5.14, §6.18) — Step 20
+  // ----------------------------------------------------------------------
+  /** Push or scheduled quiz id not in the database. */
+  ERR_QUIZ_NOT_FOUND: 'ERR_QUIZ_NOT_FOUND',
+  /** Push-quiz lookup succeeded but the quiz has been ended / expired. */
+  ERR_QUIZ_NOT_ACTIVE: 'ERR_QUIZ_NOT_ACTIVE',
+  /** Time-window enforcement: client tried to answer after the per-question
+   *  deadline (or after the push-quiz expires_at). */
+  ERR_QUIZ_TIME_WINDOW_EXPIRED: 'ERR_QUIZ_TIME_WINDOW_EXPIRED',
+  /** Push-quiz hasn't started (state machine transition not made). */
+  ERR_QUIZ_NOT_STARTED: 'ERR_QUIZ_NOT_STARTED',
+  /** Push-quiz attempted by a student outside the target batch. */
+  ERR_QUIZ_STUDENT_NOT_IN_BATCH: 'ERR_QUIZ_STUDENT_NOT_IN_BATCH',
+  /** Question id referenced is not part of the push quiz / scheduled quiz. */
+  ERR_QUIZ_QUESTION_NOT_FOUND: 'ERR_QUIZ_QUESTION_NOT_FOUND',
+  /** Submitted to a question that isn't the currently-active one. */
+  ERR_QUIZ_QUESTION_NOT_ACTIVE: 'ERR_QUIZ_QUESTION_NOT_ACTIVE',
+  /** Quiz event scheduled window is closed. */
+  ERR_QUIZ_EVENT_WINDOW_CLOSED: 'ERR_QUIZ_EVENT_WINDOW_CLOSED',
+  /** Quiz attempt has already been submitted. */
+  ERR_QUIZ_ATTEMPT_ALREADY_SUBMITTED: 'ERR_QUIZ_ATTEMPT_ALREADY_SUBMITTED',
+  /** Push-quiz ended already (POST /end after end). */
+  ERR_QUIZ_ALREADY_ENDED: 'ERR_QUIZ_ALREADY_ENDED',
+  /** Tried to use an AI-generated question that hasn't been reviewed. */
+  ERR_QUIZ_QUESTION_NOT_APPROVED: 'ERR_QUIZ_QUESTION_NOT_APPROVED',
+  /** AI generation job id not found. */
+  ERR_AI_JOB_NOT_FOUND: 'ERR_AI_JOB_NOT_FOUND',
+
+  // ----------------------------------------------------------------------
   // AI service (SPEC §3.5)
   // ----------------------------------------------------------------------
   ERR_AI_UNAVAILABLE: 'ERR_AI_UNAVAILABLE',

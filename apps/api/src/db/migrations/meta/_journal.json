@@ -99,6 +99,13 @@
       "when": 1779964367359,
       "tag": "0014_step19_curriculum_exams",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1779964367360,
+      "tag": "0015_step20_quizzes",
+      "breakpoints": true
     }
   ]
 }

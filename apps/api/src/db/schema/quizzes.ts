@@ -1,10 +1,10 @@
 /** Quiz bank + scheduled quiz events + push (live) quizzes (SPEC §5.14). */
 
-import { integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, integer, jsonb, pgTable, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 
 import { auditedBy, timestamps } from './_helpers';
 import { batches, centres } from './centres';
-import { ageGroupEnum, quizScopeEnum } from './enums';
+import { ageGroupEnum, languageEnum, quizScopeEnum } from './enums';
 import { cities } from './geography';
 import { users } from './identity';
 import { students } from './students';
@@ -25,6 +25,42 @@ export const questions = pgTable('questions', {
   ai_generation_id: uuid('ai_generation_id'),
   reviewed: text('reviewed'),
   reviewed_by: uuid('reviewed_by').references(() => users.id, { onDelete: 'set null' }),
+  /** Step 20: AI-generated rows enter `pending_review` and are filtered out
+   *  of quiz_event question pickers until a super_admin transitions them to
+   *  `approved` (or `rejected`). Existing rows are backfilled to `approved`
+   *  in migration 0015. */
+  is_ai_generated: boolean('is_ai_generated').notNull().default(false),
+  ai_review_status: text('ai_review_status'), // 'pending_review' | 'approved' | 'rejected'
+  ...timestamps(),
+});
+
+/**
+ * AI quiz-generation job state (SPEC §6.18).
+ *
+ * Workflow:
+ *   1. Admin calls POST /v1/admin/question-bank/ai-generate → row inserted
+ *      with status='queued'; BullMQ `ai.quiz.generate` job enqueued.
+ *   2. Worker calls FastAPI /ai/quiz/generate (Step 21); when complete it
+ *      inserts the generated questions into `questions` with
+ *      `is_ai_generated=true, ai_review_status='pending_review'` and updates
+ *      this row to status='ready' + result_question_ids[].
+ *   3. Admin GETs the job to fetch the drafted question ids and reviews
+ *      them one-by-one via POST /v1/admin/questions/:id/approve | /reject.
+ *   4. Once all are approved the job is considered complete (no extra publish
+ *      step needed — `approved` rows immediately appear in the pickers).
+ */
+export const ai_generation_jobs = pgTable('ai_generation_jobs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  actor_user_id: uuid('actor_user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  topic: text('topic').notNull(),
+  age_group: ageGroupEnum('age_group'),
+  language: languageEnum('language').notNull().default('en'),
+  count: integer('count').notNull().default(10),
+  status: text('status').notNull().default('queued'), // 'queued' | 'running' | 'ready' | 'failed'
+  result_question_ids: uuid('result_question_ids').array(),
+  error: text('error'),
   ...timestamps(),
 });
 
@@ -130,3 +166,5 @@ export type PushQuizQuestion = typeof push_quiz_questions.$inferSelect;
 export type NewPushQuizQuestion = typeof push_quiz_questions.$inferInsert;
 export type PushQuizAttempt = typeof push_quiz_attempts.$inferSelect;
 export type NewPushQuizAttempt = typeof push_quiz_attempts.$inferInsert;
+export type AiGenerationJob = typeof ai_generation_jobs.$inferSelect;
+export type NewAiGenerationJob = typeof ai_generation_jobs.$inferInsert;

@@ -72,6 +72,12 @@ export const ADMIN_NAV: NavGroup[] = [
       { href: '/admin/batches', label: 'Batches', icon: CalendarDays, min: 'sanchalak' },
       { href: '/admin/curriculum', label: 'Curriculum', icon: ScrollText, min: 'city_admin' },
       { href: '/admin/exams', label: 'Exams', icon: ListChecks, min: 'city_admin' },
+      {
+        href: '/admin/questions/ai-review',
+        label: 'AI questions',
+        icon: Sparkles,
+        min: 'super_admin',
+      },
       { href: '/admin/niyams', label: 'Niyams', icon: Flame, min: 'shikshak' },
       { href: '/admin/shivirs', label: 'Shivirs', icon: CalendarDays, min: 'city_admin' },
       { href: '/admin/punya/manual-award', label: 'Award Punya', icon: Award, min: 'shikshak' },

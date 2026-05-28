@@ -36,6 +36,7 @@ import { NoticesModule } from './modules/notices/notices.module';
 import { AdminBroadcastModule } from './modules/notifications/admin-broadcast.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { PunyaModule } from './modules/punya/punya.module';
+import { QuizzesModule } from './modules/quizzes/quizzes.module';
 import { SessionsModule } from './modules/sessions/sessions.module';
 import { ShivirsModule } from './modules/shivirs/shivirs.module';
 import { StudentsModule } from './modules/students/students.module';
@@ -84,6 +85,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     CompetitionsModule,
     CurriculumModule,
     ExamsModule,
+    QuizzesModule,
     SyncModule,
     RealtimeModule,
     AdminQueuesModule,
