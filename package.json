@@ -43,5 +43,10 @@
     "turbo": "^2.3.3",
     "typescript": "^5.7.2",
     "typescript-eslint": "^8.18.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "ioredis": "^5.11.0"
+    }
   }
 }

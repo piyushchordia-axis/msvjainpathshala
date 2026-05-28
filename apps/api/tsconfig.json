@@ -1,0 +1,28 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "useDefineForClassFields": false,
+    "resolveJsonModule": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "noEmit": true,
+    "esModuleInterop": true,
+
+    "types": ["node"],
+
+    // Explicitly OVERRIDE tsconfig.base.json's paths. Pnpm symlinks
+    // node_modules/@jp/* → ../../packages/*, and the packages' package.json
+    // `main` / `types` fields drive resolution to the built `dist/`.
+    // Inheriting the base's paths would shortcut the resolver to the source
+    // .ts files, which neither tsc nor @swc-node/register handles cleanly
+    // at runtime.
+    "paths": {}
+  },
+  "include": ["src/**/*"]
+}

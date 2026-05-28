@@ -32,9 +32,15 @@ venv/
 .ruff_cache/
 
 # --- Environment & secrets ---
+# Production / per-developer overrides stay local; example + development
+# (local-machine, no secrets) variants are committed.
 .env
-.env.*
+.env.local
+.env.*.local
+.env.production
+.env.staging
 !.env.example
+!.env.development
 !.env.*.example
 *.pem
 *.key
