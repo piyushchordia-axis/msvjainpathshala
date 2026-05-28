@@ -1,5 +1,10 @@
 import { Global, Module } from '@nestjs/common';
 
+import {
+  BatchesRepository,
+  PunyaTransactionsRepository,
+  UsersRepository,
+} from '../../db/repositories';
 import { AppConfigService } from '../config/app-config.service';
 import { ConfigModule } from '../config/config.module';
 
@@ -13,8 +18,9 @@ import {
 } from './drizzle.service';
 
 /**
- * Global database module — constructs the read + write Postgres clients ONCE
- * and exposes `DrizzleService` to the rest of the app.
+ * Global database module — constructs the read + write Postgres clients ONCE,
+ * exposes `DrizzleService`, and ships the Step 4 repository layer
+ * (UsersRepository / BatchesRepository / PunyaTransactionsRepository).
  *
  * Both pools share a graceful-shutdown hook (DrizzleService.onModuleDestroy).
  */
@@ -48,7 +54,10 @@ import {
       inject: ['JP_POOLS'],
     },
     DrizzleService,
+    UsersRepository,
+    BatchesRepository,
+    PunyaTransactionsRepository,
   ],
-  exports: [DrizzleService],
+  exports: [DrizzleService, UsersRepository, BatchesRepository, PunyaTransactionsRepository],
 })
 export class DatabaseModule {}
