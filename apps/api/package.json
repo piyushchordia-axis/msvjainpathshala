@@ -1,0 +1,10 @@
+{
+  "name": "@jp/api",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Jain Pathshala — NestJS backend API + BullMQ worker (placeholder; built in Step 3).",
+  "scripts": {
+    "lint": "echo \"@jp/api: lint not yet configured (Step 3)\" && exit 0",
+    "typecheck": "echo \"@jp/api: typecheck not yet configured (Step 3)\" && exit 0"
+  }
+}

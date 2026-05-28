@@ -1,0 +1,10 @@
+{
+  "name": "@jp/mobile",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Jain Pathshala — Expo React Native mobile app (placeholder; built in later step).",
+  "scripts": {
+    "lint": "echo \"@jp/mobile: lint not yet configured\" && exit 0",
+    "typecheck": "echo \"@jp/mobile: typecheck not yet configured\" && exit 0"
+  }
+}

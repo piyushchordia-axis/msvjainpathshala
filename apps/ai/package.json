@@ -1,0 +1,10 @@
+{
+  "name": "@jp/ai",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Jain Pathshala — Python FastAPI AI service (placeholder; Node package only for pnpm workspace discovery — actual app is Python).",
+  "scripts": {
+    "lint": "echo \"@jp/ai: Python lint runs via ruff in Python toolchain\" && exit 0",
+    "typecheck": "echo \"@jp/ai: Python typecheck runs via mypy in Python toolchain\" && exit 0"
+  }
+}

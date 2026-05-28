@@ -1,0 +1,16 @@
+node_modules
+.pnpm-store
+dist
+build
+.next
+.turbo
+.expo
+coverage
+pnpm-lock.yaml
+*.tsbuildinfo
+
+# Python service has its own formatter (ruff).
+apps/ai/
+
+# Design system source files are vendor-formatted; do not reformat.
+jp-design-system/

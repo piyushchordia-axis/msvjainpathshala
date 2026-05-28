@@ -1,0 +1,10 @@
+{
+  "name": "@jp/design-tokens",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Design tokens (W3C JSON + typed exports) consumed by Jain Pathshala web and mobile (built in Step 2).",
+  "scripts": {
+    "lint": "echo \"@jp/design-tokens: lint not yet configured (Step 2)\" && exit 0",
+    "typecheck": "echo \"@jp/design-tokens: typecheck not yet configured (Step 2)\" && exit 0"
+  }
+}

@@ -1,0 +1,67 @@
+# Jain Pathshala — CI skeleton (Step 1).
+#
+# Mirrors SPEC.md §18.3 but only enables the jobs that are runnable at this
+# stage of the build. The integration-tests job is added in Step 4 (once the
+# DB schema lands and `pnpm --filter @jp/api db:migrate` is available); the
+# security-scan job is added in Step 18 alongside the rest of the security
+# pipeline.
+
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-typecheck:
+    name: Lint & Typecheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+  unit-tests:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Per-package test scripts land in later steps; until then this job
+      # exercises the install + workspace topology and exits clean.
+      - name: Test (workspace topology only at Step 1)
+        run: pnpm -r --if-present test
