@@ -75,9 +75,8 @@ export default function OtpScreen() {
   const router = useRouter();
   const { t } = useTranslation();
   const { signIn } = useAuth();
-  const params = useLocalSearchParams<{ phone?: string; otp_token?: string }>();
+  const params = useLocalSearchParams<{ phone?: string }>();
   const phone = params.phone ?? '';
-  const otpToken = params.otp_token ?? '';
 
   const [cells, setCells] = useState<string[]>(() => Array(CELL_COUNT).fill(''));
   const [focused, setFocused] = useState(0);
@@ -142,12 +141,9 @@ export default function OtpScreen() {
 
   const verify = useCallback(async () => {
     if (!canSubmit) return;
-    if (!otpToken) {
-      // Defensive: should never happen because phone.tsx always forwards it,
-      // but if the user deep-links straight to /otp we surface the missing
-      // token instead of failing silently.
+    if (!phone) {
       setError(
-        t('auth.otp.errors.missing_token', {
+        t('auth.otp.errors.missing_phone', {
           defaultValue: 'Session expired. Please go back and request a new OTP.',
         }),
       );
@@ -157,9 +153,9 @@ export default function OtpScreen() {
     setBusy(true);
     try {
       // eslint-disable-next-line no-console
-      console.log('[auth] verifying OTP', { phone, otpToken: `${otpToken.slice(0, 6)}…` });
+      console.log('[auth] verifying OTP', { phone });
       const resp = await authApi.otpVerify({
-        otp_token: otpToken,
+        phone,
         code,
         device_id: deviceId(),
         platform: devicePlatform(),
@@ -171,6 +167,7 @@ export default function OtpScreen() {
       // exactly which field the server rejected.
       const details =
         err instanceof ApiError ? { code: err.code, details: err.details } : undefined;
+
       console.warn('[auth] verify failed', err, details);
       setError(
         err instanceof ApiError
@@ -181,15 +178,13 @@ export default function OtpScreen() {
       );
       setBusy(false);
     }
-  }, [canSubmit, code, otpToken, phone, router, signIn, t]);
+  }, [canSubmit, code, phone, router, signIn, t]);
 
   const resend = useCallback(async () => {
     if (resendIn > 0 || !phone) return;
     setError(null);
     try {
-      const { otp_token: newToken } = await authApi.otpSend(phone);
-      // Update the route param so the next verify uses the fresh token.
-      router.setParams({ otp_token: newToken });
+      await authApi.otpSend(phone);
       setResendIn(RESEND_SECONDS);
       setCells(Array(CELL_COUNT).fill(''));
       lastAttemptedCode.current = '';
@@ -203,7 +198,7 @@ export default function OtpScreen() {
             }),
       );
     }
-  }, [resendIn, phone, focusCell, router, t]);
+  }, [resendIn, phone, focusCell, t]);
 
   // Auto-verify on full 6-digit entry, but only ONCE per unique code value.
   // Without the ref guard the effect would re-fire on every `verify` identity

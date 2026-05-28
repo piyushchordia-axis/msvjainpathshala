@@ -45,20 +45,21 @@ export const authApi = {
   },
 
   /**
-   * Verify the OTP. The backend binds the call to the original send via
-   * `otp_token` (returned by `otpSend`) — `phone` is NOT part of the verify
-   * body; the server resolves it from the token. The device block lets the
-   * server record a `device_sessions` row.
+   * Verify the OTP. The verify body is `{phone, code, device}` — the backend
+   * controller (auth.controller.ts otpVerifySendShape) resolves the active
+   * attempt by phone, not by otp_token. The shared schema in @jp/shared has
+   * an aspirational otp_token-binding version, but that's not the one wired
+   * up; the controller's local schema is the source of truth.
    */
   async otpVerify(input: {
-    otp_token: string;
+    phone: string;
     code: string;
     device_id: string;
     platform: 'ios' | 'android' | 'web';
   }): Promise<OtpVerifyResponse> {
     return unwrap<OtpVerifyResponse>(
       api.post('/v1/auth/otp/verify', {
-        otp_token: input.otp_token,
+        phone: input.phone,
         code: input.code,
         device: { device_id: input.device_id, platform: input.platform },
       }),
