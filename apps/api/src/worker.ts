@@ -1,13 +1,22 @@
 /**
  * apps/api — Worker entrypoint (`pnpm --filter @jp/api dev:worker`).
  *
- * Loads QueueModule + processors only (Step 3 prompt). Exposes a tiny native
- * HTTP server on `WORKER_HEALTH_PORT` so ECS / docker-compose can probe
- * liveness even though there are no application HTTP routes here.
+ * Loads the Step 7 background-jobs infrastructure only:
+ *   - QueuesModule.forRoot()  — producer registry (every queue + .dlq pair)
+ *   - QueueProcessorsModule    — every @Processor under queues/processors/*
+ *   - SchedulerModule          — installs 10 BullMQ repeatable jobs
+ *   - ObservabilityModule      — periodic queue depth/rate gauge exporter
+ *   - Plus the core modules (config, logger, db, redis, health for metrics)
+ *
+ * Exposes a tiny native HTTP server on `WORKER_HEALTH_PORT` so ECS /
+ * docker-compose can probe liveness even though there are no application
+ * HTTP routes here.
  *
  * Graceful shutdown drains BullMQ workers within a 25 s window — past that
  * we hard-exit so ECS doesn't keep us around forever on a stuck job
- * (CLAUDE.md "BullMQ → graceful shutdown 25s drain").
+ * (CLAUDE.md "BullMQ → graceful shutdown 25s drain"). nest.enableShutdownHooks
+ * fires OnApplicationShutdown on every provider, which is how every Worker
+ * registered via @Processor gets a chance to finish in-flight jobs.
  */
 
 import 'reflect-metadata';
@@ -19,6 +28,7 @@ import { Logger as PinoNestLogger } from 'nestjs-pino';
 
 import { loadAndValidateEnv } from './core/config/env.schema';
 import { shutdownTelemetry, startTelemetry } from './core/telemetry/telemetry';
+import { QUEUE_NAMES } from './queues/queues.constants';
 
 const DRAIN_TIMEOUT_MS = 25_000;
 
@@ -60,6 +70,10 @@ async function bootstrap(): Promise<void> {
   log.log(
     `apps/api worker ready — health http://0.0.0.0:${env.WORKER_HEALTH_PORT}/healthz` +
       `  (env=${env.NODE_ENV}, kind=${env.WORKER_KIND})`,
+    'WorkerBootstrap',
+  );
+  log.log(
+    `Registered ${QUEUE_NAMES.length} BullMQ queues: ${QUEUE_NAMES.join(', ')}`,
     'WorkerBootstrap',
   );
 

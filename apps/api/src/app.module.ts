@@ -10,6 +10,7 @@ import { HealthModule } from './core/health/health.module';
 import { LoggerModule } from './core/logger/logger.module';
 import { RedisModule } from './core/redis/redis.module';
 import { SystemConfigModule } from './core/system-config/system-config.module';
+import { AdminQueuesModule } from './modules/admin-queues/admin-queues.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
@@ -20,6 +21,8 @@ import { CentreHolidaysModule } from './modules/centre-holidays/centre-holidays.
 import { CentresModule } from './modules/centres/centres.module';
 import { FormConfigsModule } from './modules/form-configs/form-configs.module';
 import { GeographyModule } from './modules/geography/geography.module';
+import { ObservabilityModule } from './observability/observability.module';
+import { QueuesModule } from './queues/queues.module';
 
 /**
  * Root HTTP module. Domain modules from `src/modules/*` land here per step.
@@ -35,6 +38,7 @@ import { GeographyModule } from './modules/geography/geography.module';
     DatabaseModule,
     RedisModule,
     SystemConfigModule,
+    QueuesModule.forRoot(),
     AuditModule,
     AuthModule,
     GeographyModule,
@@ -42,7 +46,9 @@ import { GeographyModule } from './modules/geography/geography.module';
     BatchesModule,
     CentreHolidaysModule,
     FormConfigsModule,
+    AdminQueuesModule,
     HealthModule,
+    ObservabilityModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
