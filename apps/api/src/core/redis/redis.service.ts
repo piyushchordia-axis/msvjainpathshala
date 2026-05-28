@@ -14,7 +14,7 @@
 import { Injectable, Logger, type OnModuleDestroy } from '@nestjs/common';
 import { Redis, type RedisOptions } from 'ioredis';
 
-import { type AppConfigService } from '../config/app-config.service';
+import { AppConfigService } from '../config/app-config.service';
 
 function buildOptions(config: AppConfigService, opts: { includeKeyPrefix: boolean }): RedisOptions {
   const r = config.redis;

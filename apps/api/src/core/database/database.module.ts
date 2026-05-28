@@ -2,7 +2,11 @@ import { Global, Module } from '@nestjs/common';
 
 import {
   BatchesRepository,
+  DeviceSessionsRepository,
+  PhoneOtpAttemptsRepository,
   PunyaTransactionsRepository,
+  RefreshTokenFamiliesRepository,
+  SystemConfigRepository,
   UsersRepository,
 } from '../../db/repositories';
 import { AppConfigService } from '../config/app-config.service';
@@ -57,7 +61,20 @@ import {
     UsersRepository,
     BatchesRepository,
     PunyaTransactionsRepository,
+    DeviceSessionsRepository,
+    PhoneOtpAttemptsRepository,
+    RefreshTokenFamiliesRepository,
+    SystemConfigRepository,
   ],
-  exports: [DrizzleService, UsersRepository, BatchesRepository, PunyaTransactionsRepository],
+  exports: [
+    DrizzleService,
+    UsersRepository,
+    BatchesRepository,
+    PunyaTransactionsRepository,
+    DeviceSessionsRepository,
+    PhoneOtpAttemptsRepository,
+    RefreshTokenFamiliesRepository,
+    SystemConfigRepository,
+  ],
 })
 export class DatabaseModule {}

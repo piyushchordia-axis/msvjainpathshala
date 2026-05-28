@@ -11,7 +11,7 @@
 import { Injectable } from '@nestjs/common';
 import { and, desc, eq, sql } from 'drizzle-orm';
 
-import { type DrizzleService } from '../../core/database/drizzle.service';
+import { DrizzleService } from '../../core/database/drizzle.service';
 import { punya_balances, punya_transactions } from '../schema';
 
 import type { NewPunyaTransaction, PunyaTransaction } from '../schema';

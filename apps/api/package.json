@@ -12,8 +12,8 @@
     "start:worker": "node dist/worker.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "lint": "eslint src --max-warnings=0",
-    "test": "echo \"@jp/api: tests land in Step 5+\" && exit 0",
-    "test:integration": "echo \"@jp/api: integration tests land in Step 5+\" && exit 0",
+    "test": "vitest run --config vitest.config.ts",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "db:generate": "tsx --env-file=.env.development node_modules/drizzle-kit/bin.cjs generate --config drizzle.config.ts",
     "db:migrate": "tsx --env-file=.env.development src/db/migrate.ts",
     "db:studio": "tsx --env-file=.env.development node_modules/drizzle-kit/bin.cjs studio --config drizzle.config.ts",
@@ -35,10 +35,12 @@
     "@opentelemetry/sdk-node": "^0.57.0",
     "@opentelemetry/semantic-conventions": "^1.28.0",
     "@sentry/node": "^8.47.0",
+    "argon2": "^0.41.1",
     "bullmq": "^5.34.5",
     "drizzle-orm": "^0.36.4",
     "express": "^4.21.2",
     "ioredis": "^5.4.2",
+    "jose": "^5.9.6",
     "nestjs-pino": "^4.4.0",
     "pino": "^9.5.0",
     "pino-http": "^10.3.0",
@@ -54,7 +56,13 @@
     "@swc-node/register": "^1.10.10",
     "@swc/core": "^1.10.7",
     "@types/express": "^5.0.0",
+    "@types/supertest": "^6.0.2",
+    "@vitest/coverage-v8": "^2.1.8",
     "drizzle-kit": "^0.30.1",
-    "tsx": "^4.19.2"
+    "supertest": "^7.0.0",
+    "testcontainers": "^10.16.0",
+    "tsx": "^4.19.2",
+    "unplugin-swc": "^1.5.1",
+    "vitest": "^2.1.8"
   }
 }

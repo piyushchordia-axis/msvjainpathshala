@@ -12,22 +12,24 @@
  */
 
 import { Controller, ForbiddenException, Get, Header, Req, Res } from '@nestjs/common';
-import { HealthCheck, type HealthCheckService } from '@nestjs/terminus';
+import { HealthCheck, HealthCheckService } from '@nestjs/terminus';
 
 import { BYPASS_ENVELOPE } from '../../common/interceptors/transform.interceptor';
-import { type AppConfigService } from '../config/app-config.service';
+import { Public } from '../../modules/auth/decorators/public.decorator';
+import { AppConfigService } from '../config/app-config.service';
 
-import { type DbReadIndicator } from './db-read.indicator';
-import { type DbWriteIndicator } from './db-write.indicator';
-import { type MetricsService } from './metrics.service';
-import { type RedisIndicator } from './redis.indicator';
-import { type StorageIndicator } from './storage.indicator';
+import { DbReadIndicator } from './db-read.indicator';
+import { DbWriteIndicator } from './db-write.indicator';
+import { MetricsService } from './metrics.service';
+import { RedisIndicator } from './redis.indicator';
+import { StorageIndicator } from './storage.indicator';
 
 import type { Request, Response } from 'express';
 
 const LOOPBACKS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
 @Controller()
+@Public()
 export class HealthController {
   constructor(
     private readonly health: HealthCheckService,

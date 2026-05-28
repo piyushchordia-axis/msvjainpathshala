@@ -26,6 +26,7 @@ export default tseslint.config(
       '**/coverage/**',
       '**/*.d.ts',
       'apps/ai/**', // Python service; linted by ruff, not ESLint
+      'apps/api/**', // Has its own eslint.config.mjs (disables consistent-type-imports for NestJS DI)
       'jp-design-system/**', // Vendored design system; not application source
       '.claude/**', // Local Claude tooling — not project source
       '.husky/**', // Git hooks; shell scripts only

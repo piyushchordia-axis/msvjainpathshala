@@ -8,7 +8,7 @@
 import { Injectable } from '@nestjs/common';
 import { and, count, eq, isNull } from 'drizzle-orm';
 
-import { type DrizzleService } from '../../core/database/drizzle.service';
+import { DrizzleService } from '../../core/database/drizzle.service';
 import { batches, shikshak_batch_assignments, students } from '../schema';
 
 import type { Batch } from '../schema';

@@ -14,7 +14,7 @@
 import { Injectable } from '@nestjs/common';
 import { HealthIndicator, type HealthIndicatorResult } from '@nestjs/terminus';
 
-import { type AppConfigService } from '../config/app-config.service';
+import { AppConfigService } from '../config/app-config.service';
 
 @Injectable()
 export class StorageIndicator extends HealthIndicator {

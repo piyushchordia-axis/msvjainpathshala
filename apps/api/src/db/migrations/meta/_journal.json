@@ -29,6 +29,13 @@
       "when": 1779964367349,
       "tag": "0004_seed_static_data",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1779964367350,
+      "tag": "0005_system_config",
+      "breakpoints": true
     }
   ]
 }

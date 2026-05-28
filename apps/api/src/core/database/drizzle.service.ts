@@ -16,7 +16,7 @@ import { Inject, Injectable, Logger, type OnModuleDestroy } from '@nestjs/common
 import { drizzle, type PostgresJsDatabase } from 'drizzle-orm/postgres-js';
 import postgres, { type Sql } from 'postgres';
 
-import { type AppConfigService } from '../config/app-config.service';
+import { AppConfigService } from '../config/app-config.service';
 
 export const DRIZZLE_WRITE_TOKEN = Symbol('DRIZZLE_WRITE');
 export const DRIZZLE_READ_TOKEN = Symbol('DRIZZLE_READ');

@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { HealthCheckError, HealthIndicator, type HealthIndicatorResult } from '@nestjs/terminus';
 
-import { type RedisService } from '../redis/redis.service';
+import { RedisService } from '../redis/redis.service';
 
 /** Redis cache client `PING` readiness per SPEC §18.6. */
 @Injectable()

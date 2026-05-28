@@ -1,5 +1,5 @@
 import { type MiddlewareConsumer, Module, type NestModule } from '@nestjs/common';
-import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
+import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
@@ -9,16 +9,37 @@ import { DatabaseModule } from './core/database/database.module';
 import { HealthModule } from './core/health/health.module';
 import { LoggerModule } from './core/logger/logger.module';
 import { RedisModule } from './core/redis/redis.module';
+import { SystemConfigModule } from './core/system-config/system-config.module';
+import { AuditModule } from './modules/audit/audit.module';
+import { AuthModule } from './modules/auth/auth.module';
+import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
+import { RolesGuard } from './modules/auth/guards/roles.guard';
+import { ScopeGuard } from './modules/auth/guards/scope.guard';
 
 /**
- * Root HTTP module. Domain modules from `src/modules/*` land here in later
- * steps (auth in Step 5, centres+batches in Step 6, etc).
+ * Root HTTP module. Domain modules from `src/modules/*` land here per step.
+ *
+ * Auth guards are wired at APP_GUARD so every controller is protected by
+ * default; `@Public()` is the per-route opt-out (health endpoints + the
+ * three pre-auth routes /v1/auth/otp/send, /v1/auth/otp/verify, /v1/auth/refresh).
  */
 @Module({
-  imports: [ConfigModule, LoggerModule, DatabaseModule, RedisModule, HealthModule],
+  imports: [
+    ConfigModule,
+    LoggerModule,
+    DatabaseModule,
+    RedisModule,
+    SystemConfigModule,
+    AuditModule,
+    AuthModule,
+    HealthModule,
+  ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
     { provide: APP_INTERCEPTOR, useClass: TransformInterceptor },
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: ScopeGuard },
   ],
 })
 export class AppModule implements NestModule {

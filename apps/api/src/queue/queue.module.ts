@@ -19,7 +19,7 @@ import { ConfigModule } from '../core/config/config.module';
 import { DatabaseModule } from '../core/database/database.module';
 import { LoggerModule } from '../core/logger/logger.module';
 import { RedisModule } from '../core/redis/redis.module';
-import { type RedisService } from '../core/redis/redis.service';
+import { RedisService } from '../core/redis/redis.service';
 
 import { createDebugEchoWorker } from './processors/debug-echo.processor';
 

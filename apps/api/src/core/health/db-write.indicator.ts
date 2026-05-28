@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { HealthCheckError, HealthIndicator, type HealthIndicatorResult } from '@nestjs/terminus';
 
-import { type DrizzleService } from '../database/drizzle.service';
+import { DrizzleService } from '../database/drizzle.service';
 
 /** Postgres write pool readiness — `SELECT 1` per SPEC §18.6. */
 @Injectable()
