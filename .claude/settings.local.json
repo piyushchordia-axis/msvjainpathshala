@@ -6,7 +6,11 @@
       "Bash(mkdir -p /Users/sumit/Projects/Replit-Agent/.claude/skills/hello-world)",
       "Bash(npx --version)",
       "Bash(npx create-expo-app@latest EnnaCreationsApp --template blank-typescript)",
-      "Bash(npx expo *)"
+      "Bash(npx expo *)",
+      "Bash(grep -n \"^#### \\\\`\" /Users/sumit/Projects/Pathshala/SPEC.md)",
+      "Bash(grep \"^#### \\\\`\")",
+      "Bash(python3 -c ' *)",
+      "Read(//tmp/**)"
     ]
   }
 }

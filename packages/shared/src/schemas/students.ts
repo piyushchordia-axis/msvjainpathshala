@@ -1,4 +1,18 @@
-/** Student + enrolment + MSV DTOs (SPEC §5.3, §6.5, §6.6, CLAUDE.md Q1, Q11). */
+/** Student + enrolment + MSV DTOs (SPEC §5.3, §6.5, §6.6, CLAUDE.md Q1, Q11).
+ *
+ * The schemas here are the canonical READ shapes that API responses must
+ * match. WRITE shapes (POST/PATCH bodies) live next to the controllers
+ * that own them so the business rules — who can change which columns —
+ * stay with the route. Earlier versions of this file exported
+ * `studentCreateSchema` / `studentUpdateSchema` / `enrolmentDecisionSchema`
+ * / `msvDecisionSchema` as nominal "write shapes," but they didn't match
+ * what any controller actually validated and were classic traps for the
+ * next contributor (see the OTP verify incident: shared schema sat
+ * unused while the controller validated a different shape, and the mobile
+ * client wired to the wrong one). Apply-side write shapes that DO match a
+ * route are kept here (e.g. `msvApplicationSchema`) and imported by the
+ * controller.
+ */
 
 import { z } from 'zod';
 
@@ -8,7 +22,8 @@ import { GENDERS } from '../enums/gender.js';
 
 import { isoDate, isoDatetime, uuid } from './common.js';
 
-export const studentCreateSchema = z.object({
+export const studentSchema = z.object({
+  id: uuid,
   full_name: z.string().min(1).max(200),
   dob: isoDate,
   gender: z.enum(GENDERS),
@@ -20,36 +35,19 @@ export const studentCreateSchema = z.object({
   registration_form_data: z.record(z.string(), z.unknown()).default({}),
   /** Parent's consent that the child appears in gallery surfaces (CLAUDE.md Q6). */
   gallery_consent: z.boolean().default(false),
+  status: z.enum(STUDENT_STATUSES),
+  /** Set when the student is soft-deactivated (CLAUDE.md Q11 — never hard-deleted). */
+  deactivated_at: isoDatetime.nullable(),
+  student_view_enabled: z.boolean(),
+  msv_status: z.enum(MSV_STATUSES),
+  created_at: isoDatetime,
+  updated_at: isoDatetime,
 });
-export type StudentCreateDto = z.infer<typeof studentCreateSchema>;
-
-export const studentUpdateSchema = studentCreateSchema.partial();
-export type StudentUpdateDto = z.infer<typeof studentUpdateSchema>;
-
-export const studentSchema = studentCreateSchema.merge(
-  z.object({
-    id: uuid,
-    status: z.enum(STUDENT_STATUSES),
-    /** Set when the student is soft-deactivated (CLAUDE.md Q11 — never hard-deleted). */
-    deactivated_at: isoDatetime.nullable(),
-    student_view_enabled: z.boolean(),
-    msv_status: z.enum(MSV_STATUSES),
-    created_at: isoDatetime,
-    updated_at: isoDatetime,
-  }),
-);
 export type StudentDto = z.infer<typeof studentSchema>;
 
 // ---------------------------------------------------------------------------
 // Enrolment workflow (SPEC §8.1, §6.5)
 // ---------------------------------------------------------------------------
-
-export const enrolmentDecisionSchema = z.object({
-  student_id: uuid,
-  decision: z.enum(['approve', 'reject', 'waitlist']),
-  reason: z.string().max(500).optional(),
-});
-export type EnrolmentDecisionDto = z.infer<typeof enrolmentDecisionSchema>;
 
 export const enrolmentSchema = z.object({
   id: uuid,
@@ -67,16 +65,13 @@ export type EnrolmentDto = z.infer<typeof enrolmentSchema>;
 // MSV (CLAUDE.md Q1 — no eligibility validation; admin discretion only)
 // ---------------------------------------------------------------------------
 
+/**
+ * Body for `POST /v1/msv/enrolments` (the parent's apply call). Used by the
+ * MsvController via direct import — single source of truth.
+ */
 export const msvApplicationSchema = z.object({
   student_id: uuid,
   /** Parent's free-form note explaining why they're applying. */
   note: z.string().max(1000).optional(),
 });
 export type MsvApplicationDto = z.infer<typeof msvApplicationSchema>;
-
-export const msvDecisionSchema = z.object({
-  student_id: uuid,
-  decision: z.enum(['approve', 'reject', 'waitlist', 'revoke']),
-  reason: z.string().max(500).optional(),
-});
-export type MsvDecisionDto = z.infer<typeof msvDecisionSchema>;

@@ -15,7 +15,7 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
 
-import { AppError, ERROR_CODES } from '@jp/shared';
+import { AppError, ERROR_CODES, msvApplicationSchema } from '@jp/shared';
 
 import { ZodValidationPipe } from '../../common/validation/zod-validation.pipe';
 import { CurrentUser, type CurrentUserPayload } from '../auth/decorators/current-user.decorator';
@@ -23,11 +23,10 @@ import { Roles } from '../auth/decorators/roles.decorator';
 
 import { MsvService, type ScopedActor } from './msv.service';
 
-const applySchema = z.object({
-  student_id: z.string().uuid(),
-  note: z.string().max(1000).optional(),
-});
-
+// Decision write-shapes live locally because the controller routes verbs
+// through the URL (`/:id/approve`, `/:id/reject`, `/:id/waitlist`) and the
+// body just carries the admin's free-form `notes`. Reject requires a
+// non-empty justification — approve/waitlist make it optional.
 const decideSchema = z.object({
   notes: z.string().max(1000).optional(),
 });
@@ -71,7 +70,7 @@ export class MsvController {
   @HttpCode(201)
   async apply(
     @CurrentUser() user: CurrentUserPayload | undefined,
-    @Body(new ZodValidationPipe(applySchema)) body: z.infer<typeof applySchema>,
+    @Body(new ZodValidationPipe(msvApplicationSchema)) body: z.infer<typeof msvApplicationSchema>,
   ) {
     assertActor(user);
     return this.service.apply(toScopedActor(user), body);

@@ -1,0 +1,47 @@
+{
+  "promptsFile": "../prompts.md",
+  "promptsFormat": "markdown",
+  "promptsPattern": "^## PROMPT (\\d+)\\s*[—-]?\\s*(.*)$",
+
+  "model": "claude-opus-4-7[1m]",
+  "effort": "xhigh",
+  "thinking": { "type": "adaptive" },
+  "settingSources": ["user", "project", "local"],
+  "permissionMode": "bypassPermissions",
+  "allowedTools": null,
+  "disallowedTools": null,
+  "maxTurns": null,
+
+  "cwd": "..",
+
+  "blockSize": 6,
+  "contextWindowTokens": 1000000,
+  "compactAtPercent": 0.6,
+  "planModePrompts": [4, 5, 8, 13, 14, 23],
+  "planPhaseInstruction": "Use plan mode. Read every file you need to understand the current state, then produce a complete step-by-step implementation plan via ExitPlanMode. Number the steps, name every file you will create or modify, and call out the verification commands. Do NOT modify any files in this phase.",
+  "execPhaseInstruction": "Now execute the plan you just produced. Permissions are bypassed for this phase — apply every file change in the plan, run any required commands, and verify with typecheck/tests at the end. If you discover that part of the plan is wrong, adapt minimally but stay close to it. Do not re-plan; execute.",
+  "autoAnswerQuestions": true,
+  "extraContext": "You are executing a build prompt from prompts.md. CLAUDE.md and SPEC.md in this repo are authoritative — always re-read the relevant SPEC.md section before writing code. Do not invent file paths; verify against the current tree.",
+
+  "groundTruth": [
+    {
+      "label": "git branch + HEAD",
+      "command": "git rev-parse --abbrev-ref HEAD && git log -1 --oneline",
+      "allowFailure": true,
+      "maxBytes": 500
+    },
+    { "label": "git status", "command": "git status --short", "allowFailure": true, "maxBytes": 4000 },
+    { "label": "git diff (HEAD)", "command": "git diff --stat HEAD", "allowFailure": true, "maxBytes": 4000 },
+    { "label": "typecheck (tail)", "command": "pnpm typecheck 2>&1 | tail -60", "allowFailure": true, "maxBytes": 6000 }
+  ],
+
+  "stateDir": ".agent-runner",
+  "stopOnError": true,
+  "commitBetweenSteps": false,
+  "commitMessageTemplate": "feat: prompt {{n}} — {{title}}",
+
+  "startAt": 11,
+  "endAt": null,
+  "only": null,
+  "dryRun": false
+}

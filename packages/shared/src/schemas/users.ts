@@ -23,12 +23,10 @@ export const userSchema = z.object({
 });
 export type UserDto = z.infer<typeof userSchema>;
 
-export const userUpdateSchema = z.object({
-  full_name: z.string().min(1).max(200).optional(),
-  email: email.nullable().optional(),
-  gender: z.enum(GENDERS).nullable().optional(),
-  preferred_language: languageCode.optional(),
-  profile_photo_asset_id: uuid.nullable().optional(),
-  gallery_visibility_opt_in: z.boolean().optional(),
-});
-export type UserUpdateDto = z.infer<typeof userUpdateSchema>;
+// Write shapes for user mutations live next to the routes that own them.
+// `PATCH /v1/auth/me` (self-service) and any admin update endpoint have
+// different fields-allowed lists — what counts as "user-updateable" depends
+// on who's asking. Earlier versions exported a broad `userUpdateSchema`
+// here that would have let self-service flip `gallery_visibility_opt_in`
+// (CLAUDE.md Q6 routes that toggle through a different endpoint), which
+// is exactly the kind of trap the OTP-verify mismatch was.

@@ -75,3 +75,6 @@ infra/docker/volumes/
 # --- Misc ---
 .cache/
 tmp/
+
+# --- Agent runner state/logs ---
+.agent-runner/
