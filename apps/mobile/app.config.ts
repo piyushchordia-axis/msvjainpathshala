@@ -42,6 +42,11 @@ const config: ExpoConfig = {
     config: {
       usesNonExemptEncryption: false,
     },
+    infoPlist: {
+      // Step 13 — shikshak GPS check-in (SPEC §8.2).
+      NSLocationWhenInUseUsageDescription:
+        'Jain Pathshala uses your location only when you check in to a session, to confirm you are at the centre.',
+    },
   },
   android: {
     package: 'org.jainpathshala.app',
@@ -49,13 +54,25 @@ const config: ExpoConfig = {
       foregroundImage: './assets/adaptive-icon.png',
       backgroundColor: '#D4621A',
     },
+    permissions: ['ACCESS_FINE_LOCATION', 'ACCESS_COARSE_LOCATION'],
   },
   web: {
     bundler: 'metro',
     output: 'static',
     favicon: './assets/icon.png',
   },
-  plugins: ['expo-router', 'expo-secure-store', 'expo-font'],
+  plugins: [
+    'expo-router',
+    'expo-secure-store',
+    'expo-font',
+    [
+      'expo-location',
+      {
+        locationAlwaysAndWhenInUsePermission:
+          'Jain Pathshala uses your location only when you check in to a session, to confirm you are at the centre.',
+      },
+    ],
+  ],
   experiments: {
     typedRoutes: true,
   },

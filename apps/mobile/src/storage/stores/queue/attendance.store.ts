@@ -1,20 +1,28 @@
 /**
- * Pending attendance marks. Full processor lands in Step 13 (Attendance);
- * Step 8 only stands up the queue so the sync engine has somewhere to drain
- * from later.
+ * Pending attendance marks (Step 13).
  *
- * Op payload shape is illustrative — the canonical shape lives in
- * `@jp/shared` once the attendance module ships server-side.
+ * The drain (in `features/attendance/attendance-drain.ts`) groups ops by
+ * `session_id` and POSTs them as a single `/v1/attendance/mark` body. Items
+ * with a null `session_id` were enqueued before the shikshak completed
+ * check-in — the drain skips them; the marking screen rewrites the queue
+ * with the resolved session_id once the check-in returns.
  */
 
 import { QueueStore } from './_queue-base';
 
+import type { AttendanceStatus } from '@jp/shared';
+
 export interface AttendanceOpPayload {
+  /** Server's session id once check-in resolves. Pre-checkin queue items
+   *  may have this set to null; the drain skips them. */
+  session_id: string | null;
   batch_id: string;
-  session_date: string;
+  scheduled_date: string;
   student_id: string;
-  status: 'present' | 'absent' | 'late' | 'excused';
+  status: AttendanceStatus;
+  notes?: string | null;
   marked_at: string;
+  /** Optional GPS context for analytics; the server doesn't read it on /mark. */
   gps?: { lat: number; lng: number; accuracy_m: number } | null;
 }
 

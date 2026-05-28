@@ -8,6 +8,7 @@ export default function ParentTabsLayout() {
     <Tabs screenOptions={tabScreenOptions}>
       <Tabs.Screen name="home" options={{ title: 'Home' }} />
       <Tabs.Screen name="children" options={{ title: 'My children' }} />
+      <Tabs.Screen name="attendance" options={{ title: 'Attendance' }} />
       <Tabs.Screen name="niyams" options={{ title: 'Niyams' }} />
       <Tabs.Screen name="library" options={{ title: 'Library' }} />
       <Tabs.Screen name="notifications" options={{ title: 'Notifications' }} />

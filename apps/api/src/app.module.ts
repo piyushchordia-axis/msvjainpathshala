@@ -12,6 +12,7 @@ import { RedisModule } from './core/redis/redis.module';
 import { StorageModule } from './core/storage/storage.module';
 import { SystemConfigModule } from './core/system-config/system-config.module';
 import { AdminQueuesModule } from './modules/admin-queues/admin-queues.module';
+import { AttendanceModule } from './modules/attendance/attendance.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { JwtAuthGuard } from './modules/auth/guards/jwt-auth.guard';
@@ -27,6 +28,7 @@ import { MediaModule } from './modules/media/media.module';
 import { MsvModule } from './modules/msv/msv.module';
 import { AdminBroadcastModule } from './modules/notifications/admin-broadcast.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { SessionsModule } from './modules/sessions/sessions.module';
 import { StudentsModule } from './modules/students/students.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { QueuesModule } from './queues/queues.module';
@@ -61,6 +63,8 @@ import { RealtimeModule } from './realtime/realtime.module';
     MediaModule,
     NotificationsModule,
     AdminBroadcastModule,
+    SessionsModule,
+    AttendanceModule,
     RealtimeModule,
     AdminQueuesModule,
     HealthModule,

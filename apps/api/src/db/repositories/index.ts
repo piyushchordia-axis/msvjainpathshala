@@ -8,6 +8,8 @@
  *   - …
  */
 
+export { AbsenceNotificationsRepository } from './absence-notifications.repository';
+export { AttendanceRepository } from './attendance.repository';
 export { BatchesRepository } from './batches.repository';
 export { CentreHolidaysRepository } from './centre-holidays.repository';
 export { CentresRepository } from './centres.repository';
@@ -23,8 +25,11 @@ export { PhoneOtpAttemptsRepository } from './phone-otp-attempts.repository';
 export { PunyaTransactionsRepository } from './punya-transactions.repository';
 export { RefreshTokenFamiliesRepository } from './refresh-token-families.repository';
 export { SanchalakAssignmentsRepository } from './sanchalak-assignments.repository';
+export { SessionCancellationsRepository } from './session-cancellations.repository';
+export { SessionsRepository } from './sessions.repository';
 export { ShikshakAssignmentsRepository } from './shikshak-assignments.repository';
 export { SmsLogsRepository } from './sms-logs.repository';
+export { StudentNotesRepository } from './student-notes.repository';
 export { StudentsRepository } from './students.repository';
 export { SystemConfigRepository } from './system-config.repository';
 export { UsersRepository } from './users.repository';

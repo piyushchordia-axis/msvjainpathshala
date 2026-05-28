@@ -20,12 +20,18 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 
 import { authApi, type AuthUser, type OtpVerifyResponse } from '@/api/endpoints/auth';
+import { attendanceDrain } from '@/features/attendance/attendance-drain';
 import { registerDeviceToken, unregisterDeviceToken } from '@/notifications/device-token';
 import { authStore } from '@/storage/stores/auth.store';
 import { profileStore } from '@/storage/stores/profile.store';
-import { syncEngine } from '@/sync/sync-engine';
+import { registerDrain, syncEngine } from '@/sync/sync-engine';
 
 import type { AuthSnapshot } from '@/storage/types';
+
+// Wire the attendance drain into the sync engine once at module load.
+// Drain registration is idempotent — re-registering with the same key
+// overwrites the previous fn, which is fine.
+registerDrain('attendance', attendanceDrain);
 
 export type AuthStatus = 'booting' | 'unauthenticated' | 'authenticated';
 

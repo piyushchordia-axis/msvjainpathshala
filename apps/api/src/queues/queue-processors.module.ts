@@ -14,13 +14,23 @@ import { Module } from '@nestjs/common';
 
 import { RedisModule } from '../core/redis/redis.module';
 import {
+  AttendanceRepository,
+  BatchesRepository,
+  CentresRepository,
   DeviceTokensRepository,
   MediaAssetsRepository,
   NotificationsRepository,
+  PunyaTransactionsRepository,
+  SanchalakAssignmentsRepository,
   SmsLogsRepository,
+  StudentNotesRepository,
+  StudentsRepository,
+  UsersRepository,
 } from '../db/repositories';
 import { NotificationsModule } from '../modules/notifications/notifications.module';
 
+import { AttendanceConsecutiveCheckProcessor } from './processors/attendance-consecutive-check.processor';
+import { AttendancePostProcessProcessor } from './processors/attendance-post-process.processor';
 import { DebugEchoProcessor } from './processors/debug-echo.processor';
 import { IdCardGenerationProcessor } from './processors/idcard-generation.processor';
 import { MediaProcessingProcessor } from './processors/media-processing.processor';
@@ -41,11 +51,22 @@ import { NotificationSmsProcessor } from './processors/notification-sms.processo
     NotificationSmsProcessor,
     NotificationEmailProcessor,
 
+    AttendancePostProcessProcessor,
+    AttendanceConsecutiveCheckProcessor,
+
     // repos used by processors
     MediaAssetsRepository,
     NotificationsRepository,
     DeviceTokensRepository,
     SmsLogsRepository,
+    AttendanceRepository,
+    BatchesRepository,
+    CentresRepository,
+    PunyaTransactionsRepository,
+    SanchalakAssignmentsRepository,
+    StudentNotesRepository,
+    StudentsRepository,
+    UsersRepository,
   ],
   exports: [
     DebugEchoProcessor,
@@ -55,6 +76,8 @@ import { NotificationSmsProcessor } from './processors/notification-sms.processo
     NotificationPushProcessor,
     NotificationSmsProcessor,
     NotificationEmailProcessor,
+    AttendancePostProcessProcessor,
+    AttendanceConsecutiveCheckProcessor,
   ],
 })
 export class QueueProcessorsModule {}

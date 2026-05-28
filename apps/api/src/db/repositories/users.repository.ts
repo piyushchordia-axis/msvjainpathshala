@@ -9,13 +9,13 @@
  */
 
 import { Injectable } from '@nestjs/common';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 
 import { DrizzleService } from '../../core/database/drizzle.service';
 import { users } from '../schema';
 
 import type { NewUser, User } from '../schema';
-import type { Language } from '@jp/shared';
+import type { Language, Role } from '@jp/shared';
 
 @Injectable()
 export class UsersRepository {
@@ -80,6 +80,33 @@ export class UsersRepository {
       .where(and(eq(users.id, id), isNull(users.deleted_at)))
       .returning();
     return row ?? null;
+  }
+
+  /**
+   * Look up active users by role + city. Used by the attendance
+   * consecutive-absence cron to notify city_admins.
+   */
+  async findByRoleAndCity(role: Role, cityId: string): Promise<User[]> {
+    return this.drizzle.dbRead
+      .select()
+      .from(users)
+      .where(
+        and(
+          eq(users.role, role),
+          eq(users.city_id, cityId),
+          eq(users.is_active, true),
+          isNull(users.deleted_at),
+        ),
+      );
+  }
+
+  /** Look up users by ids (excludes soft-deleted). */
+  async findByIds(ids: string[]): Promise<User[]> {
+    if (ids.length === 0) return [];
+    return this.drizzle.dbRead
+      .select()
+      .from(users)
+      .where(and(inArray(users.id, ids), isNull(users.deleted_at)));
   }
 
   /**

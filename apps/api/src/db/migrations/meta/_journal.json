@@ -50,6 +50,13 @@
       "when": 1779964367352,
       "tag": "0007_step12_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1779964367353,
+      "tag": "0008_step13_attendance",
+      "breakpoints": true
     }
   ]
 }
