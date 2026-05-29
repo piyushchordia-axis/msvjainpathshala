@@ -246,6 +246,36 @@ export const ERROR_CODES = {
   ERR_AI_MODERATION_FLAGGED: 'ERR_AI_MODERATION_FLAGGED',
 
   // ----------------------------------------------------------------------
+  // Domain — Library (SPEC §5.16, §6.20) — Step 22
+  // ----------------------------------------------------------------------
+  ERR_LIBRARY_NOT_FOUND: 'ERR_LIBRARY_NOT_FOUND',
+  /** Access tier check (public / student / msv / shikshak) refused. */
+  ERR_LIBRARY_ACCESS_DENIED: 'ERR_LIBRARY_ACCESS_DENIED',
+  /** Q7: video_embed items must carry a YouTube/Vimeo URL and no asset_id. */
+  ERR_LIBRARY_EMBED_URL_REQUIRED: 'ERR_LIBRARY_EMBED_URL_REQUIRED',
+  /** Q7: non-video items must NOT carry an embed_url. */
+  ERR_LIBRARY_EMBED_URL_FORBIDDEN: 'ERR_LIBRARY_EMBED_URL_FORBIDDEN',
+  /** Q7: file-asset items (pdf/audio/image) must reference an asset_id. */
+  ERR_LIBRARY_ASSET_REQUIRED: 'ERR_LIBRARY_ASSET_REQUIRED',
+  /** Q7: video_embed items must NOT carry an asset_id. */
+  ERR_LIBRARY_ASSET_FORBIDDEN: 'ERR_LIBRARY_ASSET_FORBIDDEN',
+
+  // ----------------------------------------------------------------------
+  // Domain — Service Requests (SPEC §5.15, §6.19) — Step 22
+  // ----------------------------------------------------------------------
+  ERR_SERVICE_REQUEST_NOT_FOUND: 'ERR_SERVICE_REQUEST_NOT_FOUND',
+  ERR_SERVICE_REQUEST_NOT_ASSIGNED: 'ERR_SERVICE_REQUEST_NOT_ASSIGNED',
+  ERR_SERVICE_REQUEST_ALREADY_RESOLVED: 'ERR_SERVICE_REQUEST_ALREADY_RESOLVED',
+
+  // ----------------------------------------------------------------------
+  // Domain — Reports & Exports (SPEC §5.20, §12) — Step 22
+  // ----------------------------------------------------------------------
+  ERR_REPORT_NOT_FOUND: 'ERR_REPORT_NOT_FOUND',
+  ERR_REPORT_NOT_RELEASED: 'ERR_REPORT_NOT_RELEASED',
+  ERR_EXPORT_NOT_FOUND: 'ERR_EXPORT_NOT_FOUND',
+  ERR_EXPORT_NOT_READY: 'ERR_EXPORT_NOT_READY',
+
+  // ----------------------------------------------------------------------
   // Internal
   // ----------------------------------------------------------------------
   ERR_INTERNAL: 'ERR_INTERNAL',

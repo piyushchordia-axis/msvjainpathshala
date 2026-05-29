@@ -43,4 +43,5 @@ export * from './notifications';
 export * from './platform';
 export * from './audit';
 export * from './student_notes';
+export * from './exports';
 export * from './system_config';

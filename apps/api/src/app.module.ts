@@ -13,6 +13,7 @@ import { StorageModule } from './core/storage/storage.module';
 import { SystemConfigModule } from './core/system-config/system-config.module';
 import { AdminQueuesModule } from './modules/admin-queues/admin-queues.module';
 import { AiModule } from './modules/ai/ai.module';
+import { AnalyticsModule } from './modules/analytics/analytics.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -31,6 +32,7 @@ import { FormConfigsModule } from './modules/form-configs/form-configs.module';
 import { GalleryModule } from './modules/gallery/gallery.module';
 import { GeographyModule } from './modules/geography/geography.module';
 import { HomeworkModule } from './modules/homework/homework.module';
+import { LibraryModule } from './modules/library/library.module';
 import { MediaModule } from './modules/media/media.module';
 import { MsvModule } from './modules/msv/msv.module';
 import { NiyamsModule } from './modules/niyams/niyams.module';
@@ -39,6 +41,8 @@ import { AdminBroadcastModule } from './modules/notifications/admin-broadcast.mo
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { PunyaModule } from './modules/punya/punya.module';
 import { QuizzesModule } from './modules/quizzes/quizzes.module';
+import { ReportsModule } from './modules/reports/reports.module';
+import { ServiceRequestsModule } from './modules/service-requests/service-requests.module';
 import { SessionsModule } from './modules/sessions/sessions.module';
 import { ShivirsModule } from './modules/shivirs/shivirs.module';
 import { StudentsModule } from './modules/students/students.module';
@@ -90,6 +94,10 @@ import { RealtimeModule } from './realtime/realtime.module';
     QuizzesModule,
     DonationsModule,
     AiModule,
+    LibraryModule,
+    ServiceRequestsModule,
+    ReportsModule,
+    AnalyticsModule,
     SyncModule,
     RealtimeModule,
     AdminQueuesModule,

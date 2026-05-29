@@ -121,6 +121,15 @@ export class UsersRepository {
       );
   }
 
+  /** All active users with the given role (used by the weekly digest). */
+  async listByRole(role: Role, limit = 2000): Promise<User[]> {
+    return this.drizzle.dbRead
+      .select()
+      .from(users)
+      .where(and(eq(users.role, role), eq(users.is_active, true), isNull(users.deleted_at)))
+      .limit(limit);
+  }
+
   /** Look up users by ids (excludes soft-deleted). */
   async findByIds(ids: string[]): Promise<User[]> {
     if (ids.length === 0) return [];

@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Progress report — {{student.full_name}}</title>
+  <style>
+    @page { size: A4; margin: 18mm 16mm; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: 'Mukta', 'Helvetica Neue', Arial, sans-serif;
+      color: #1A0A00;
+      background: #FDF8F2;
+      font-size: 12pt;
+      line-height: 1.55;
+    }
+    .frame {
+      border: 1.5px solid #E6D8C2;
+      background: #FFFFFF;
+      border-radius: 14px;
+      padding: 24px 28px;
+    }
+    .header {
+      background: linear-gradient(135deg, #D4621A 0%, #B5521A 100%);
+      color: #FDF8F2;
+      padding: 18px 22px;
+      border-radius: 12px;
+      margin-bottom: 22px;
+    }
+    .header h1 {
+      font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+      font-size: 24pt;
+      margin: 0 0 4px;
+      letter-spacing: .02em;
+    }
+    .header .sub {
+      font-size: 10pt;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      opacity: .9;
+    }
+    .meta {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 22px;
+    }
+    .meta .cell {
+      background: #F5EDE0;
+      border-radius: 10px;
+      padding: 10px 14px;
+    }
+    .meta .label {
+      font-size: 9pt;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      color: #8B6F5E;
+      margin-bottom: 4px;
+    }
+    .meta .value {
+      font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+      font-size: 14pt;
+      color: #1A0A00;
+    }
+    h2 {
+      font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+      color: #7A1818;
+      font-size: 16pt;
+      margin: 22px 0 10px;
+    }
+    .kpis {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 12px;
+    }
+    .kpi {
+      background: #FFFFFF;
+      border: 1px solid #E6D8C2;
+      border-radius: 10px;
+      padding: 12px 14px;
+    }
+    .kpi .num {
+      font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+      font-size: 28pt;
+      color: #D4621A;
+      margin-bottom: 4px;
+    }
+    .kpi .name {
+      font-size: 10pt;
+      color: #8B6F5E;
+    }
+    .highlights {
+      background: #FDF8F2;
+      border-left: 4px solid #C8941F;
+      padding: 12px 18px;
+      border-radius: 0 10px 10px 0;
+      margin-top: 10px;
+    }
+    .highlights li {
+      margin: 4px 0;
+    }
+    .footer {
+      margin-top: 28px;
+      font-size: 9pt;
+      color: #8B6F5E;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <div class="header">
+      <div class="sub">Monthly progress report</div>
+      <h1>{{student.full_name}}</h1>
+      <div class="sub">{{student.student_code}} · {{period.label}}</div>
+    </div>
+
+    <div class="meta">
+      <div class="cell">
+        <div class="label">Age group</div>
+        <div class="value">{{student.age_group}}</div>
+      </div>
+      <div class="cell">
+        <div class="label">Period</div>
+        <div class="value">{{period.label}}</div>
+      </div>
+      <div class="cell">
+        <div class="label">Generated</div>
+        <div class="value">{{period.kind}}</div>
+      </div>
+    </div>
+
+    <h2>Attendance</h2>
+    <div class="kpis">
+      <div class="kpi">
+        <div class="num">{{attendance.present}}</div>
+        <div class="name">Present sessions</div>
+      </div>
+      <div class="kpi">
+        <div class="num">{{attendance.total}}</div>
+        <div class="name">Scheduled sessions</div>
+      </div>
+      <div class="kpi">
+        <div class="num">{{attendance.rate_pct}}%</div>
+        <div class="name">Attendance rate</div>
+      </div>
+    </div>
+
+    <h2>Punya</h2>
+    <div class="kpis">
+      <div class="kpi">
+        <div class="num">{{punya.points_awarded}}</div>
+        <div class="name">Points awarded</div>
+      </div>
+      <div class="kpi">
+        <div class="num">{{punya.reversals}}</div>
+        <div class="name">Reversals</div>
+      </div>
+      <div class="kpi">
+        <div class="num">—</div>
+        <div class="name">Tier</div>
+      </div>
+    </div>
+
+    {{#if highlights.length}}
+      <h2>Highlights</h2>
+      <ul class="highlights">
+        {{#each highlights}}<li>{{this}}</li>{{/each}}
+      </ul>
+    {{/if}}
+
+    <div class="footer">
+      Jain Pathshala · Megh Sanskar Vatika · {{period.label}}
+    </div>
+  </div>
+</body>
+</html>
