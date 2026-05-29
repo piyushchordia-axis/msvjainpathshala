@@ -13,6 +13,7 @@
 
 import { Controller, ForbiddenException, Get, Header, Req, Res } from '@nestjs/common';
 import { HealthCheck, HealthCheckService } from '@nestjs/terminus';
+import { SkipThrottle } from '@nestjs/throttler';
 
 import { BYPASS_ENVELOPE } from '../../common/interceptors/transform.interceptor';
 import { Public } from '../../modules/auth/decorators/public.decorator';
@@ -28,6 +29,9 @@ import type { Request, Response } from 'express';
 
 const LOOPBACKS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
+// ALB / k8s probes hit /healthz every 5–10s and Prometheus scrapes /metrics
+// every 15s — neither should ever burn a global throttle quota.
+@SkipThrottle()
 @Controller()
 @Public()
 export class HealthController {

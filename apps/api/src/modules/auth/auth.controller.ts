@@ -17,6 +17,7 @@
  */
 
 import { Body, Controller, HttpCode, Param, Patch, Post, Get, Req } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import { z } from 'zod';
 
 import {
@@ -81,6 +82,10 @@ export class AuthController {
   ) {}
 
   // -- /v1/auth/otp/send -------------------------------------------------
+  // SkipThrottle: the OtpService has stricter dedicated sliding-window
+  // limits (3/min/phone, 10/hr/phone, 30/hr/IP); the coarse global limiter
+  // would alias those rejections behind a generic 429.
+  @SkipThrottle()
   @Public()
   @Post('/auth/otp/send')
   @HttpCode(202)
@@ -97,6 +102,9 @@ export class AuthController {
   }
 
   // -- /v1/auth/otp/verify -----------------------------------------------
+  // SkipThrottle: OtpService caps verify attempts at 5/OTP and rotates the
+  // token immediately on the 6th — that's already the right throttle.
+  @SkipThrottle()
   @Public()
   @Post('/auth/otp/verify')
   @HttpCode(200)

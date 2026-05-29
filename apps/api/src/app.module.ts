@@ -11,6 +11,7 @@ import { LoggerModule } from './core/logger/logger.module';
 import { RedisModule } from './core/redis/redis.module';
 import { StorageModule } from './core/storage/storage.module';
 import { SystemConfigModule } from './core/system-config/system-config.module';
+import { GlobalThrottlerModule } from './core/throttler/throttler.module';
 import { AdminQueuesModule } from './modules/admin-queues/admin-queues.module';
 import { AiModule } from './modules/ai/ai.module';
 import { AnalyticsModule } from './modules/analytics/analytics.module';
@@ -66,6 +67,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     RedisModule,
     StorageModule,
     SystemConfigModule,
+    GlobalThrottlerModule,
     QueuesModule.forRoot(),
     AuditModule,
     AuthModule,

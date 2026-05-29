@@ -1,0 +1,167 @@
+# Manual production deploy. Requires 2-reviewer approval via the
+# `environment: production` gate configured in GitHub.
+
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_sha:
+        description: SHA of the staging-tested image to promote
+        required: true
+        type: string
+      release_tag:
+        description: 'Release tag to apply on success (e.g. v1.0.1)'
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: write
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_BASE: ${{ secrets.AWS_ACCOUNT_ID_PROD }}.dkr.ecr.ap-south-1.amazonaws.com
+
+jobs:
+  notify-start:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Slack start notice
+        if: ${{ env.SLACK_WEBHOOK_DEPLOYS != '' }}
+        run: |
+          curl -fsS -X POST "${{ secrets.SLACK_WEBHOOK_DEPLOYS }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\":\"🚢 Production deploy starting — image sha ${{ inputs.image_sha }}, tag ${{ inputs.release_tag }}\"}"
+        env:
+          SLACK_WEBHOOK_DEPLOYS: ${{ secrets.SLACK_WEBHOOK_DEPLOYS }}
+
+  promote-image:
+    needs: notify-start
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      matrix:
+        service: [api, worker, web, ai]
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID_PROD }}:role/gh-actions-prod
+          aws-region: ${{ env.AWS_REGION }}
+      - uses: aws-actions/amazon-ecr-login@v2
+      - name: Tag image with prod label
+        run: |
+          MANIFEST=$(aws ecr batch-get-image \
+            --repository-name jp-${{ matrix.service }} \
+            --image-ids imageTag=staging-${{ inputs.image_sha }} \
+            --query 'images[].imageManifest' --output text)
+          aws ecr put-image \
+            --repository-name jp-${{ matrix.service }} \
+            --image-tag prod-${{ inputs.release_tag }} \
+            --image-manifest "$MANIFEST"
+
+  migrate-dry-run:
+    needs: promote-image
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID_PROD }}:role/gh-actions-prod
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Migration dry-run
+        run: |
+          TASK_ARN=$(aws ecs run-task \
+            --cluster jp-prod-cluster \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ secrets.PROD_PRIVATE_SUBNETS }}],securityGroups=[${{ secrets.PROD_TASK_SG }}]}" \
+            --task-definition jp-prod-migrate \
+            --overrides '{"containerOverrides":[{"name":"migrate","environment":[{"name":"DRY_RUN","value":"true"}]}]}' \
+            --query 'tasks[0].taskArn' --output text)
+          aws ecs wait tasks-stopped --cluster jp-prod-cluster --tasks "$TASK_ARN"
+          EXIT=$(aws ecs describe-tasks --cluster jp-prod-cluster --tasks "$TASK_ARN" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          test "$EXIT" = "0"
+
+  migrate-apply:
+    needs: migrate-dry-run
+    runs-on: ubuntu-latest
+    environment: production-migrations # second-reviewer gate
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID_PROD }}:role/gh-actions-prod
+          aws-region: ${{ env.AWS_REGION }}
+      - name: Apply migrations
+        run: |
+          TASK_ARN=$(aws ecs run-task \
+            --cluster jp-prod-cluster \
+            --launch-type FARGATE \
+            --network-configuration "awsvpcConfiguration={subnets=[${{ secrets.PROD_PRIVATE_SUBNETS }}],securityGroups=[${{ secrets.PROD_TASK_SG }}]}" \
+            --task-definition jp-prod-migrate \
+            --query 'tasks[0].taskArn' --output text)
+          aws ecs wait tasks-stopped --cluster jp-prod-cluster --tasks "$TASK_ARN"
+          EXIT=$(aws ecs describe-tasks --cluster jp-prod-cluster --tasks "$TASK_ARN" \
+            --query 'tasks[0].containers[0].exitCode' --output text)
+          test "$EXIT" = "0"
+
+  blue-green:
+    needs: migrate-apply
+    runs-on: ubuntu-latest
+    environment: production
+    strategy:
+      matrix:
+        service: [api, worker, web, ai]
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID_PROD }}:role/gh-actions-prod
+          aws-region: ${{ env.AWS_REGION }}
+      - name: CodeDeploy progressive shift 10→50→100
+        run: |
+          aws deploy create-deployment \
+            --application-name jp-${{ matrix.service }}-prod \
+            --deployment-group-name jp-${{ matrix.service }}-prod-bg \
+            --revision "revisionType=AppSpecContent,appSpecContent={content='version: 0.0\nResources:\n- TargetService:\n    Type: AWS::ECS::Service\n    Properties:\n      TaskDefinition: jp-prod-${{ matrix.service }}\n      LoadBalancerInfo:\n        ContainerName: ${{ matrix.service }}\n        ContainerPort: 3000'}" \
+            --deployment-config-name CodeDeployDefault.ECSCanary10Percent5Minutes
+
+  smoke-tests:
+    needs: blue-green
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Smoke test
+        run: bash infra/smoke-tests/prod-smoke.sh https://api.jainpathshala.org
+
+  tag-release:
+    needs: smoke-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "${{ inputs.release_tag }}" -m "Production deploy of ${{ inputs.image_sha }}"
+          git push origin "${{ inputs.release_tag }}"
+
+  notify-done:
+    needs: [blue-green, smoke-tests, tag-release]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Slack done notice
+        if: ${{ env.SLACK_WEBHOOK_DEPLOYS != '' }}
+        run: |
+          status="${{ needs.smoke-tests.result }}"
+          curl -fsS -X POST "${{ secrets.SLACK_WEBHOOK_DEPLOYS }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\":\"🏁 Production deploy ${status} — ${{ inputs.release_tag }}\"}"
+        env:
+          SLACK_WEBHOOK_DEPLOYS: ${{ secrets.SLACK_WEBHOOK_DEPLOYS }}

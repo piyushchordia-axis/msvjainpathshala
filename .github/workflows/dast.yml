@@ -1,0 +1,44 @@
+# Weekly OWASP ZAP baseline scan against staging.
+# Fails on any Medium-or-higher finding; uploads the HTML report to S3.
+
+name: DAST
+
+on:
+  schedule:
+    - cron: '0 3 * * 1' # Monday 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  zap-baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: ZAP baseline scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: https://staging-api.jainpathshala.org
+          fail_action: true
+          cmd_options: '-T 25 -m 5 -j -l WARN -d'
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID_STAGING }}:role/gh-actions-staging
+          aws-region: ap-south-1
+
+      - name: Upload report to S3
+        if: always()
+        run: |
+          aws s3 cp report_html.html \
+            "s3://jp-staging-security-reports/zap/$(date -u +%Y-%m-%d).html"
+
+      - name: Slack notice
+        if: failure()
+        run: |
+          curl -fsS -X POST "${{ secrets.SLACK_WEBHOOK_SECURITY }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"text\":\"⚠️ Weekly ZAP scan FAILED — see s3://jp-staging-security-reports/zap/$(date -u +%Y-%m-%d).html\"}"

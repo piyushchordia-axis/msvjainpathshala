@@ -36,6 +36,7 @@ export default tseslint.config(
       '.claude/**', // Local Claude tooling — not project source
       '.husky/**', // Git hooks; shell scripts only
       'infra/terraform/**', // .tf / .tfvars — handled by terraform fmt
+      'infra/load-tests/**', // k6 scripts — run under the k6 runtime which exposes __VU / __ENV / open() as globals (`k6 inspect` validates instead)
     ],
   },
 

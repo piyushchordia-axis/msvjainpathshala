@@ -9,6 +9,7 @@
 import 'reflect-metadata';
 
 import { NestFactory } from '@nestjs/core';
+import helmet from 'helmet';
 import { Logger as PinoNestLogger } from 'nestjs-pino';
 
 import { loadAndValidateEnv } from './core/config/env.schema';
@@ -45,6 +46,17 @@ async function bootstrap(): Promise<void> {
   const isDev = env.NODE_ENV === 'development';
   const explicitAllowlist = new Set(env.CORS_ALLOWED_ORIGINS);
   const localhostHostnames = new Set(['localhost', '127.0.0.1', '0.0.0.0']);
+
+  // Production / staging MUST have an explicit allow-list. We refuse to boot
+  // with an empty allow-list outside development to prevent accidental
+  // wildcard CORS in cloud environments.
+  if (!isDev && explicitAllowlist.size === 0) {
+    throw new Error(
+      '[main] CORS_ALLOWED_ORIGINS must be non-empty outside NODE_ENV=development. ' +
+        'Provide a comma-separated origin list (e.g. https://admin.jainpathshala.org).',
+    );
+  }
+
   const corsOrigin = (
     origin: string | undefined,
     cb: (err: Error | null, allow?: boolean) => void,
@@ -81,6 +93,60 @@ async function bootstrap(): Promise<void> {
   // Hand log emission to Pino so every log line carries the standard fields
   // (timestamp, level, service, env, trace_id, span_id, request_id, msg).
   app.useLogger(app.get(PinoNestLogger));
+
+  // ------------------------------------------------------------------------
+  // Security headers (Step 23 — Section 16.1 / 16.2)
+  //
+  // Helmet sets a curated set of HTTP response headers that mitigate common
+  // browser-level attacks. The default preset is mostly fine; we tighten:
+  //   - CSP to a strict allow-list (no inline scripts, no unsafe-eval).
+  //   - HSTS to a 1-year max-age with preload eligibility.
+  //   - X-Frame-Options: DENY (defence-in-depth alongside frame-ancestors).
+  //   - Referrer-Policy: strict-origin-when-cross-origin.
+  // CSP is relaxed in development so Swagger / local mock UIs work without
+  // a separate dev profile.
+  // ------------------------------------------------------------------------
+  app.use(
+    helmet({
+      contentSecurityPolicy: isDev
+        ? false
+        : {
+            useDefaults: true,
+            directives: {
+              defaultSrc: ["'self'"],
+              scriptSrc: ["'self'"],
+              styleSrc: ["'self'", "'unsafe-inline'"],
+              imgSrc: ["'self'", 'data:', 'https://*.jainpathshala.org'],
+              connectSrc: ["'self'", 'https://*.jainpathshala.org'],
+              fontSrc: ["'self'", 'data:'],
+              objectSrc: ["'none'"],
+              frameAncestors: ["'none'"],
+              upgradeInsecureRequests: [],
+            },
+          },
+      hsts: {
+        maxAge: 31536000,
+        includeSubDomains: true,
+        preload: true,
+      },
+      frameguard: { action: 'deny' },
+      referrerPolicy: { policy: 'strict-origin-when-cross-origin' },
+      crossOriginEmbedderPolicy: false, // signed media URLs need CORS, not COEP
+      crossOriginResourcePolicy: { policy: 'same-site' },
+      permittedCrossDomainPolicies: { permittedPolicies: 'none' },
+    }),
+  );
+
+  // Permissions-Policy is not part of helmet 8's default set. Author it
+  // explicitly so privacy-sensitive APIs (camera, mic, payment, etc.) are
+  // off by default for our domain — the mobile app handles those natively.
+  app.use((_req: import('express').Request, res: import('express').Response, next: () => void) => {
+    res.setHeader(
+      'Permissions-Policy',
+      'camera=(), microphone=(), geolocation=(self), payment=(), usb=()',
+    );
+    next();
+  });
 
   // Enable shutdown hooks so OnModuleDestroy / OnApplicationShutdown fire on
   // SIGTERM / SIGINT (graceful DB + Redis close, OTel flush).

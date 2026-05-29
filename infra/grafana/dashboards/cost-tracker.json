@@ -1,0 +1,71 @@
+{
+  "title": "Cost Tracker",
+  "uid": "jp-cost-tracker",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1h",
+  "tags": ["jp", "production", "step23"],
+  "timezone": "Asia/Kolkata",
+  "time": { "from": "now-30d", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Daily AWS spend by service",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 10 },
+      "datasource": "cloudwatch",
+      "targets": [
+        {
+          "namespace": "AWS/Billing",
+          "metricName": "EstimatedCharges",
+          "statistic": "Maximum",
+          "dimensions": { "ServiceName": "*", "Currency": "USD" }
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Projected month-end (USD)",
+      "gridPos": { "x": 0, "y": 10, "w": 8, "h": 4 },
+      "datasource": "cloudwatch",
+      "targets": [
+        {
+          "namespace": "AWS/Billing",
+          "metricName": "EstimatedCharges",
+          "statistic": "Maximum"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "RDS spend / day",
+      "gridPos": { "x": 8, "y": 10, "w": 8, "h": 4 },
+      "datasource": "cloudwatch",
+      "targets": [
+        {
+          "namespace": "AWS/Billing",
+          "metricName": "EstimatedCharges",
+          "statistic": "Maximum",
+          "dimensions": { "ServiceName": "AmazonRDS" }
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "ECS spend / day",
+      "gridPos": { "x": 16, "y": 10, "w": 8, "h": 4 },
+      "datasource": "cloudwatch",
+      "targets": [
+        {
+          "namespace": "AWS/Billing",
+          "metricName": "EstimatedCharges",
+          "statistic": "Maximum",
+          "dimensions": { "ServiceName": "AmazonECS" }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+# apps/api/Dockerfile.worker — BullMQ worker process (port 3100 for /healthz).
+#
+# Identical to apps/api/Dockerfile except the entrypoint runs dist/worker.js
+# instead of dist/main.js. Built from the same monorepo root.
+
+FROM node:20-alpine AS builder
+WORKDIR /app
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json tsconfig.base.json ./
+COPY apps/api ./apps/api
+COPY packages ./packages
+RUN pnpm install --frozen-lockfile
+RUN pnpm --filter @jp/api build
+
+FROM node:20-alpine AS runner
+RUN apk add --no-cache dumb-init tini wget && \
+    addgroup -S -g 1001 appuser && \
+    adduser  -S -u 1001 -G appuser appuser
+WORKDIR /app
+ENV NODE_ENV=production
+ENV PORT=3100
+
+COPY --from=builder --chown=appuser:appuser /app/apps/api/dist          ./apps/api/dist
+COPY --from=builder --chown=appuser:appuser /app/apps/api/package.json  ./apps/api/package.json
+COPY --from=builder --chown=appuser:appuser /app/packages               ./packages
+COPY --from=builder --chown=appuser:appuser /app/node_modules           ./node_modules
+
+USER 1001
+EXPOSE 3100
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
+  CMD wget -qO- http://localhost:3100/healthz || exit 1
+WORKDIR /app/apps/api
+ENTRYPOINT ["dumb-init", "--"]
+CMD ["node", "dist/worker.js"]
