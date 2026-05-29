@@ -1,6 +1,15 @@
 /** Donations + campaigns + donor profiles (SPEC §5.17). */
 
-import { bigint, boolean, pgTable, text, timestamp, uuid, varchar } from 'drizzle-orm/pg-core';
+import {
+  bigint,
+  boolean,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uuid,
+  varchar,
+} from 'drizzle-orm/pg-core';
 
 import { softDelete, timestamps } from './_helpers';
 import { donationFrequencyEnum, donationPurposeEnum, paymentStatusEnum } from './enums';
@@ -25,6 +34,7 @@ export const donation_campaigns = pgTable('donation_campaigns', {
 
 export const donations = pgTable('donations', {
   id: uuid('id').primaryKey().defaultRandom(),
+  donor_user_id: uuid('donor_user_id').references(() => users.id, { onDelete: 'set null' }),
   donor_name: text('donor_name').notNull(),
   donor_phone: varchar('donor_phone', { length: 15 }),
   donor_email: varchar('donor_email', { length: 255 }),
@@ -44,10 +54,28 @@ export const donations = pgTable('donations', {
   payment_captured_at: timestamp('payment_captured_at', { withTimezone: true }),
   eighty_g_eligible: boolean('eighty_g_eligible').notNull().default(false),
   receipt_number: text('receipt_number'),
+  receipt_asset_id: uuid('receipt_asset_id'),
   eighty_g_certificate_asset_id: uuid('eighty_g_certificate_asset_id'),
+  financial_year: text('financial_year'),
   notes: text('notes'),
   ...softDelete(),
   ...timestamps(),
+});
+
+/**
+ * Append-only ledger of Razorpay webhook deliveries. PK on event_id makes
+ * duplicate deliveries a no-op (SPEC §8.8) — we INSERT … ON CONFLICT DO NOTHING
+ * before processing and skip if the row already existed.
+ */
+export const donation_webhook_events = pgTable('donation_webhook_events', {
+  event_id: text('event_id').primaryKey(),
+  event_type: text('event_type').notNull(),
+  razorpay_payment_id: text('razorpay_payment_id'),
+  razorpay_order_id: text('razorpay_order_id'),
+  donation_id: uuid('donation_id').references(() => donations.id, { onDelete: 'set null' }),
+  payload: jsonb('payload').notNull(),
+  received_at: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+  processed_at: timestamp('processed_at', { withTimezone: true }),
 });
 
 export const donor_profiles = pgTable('donor_profiles', {
@@ -68,3 +96,5 @@ export type Donation = typeof donations.$inferSelect;
 export type NewDonation = typeof donations.$inferInsert;
 export type DonorProfile = typeof donor_profiles.$inferSelect;
 export type NewDonorProfile = typeof donor_profiles.$inferInsert;
+export type DonationWebhookEvent = typeof donation_webhook_events.$inferSelect;
+export type NewDonationWebhookEvent = typeof donation_webhook_events.$inferInsert;

@@ -161,6 +161,35 @@ export class AppConfigService {
     };
   }
 
+  // ----- AI service (Python FastAPI) -----------------------------------
+  get aiService() {
+    return {
+      baseUrl: this.env.AI_SERVICE_BASE_URL,
+      hmacSecret: this.env.AI_SERVICE_HMAC_SECRET,
+      timeoutMs: this.env.AI_SERVICE_TIMEOUT_MS,
+      ipAllowlist: this.env.AI_SERVICE_IP_ALLOWLIST,
+    };
+  }
+
+  // ----- Razorpay -----------------------------------------------------
+  get razorpay() {
+    return {
+      keyId: this.env.RAZORPAY_KEY_ID,
+      keySecret: this.env.RAZORPAY_KEY_SECRET,
+      webhookSecret: this.env.RAZORPAY_WEBHOOK_SECRET,
+    };
+  }
+
+  // ----- PAN encryption ------------------------------------------------
+  /**
+   * Hex-encoded AES-256-GCM key. Returns null when unset (dev convenience).
+   * The encryption service derives a deterministic dev key in that case so
+   * tests don't require KMS, but production refuses to boot without it.
+   */
+  get panEncryptionKeyHex(): string {
+    return this.env.DONATION_PAN_ENCRYPTION_KEY_HEX;
+  }
+
   /** Escape hatch for code that genuinely needs the raw shape. Avoid where possible. */
   get raw(): AppEnv {
     return this.env;

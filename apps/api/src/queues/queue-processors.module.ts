@@ -18,25 +18,32 @@ import {
   BatchesRepository,
   CentresRepository,
   DeviceTokensRepository,
+  DonationsRepository,
   MediaAssetsRepository,
   NiyamsRepository,
   NiyamStreaksRepository,
   NiyamSubmissionsRepository,
   NotificationsRepository,
+  PlatformSettingsRepository,
   PunyaFeaturesRepository,
   PunyaTransactionsRepository,
+  QuestionsRepository,
   SanchalakAssignmentsRepository,
   SmsLogsRepository,
   StudentNotesRepository,
   StudentsRepository,
   UsersRepository,
 } from '../db/repositories';
+import { DonationsModule } from '../modules/donations/donations.module';
 import { NotificationsModule } from '../modules/notifications/notifications.module';
 import { PunyaModule } from '../modules/punya/punya.module';
 
+import { AiQuizGenerateProcessor } from './processors/ai-quiz-generate.processor';
 import { AttendanceConsecutiveCheckProcessor } from './processors/attendance-consecutive-check.processor';
 import { AttendancePostProcessProcessor } from './processors/attendance-post-process.processor';
 import { DebugEchoProcessor } from './processors/debug-echo.processor';
+import { DonationEightyGCertProcessor } from './processors/donation-eightyg-cert.processor';
+import { DonationReceiptGenerateProcessor } from './processors/donation-receipt-generate.processor';
 import { IdCardGenerationProcessor } from './processors/idcard-generation.processor';
 import { MediaProcessingProcessor } from './processors/media-processing.processor';
 import { NiyamStreakRecomputeProcessor } from './processors/niyam-streak-recompute.processor';
@@ -48,7 +55,7 @@ import { PunyaLeaderboardRefreshProcessor } from './processors/punya-leaderboard
 import { PunyaReconcileProcessor } from './processors/punya-reconcile.processor';
 
 @Module({
-  imports: [RedisModule, NotificationsModule, PunyaModule],
+  imports: [RedisModule, NotificationsModule, PunyaModule, DonationsModule],
   providers: [
     DebugEchoProcessor,
     MediaProcessingProcessor,
@@ -67,6 +74,11 @@ import { PunyaReconcileProcessor } from './processors/punya-reconcile.processor'
 
     NiyamStreakRecomputeProcessor,
 
+    // Step 21 — AI + donations workers
+    AiQuizGenerateProcessor,
+    DonationReceiptGenerateProcessor,
+    DonationEightyGCertProcessor,
+
     // repos used by processors
     MediaAssetsRepository,
     NotificationsRepository,
@@ -84,6 +96,9 @@ import { PunyaReconcileProcessor } from './processors/punya-reconcile.processor'
     NiyamsRepository,
     NiyamSubmissionsRepository,
     NiyamStreaksRepository,
+    QuestionsRepository,
+    DonationsRepository,
+    PlatformSettingsRepository,
   ],
   exports: [
     DebugEchoProcessor,
@@ -98,6 +113,9 @@ import { PunyaReconcileProcessor } from './processors/punya-reconcile.processor'
     PunyaLeaderboardRefreshProcessor,
     PunyaReconcileProcessor,
     NiyamStreakRecomputeProcessor,
+    AiQuizGenerateProcessor,
+    DonationReceiptGenerateProcessor,
+    DonationEightyGCertProcessor,
   ],
 })
 export class QueueProcessorsModule {}

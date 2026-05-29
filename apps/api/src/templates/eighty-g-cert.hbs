@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>80G certificate — {{receipt_number}}</title>
+  <style>
+    @page { size: A4; margin: 20mm 16mm; }
+    body {
+      font-family: 'Mukta', 'Helvetica Neue', Arial, sans-serif;
+      color: #1A0A00;
+      background: #FFFFFF;
+      font-size: 11.5pt;
+      line-height: 1.65;
+    }
+    .frame {
+      border: 2.5px solid #C8941F;
+      padding: 22px 26px;
+      border-radius: 12px;
+    }
+    .inner {
+      border: 1px solid #E6D8C2;
+      padding: 22px;
+      border-radius: 8px;
+    }
+    .head {
+      text-align: center;
+      margin-bottom: 16px;
+    }
+    .head .seal {
+      display: inline-block;
+      background: linear-gradient(135deg, #E6C26B 0%, #C8941F 100%);
+      color: #5C1010;
+      font-weight: 800;
+      letter-spacing: 1.5px;
+      padding: 4px 12px;
+      border-radius: 4px;
+      font-size: 10pt;
+    }
+    .head h1 {
+      font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+      font-size: 22pt;
+      color: #7A1818;
+      margin: 8px 0 4px 0;
+    }
+    .head .org-meta {
+      color: #8B6F5E;
+      font-size: 10pt;
+    }
+    .body p {
+      margin: 10px 0;
+    }
+    .lbl-inline {
+      color: #8B6F5E;
+      font-size: 10pt;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    .val-strong {
+      color: #1A0A00;
+      font-weight: 700;
+    }
+    .mono {
+      font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+      font-weight: 600;
+    }
+    .summary {
+      margin: 16px 0;
+      padding: 16px;
+      background: #FAF1DC;
+      border-left: 4px solid #C8941F;
+      border-radius: 6px;
+    }
+    .summary .amount {
+      font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+      font-size: 24pt;
+      color: #C8941F;
+    }
+    .sign {
+      margin-top: 36px;
+      display: flex;
+      justify-content: space-between;
+    }
+    .sign .col {
+      width: 48%;
+    }
+    .sign .line {
+      border-top: 1px solid #8B6F5E;
+      margin-top: 36px;
+      padding-top: 4px;
+      font-size: 9.5pt;
+      color: #8B6F5E;
+    }
+    .foot {
+      margin-top: 20px;
+      font-size: 9.5pt;
+      color: #8B6F5E;
+      text-align: center;
+      border-top: 1px dashed #C4A882;
+      padding-top: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <div class="inner">
+      <div class="head">
+        <div class="seal">80G CERTIFICATE</div>
+        <h1>{{trust_name}}</h1>
+        <div class="org-meta">{{trust_address}}</div>
+        <div class="org-meta">PAN: <span class="mono">{{trust_pan}}</span> &middot; 80G Reg.: <span class="mono">{{registration_number}}</span></div>
+        <div class="org-meta">Section {{section}} of the Income-tax Act, 1961</div>
+      </div>
+
+      <div class="body">
+        <p>
+          <span class="lbl-inline">Certificate no.</span>
+          &nbsp;<span class="mono val-strong">{{receipt_number}}</span>
+          &nbsp;&nbsp;
+          <span class="lbl-inline">Financial year</span>
+          &nbsp;<span class="val-strong">{{financial_year}}</span>
+        </p>
+        <p>
+          This is to certify that <b>{{donor_name}}</b>
+          {{#if donor_pan_masked}}(PAN <span class="mono">{{donor_pan_masked}}</span>){{/if}}
+          has made a donation to <b>{{trust_name}}</b> on
+          <b>{{captured_on_display}}</b> via Razorpay payment ID
+          <span class="mono">{{razorpay_payment_id}}</span> for the purpose of
+          <b>{{purpose_label}}</b>.
+        </p>
+
+        <div class="summary">
+          <div class="lbl-inline">Donation received</div>
+          <div class="amount">₹{{amount_inr_display}}</div>
+          <div style="color:#8B6F5E; font-size:10pt;">Currency: {{currency}}</div>
+        </div>
+
+        <p>
+          This donation is eligible for deduction under Section {{section}} of the
+          Income-tax Act, 1961, subject to the conditions specified therein. The
+          donor is advised to retain this certificate for filing income-tax
+          returns.
+        </p>
+      </div>
+
+      <div class="sign">
+        <div class="col">
+          <div class="line">Date of issue · {{issued_on_display}}</div>
+        </div>
+        <div class="col" style="text-align:right;">
+          <div class="line">Authorised signatory, {{trust_name}}</div>
+        </div>
+      </div>
+
+      <div class="foot">
+        Computer-generated certificate. Valid without a physical signature.
+      </div>
+    </div>
+  </div>
+</body>
+</html>

@@ -12,6 +12,7 @@ import { RedisModule } from './core/redis/redis.module';
 import { StorageModule } from './core/storage/storage.module';
 import { SystemConfigModule } from './core/system-config/system-config.module';
 import { AdminQueuesModule } from './modules/admin-queues/admin-queues.module';
+import { AiModule } from './modules/ai/ai.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { AuditModule } from './modules/audit/audit.module';
 import { AuthModule } from './modules/auth/auth.module';
@@ -23,6 +24,7 @@ import { CentreHolidaysModule } from './modules/centre-holidays/centre-holidays.
 import { CentresModule } from './modules/centres/centres.module';
 import { CompetitionsModule } from './modules/competitions/competitions.module';
 import { CurriculumModule } from './modules/curriculum/curriculum.module';
+import { DonationsModule } from './modules/donations/donations.module';
 import { EnrolmentsModule } from './modules/enrolments/enrolments.module';
 import { ExamsModule } from './modules/exams/exams.module';
 import { FormConfigsModule } from './modules/form-configs/form-configs.module';
@@ -86,6 +88,8 @@ import { RealtimeModule } from './realtime/realtime.module';
     CurriculumModule,
     ExamsModule,
     QuizzesModule,
+    DonationsModule,
+    AiModule,
     SyncModule,
     RealtimeModule,
     AdminQueuesModule,

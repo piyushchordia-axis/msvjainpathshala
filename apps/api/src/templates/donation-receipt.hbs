@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Donation receipt — {{receipt_number}}</title>
+  <style>
+    @page { size: A4; margin: 18mm 16mm; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: 'Mukta', 'Helvetica Neue', Arial, sans-serif;
+      color: #1A0A00;
+      background: #FDF8F2;
+      font-size: 12pt;
+      line-height: 1.55;
+    }
+    .frame {
+      border: 1.5px solid #E6D8C2;
+      background: #FFFFFF;
+      border-radius: 14px;
+      padding: 24px 28px;
+    }
+    .band {
+      background: linear-gradient(135deg, #7A1818 0%, #5C1010 100%);
+      color: #FDF8F2;
+      padding: 14px 18px;
+      border-radius: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 22px;
+    }
+    .brand {
+      font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+      font-size: 20pt;
+      letter-spacing: .02em;
+    }
+    .brand-sub {
+      font-size: 9pt;
+      letter-spacing: 1.4px;
+      color: #E8A06A;
+      text-transform: uppercase;
+      margin-top: 2px;
+    }
+    h1 {
+      font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+      color: #7A1818;
+      font-size: 18pt;
+      margin: 0 0 4px 0;
+    }
+    .lbl {
+      color: #8B6F5E;
+      font-size: 10pt;
+      font-weight: 600;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .val {
+      color: #1A0A00;
+      font-weight: 600;
+      font-size: 12pt;
+    }
+    .mono {
+      font-family: 'JetBrains Mono', ui-monospace, Menlo, monospace;
+      font-weight: 600;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px 32px;
+      margin-top: 18px;
+    }
+    .amount-row {
+      margin-top: 22px;
+      padding: 18px;
+      background: #FCEFE3;
+      border-radius: 12px;
+      border: 1px solid #E8A06A;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .amount-row .amount {
+      font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+      font-size: 32pt;
+      color: #D4621A;
+    }
+    .footnote {
+      margin-top: 26px;
+      font-size: 10pt;
+      color: #8B6F5E;
+      border-top: 1px solid #E6D8C2;
+      padding-top: 12px;
+    }
+    .seal {
+      margin-top: 28px;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+    }
+    .sign {
+      text-align: right;
+      color: #8B6F5E;
+      font-size: 10pt;
+    }
+    .sign .name {
+      color: #7A1818;
+      font-weight: 700;
+      font-family: 'Tiro Devanagari Sanskrit', Georgia, serif;
+      font-size: 13pt;
+    }
+  </style>
+</head>
+<body>
+  <div class="frame">
+    <div class="band">
+      <div>
+        <div class="brand">Jain Pathshala</div>
+        <div class="brand-sub">Donation receipt · {{financial_year}}</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="brand-sub" style="color:#FCEFE3;">Receipt no.</div>
+        <div class="mono" style="font-size:13pt;">{{receipt_number}}</div>
+      </div>
+    </div>
+
+    <h1>Thank you for your gift</h1>
+    <div style="color:#8B6F5E; font-size:11pt;">
+      Issued on {{issued_on_display}}.
+    </div>
+
+    <div class="grid">
+      <div>
+        <div class="lbl">Donor</div>
+        <div class="val">{{donor_name}}</div>
+        {{#if donor_email}}<div style="color:#8B6F5E; font-size:10pt;">{{donor_email}}</div>{{/if}}
+        {{#if donor_phone}}<div style="color:#8B6F5E; font-size:10pt;">{{donor_phone}}</div>{{/if}}
+      </div>
+      <div>
+        <div class="lbl">Purpose</div>
+        <div class="val">{{purpose_label}}</div>
+        {{#if campaign_name}}<div style="color:#8B6F5E; font-size:10pt;">Campaign: {{campaign_name}}</div>{{/if}}
+      </div>
+      <div>
+        <div class="lbl">Payment id</div>
+        <div class="val mono">{{razorpay_payment_id}}</div>
+      </div>
+      <div>
+        <div class="lbl">Order id</div>
+        <div class="val mono">{{razorpay_order_id}}</div>
+      </div>
+      {{#if donor_pan_masked}}
+        <div>
+          <div class="lbl">Donor PAN</div>
+          <div class="val mono">{{donor_pan_masked}}</div>
+        </div>
+      {{/if}}
+      <div>
+        <div class="lbl">Payment date</div>
+        <div class="val">{{captured_on_display}}</div>
+      </div>
+    </div>
+
+    <div class="amount-row">
+      <div>
+        <div class="lbl">Amount received</div>
+        <div style="color:#8B6F5E; font-size:10pt;">Indian Rupees ({{currency}})</div>
+      </div>
+      <div class="amount">₹{{amount_inr_display}}</div>
+    </div>
+
+    <div class="footnote">
+      Received with gratitude on behalf of <b>{{trust_name}}</b>.
+      {{#if eighty_g_note}}{{eighty_g_note}}{{/if}}
+      This is a computer-generated receipt and is valid without a signature.
+    </div>
+
+    <div class="seal">
+      <div class="lbl">Megh Sanskar Vatika · Jain Pathshala</div>
+      <div class="sign">
+        <div class="name">Authorised signatory</div>
+        <div>{{trust_name}}</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

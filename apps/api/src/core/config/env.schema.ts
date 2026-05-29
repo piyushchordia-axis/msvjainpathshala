@@ -127,7 +127,15 @@ export const envSchema = z
     // ----- AI service ---------------------------------------------------
     AI_SERVICE_BASE_URL: z.string().default('http://localhost:8000'),
     AI_SERVICE_HMAC_SECRET: z.string().default(''),
-    AI_SERVICE_TIMEOUT_MS: numberFromString.default(30_000),
+    AI_SERVICE_TIMEOUT_MS: numberFromString.default(60_000),
+    /** Comma-separated CIDR list for the AI service's IP allowlist middleware. */
+    AI_SERVICE_IP_ALLOWLIST: csvFromString.default(''),
+
+    // ----- PAN encryption (donor PAN — AES-256-GCM at the app layer) -----
+    // Hex-encoded 32-byte key. In production this is hydrated from KMS via
+    // Secrets Manager; in dev a deterministic placeholder is fine. The
+    // service refuses to start without 64 hex chars when NODE_ENV=production.
+    DONATION_PAN_ENCRYPTION_KEY_HEX: z.string().default(''),
 
     // ----- Observability ------------------------------------------------
     SENTRY_DSN: z.string().default(''),
@@ -171,6 +179,13 @@ export const envSchema = z
       if (env.STORAGE_DRIVER === 'noop')
         missing.push("STORAGE_DRIVER (must not be 'noop' in production)");
       if (!env.SENTRY_DSN) missing.push('SENTRY_DSN');
+      if (!env.AI_SERVICE_HMAC_SECRET) missing.push('AI_SERVICE_HMAC_SECRET');
+      if (!env.RAZORPAY_KEY_ID) missing.push('RAZORPAY_KEY_ID');
+      if (!env.RAZORPAY_KEY_SECRET) missing.push('RAZORPAY_KEY_SECRET');
+      if (!env.RAZORPAY_WEBHOOK_SECRET) missing.push('RAZORPAY_WEBHOOK_SECRET');
+      if (!/^[0-9a-fA-F]{64}$/.test(env.DONATION_PAN_ENCRYPTION_KEY_HEX)) {
+        missing.push('DONATION_PAN_ENCRYPTION_KEY_HEX (64-hex-char AES-256 key)');
+      }
       for (const m of missing) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,

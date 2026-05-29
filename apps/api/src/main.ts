@@ -63,13 +63,20 @@ async function bootstrap(): Promise<void> {
     return cb(null, false);
   };
 
-  const app = await NestFactory.create(AppModule, {
-    bufferLogs: true, // Defer Logger output until nestjs-pino is wired
-    cors: {
-      origin: corsOrigin,
-      credentials: true,
+  const app = await NestFactory.create<import('@nestjs/platform-express').NestExpressApplication>(
+    AppModule,
+    {
+      bufferLogs: true, // Defer Logger output until nestjs-pino is wired
+      // rawBody: true makes req.rawBody available on every request (we then
+      // gate HMAC checks per-route in the guards). The body is still parsed
+      // by Nest's default JSON middleware.
+      rawBody: true,
+      cors: {
+        origin: corsOrigin,
+        credentials: true,
+      },
     },
-  });
+  );
 
   // Hand log emission to Pino so every log line carries the standard fields
   // (timestamp, level, service, env, trace_id, span_id, request_id, msg).
@@ -82,6 +89,11 @@ async function bootstrap(): Promise<void> {
   // The express trust-proxy setting makes `req.ip` honor X-Forwarded-For when
   // running behind the AWS ALB / a local reverse proxy.
   app.getHttpAdapter().getInstance().set('trust proxy', 'loopback, linklocal, uniquelocal');
+
+  // Note: raw body capture for HMAC verification (AI batch + Razorpay
+  // webhook) is wired via `rawBody: true` above. NestJS's RawBodyRequest
+  // interface exposes `req.rawBody: Buffer` on every request; AiHmacGuard
+  // and the donations webhook handler read it directly.
 
   await app.listen(env.PORT, '0.0.0.0');
 
