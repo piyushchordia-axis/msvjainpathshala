@@ -12,6 +12,7 @@
     "build": "turbo run build",
     "dev": "turbo run dev",
     "dev:tunnel": "pnpm --filter @jp/mobile dev:tunnel",
+    "dev:tunnel:clean": "pnpm --filter @jp/mobile dev:tunnel:clean",
     "lint": "pnpm run lint:root && turbo run lint",
     "lint:root": "eslint .",
     "typecheck": "turbo run typecheck",

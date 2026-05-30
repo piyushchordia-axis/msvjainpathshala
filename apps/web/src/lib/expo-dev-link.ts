@@ -63,8 +63,35 @@ export function parseExpoDevUrl(
   };
 }
 
-function metroBase(): string {
-  return (process.env.EXPO_METRO_URL ?? 'http://127.0.0.1:8081').replace(/\/$/, '');
+const DEFAULT_METRO_PORTS = ['8081', '8082', '8083', '19000'];
+
+function metroBasesToProbe(): string[] {
+  const bases: string[] = [];
+  if (process.env.EXPO_METRO_URL) {
+    bases.push(process.env.EXPO_METRO_URL.replace(/\/$/, ''));
+  }
+  const ports = (process.env.EXPO_METRO_PORTS ?? DEFAULT_METRO_PORTS.join(','))
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean);
+  for (const port of ports) {
+    const base = `http://127.0.0.1:${port}`;
+    if (!bases.includes(base)) bases.push(base);
+  }
+  return bases;
+}
+
+async function isMetroRunning(base: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${base}/status`, {
+      signal: AbortSignal.timeout(1500),
+      cache: 'no-store',
+    });
+    const text = await res.text();
+    return res.ok && text.includes('packager-status:running');
+  } catch {
+    return false;
+  }
 }
 
 const EXPO_DEV_JSON_CANDIDATES = [
@@ -86,13 +113,20 @@ function pickUrlFromDevJson(data: ExpoDevJsonFile): string | null {
   return data.url ?? data.tunnelUrl ?? data.expoGoUrl ?? data.deepLink ?? null;
 }
 
+function isPublicExpoUrl(url: string): boolean {
+  const hostPart = url.replace(/^exp[s]?:\/\//i, '').split('/')[0] ?? '';
+  if (/^(127\.0\.0\.1|localhost)(:|$)/i.test(hostPart)) return false;
+  return /\.exp\.direct/i.test(hostPart) || /\.ngrok/i.test(hostPart);
+}
+
 async function readExpoDevJsonFile(): Promise<ExpoDeepLink | null> {
   for (const filePath of EXPO_DEV_JSON_CANDIDATES) {
     try {
       const raw = await readFile(filePath, 'utf8');
-      const data = JSON.parse(raw) as ExpoDevJsonFile;
+      const data = JSON.parse(raw) as ExpoDevJsonFile & { requireTunnel?: boolean };
       const url = pickUrlFromDevJson(data);
       if (!url) continue;
+      if (data.requireTunnel && !isPublicExpoUrl(url)) continue;
       const parsed = parseExpoDevUrl(url, 'expo-dev-json');
       if (parsed) return parsed;
     } catch {
@@ -102,26 +136,22 @@ async function readExpoDevJsonFile(): Promise<ExpoDeepLink | null> {
   return null;
 }
 
-async function readExpoOpenEndpoint(): Promise<ExpoDeepLink | null> {
-  const base = metroBase();
+async function readExpoOpenFromBase(base: string): Promise<ExpoDeepLink | null> {
   try {
     const res = await fetch(`${base}/_expo/open?platform=ios&runtime=expo`, {
       signal: AbortSignal.timeout(3000),
       cache: 'no-store',
     });
     if (!res.ok) return null;
-
     const body = (await res.json()) as { url?: string };
     if (!body.url) return null;
-    const parsed = parseExpoDevUrl(body.url, 'expo-open');
-    return parsed;
+    return parseExpoDevUrl(body.url, 'expo-open');
   } catch {
     return null;
   }
 }
 
-async function readMetroManifestLink(): Promise<ExpoDeepLink | null> {
-  const base = metroBase();
+async function readManifestFromBase(base: string): Promise<ExpoDeepLink | null> {
   try {
     const res = await fetch(`${base}/manifest`, {
       headers: { 'expo-platform': 'ios' },
@@ -146,13 +176,30 @@ async function readMetroManifestLink(): Promise<ExpoDeepLink | null> {
 
     const hostUri = manifest.extra?.expoClient?.hostUri;
     if (hostUri) {
-      const parsed = parseExpoDevUrl(`exp://${hostUri}`, 'metro');
-      if (parsed) return parsed;
+      return parseExpoDevUrl(`exp://${hostUri}`, 'metro');
     }
   } catch {
     /* Metro not running or unreachable */
   }
   return null;
+}
+
+async function readBestMetroLink(preferTunnel: boolean): Promise<ExpoDeepLink | null> {
+  const candidates: ExpoDeepLink[] = [];
+
+  for (const base of metroBasesToProbe()) {
+    if (!(await isMetroRunning(base))) continue;
+
+    const fromOpen = await readExpoOpenFromBase(base);
+    if (fromOpen) candidates.push(fromOpen);
+
+    const fromManifest = await readManifestFromBase(base);
+    if (fromManifest) candidates.push(fromManifest);
+  }
+
+  const tunnel = candidates.find((c) => isPublicExpoUrl(c.deepLink));
+  if (preferTunnel) return tunnel ?? null;
+  return tunnel ?? candidates[0] ?? null;
 }
 
 export async function resolveExpoDeepLink(): Promise<ExpoDeepLink> {
@@ -162,10 +209,7 @@ export async function resolveExpoDeepLink(): Promise<ExpoDeepLink> {
   const fromDevJson = await readExpoDevJsonFile();
   if (fromDevJson) return fromDevJson;
 
-  const fromOpen = await readExpoOpenEndpoint();
-  if (fromOpen) return fromOpen;
-
-  const fromMetro = await readMetroManifestLink();
+  const fromMetro = await readBestMetroLink(true);
   if (fromMetro) return fromMetro;
 
   return {
