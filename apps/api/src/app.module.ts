@@ -44,6 +44,8 @@ import { PunyaModule } from './modules/punya/punya.module';
 import { QuizzesModule } from './modules/quizzes/quizzes.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { ServiceRequestsModule } from './modules/service-requests/service-requests.module';
+import { StudentNotesModule } from './modules/student-notes/student-notes.module';
+import { DataExportModule } from './modules/data-export/data-export.module';
 import { SessionsModule } from './modules/sessions/sessions.module';
 import { ShivirsModule } from './modules/shivirs/shivirs.module';
 import { StudentsModule } from './modules/students/students.module';
@@ -98,6 +100,8 @@ import { RealtimeModule } from './realtime/realtime.module';
     AiModule,
     LibraryModule,
     ServiceRequestsModule,
+    StudentNotesModule,
+    DataExportModule,
     ReportsModule,
     AnalyticsModule,
     SyncModule,
