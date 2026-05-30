@@ -81,5 +81,12 @@
   },
   "detox": {
     "configurations": "./.detoxrc.js"
+  },
+  "expo": {
+    "install": {
+      "exclude": [
+        "@types/react"
+      ]
+    }
   }
 }
