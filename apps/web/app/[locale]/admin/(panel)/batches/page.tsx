@@ -10,6 +10,8 @@ import { listAdminBatches, type AdminBatchRow } from '@/api/admin-misc';
 import { Card } from '@/components/ui/card';
 import { Link } from '@/i18n/navigation';
 
+import { BatchActions } from './batch-actions';
+
 const DAY_NAMES = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 function formatDays(days: number[]): string {
@@ -77,12 +79,13 @@ export default async function AdminBatchesPage() {
                 <th className="px-4 py-3">Shikshak</th>
                 <th className="px-4 py-3">Day / time</th>
                 <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-6 text-center text-muted-foreground">
+                  <td colSpan={7} className="px-4 py-6 text-center text-muted-foreground">
                     No batches in scope yet.
                   </td>
                 </tr>
@@ -111,6 +114,9 @@ export default async function AdminBatchesPage() {
                       >
                         {b.status}
                       </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <BatchActions id={b.id} status={b.status} />
                     </td>
                   </tr>
                 ))

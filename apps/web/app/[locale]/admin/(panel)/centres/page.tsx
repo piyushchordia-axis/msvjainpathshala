@@ -9,6 +9,8 @@ import { listAdminCentres, type CentreRow } from '@/api/admin-misc';
 import { Card } from '@/components/ui/card';
 import { Link } from '@/i18n/navigation';
 
+import { CentreActions } from './centre-actions';
+
 export default async function AdminCentresPage() {
   let items: CentreRow[] = [];
   let error: string | null = null;
@@ -53,12 +55,13 @@ export default async function AdminCentresPage() {
                 <th className="px-4 py-3">Contact</th>
                 <th className="px-4 py-3 text-right">Geo-fence (m)</th>
                 <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-6 text-center text-muted-foreground">
+                  <td colSpan={7} className="px-4 py-6 text-center text-muted-foreground">
                     No centres yet.
                   </td>
                 </tr>
@@ -82,6 +85,9 @@ export default async function AdminCentresPage() {
                       >
                         {c.status}
                       </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <CentreActions id={c.id} status={c.status} />
                     </td>
                   </tr>
                 ))
