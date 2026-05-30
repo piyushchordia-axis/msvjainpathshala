@@ -93,5 +93,5 @@ export default function middleware(req: NextRequest): NextResponse {
 
 export const config = {
   // Skip Next.js internals + static files; everything else flows through.
-  matcher: ['/((?!api|_next|_vercel|.*\\..*).*)'],
+  matcher: ['/((?!api|_next|_vercel|expo|.*\\..*).*)'],
 };

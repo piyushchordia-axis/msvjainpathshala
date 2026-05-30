@@ -19,6 +19,23 @@ pnpm --filter @jp/mobile dev
 Then scan the printed QR with the Expo Go app (Android) or `i`/`a` in the
 Metro CLI to open the iOS Simulator / Android emulator.
 
+### Remote / tunnel preview (QR landing page on web)
+
+```bash
+# Terminal 1 — API
+pnpm --filter @jp/api dev
+
+# Terminal 2 — Metro via ngrok tunnel (writes apps/mobile/.expo-dev.json)
+pnpm dev:tunnel
+
+# Terminal 3 — Next.js (serves /expo on port 3001)
+pnpm --filter @jp/web dev
+```
+
+Open **http://localhost:3001/expo** (or `https://pathshala.enaacreations.com/expo` behind nginx).
+The page reads `apps/mobile/.expo-dev.json` (updated every few seconds while tunnel runs),
+then falls back to Metro `/_expo/open` or `/manifest`, then `EXPO_TUNNEL_URL` if set.
+
 ## API base URL
 
 `EXPO_PUBLIC_API_BASE_URL` is read by `src/api/client.ts`. Defaults:

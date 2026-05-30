@@ -1,5 +1,5 @@
 /**
- * POST /api/admin/centres/[id]/deactivate
+ * POST /api/admin/centres/[centreId]/deactivate
  *
  * Proxy for the centre deactivate action. Forwards to
  * POST /v1/centres/:id/deactivate (city_admin+). The backend rejects with 409
@@ -13,9 +13,9 @@ import { readAccessToken } from '@/lib/auth-cookies';
 
 export async function POST(
   _req: Request,
-  ctx: { params: Promise<{ id: string }> },
+  ctx: { params: Promise<{ centreId: string }> },
 ): Promise<NextResponse> {
-  const { id } = await ctx.params;
+  const { centreId } = await ctx.params;
   const token = await readAccessToken();
   if (!token) {
     return NextResponse.json(
@@ -25,7 +25,7 @@ export async function POST(
   }
   try {
     const client = await authenticatedServerClient();
-    await client.post(`/v1/centres/${id}/deactivate`, {});
+    await client.post(`/v1/centres/${centreId}/deactivate`, {});
     return NextResponse.json({ data: { ok: true } }, { status: 200 });
   } catch (err) {
     if (err instanceof ApiError) {
