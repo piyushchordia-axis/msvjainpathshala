@@ -112,6 +112,12 @@ export function ProfileScreen() {
             label={t('profile.reports', { defaultValue: 'Progress reports' })}
             onPress={() => router.push('/reports' as never)}
           />
+          {user?.role === 'parent' ? (
+            <SettingsRow
+              label={t('profile.documents', { defaultValue: 'ID card & reports' })}
+              onPress={() => router.push('/profile/documents' as never)}
+            />
+          ) : null}
           <SettingsRow
             label={t('profile.msv', { defaultValue: 'MSV programme' })}
             onPress={() => router.push('/msv' as never)}
