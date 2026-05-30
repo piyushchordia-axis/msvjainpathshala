@@ -75,6 +75,8 @@ const config: ExpoConfig = {
   ],
   experiments: {
     typedRoutes: true,
+    // Align Metro resolution with Expo autolinking in the pnpm monorepo (SDK 54).
+    autolinkingModuleResolution: true,
   },
   // Surface env-driven values to JS via Constants.expoConfig.extra. The
   // EXPO_PUBLIC_* convention is auto-inlined by Metro at bundle time, but
