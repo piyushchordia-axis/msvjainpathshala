@@ -5,8 +5,8 @@
  * with status 'none' / 'rejected' / 'revoked' can apply; an in-progress
  * ('applied' / 'waitlisted') or 'approved' child shows a status pill instead.
  *
- * POST /v1/msv/enrolments { student_id, motivation?, parent_remarks? }.
- * Q1: no eligibility checks — the form just captures intent for the admin.
+ * POST /v1/msv/enrolments { student_id, note? } — matches msvApplicationSchema
+ * exactly. Q1: no eligibility checks — the note just captures intent.
  */
 
 import { Stack, useFocusEffect } from 'expo-router';
@@ -45,8 +45,7 @@ export default function MsvApplyScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [openFor, setOpenFor] = useState<string | null>(null);
-  const [motivation, setMotivation] = useState('');
-  const [remarks, setRemarks] = useState('');
+  const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -73,13 +72,11 @@ export default function MsvApplyScreen() {
     try {
       await msvApi.apply({
         student_id: studentId,
-        ...(motivation.trim() ? { motivation: motivation.trim() } : {}),
-        ...(remarks.trim() ? { parent_remarks: remarks.trim() } : {}),
+        ...(note.trim() ? { note: note.trim() } : {}),
       });
       appToast.success('Application sent', 'Your MSV application is now with the admin.');
       setOpenFor(null);
-      setMotivation('');
-      setRemarks('');
+      setNote('');
       await load();
     } catch (err) {
       appToast.error(
@@ -134,8 +131,7 @@ export default function MsvApplyScreen() {
                     style={styles.applyBtn}
                     onPress={() => {
                       setOpenFor(c.id);
-                      setMotivation('');
-                      setRemarks('');
+                      setNote('');
                     }}
                   >
                     <Text style={styles.applyBtnText}>Apply for MSV</Text>
@@ -152,27 +148,17 @@ export default function MsvApplyScreen() {
 
                 {open ? (
                   <View style={styles.form}>
-                    <Text style={styles.label}>Why is your child interested? (optional)</Text>
+                    <Text style={styles.label}>
+                      Why are you applying for your child? (optional)
+                    </Text>
                     <TextInput
                       style={styles.textArea}
-                      value={motivation}
-                      onChangeText={setMotivation}
-                      placeholder="Share your child's motivation…"
+                      value={note}
+                      onChangeText={setNote}
+                      placeholder="Share your child's motivation and anything the admin should know…"
                       placeholderTextColor={JPColors.textSub}
                       multiline
-                      maxLength={2000}
-                      textAlignVertical="top"
-                      editable={!busy}
-                    />
-                    <Text style={styles.label}>Anything else for the admin? (optional)</Text>
-                    <TextInput
-                      style={styles.textArea}
-                      value={remarks}
-                      onChangeText={setRemarks}
-                      placeholder="Additional remarks…"
-                      placeholderTextColor={JPColors.textSub}
-                      multiline
-                      maxLength={2000}
+                      maxLength={1000}
                       textAlignVertical="top"
                       editable={!busy}
                     />
