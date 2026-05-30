@@ -7,6 +7,7 @@ import { HealthModule } from './core/health/health.module';
 import { LoggerModule } from './core/logger/logger.module';
 import { RedisModule } from './core/redis/redis.module';
 import { StorageModule } from './core/storage/storage.module';
+import { SystemConfigModule } from './core/system-config/system-config.module';
 import { ObservabilityModule } from './observability/observability.module';
 import { QueueProcessorsModule } from './queues/queue-processors.module';
 import { QueuesModule } from './queues/queues.module';
@@ -29,6 +30,7 @@ import { SchedulerModule } from './queues/scheduler.module';
     PdfModule,
     RedisModule,
     StorageModule,
+    SystemConfigModule, // provides SystemConfigService for the @Global AuditModule
     HealthModule, // exports MetricsService used by QueueMetricsService
     QueuesModule.forRoot(),
     QueueProcessorsModule,
