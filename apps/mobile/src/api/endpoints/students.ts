@@ -33,9 +33,38 @@ export interface EnrolmentSubmitInput {
   form_data?: Record<string, unknown>;
 }
 
+/** Loose admin/teacher roster row (defensive optional fields). */
+export interface AdminStudentRow {
+  id: string;
+  full_name: string;
+  student_code?: string;
+  age_group?: string;
+  status?: string;
+}
+
+/** Loose pending-enrolment row for the sanchalak approval queue. */
+export interface PendingEnrolmentRow {
+  id: string;
+  full_name?: string;
+  student_name?: string;
+  requested_centre_name?: string;
+  centre_name?: string;
+  requested_batch_name?: string;
+  batch_name?: string;
+  dob?: string;
+  status?: string;
+}
+
 export const studentsApi = {
   async myChildren(): Promise<{ items: StudentDto[] }> {
     return unwrap<{ items: StudentDto[] }>(api.get('/v1/parents/me/students'));
+  },
+
+  /** Roster for shikshak+ (scope-filtered server-side). */
+  async listForAdmin(
+    params: { status?: 'active' | 'inactive'; limit?: number } = {},
+  ): Promise<{ items: AdminStudentRow[] }> {
+    return unwrap<{ items: AdminStudentRow[] }>(api.get('/v1/students', { params }));
   },
 };
 
@@ -47,5 +76,20 @@ export const enrolmentsApi = {
     };
   }> {
     return unwrap(api.post('/v1/enrolments', input));
+  },
+
+  /** Pending enrolment applications in the actor's scope (sanchalak+). */
+  async listPending(): Promise<{ items: PendingEnrolmentRow[] }> {
+    return unwrap<{ items: PendingEnrolmentRow[] }>(
+      api.get('/v1/enrolments', { params: { status: 'pending' } }),
+    );
+  },
+
+  async approve(id: string): Promise<unknown> {
+    return unwrap<unknown>(api.post(`/v1/enrolments/${id}/approve`, {}));
+  },
+
+  async reject(id: string, reason: string): Promise<unknown> {
+    return unwrap<unknown>(api.post(`/v1/enrolments/${id}/reject`, { reason }));
   },
 };

@@ -100,6 +100,20 @@ export const punyaApi = {
   ): Promise<LeaderboardResponse> {
     return unwrap<LeaderboardResponse>(api.get(`/v1/leaderboards/${scope}`, { params: opts }));
   },
+
+  /**
+   * Manual discretionary award (shikshak+). feature_key is fixed to the
+   * `manual_award` bucket; points are −500…500 (non-zero), reason 3+ chars.
+   */
+  async award(input: {
+    student_id: string;
+    feature_key: string;
+    points: number;
+    reason: string;
+    is_msv_track?: boolean;
+  }): Promise<unknown> {
+    return unwrap<unknown>(api.post('/v1/punya/award', input));
+  },
 };
 
 /**

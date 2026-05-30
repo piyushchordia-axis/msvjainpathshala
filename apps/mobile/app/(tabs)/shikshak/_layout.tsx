@@ -67,6 +67,7 @@ export default function ShikshakTabsLayout() {
       <Tabs.Screen name="batches" options={{ title: 'Batches', tabBarIcon: tabIcon('user') }} />
       <Tabs.Screen name="niyams" options={{ title: 'Niyams', tabBarIcon: tabIcon('flame') }} />
       <Tabs.Screen name="library" options={{ title: 'Library', tabBarIcon: tabIcon('book') }} />
+      <Tabs.Screen name="punya" options={{ title: 'Punya', tabBarIcon: tabIcon('sparkles') }} />
       <Tabs.Screen
         name="profile"
         options={{ title: 'Profile', tabBarIcon: (p) => <FailedIcon {...p} /> }}
