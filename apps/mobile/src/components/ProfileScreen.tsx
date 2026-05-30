@@ -101,6 +101,10 @@ export function ProfileScreen() {
             onPress={() => router.push('/profile/notification-preferences' as never)}
           />
           <SettingsRow
+            label={t('profile.help_support', { defaultValue: 'Help & support' })}
+            onPress={() => router.push('/service-requests' as never)}
+          />
+          <SettingsRow
             label={t('profile.sync_issues', { defaultValue: 'Sync & offline' })}
             onPress={() => router.push('/profile/sync-issues' as never)}
           />
