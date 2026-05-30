@@ -113,6 +113,10 @@ export function ProfileScreen() {
             onPress={() => router.push('/reports' as never)}
           />
           <SettingsRow
+            label={t('profile.msv', { defaultValue: 'MSV programme' })}
+            onPress={() => router.push('/msv' as never)}
+          />
+          <SettingsRow
             label={t('profile.sync_issues', { defaultValue: 'Sync & offline' })}
             onPress={() => router.push('/profile/sync-issues' as never)}
           />
