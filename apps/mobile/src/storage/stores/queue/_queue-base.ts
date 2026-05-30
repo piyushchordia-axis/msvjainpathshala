@@ -16,7 +16,7 @@
  * ever multi-thread (worklets, etc), revisit this.
  */
 
-import { ulid } from 'ulid';
+import { ulid } from '@/lib/ulid';
 
 import { getMmkv, type MMKVInstanceId } from '../../mmkv';
 

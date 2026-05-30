@@ -18,9 +18,9 @@
  */
 
 import { Platform } from 'react-native';
-import { ulid } from 'ulid';
 
 import { notificationsApi } from '@/api/endpoints/notifications';
+import { ulid } from '@/lib/ulid';
 import { getMmkv } from '@/storage/mmkv';
 
 import type { NotificationFeedItem } from '@/api/endpoints/notifications';

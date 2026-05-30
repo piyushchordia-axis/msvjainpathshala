@@ -17,8 +17,8 @@
 
 import axios, { type AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
 import Constants from 'expo-constants';
-import { ulid } from 'ulid';
 
+import { ulid } from '@/lib/ulid';
 import { authStore } from '@/storage/stores/auth.store';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
