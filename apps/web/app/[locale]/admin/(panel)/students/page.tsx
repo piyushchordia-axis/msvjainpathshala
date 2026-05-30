@@ -10,6 +10,7 @@ import { Card } from '@/components/ui/card';
 import { Link } from '@/i18n/navigation';
 
 import { StudentActions } from './student-actions';
+import { StudentDocuments } from './student-documents';
 
 export default async function AdminStudentsPage() {
   let items: AdminStudentRow[] = [];
@@ -95,7 +96,10 @@ export default async function AdminStudentsPage() {
                       </span>
                     </td>
                     <td className="px-4 py-3">
-                      <StudentActions id={s.id} status={s.status} />
+                      <div className="flex flex-col gap-2">
+                        <StudentActions id={s.id} status={s.status} />
+                        <StudentDocuments id={s.id} />
+                      </div>
                     </td>
                   </tr>
                 ))
