@@ -268,24 +268,3 @@ export async function getPlatformSettings(): Promise<PlatformSettings> {
   const res = await client.get('/v1/admin/platform-settings');
   return res.data.data as PlatformSettings;
 }
-
-// ---------------------------------------------------------------------------
-// Quiz events (scheduled quizzes)
-// ---------------------------------------------------------------------------
-
-export interface QuizEventRow {
-  id: string;
-  title: string;
-  audience_kind: string;
-  status: string;
-  starts_at: string;
-  duration_minutes: number;
-  question_ids: string[];
-  created_at: string;
-}
-
-export async function listQuizEvents(): Promise<{ items: QuizEventRow[] }> {
-  const client = await authenticatedServerClient();
-  const res = await client.get('/v1/quiz-events');
-  return res.data.data as { items: QuizEventRow[] };
-}
