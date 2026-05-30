@@ -13,6 +13,10 @@ export default function SanchalakTabsLayout() {
         options={{ title: 'My centres', tabBarIcon: tabIcon('mapPin') }}
       />
       <Tabs.Screen name="batches" options={{ title: 'Batches', tabBarIcon: tabIcon('user') }} />
+      <Tabs.Screen
+        name="enrolments"
+        options={{ title: 'Enrolments', tabBarIcon: tabIcon('check') }}
+      />
       <Tabs.Screen name="reports" options={{ title: 'Reports', tabBarIcon: tabIcon('book') }} />
       <Tabs.Screen name="profile" options={{ title: 'Profile', tabBarIcon: tabIcon('settings') }} />
     </Tabs>
