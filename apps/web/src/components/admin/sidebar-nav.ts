@@ -121,6 +121,7 @@ export const ADMIN_NAV: NavGroup[] = [
   {
     heading: 'System',
     items: [
+      { href: '/admin/forms', label: 'Form builder', icon: ScrollText, min: 'city_admin' },
       { href: '/admin/queues', label: 'Queues', icon: ShieldCheck, min: 'super_admin' },
       { href: '/admin/geography', label: 'Geography', icon: Building2, min: 'state_admin' },
       { href: '/admin/settings', label: 'Settings', icon: Settings, min: 'state_admin' },
