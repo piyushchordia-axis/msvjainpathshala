@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { AppError, ERROR_CODES } from '@jp/shared';
 
 import { ZodValidationPipe } from '../../common/validation/zod-validation.pipe';
+import { BatchesRepository, CentresRepository } from '../../db/repositories';
 import { CurrentUser, type CurrentUserPayload } from '../auth/decorators/current-user.decorator';
 import { Public } from '../auth/decorators/public.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -58,6 +59,10 @@ const transferSchema = z.object({
   target_batch_id: z.string().uuid(),
 });
 
+const optionsCentresQuery = z.object({
+  city_id: z.string().uuid(),
+});
+
 const listQuerySchema = z.object({
   status: z.enum(['pending', 'approved', 'rejected', 'waitlisted']).optional(),
   batch_id: z.string().uuid().optional(),
@@ -89,7 +94,11 @@ function assertActor(user: CurrentUserPayload | undefined): asserts user is Curr
 
 @Controller('/v1/enrolments')
 export class EnrolmentsController {
-  constructor(private readonly service: EnrolmentsService) {}
+  constructor(
+    private readonly service: EnrolmentsService,
+    private readonly centresRepo: CentresRepository,
+    private readonly batchesRepo: BatchesRepository,
+  ) {}
 
   // ---- Submit (public — guest OR authenticated parent) ----------------
   @Public()
@@ -119,6 +128,35 @@ export class EnrolmentsController {
       };
     }
     return { enrolment: result.enrolment };
+  }
+
+  // ---- Public enrolment options (guest OR parent adding a child) -------
+  // The authenticated `GET /v1/centres` is scope-filtered and returns nothing
+  // for guests/parents, so enrolment needs these unauthenticated lookups to
+  // populate the mobile city → centre → batch pickers. Minimal public fields.
+  @Public()
+  @Get('/options/centres')
+  async optionsCentres(
+    @Query(new ZodValidationPipe(optionsCentresQuery)) q: z.infer<typeof optionsCentresQuery>,
+  ) {
+    const rows = await this.centresRepo.listByCity(q.city_id);
+    const items = rows
+      .filter((c) => c.status === 'active')
+      .map((c) => ({ id: c.id, name: c.name, locality: c.locality, city_id: c.city_id }));
+    return { items };
+  }
+
+  @Public()
+  @Get('/options/centres/:centreId/batches')
+  async optionsBatches(@Param('centreId') centreId: string) {
+    const rows = await this.batchesRepo.listByCentre(centreId, { status: 'active' });
+    const items = rows.map((b) => ({
+      id: b.id,
+      name: b.name,
+      age_group: b.age_group,
+      language_preference: b.language_preference,
+    }));
+    return { items };
   }
 
   // ---- List / Detail (sanchalak+) -------------------------------------

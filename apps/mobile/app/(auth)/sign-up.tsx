@@ -1,24 +1,24 @@
 /**
- * Mobile sign-up flow. Step 10 ships a minimal but functional form:
+ * Mobile sign-up / enrol-a-child flow.
  *
  *   - phone (+91, 10 digits)
  *   - parent name
  *   - child name
  *   - dob (YYYY-MM-DD)
- *   - age group
- *   - centre id  (full picker UI lands when /v1/centres list is wired)
- *   - batch id   (full picker UI lands when /v1/batches list is wired)
+ *   - state → city → centre → batch cascading pickers (replaces the old
+ *     paste-a-UUID inputs). State/city come from the public geography API;
+ *     centres/batches from the public enrolment-options API. The selected
+ *     batch sets the age group automatically.
  *
- * Submitting calls `POST /v1/enrolments`. If the API returns a duplicate
- * warning we surface it inline but still let the parent confirm. After
- * success the parent is bounced back to the auth landing (their phone
- * is now in the system as a `guest`; once an admin approves they're
- * promoted to `parent`).
+ * Submitting calls the @Public `POST /v1/enrolments`. Works for guests and
+ * for authenticated parents adding another child (the options endpoints are
+ * public, so a parent with no centre scope can still browse).
  */
 
 import { useRouter } from 'expo-router';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -31,12 +31,18 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ApiError } from '@/api/client';
+import {
+  enrolmentOptionsApi,
+  type PublicBatch,
+  type PublicCentre,
+} from '@/api/endpoints/enrolment-options';
+import { geographyApi, type CityDto, type StateDto } from '@/api/endpoints/geography';
 import { enrolmentsApi } from '@/api/endpoints/students';
 import { PrimaryButton } from '@/components/ui';
+import { appToast } from '@/components/ui/feedback/AppToast';
 import { JPColors, JPFonts, JPRadius, JPSpacing } from '@/constants/colors';
 
-const AGE_GROUPS = ['bal', 'kishor', 'tarun', 'yuva'] as const;
-type AgeGroup = (typeof AGE_GROUPS)[number];
+type AgeGroup = 'bal' | 'kishor' | 'tarun' | 'yuva';
 
 interface FormState {
   phone: string;
@@ -63,9 +69,6 @@ function isE164Phone(digits: string): boolean {
 }
 function isIsoDate(s: string): boolean {
   return /^\d{4}-\d{2}-\d{2}$/.test(s);
-}
-function isUuid(s: string): boolean {
-  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s);
 }
 
 function FieldLabel({ children }: { children: string }) {
@@ -106,54 +109,194 @@ function Field({
   );
 }
 
+interface Option {
+  id: string;
+  label: string;
+  sublabel?: string | null;
+}
+
+function SelectList({
+  label,
+  options,
+  selectedId,
+  onSelect,
+  loading,
+  placeholder,
+  disabled,
+}: {
+  label: string;
+  options: Option[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+  loading?: boolean;
+  placeholder: string;
+  disabled?: boolean;
+}) {
+  return (
+    <View style={styles.field}>
+      <FieldLabel>{label}</FieldLabel>
+      {disabled ? (
+        <Text style={styles.pickerHint}>{placeholder}</Text>
+      ) : loading ? (
+        <View style={styles.pickerLoading}>
+          <ActivityIndicator color={JPColors.saffron} />
+        </View>
+      ) : options.length === 0 ? (
+        <Text style={styles.pickerHint}>Nothing available here yet.</Text>
+      ) : (
+        <View style={styles.optionList}>
+          {options.map((o) => {
+            const active = o.id === selectedId;
+            return (
+              <Pressable
+                key={o.id}
+                onPress={() => onSelect(o.id)}
+                style={[styles.optionRow, active && styles.optionRowActive]}
+              >
+                <Text style={[styles.optionText, active && styles.optionTextActive]}>
+                  {o.label}
+                </Text>
+                {o.sublabel ? <Text style={styles.optionSub}>{o.sublabel}</Text> : null}
+              </Pressable>
+            );
+          })}
+        </View>
+      )}
+    </View>
+  );
+}
+
 export default function SignUpScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const [form, setForm] = useState<FormState>(INITIAL);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [warning, setWarning] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+
+  // Cascading picker state.
+  const [states, setStates] = useState<StateDto[]>([]);
+  const [cities, setCities] = useState<CityDto[]>([]);
+  const [centres, setCentres] = useState<PublicCentre[]>([]);
+  const [batchOpts, setBatchOpts] = useState<PublicBatch[]>([]);
+  const [stateId, setStateId] = useState('');
+  const [cityId, setCityId] = useState('');
+  const [loading, setLoading] = useState<'states' | 'cities' | 'centres' | 'batches' | null>(
+    'states',
+  );
 
   const set = useCallback(<K extends keyof FormState>(k: K, v: FormState[K]) => {
     setForm((prev) => ({ ...prev, [k]: v }));
   }, []);
+
+  // Load states on mount.
+  useEffect(() => {
+    let active = true;
+    setLoading('states');
+    geographyApi
+      .states()
+      .then((res) => {
+        if (active) setStates(res.items);
+      })
+      .catch(() => appToast.error('Could not load states', 'Check your connection and retry.'))
+      .finally(() => {
+        if (active) setLoading(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const selectState = useCallback(async (id: string) => {
+    setStateId(id);
+    setCityId('');
+    setCities([]);
+    setCentres([]);
+    setBatchOpts([]);
+    setForm((p) => ({ ...p, centreId: '', batchId: '' }));
+    setLoading('cities');
+    try {
+      const res = await geographyApi.cities(id);
+      setCities(res.items);
+    } catch {
+      appToast.error('Could not load cities', 'Please try again.');
+    } finally {
+      setLoading(null);
+    }
+  }, []);
+
+  const selectCity = useCallback(async (id: string) => {
+    setCityId(id);
+    setCentres([]);
+    setBatchOpts([]);
+    setForm((p) => ({ ...p, centreId: '', batchId: '' }));
+    setLoading('centres');
+    try {
+      const res = await enrolmentOptionsApi.centres(id);
+      setCentres(res.items);
+    } catch {
+      appToast.error('Could not load centres', 'Please try again.');
+    } finally {
+      setLoading(null);
+    }
+  }, []);
+
+  const selectCentre = useCallback(async (id: string) => {
+    setBatchOpts([]);
+    setForm((p) => ({ ...p, centreId: id, batchId: '' }));
+    setLoading('batches');
+    try {
+      const res = await enrolmentOptionsApi.batches(id);
+      setBatchOpts(res.items);
+    } catch {
+      appToast.error('Could not load batches', 'Please try again.');
+    } finally {
+      setLoading(null);
+    }
+  }, []);
+
+  const selectBatch = useCallback(
+    (id: string) => {
+      const b = batchOpts.find((x) => x.id === id);
+      setForm((p) => ({ ...p, batchId: id, ageGroup: b?.age_group ?? p.ageGroup }));
+    },
+    [batchOpts],
+  );
 
   const valid =
     isE164Phone(form.phone) &&
     form.parentName.trim().length > 0 &&
     form.childName.trim().length > 0 &&
     isIsoDate(form.dob) &&
-    isUuid(form.centreId) &&
-    isUuid(form.batchId);
+    form.centreId.length > 0 &&
+    form.batchId.length > 0;
 
   const submit = useCallback(async () => {
     if (!valid) return;
     setBusy(true);
     setError(null);
-    setWarning(null);
     try {
       await enrolmentsApi.submit({
         parent_phone: `+91${form.phone}`,
         parent_full_name: form.parentName.trim(),
         preferred_language: 'en',
-        requested_centre_id: form.centreId.trim(),
-        requested_batch_id: form.batchId.trim(),
+        requested_centre_id: form.centreId,
+        requested_batch_id: form.batchId,
         full_name: form.childName.trim(),
         dob: form.dob,
         age_group: form.ageGroup,
       });
+      appToast.success('Enrolment submitted', 'Your Sanchalak will review it shortly.');
       setDone(true);
     } catch (err) {
-      if (err instanceof ApiError) {
-        if (err.code === 'ERR_VALIDATION_FAILED') {
-          setError('Please double-check the form fields.');
-        } else {
-          setError(err.message);
-        }
-      } else {
-        setError('Could not submit. Please try again.');
-      }
+      const msg =
+        err instanceof ApiError
+          ? err.code === 'ERR_VALIDATION_FAILED'
+            ? 'Please double-check the form fields.'
+            : err.message
+          : 'Could not submit. Please try again.';
+      setError(msg);
+      appToast.error('Could not submit', msg);
     } finally {
       setBusy(false);
     }
@@ -226,44 +369,49 @@ export default function SignUpScreen() {
             maxLength={10}
           />
 
-          <View style={styles.field}>
-            <FieldLabel>Age group</FieldLabel>
-            <View style={styles.row}>
-              {AGE_GROUPS.map((g) => {
-                const active = form.ageGroup === g;
-                return (
-                  <Pressable
-                    key={g}
-                    onPress={() => set('ageGroup', g)}
-                    style={[styles.chip, active && styles.chipActive]}
-                  >
-                    <Text style={[styles.chipText, active && styles.chipTextActive]}>{g}</Text>
-                  </Pressable>
-                );
-              })}
-            </View>
-          </View>
-
-          <Field
-            label="Centre id"
-            value={form.centreId}
-            onChangeText={(v) => set('centreId', v.trim())}
-            placeholder="Paste centre UUID"
-            autoCapitalize="none"
+          <SelectList
+            label="State"
+            placeholder="Loading…"
+            loading={loading === 'states'}
+            options={states.map((s) => ({ id: s.id, label: s.name }))}
+            selectedId={stateId}
+            onSelect={(id) => void selectState(id)}
           />
-          <Field
-            label="Batch id"
-            value={form.batchId}
-            onChangeText={(v) => set('batchId', v.trim())}
-            placeholder="Paste batch UUID"
-            autoCapitalize="none"
-          />
-          <Text style={styles.helper}>
-            Centre and batch pickers land in a follow-up step; for now your Sanchalak can share the
-            IDs with you.
-          </Text>
 
-          {warning ? <Text style={styles.warning}>{warning}</Text> : null}
+          <SelectList
+            label="City"
+            placeholder="Pick a state first"
+            disabled={!stateId}
+            loading={loading === 'cities'}
+            options={cities.map((c) => ({ id: c.id, label: c.name }))}
+            selectedId={cityId}
+            onSelect={(id) => void selectCity(id)}
+          />
+
+          <SelectList
+            label="Centre"
+            placeholder="Pick a city first"
+            disabled={!cityId}
+            loading={loading === 'centres'}
+            options={centres.map((c) => ({ id: c.id, label: c.name, sublabel: c.locality }))}
+            selectedId={form.centreId}
+            onSelect={(id) => void selectCentre(id)}
+          />
+
+          <SelectList
+            label="Batch"
+            placeholder="Pick a centre first"
+            disabled={!form.centreId}
+            loading={loading === 'batches'}
+            options={batchOpts.map((b) => ({
+              id: b.id,
+              label: b.name,
+              sublabel: `Age group: ${b.age_group}`,
+            }))}
+            selectedId={form.batchId}
+            onSelect={selectBatch}
+          />
+
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
           <View style={styles.cta}>
@@ -321,36 +469,38 @@ const styles = StyleSheet.create({
     paddingHorizontal: JPSpacing.sp4,
     paddingVertical: JPSpacing.sp3,
   },
-  row: { flexDirection: 'row', gap: JPSpacing.sp2, flexWrap: 'wrap' },
-  chip: {
+  optionList: { gap: JPSpacing.sp2 },
+  optionRow: {
     borderWidth: 1,
     borderColor: JPColors.border,
-    borderRadius: JPRadius.pill,
+    borderRadius: JPRadius.md,
     paddingHorizontal: JPSpacing.sp4,
-    paddingVertical: 8,
+    paddingVertical: JPSpacing.sp3,
     backgroundColor: '#FFFFFF',
   },
-  chipActive: {
+  optionRowActive: {
     borderColor: JPColors.saffron,
     backgroundColor: JPColors.saffron50,
   },
-  chipText: {
+  optionText: {
     fontFamily: JPFonts.body,
-    color: JPColors.textSub,
-    fontSize: 14,
-    textTransform: 'capitalize',
+    fontSize: 15,
+    color: JPColors.textPrimary,
   },
-  chipTextActive: { color: JPColors.saffron, fontWeight: '600' },
-  helper: {
+  optionTextActive: { color: JPColors.saffron, fontWeight: '600' },
+  optionSub: {
     fontFamily: JPFonts.body,
     fontSize: 12,
     color: JPColors.textSub,
+    marginTop: 2,
   },
-  warning: {
+  pickerHint: {
     fontFamily: JPFonts.body,
-    color: JPColors.warning,
     fontSize: 13,
+    color: JPColors.textSub,
+    paddingVertical: JPSpacing.sp2,
   },
+  pickerLoading: { paddingVertical: JPSpacing.sp3, alignItems: 'flex-start' },
   error: {
     fontFamily: JPFonts.body,
     color: JPColors.error,
