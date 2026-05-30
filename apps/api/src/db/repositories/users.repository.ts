@@ -146,6 +146,25 @@ export class UsersRepository {
       .limit(limit);
   }
 
+  /**
+   * Active sanchalak users, optionally restricted to a single city. Backs the
+   * city_admin sanchalak-assignment picker (`GET /v1/admin/sanchalaks`).
+   * super_admin / state_admin pass `cityId=undefined` to see all.
+   */
+  async listSanchalaks(cityId?: string, limit = 500): Promise<User[]> {
+    const where = [
+      eq(users.role, 'sanchalak'),
+      eq(users.is_active, true),
+      isNull(users.deleted_at),
+    ];
+    if (cityId) where.push(eq(users.city_id, cityId));
+    return this.drizzle.dbRead
+      .select()
+      .from(users)
+      .where(and(...where))
+      .limit(limit);
+  }
+
   /** Look up users by ids (excludes soft-deleted). */
   async findByIds(ids: string[]): Promise<User[]> {
     if (ids.length === 0) return [];

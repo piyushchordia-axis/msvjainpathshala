@@ -98,6 +98,27 @@ export class BatchesController {
     return { items, page_size: items.length };
   }
 
+  /**
+   * City-scoped roster of sanchalak (centre-head) users. Backs the city_admin
+   * sanchalak-assignment picker — its write side is
+   * POST/DELETE /v1/centres/:id/sanchalak-assignments.
+   */
+  @Roles('city_admin')
+  @Get('/v1/admin/sanchalaks')
+  async listSanchalaks(@CurrentUser() user: CurrentUserPayload | undefined) {
+    const actor = toActor(user);
+    const cityId = GLOBAL_ROLES.includes(actor.role) ? undefined : user?.scope.city_id;
+    const rows = await this.users.listSanchalaks(cityId);
+    const items = rows.map((u) => ({
+      id: u.id,
+      full_name: u.full_name,
+      phone: u.phone,
+      gender: u.gender,
+      centre_id_default: u.centre_id_default,
+    }));
+    return { items, page_size: items.length };
+  }
+
   // ---- by centre ---------------------------------------------------------
 
   @Get('/v1/centres/:centreId/batches')
