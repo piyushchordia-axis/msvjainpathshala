@@ -43,6 +43,7 @@ import '@/i18n';
 import '@/api/endpoints/auth';
 
 import { AppOfflineBanner } from '@/components/AppOfflineBanner';
+import { AppToastHost } from '@/components/ui/feedback/AppToast';
 import { SyncToast } from '@/components/ui/feedback/SyncToast';
 import { JPColors } from '@/constants/colors';
 import { AuthProvider } from '@/features/auth/auth-context';
@@ -114,6 +115,7 @@ export default function RootLayout() {
                 <AppOfflineBanner />
                 <InAppToast />
                 <SyncToast />
+                <AppToastHost />
                 <Stack
                   screenOptions={{
                     headerShown: false,

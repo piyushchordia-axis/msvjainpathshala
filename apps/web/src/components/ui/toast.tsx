@@ -3,16 +3,17 @@
 /**
  * Minimal toast system (no external dep). A module-scope event emitter
  * lets any client component call `toast.success(...)` / `toast.error(...)`
- * while a single mounted <Toaster /> renders the stack.
+ * / `toast.warning(...)` / `toast.info(...)` while a single mounted
+ * <Toaster /> (mounted once in the locale layout) renders the stack.
  *
  * Visual language matches the JP design system — cream surface, saffron /
  * maroon accents, rounded-2xl, soft shadow. Auto-dismisses after 4s.
  */
 
-import { CheckCircle2, X, AlertTriangle } from 'lucide-react';
+import { CheckCircle2, X, AlertTriangle, Info, TriangleAlert } from 'lucide-react';
 import { useEffect, useState } from 'react';
 
-export type ToastTone = 'success' | 'error' | 'info';
+export type ToastTone = 'success' | 'error' | 'warning' | 'info';
 
 export interface ToastItem {
   id: string;
@@ -46,6 +47,7 @@ function dismiss(id: string) {
 export const toast = {
   success: (title: string, description?: string) => push('success', title, description),
   error: (title: string, description?: string) => push('error', title, description),
+  warning: (title: string, description?: string) => push('warning', title, description),
   info: (title: string, description?: string) => push('info', title, description),
 };
 
@@ -58,9 +60,13 @@ const TONE_STYLES: Record<ToastTone, { border: string; icon: React.ReactNode }> 
     border: 'border-l-4 border-l-destructive',
     icon: <AlertTriangle className="h-5 w-5 text-destructive" aria-hidden />,
   },
+  warning: {
+    border: 'border-l-4 border-l-amber-500',
+    icon: <TriangleAlert className="h-5 w-5 text-amber-600" aria-hidden />,
+  },
   info: {
     border: 'border-l-4 border-l-primary',
-    icon: <CheckCircle2 className="h-5 w-5 text-primary" aria-hidden />,
+    icon: <Info className="h-5 w-5 text-primary" aria-hidden />,
   },
 };
 
