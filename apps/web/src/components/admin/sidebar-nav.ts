@@ -94,6 +94,12 @@ export const ADMIN_NAV: NavGroup[] = [
       { href: '/admin/notices', label: 'Notices', icon: Megaphone, min: 'shikshak' },
       { href: '/admin/gallery', label: 'Gallery', icon: ImageIcon, min: 'sanchalak' },
       { href: '/admin/library', label: 'Library', icon: Library, min: 'city_admin' },
+      {
+        href: '/admin/donations/campaigns/new',
+        label: 'Donation campaign',
+        icon: Sparkles,
+        min: 'city_admin',
+      },
     ],
   },
   {
@@ -107,6 +113,7 @@ export const ADMIN_NAV: NavGroup[] = [
     heading: 'System',
     items: [
       { href: '/admin/queues', label: 'Queues', icon: ShieldCheck, min: 'super_admin' },
+      { href: '/admin/geography', label: 'Geography', icon: Building2, min: 'state_admin' },
       { href: '/admin/settings', label: 'Settings', icon: Settings, min: 'state_admin' },
     ],
   },
