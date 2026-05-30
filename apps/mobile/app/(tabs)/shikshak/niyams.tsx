@@ -4,8 +4,9 @@
  * Punya value, proof requirement and active window.
  */
 
+import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { ApiError } from '@/api/client';
 import { niyamsApi, type NiyamAdminRow } from '@/api/endpoints/niyams';
@@ -24,6 +25,7 @@ function TypePill({ type }: { type: NiyamAdminRow['type'] }) {
 
 export default function ShikshakNiyams() {
   const lang = useLanguage();
+  const router = useRouter();
   const [items, setItems] = useState<NiyamAdminRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -65,6 +67,11 @@ export default function ShikshakNiyams() {
       emptyTitle="No niyams yet"
       emptyBody="No niyams have been created in your scope yet."
     >
+      <Pressable onPress={() => router.push('/shikshak/niyam-submissions' as never)}>
+        <Panel style={styles.reviewLink}>
+          <Text style={styles.reviewText}>Review submissions →</Text>
+        </Panel>
+      </Pressable>
       {items.map((n) => {
         const title = lang === 'hi' && n.title_hi ? n.title_hi : n.title_en;
         return (
@@ -118,5 +125,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: JPColors.saffron,
     textTransform: 'uppercase',
+  },
+  reviewLink: { backgroundColor: JPColors.saffron50, borderColor: JPColors.saffron },
+  reviewText: {
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
+    color: JPColors.saffron,
+    fontSize: 14,
   },
 });

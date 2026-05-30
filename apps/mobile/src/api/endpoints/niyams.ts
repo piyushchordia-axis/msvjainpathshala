@@ -74,6 +74,18 @@ export interface SubmitNiyamResult {
   submission_date: string;
 }
 
+/** Loose shape for the admin submission-review queue (defensive fields). */
+export interface NiyamSubmissionForReview {
+  id: string;
+  student_name?: string;
+  student_full_name?: string;
+  niyam_title_en?: string;
+  title_en?: string;
+  status?: string;
+  submitted_at?: string;
+  submission_date?: string;
+}
+
 export const niyamsApi = {
   /** Admin niyam catalogue for shikshak+ (city-scoped server-side). */
   async listForAdmin(
@@ -106,6 +118,22 @@ export const niyamsApi = {
 
   async streaksForStudent(studentId: string): Promise<{ items: NiyamStreakDto[] }> {
     return unwrap<{ items: NiyamStreakDto[] }>(api.get(`/v1/students/${studentId}/niyam-streaks`));
+  },
+
+  /** Admin submission review queue (shikshak+). */
+  async listSubmissionsForReview(
+    opts: { niyam_id?: string } = {},
+  ): Promise<{ items: NiyamSubmissionForReview[] }> {
+    return unwrap<{ items: NiyamSubmissionForReview[] }>(
+      api.get('/v1/admin/niyam-submissions', { params: opts }),
+    );
+  },
+
+  /** Reject a submission within the 30-day window (Q5). Reverses Punya. */
+  async rejectSubmission(submissionId: string, reason: string): Promise<unknown> {
+    return unwrap<unknown>(
+      api.post(`/v1/admin/niyam-submissions/${submissionId}/reject`, { reason }),
+    );
   },
 
   async setGalleryVisibility(
