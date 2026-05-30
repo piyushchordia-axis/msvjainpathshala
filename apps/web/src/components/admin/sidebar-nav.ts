@@ -101,6 +101,13 @@ export const ADMIN_NAV: NavGroup[] = [
         icon: Sparkles,
         min: 'city_admin',
       },
+      { href: '/admin/donations', label: 'Donations', icon: BarChart3, min: 'city_admin' },
+      {
+        href: '/admin/service-requests',
+        label: 'Service requests',
+        icon: ListChecks,
+        min: 'sanchalak',
+      },
     ],
   },
   {
