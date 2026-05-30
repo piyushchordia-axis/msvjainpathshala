@@ -7,6 +7,9 @@
   "scripts": {
     "dev": "expo start",
     "dev:tunnel": "node scripts/dev-tunnel.mjs",
+    "dev:tunnel:clean": "node scripts/clear-metro-cache.mjs && EXPO_METRO_CLEAR=1 node scripts/dev-tunnel.mjs",
+    "metro:clear-cache": "node scripts/clear-metro-cache.mjs",
+    "dev:lan": "expo start --lan",
     "expo:write-dev-json": "node scripts/write-expo-dev-json.mjs",
     "start": "expo start",
     "android": "expo run:android",
@@ -66,6 +69,7 @@
     "zustand": "^5.0.2"
   },
   "devDependencies": {
+    "@expo/ngrok": "^4.1.3",
     "@babel/core": "^7.26.0",
     "@types/jest": "^29.5.14",
     "@types/react": "~18.3.12",

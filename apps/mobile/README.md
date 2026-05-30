@@ -36,6 +36,36 @@ Open **http://localhost:3001/expo** (or `https://pathshala.enaacreations.com/exp
 The page reads `apps/mobile/.expo-dev.json` (updated every few seconds while tunnel runs),
 then falls back to Metro `/_expo/open` or `/manifest`, then `EXPO_TUNNEL_URL` if set.
 
+**Metro cache error on server (`Unable to deserialize cloned data`):**
+
+Harmless — Metro falls back to a full re-index (slower first boot). Clear caches once:
+
+```bash
+pnpm metro:clear-cache
+pnpm dev:tunnel:clean
+```
+
+**Tunnel fails (`remote gone away` / ngrok):**
+
+```bash
+# Stop any stale Metro on 8081 first
+lsof -ti :8081 | xargs kill -9 2>/dev/null || true
+
+cd apps/mobile && pnpm install   # installs @expo/ngrok
+npx expo login                   # tunnel hostname needs an Expo account
+pnpm dev:tunnel:clean
+```
+
+If ngrok still fails (firewall / ngrok outage), use LAN + manual URL:
+
+```bash
+pnpm dev:lan
+# copy the exp://… URL from the terminal into apps/web/.env.development:
+# EXPO_TUNNEL_URL=exp://YOUR_LAN_IP:8081
+```
+
+The sync script ignores `127.0.0.1` when tunnel mode is active and scans ports `8081–8083`.
+
 ## API base URL
 
 `EXPO_PUBLIC_API_BASE_URL` is read by `src/api/client.ts`. Defaults:
