@@ -1,15 +1,22 @@
 /**
  * Admin → Settings (`/admin/settings`).
  *
- * Platform-wide toggles. Q3: enabling 80G requires both registration
- * number and trust name; certificates are never deleted when toggled
- * off. Editing happens via the API; this page is read-only for now.
+ * Platform-wide toggles. Q3: enabling 80G requires registration number,
+ * trust name and trust address; certificates are never deleted when toggled
+ * off. super_admin gets the editable form; lower admin roles see a
+ * read-only summary (the backend also enforces super_admin on the PATCH).
  */
 
 import { getPlatformSettings, type PlatformSettings } from '@/api/admin-misc';
 import { Card } from '@/components/ui/card';
+import { readSessionUser } from '@/lib/auth-cookies';
+
+import { EightyGForm } from './eighty-g-form';
 
 export default async function AdminSettingsPage() {
+  const user = await readSessionUser();
+  const isSuperAdmin = user?.role === 'super_admin';
+
   let settings: PlatformSettings | null = null;
   let error: string | null = null;
   try {
@@ -33,9 +40,14 @@ export default async function AdminSettingsPage() {
         </Card>
       ) : null}
 
-      {settings ? (
+      {settings && isSuperAdmin ? <EightyGForm settings={settings} /> : null}
+
+      {settings && !isSuperAdmin ? (
         <Card className="space-y-4 p-6">
           <h3 className="font-display text-lg text-secondary">80G donation certificates</h3>
+          <p className="text-sm text-muted-foreground">
+            Only a super admin can change these settings.
+          </p>
           <dl className="grid gap-4 sm:grid-cols-2">
             <div>
               <dt className="text-xs uppercase tracking-wide text-muted-foreground">Enabled</dt>
@@ -71,16 +83,14 @@ export default async function AdminSettingsPage() {
               </dt>
               <dd className="mt-1 text-sm">{settings.eighty_g_trust_address ?? '—'}</dd>
             </div>
-            <div className="sm:col-span-2">
-              <dt className="text-xs uppercase tracking-wide text-muted-foreground">
-                Last updated
-              </dt>
-              <dd className="mt-1 text-xs text-muted-foreground">
-                {new Date(settings.last_updated_at).toLocaleString('en-IN')}
-              </dd>
-            </div>
           </dl>
         </Card>
+      ) : null}
+
+      {settings ? (
+        <p className="text-xs text-muted-foreground">
+          Last updated {new Date(settings.last_updated_at).toLocaleString('en-IN')}
+        </p>
       ) : null}
     </div>
   );
