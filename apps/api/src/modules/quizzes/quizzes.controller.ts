@@ -309,13 +309,27 @@ export class QuizzesController {
   @Roles('city_admin')
   @Get('/admin/questions')
   async listQuestions(
-    @CurrentUser() _user: CurrentUserPayload | undefined,
-    @Query('scope') scope?: string,
+    @CurrentUser() user: CurrentUserPayload | undefined,
+    @Query('topic') topic?: string,
+    @Query('limit') limit?: string,
   ) {
-    // Lightweight pass-through: the UI uses the approved questions to build
-    // the quiz event picker. We don't have a `listAll` helper, but the
-    // pending-review list + approved rows can be paged separately later.
-    void scope;
-    return { items: [] };
+    const rows = await this.questions.listBank(toScopedActor(user), {
+      ...(topic ? { topic } : {}),
+      ...(limit ? { limit: Number(limit) } : {}),
+    });
+    const items = rows.map((q) => ({
+      id: q.id,
+      scope: q.scope,
+      city_id: q.city_id,
+      question_en: q.question_en,
+      question_hi: q.question_hi,
+      options: q.options,
+      correct_indices: q.correct_indices,
+      difficulty: q.difficulty,
+      age_groups: q.age_groups,
+      topic: q.topic,
+      source: q.source,
+    }));
+    return { items };
   }
 }

@@ -15,7 +15,7 @@
  */
 
 import { Injectable } from '@nestjs/common';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, or, sql, type SQL } from 'drizzle-orm';
 
 import { DrizzleService } from '../../core/database/drizzle.service';
 import { ai_generation_jobs, questions } from '../schema';
@@ -60,6 +60,34 @@ export class QuestionsRepository {
       .where(eq(questions.id, id))
       .returning();
     return row ?? null;
+  }
+
+  /**
+   * Approved question-bank rows for the quiz-event picker (SPEC §6.18).
+   *
+   * Only `ai_review_status='approved'` rows surface — AI rows pending review
+   * or rejected are excluded. `cityScopeId`, when set, narrows city-scoped
+   * rows to that city (national/state rows always included); leaving it
+   * undefined returns every approved row (super/state admin).
+   */
+  async listForBank(
+    opts: { cityScopeId?: string; topic?: string; limit?: number } = {},
+  ): Promise<Question[]> {
+    const conds: SQL[] = [eq(questions.ai_review_status, 'approved')];
+    if (opts.cityScopeId) {
+      const scopeCond = or(
+        inArray(questions.scope, ['national', 'state']),
+        and(eq(questions.scope, 'city'), eq(questions.city_id, opts.cityScopeId)),
+      );
+      if (scopeCond) conds.push(scopeCond);
+    }
+    if (opts.topic) conds.push(eq(questions.topic, opts.topic));
+    return this.drizzle.dbRead
+      .select()
+      .from(questions)
+      .where(and(...conds))
+      .orderBy(desc(questions.created_at))
+      .limit(Math.min(Math.max(opts.limit ?? 200, 1), 500));
   }
 
   /** Pending-review queue (AI-generated, not yet approved/rejected). */

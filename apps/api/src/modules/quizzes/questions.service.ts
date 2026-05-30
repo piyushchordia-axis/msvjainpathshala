@@ -219,6 +219,35 @@ export class QuestionsService {
   }
 
   // ===========================================================================
+  // Question bank listing (quiz-event picker)
+  // ===========================================================================
+
+  /**
+   * Approved question-bank rows the actor may build a quiz event from
+   * (SPEC §6.18). super/state admin see every approved question; city_admin
+   * sees national + state + their own city. Roles below city_admin are not
+   * permitted (the picker is a city_admin authoring tool).
+   */
+  async listBank(
+    actor: ScopedActor,
+    opts: { topic?: string; limit?: number } = {},
+  ): Promise<Question[]> {
+    const allowed: Role[] = ['super_admin', 'state_admin', 'city_admin'];
+    if (!allowed.includes(actor.role)) {
+      throw new AppError({
+        code: ERROR_CODES.ERR_RBAC_FORBIDDEN,
+        message: 'Only city_admin+ can browse the question bank',
+        statusCode: 403,
+      });
+    }
+    const repoOpts: { cityScopeId?: string; topic?: string; limit?: number } = {};
+    if (actor.role === 'city_admin' && actor.city_id) repoOpts.cityScopeId = actor.city_id;
+    if (opts.topic) repoOpts.topic = opts.topic;
+    if (opts.limit !== undefined) repoOpts.limit = opts.limit;
+    return this.questions.listForBank(repoOpts);
+  }
+
+  // ===========================================================================
   // Approve / reject pending AI questions
   // ===========================================================================
 
