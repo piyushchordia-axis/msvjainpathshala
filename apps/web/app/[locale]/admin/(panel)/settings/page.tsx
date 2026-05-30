@@ -12,6 +12,7 @@ import { Card } from '@/components/ui/card';
 import { readSessionUser } from '@/lib/auth-cookies';
 
 import { EightyGForm } from './eighty-g-form';
+import { ImpersonateForm } from './impersonate-form';
 
 export default async function AdminSettingsPage() {
   const user = await readSessionUser();
@@ -41,6 +42,8 @@ export default async function AdminSettingsPage() {
       ) : null}
 
       {settings && isSuperAdmin ? <EightyGForm settings={settings} /> : null}
+
+      {isSuperAdmin ? <ImpersonateForm /> : null}
 
       {settings && !isSuperAdmin ? (
         <Card className="space-y-4 p-6">

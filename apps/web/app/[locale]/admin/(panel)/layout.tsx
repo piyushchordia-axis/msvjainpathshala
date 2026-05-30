@@ -7,10 +7,11 @@
  * middleware and render).
  */
 
+import { ImpersonationBanner } from '@/components/admin/ImpersonationBanner';
 import { Sidebar } from '@/components/admin/Sidebar';
 import { TopBar } from '@/components/admin/TopBar';
 import { redirect } from '@/i18n/navigation';
-import { readSessionUser } from '@/lib/auth-cookies';
+import { readImpersonationSubject, readSessionUser } from '@/lib/auth-cookies';
 import { canAccessAdminPanel } from '@/lib/role-access';
 
 interface PanelLayoutProps {
@@ -29,12 +30,19 @@ export default async function AdminPanelLayout({ children, params }: PanelLayout
     return null;
   }
 
+  const impersonation = await readImpersonationSubject();
+
   return (
-    <div className="flex min-h-screen bg-muted/40">
-      <Sidebar user={user} />
-      <div className="flex min-h-screen flex-1 flex-col">
-        <TopBar title="Admin" subtitle={`${user.role} · ${user.full_name || user.phone}`} />
-        <main className="flex-1 overflow-y-auto p-6">{children}</main>
+    <div className="flex min-h-screen flex-col bg-muted/40">
+      {impersonation ? (
+        <ImpersonationBanner subjectName={impersonation.name} subjectRole={impersonation.role} />
+      ) : null}
+      <div className="flex min-h-0 flex-1">
+        <Sidebar user={user} />
+        <div className="flex min-h-screen flex-1 flex-col">
+          <TopBar title="Admin" subtitle={`${user.role} · ${user.full_name || user.phone}`} />
+          <main className="flex-1 overflow-y-auto p-6">{children}</main>
+        </div>
       </div>
     </div>
   );

@@ -34,7 +34,7 @@ export interface SessionUser {
   preferred_language: 'en' | 'hi';
 }
 
-interface SetSessionInput {
+export interface SetSessionInput {
   access_token: string;
   refresh_token: string;
   access_expires_at: string;
@@ -93,4 +93,71 @@ export async function readSessionUser(): Promise<SessionUser | null> {
 export async function readAccessToken(): Promise<string | null> {
   const jar = await cookies();
   return jar.get(COOKIE_ACCESS)?.value ?? null;
+}
+
+export async function readRefreshToken(): Promise<string | null> {
+  const jar = await cookies();
+  return jar.get(COOKIE_REFRESH)?.value ?? null;
+}
+
+// ---------------------------------------------------------------------------
+// Admin impersonation (super_admin) — session swap with restore-on-stop.
+// ---------------------------------------------------------------------------
+
+/** Backup of the original admin session, kept while impersonating. */
+export const COOKIE_IMP_ORIGIN = 'jp_imp_origin';
+/** Non-HTTP-only marker so the layout can render the banner. */
+export const COOKIE_IMP_ACTIVE = 'jp_imp_active';
+
+export async function beginImpersonation(input: {
+  originRefresh: string;
+  originUser: SessionUser;
+  subject: { name: string; role: string };
+  session: SetSessionInput;
+}): Promise<void> {
+  const jar = await cookies();
+  const isProd = process.env.NODE_ENV === 'production';
+  const common = { httpOnly: true, sameSite: 'lax' as const, secure: isProd, path: '/' };
+  jar.set(
+    COOKIE_IMP_ORIGIN,
+    JSON.stringify({ refresh: input.originRefresh, user: input.originUser }),
+    { ...common, maxAge: 30 * 24 * 60 * 60 },
+  );
+  jar.set(COOKIE_IMP_ACTIVE, JSON.stringify(input.subject), {
+    ...common,
+    httpOnly: false,
+    maxAge: secondsUntil(input.session.refresh_expires_at),
+  });
+  await setSessionCookies(input.session);
+}
+
+export async function readImpersonationOrigin(): Promise<{
+  refresh: string;
+  user: SessionUser;
+} | null> {
+  const jar = await cookies();
+  const raw = jar.get(COOKIE_IMP_ORIGIN)?.value;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as { refresh: string; user: SessionUser };
+  } catch {
+    return null;
+  }
+}
+
+export async function readImpersonationSubject(): Promise<{ name: string; role: string } | null> {
+  const jar = await cookies();
+  const raw = jar.get(COOKIE_IMP_ACTIVE)?.value;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as { name: string; role: string };
+  } catch {
+    return null;
+  }
+}
+
+export async function endImpersonation(): Promise<void> {
+  const jar = await cookies();
+  jar.delete(COOKIE_IMP_ORIGIN);
+  jar.delete(COOKIE_IMP_ACTIVE);
 }
