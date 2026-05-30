@@ -86,12 +86,36 @@ export interface NiyamSubmissionForReview {
   submission_date?: string;
 }
 
+export interface CreateNiyamInput {
+  title_en: string;
+  title_hi: string;
+  description_en?: string;
+  description_hi?: string;
+  type: NiyamType;
+  start_date: string; // YYYY-MM-DD
+  end_date?: string; // YYYY-MM-DD
+  audience_kind: 'all' | 'msv_only' | 'age_group' | 'batch' | 'centre' | 'city';
+  audience_filters?: {
+    age_groups?: string[];
+    batch_ids?: string[];
+    centre_ids?: string[];
+  } | null;
+  proof_type: ProofType;
+  points_value: number;
+  msv_only?: boolean;
+}
+
 export const niyamsApi = {
   /** Admin niyam catalogue for shikshak+ (city-scoped server-side). */
   async listForAdmin(
     opts: { type?: NiyamType; limit?: number; offset?: number } = {},
   ): Promise<{ items: NiyamAdminRow[] }> {
     return unwrap<{ items: NiyamAdminRow[] }>(api.get('/v1/admin/niyams', { params: opts }));
+  },
+
+  /** Create a niyam in the caller's scope (shikshak+). POST /v1/admin/niyams. */
+  async create(input: CreateNiyamInput): Promise<NiyamAdminRow> {
+    return unwrap<NiyamAdminRow>(api.post('/v1/admin/niyams', input));
   },
 
   async listForCaller(
