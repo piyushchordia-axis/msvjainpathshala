@@ -1,57 +1,66 @@
 /**
- * Admin dashboard. Layout mirrors
+ * Admin dashboard home. Layout mirrors
  * `jp-design-system/ui_kits/admin/screens.jsx` DashboardScreen:
  *
  *   - Greeting block (date + "Good morning, {Name}")
- *   - 4-column stats grid
- *   - 2-col lower section: attendance bar chart placeholder +
- *     awaiting-approval panel
+ *   - 4-column stats grid (real, scope-aware)
+ *   - 2-col lower section: scope summary + awaiting-approval queue
+ *   - Live activity feed (Socket.IO)
  *
- * Real data hooks land per-feature step (attendance step fills the
- * chart, enrolments step fills the approvals).
+ * All numbers come from `/v1/admin/analytics/overview` and the pending
+ * enrolments list, fetched server-side through the panel's JWT cookie.
+ * The page degrades gracefully (zeros / empty queue) if a call fails or
+ * the actor's role can't see a given endpoint.
  */
 
 import { CheckCircle2, Flame, GraduationCap, Sparkles } from 'lucide-react';
 
+import { listEnrolments, type AdminEnrolment } from '@/api/enrolments';
+import { authenticatedServerClient } from '@/api/server-client';
 import { LiveActivityCard } from '@/components/admin/LiveActivityCard';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { readSessionUser } from '@/lib/auth-cookies';
 
-const STATS = [
-  {
-    label: 'Active students',
-    value: '1,248',
-    delta: '+18 this week',
-    icon: GraduationCap,
-  },
-  {
-    label: 'Attendance',
-    value: '89%',
-    delta: 'rolling 7 days',
-    icon: CheckCircle2,
-  },
-  {
-    label: 'Punya awarded',
-    value: '14,820',
-    delta: 'this month',
-    icon: Sparkles,
-  },
-  {
-    label: 'Pending approvals',
-    value: '7',
-    delta: 'enrolments + niyams',
-    icon: Flame,
-  },
-];
+interface OverviewPayload {
+  active_students: number;
+  centres: number;
+  open_service_requests: number;
+  attendance_rate_30d: number;
+  punya_awarded_30d: number;
+  msv_active: number;
+  donations_total_paise_ytd: number;
+}
 
-const PENDING = [
-  { kind: 'Enrolment', name: 'Aarav Shah', centre: 'Vasna', when: '2h ago' },
-  { kind: 'Niyam submission', name: 'Aarush Mehta', centre: 'Bopal', when: '5h ago' },
-  { kind: 'Niyam submission', name: 'Diya Doshi', centre: 'Naranpura', when: '1d ago' },
-  { kind: 'Centre holiday', name: 'Maninagar', centre: '—', when: '2d ago' },
-];
+const EMPTY_OVERVIEW: OverviewPayload = {
+  active_students: 0,
+  centres: 0,
+  open_service_requests: 0,
+  attendance_rate_30d: 0,
+  punya_awarded_30d: 0,
+  msv_active: 0,
+  donations_total_paise_ytd: 0,
+};
+
+async function safeOverview(): Promise<OverviewPayload | null> {
+  try {
+    const client = await authenticatedServerClient();
+    const res = await client.get<{ data: OverviewPayload }>('/v1/admin/analytics/overview');
+    return res.data.data;
+  } catch {
+    return null;
+  }
+}
+
+async function safePendingEnrolments(): Promise<AdminEnrolment[]> {
+  try {
+    const { items } = await listEnrolments({ status: 'pending', limit: 8 });
+    return items;
+  } catch {
+    return [];
+  }
+}
 
 function todayString(): string {
   return new Date().toLocaleDateString('en-GB', {
@@ -62,9 +71,47 @@ function todayString(): string {
   });
 }
 
+function timeAgo(iso: string): string {
+  const mins = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60_000));
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.round(hrs / 24)}d ago`;
+}
+
 export default async function AdminDashboard() {
   const user = await readSessionUser();
   const firstName = (user?.full_name ?? '').split(/\s+/)[0] || 'there';
+
+  const [overview, pending] = await Promise.all([safeOverview(), safePendingEnrolments()]);
+  const o = overview ?? EMPTY_OVERVIEW;
+
+  const stats = [
+    {
+      label: 'Active students',
+      value: o.active_students.toLocaleString('en-IN'),
+      delta: `${o.centres} centres in scope`,
+      icon: GraduationCap,
+    },
+    {
+      label: '30-day attendance',
+      value: `${o.attendance_rate_30d.toFixed(1)}%`,
+      delta: 'rolling window',
+      icon: CheckCircle2,
+    },
+    {
+      label: 'Punya awarded',
+      value: o.punya_awarded_30d.toLocaleString('en-IN'),
+      delta: 'this month',
+      icon: Sparkles,
+    },
+    {
+      label: 'Pending enrolments',
+      value: String(pending.length),
+      delta: 'awaiting your approval',
+      icon: Flame,
+    },
+  ];
 
   return (
     <div className="space-y-6">
@@ -85,7 +132,7 @@ export default async function AdminDashboard() {
           Key numbers
         </h3>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {STATS.map((s) => {
+          {stats.map((s) => {
             const Icon = s.icon;
             return (
               <Card key={s.label}>
@@ -112,43 +159,74 @@ export default async function AdminDashboard() {
       <section className="grid gap-4 xl:grid-cols-3">
         <Card className="xl:col-span-2">
           <CardHeader>
-            <CardTitle>Attendance — last 7 days</CardTitle>
-            <CardDescription>Per-centre check-in rates across your scope.</CardDescription>
+            <CardTitle>In your scope</CardTitle>
+            <CardDescription>Live totals across the centres you oversee.</CardDescription>
           </CardHeader>
-          <CardContent className="flex h-72 items-center justify-center text-sm text-muted-foreground">
-            Chart lands with the analytics step.
+          <CardContent>
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+              <ScopeStat label="Centres" value={o.centres.toLocaleString('en-IN')} />
+              <ScopeStat label="MSV approved" value={o.msv_active.toLocaleString('en-IN')} />
+              <ScopeStat
+                label="Open requests"
+                value={o.open_service_requests.toLocaleString('en-IN')}
+              />
+              <ScopeStat
+                label="Donations YTD"
+                value={`₹${(o.donations_total_paise_ytd / 100).toLocaleString('en-IN')}`}
+              />
+            </dl>
+            <p className="mt-4 text-xs text-muted-foreground">
+              Full trends and tier breakdowns live under Analytics.
+            </p>
           </CardContent>
         </Card>
 
         <Card>
           <CardHeader>
             <CardTitle>Awaiting your approval</CardTitle>
-            <CardDescription>Top of the queue right now.</CardDescription>
+            <CardDescription>Pending enrolment requests in your scope.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
-            {PENDING.map((p, i) => (
-              <div key={`${p.kind}-${i}`}>
-                <div className="flex items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium text-foreground">{p.name}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {p.kind} {p.centre !== '—' ? `· ${p.centre}` : ''}
+            {pending.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Nothing waiting right now — you&apos;re all caught up.
+              </p>
+            ) : (
+              pending.map((p, i) => (
+                <div key={p.id}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-foreground">
+                        Enrolment request
+                      </div>
+                      <div className="truncate text-xs text-muted-foreground">
+                        Review under Enrolments
+                      </div>
                     </div>
+                    <Badge variant="warning">{timeAgo(p.created_at)}</Badge>
                   </div>
-                  <Badge variant="warning">{p.when}</Badge>
+                  {i < pending.length - 1 ? <Separator className="mt-3" /> : null}
                 </div>
-                {i < PENDING.length - 1 ? <Separator className="mt-3" /> : null}
-              </div>
-            ))}
+              ))
+            )}
           </CardContent>
         </Card>
       </section>
 
-      {/* Step 12 — live activity over Socket.IO. Subscribes to the
-          /admin-dashboard/:cityId namespace and renders the last 20 events. */}
       <section>
         <LiveActivityCard />
       </section>
+    </div>
+  );
+}
+
+function ScopeStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </dt>
+      <dd className="mt-1 font-display text-2xl leading-none text-secondary">{value}</dd>
     </div>
   );
 }
