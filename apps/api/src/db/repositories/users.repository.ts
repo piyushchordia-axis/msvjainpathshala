@@ -130,6 +130,22 @@ export class UsersRepository {
       .limit(limit);
   }
 
+  /**
+   * Active shikshak users, optionally restricted to a single city. Used by the
+   * admin web "Shikshaks" roster (`GET /v1/admin/shikshaks`). super_admin /
+   * state_admin pass `cityId=undefined` to see all; city_admin / sanchalak pass
+   * their own city.
+   */
+  async listShikshaks(cityId?: string, limit = 500): Promise<User[]> {
+    const where = [eq(users.role, 'shikshak'), eq(users.is_active, true), isNull(users.deleted_at)];
+    if (cityId) where.push(eq(users.city_id, cityId));
+    return this.drizzle.dbRead
+      .select()
+      .from(users)
+      .where(and(...where))
+      .limit(limit);
+  }
+
   /** Look up users by ids (excludes soft-deleted). */
   async findByIds(ids: string[]): Promise<User[]> {
     if (ids.length === 0) return [];

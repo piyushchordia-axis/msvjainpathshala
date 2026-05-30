@@ -1,12 +1,7 @@
-import React from 'react';
+/**
+ * Student view → Punya. Reuses the full Punya hero + transactions screen from
+ * `app/(parent)/punya/index.tsx`; the same balance/transaction endpoints back
+ * the student-view context.
+ */
 
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
-
-export default function StudentViewPunya() {
-  return (
-    <PlaceholderScreen
-      title="Punya"
-      emptyBody="Your Punya balance, tier, and earning history. Lands when the Punya step ships."
-    />
-  );
-}
+export { default } from '../../(parent)/punya/index';

@@ -24,7 +24,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Header } from '@/components/ui';
-import { JPColors, JPRadius, JPSpacing } from '@/constants/colors';
+import { JPColors, JPFonts, JPRadius, JPSpacing } from '@/constants/colors';
 import { attendanceApi, type TodayRow } from '@/features/attendance/attendance.api';
 
 export default function ShikshakTodayScreen() {
@@ -114,8 +114,8 @@ function BatchCard({ row, onPress }: { row: TodayRow; onPress: () => void }) {
 function StatusPill({ status }: { status: TodayRow['session_status'] }) {
   if (status === 'in_progress') {
     return (
-      <View style={[styles.pill, { backgroundColor: '#DCEEDD' }]}>
-        <Text style={[styles.pillText, { color: '#166534' }]}>In progress</Text>
+      <View style={[styles.pill, { backgroundColor: JPColors.successBg }]}>
+        <Text style={[styles.pillText, { color: JPColors.success }]}>In progress</Text>
       </View>
     );
   }
@@ -128,8 +128,8 @@ function StatusPill({ status }: { status: TodayRow['session_status'] }) {
   }
   if (status === 'cancelled') {
     return (
-      <View style={[styles.pill, { backgroundColor: '#FBE5E5' }]}>
-        <Text style={[styles.pillText, { color: '#B91C1C' }]}>Cancelled</Text>
+      <View style={[styles.pill, { backgroundColor: JPColors.errorBg }]}>
+        <Text style={[styles.pillText, { color: JPColors.error }]}>Cancelled</Text>
       </View>
     );
   }
@@ -198,10 +198,11 @@ const styles = StyleSheet.create({
     marginTop: 48,
   },
   errorText: {
-    color: '#B91C1C',
+    color: JPColors.error,
     marginTop: 32,
     textAlign: 'center',
-    fontFamily: 'Mukta_500Medium',
+    fontFamily: JPFonts.body,
+    fontWeight: '500',
   },
   emptyCard: {
     backgroundColor: JPColors.cream,
@@ -213,14 +214,15 @@ const styles = StyleSheet.create({
   },
   emptyTitle: {
     fontSize: 17,
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
     color: JPColors.textPrimary,
     marginBottom: 6,
   },
   emptyBody: {
     fontSize: 14,
     color: JPColors.textSub,
-    fontFamily: 'Mukta_400Regular',
+    fontFamily: JPFonts.body,
     lineHeight: 20,
   },
   card: {
@@ -243,19 +245,21 @@ const styles = StyleSheet.create({
   },
   batchName: {
     fontSize: 17,
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
     color: JPColors.textPrimary,
   },
   centreName: {
     marginTop: 4,
     color: JPColors.textSub,
-    fontFamily: 'Mukta_500Medium',
+    fontFamily: JPFonts.body,
+    fontWeight: '500',
     fontSize: 13,
   },
   times: {
     marginTop: 2,
     color: JPColors.textSub,
-    fontFamily: 'Mukta_400Regular',
+    fontFamily: JPFonts.body,
     fontSize: 13,
   },
   cta: {
@@ -268,7 +272,8 @@ const styles = StyleSheet.create({
   },
   ctaLabel: {
     color: '#FFFFFF',
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
     fontSize: 14,
   },
   pill: {
@@ -278,6 +283,7 @@ const styles = StyleSheet.create({
   },
   pillText: {
     fontSize: 11,
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
   },
 });

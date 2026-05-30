@@ -1,13 +1,18 @@
+/**
+ * State admin → dashboard. State-wide roll-up from the analytics overview
+ * (GET /v1/admin/analytics/overview, scoped to the admin's state by JWT).
+ */
+
 import React from 'react';
 
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
+import { OverviewDashboard } from '@/components/admin/AdminScreen';
 
 export default function StateAdminDashboard() {
   return (
-    <PlaceholderScreen
-      title="State Admin"
-      subtitle="State-level overview"
-      emptyBody="City-level KPIs and shivir schedules. Lands in a later step."
+    <OverviewDashboard
+      title="State overview"
+      subtitle="Roll-ups across your cities"
+      scopeNoun="state"
     />
   );
 }

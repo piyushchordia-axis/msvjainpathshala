@@ -69,7 +69,7 @@ const listQuery = z.object({
 
 const statusSchema = z.object({ status: z.enum(['draft', 'active', 'archived']) });
 
-const progressListQuery = z.object({ curriculum_id: z.string().uuid() });
+const progressListQuery = z.object({ curriculum_id: z.string().uuid().optional() });
 
 function toScopedActor(user: CurrentUserPayload | undefined): ScopedActor {
   if (!user) {

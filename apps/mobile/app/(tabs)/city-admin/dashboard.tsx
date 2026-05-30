@@ -1,13 +1,18 @@
+/**
+ * City admin → dashboard. City-wide roll-up from the analytics overview
+ * (GET /v1/admin/analytics/overview, scoped to the admin's city by JWT).
+ */
+
 import React from 'react';
 
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
+import { OverviewDashboard } from '@/components/admin/AdminScreen';
 
 export default function CityAdminDashboard() {
   return (
-    <PlaceholderScreen
-      title="City Admin"
-      subtitle="City overview"
-      emptyBody="Centre roll-ups, pending enrolments, live activity. Lands in a later step."
+    <OverviewDashboard
+      title="City overview"
+      subtitle="Roll-ups across your centres"
+      scopeNoun="city"
     />
   );
 }

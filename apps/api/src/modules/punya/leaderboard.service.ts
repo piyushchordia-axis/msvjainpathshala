@@ -92,14 +92,19 @@ export class LeaderboardService {
   async read(opts: ReadOptions): Promise<LeaderboardResult> {
     const period = opts.period ?? thisPeriod();
     const limit = Math.min(Math.max(opts.limit ?? LeaderboardService.DEFAULT_LIMIT, 1), 100);
-    const key = leaderboardKey(opts.scope, opts.scope_id ?? null, period);
+
+    // Resolve scope_id from the actor / target student when the client omits
+    // it. Mobile city/MSV tabs deliberately omit scope_id and rely on this
+    // fallback (a parent's child resolves the city/centre/batch).
+    const scopeId = await this.resolveScopeId(opts);
 
     // RBAC: callers ask for /national or /msv freely; for scoped reads we
-    // verify the actor has visibility into the scope_id (city_admin for
-    // their city, sanchalak for centre, parent for any batch their child
-    // is in, etc). For Step 16 we keep this lightweight — any authenticated
-    // user can read any leaderboard. Step 17+ tightens this if needed.
-    this.assertScopeId(opts.scope, opts.scope_id);
+    // verify the actor has visibility into the scope_id. For Step 16 we keep
+    // this lightweight — any authenticated user can read any leaderboard.
+    // assertScopeId must run BEFORE leaderboardKey so a missing scope_id
+    // returns a 422 (not a raw 500 from the key builder).
+    this.assertScopeId(opts.scope, scopeId);
+    const key = leaderboardKey(opts.scope, scopeId, period);
 
     // ZREVRANGE … WITHSCORES — top N.
     const raw = (await this.client.zrevrange(key, 0, limit - 1, 'WITHSCORES')) as string[];
@@ -140,11 +145,49 @@ export class LeaderboardService {
 
     return {
       scope: opts.scope,
-      scope_id: opts.scope_id ?? null,
+      scope_id: scopeId,
       period,
       entries,
       self_rank: selfRank,
     };
+  }
+
+  /**
+   * Resolve an effective scope_id when the client omits it. national needs
+   * none; city/msv fall back to the actor's city (resolved via the target
+   * child for parents); centre/batch resolve from the target student.
+   */
+  private async resolveScopeId(opts: ReadOptions): Promise<string | null> {
+    if (opts.scope_id) return opts.scope_id;
+    if (opts.scope === 'national') return null;
+
+    const targetStudent = async () => {
+      if (opts.for_student_id) return this.students.findById(opts.for_student_id);
+      if (opts.actor.role === 'parent') {
+        const kids = await this.students.findByParent(opts.actor.user_id);
+        return kids.find((k) => k.status === 'active') ?? kids[0] ?? null;
+      }
+      return null;
+    };
+
+    if (opts.scope === 'city' || opts.scope === 'msv') {
+      if (opts.actor.city_id) return opts.actor.city_id;
+      const st = await targetStudent();
+      if (st) {
+        const centre = await this.centres.findById(st.centre_id);
+        return centre?.city_id ?? null;
+      }
+      return null;
+    }
+    if (opts.scope === 'centre') {
+      const st = await targetStudent();
+      return st?.centre_id ?? opts.actor.centre_ids?.[0] ?? null;
+    }
+    if (opts.scope === 'batch') {
+      const st = await targetStudent();
+      return st?.batch_id ?? opts.actor.batch_ids?.[0] ?? null;
+    }
+    return null;
   }
 
   // ===========================================================================

@@ -11,6 +11,7 @@
 export { AbsenceNotificationsRepository } from './absence-notifications.repository';
 export { AnalyticsRepository } from './analytics.repository';
 export { AttendanceRepository } from './attendance.repository';
+export { AuditLogsRepository, type AuditLogRow } from './audit-logs.repository';
 export { BatchesRepository } from './batches.repository';
 export { CentreHolidaysRepository } from './centre-holidays.repository';
 export { CentresRepository } from './centres.repository';

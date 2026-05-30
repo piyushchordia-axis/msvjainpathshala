@@ -70,7 +70,7 @@ export class NoticesRepository {
    * Only PUBLISHED notices (published_at <= now) are visible.
    */
   async listForCaller(opts: ListNoticesForCaller): Promise<Notice[]> {
-    const where = [isNull(notices.deleted_at), sql`${notices.published_at} <= ${opts.now}`];
+    const where = [isNull(notices.deleted_at), lte(notices.published_at, opts.now)];
     const scopeOr = or(
       // Anything pinned to this caller's city.
       and(eq(notices.scope, 'city'), eq(notices.city_id, opts.city_id)),
@@ -116,7 +116,7 @@ export class NoticesRepository {
         and(
           eq(notices.is_public, true),
           isNull(notices.deleted_at),
-          sql`${notices.published_at} <= ${opts.now}`,
+          lte(notices.published_at, opts.now),
         ),
       )
       .orderBy(desc(notices.pinned), desc(notices.published_at))

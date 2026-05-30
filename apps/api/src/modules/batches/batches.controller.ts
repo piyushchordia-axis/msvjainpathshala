@@ -11,11 +11,15 @@ import { z } from 'zod';
 import { AppError, ERROR_CODES, type Role } from '@jp/shared';
 
 import { ZodValidationPipe } from '../../common/validation/zod-validation.pipe';
+import { UsersRepository } from '../../db/repositories';
 import { CurrentUser, type CurrentUserPayload } from '../auth/decorators/current-user.decorator';
 import { RequireScope } from '../auth/decorators/require-scope.decorator';
 import { Roles } from '../auth/decorators/roles.decorator';
 
 import { BatchesService, type BatchActor } from './batches.service';
+
+/** Roles that see shikshaks across all cities (no city scoping). */
+const GLOBAL_ROLES: Role[] = ['super_admin', 'state_admin'];
 
 const ageGroup = z.enum(['bal', 'kishor', 'tarun', 'yuva']);
 const hhmm = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/, 'Time must be HH:MM[:SS]');
@@ -67,7 +71,32 @@ function toActor(user: CurrentUserPayload | undefined): BatchActor {
 
 @Controller()
 export class BatchesController {
-  constructor(private readonly batches: BatchesService) {}
+  constructor(
+    private readonly batches: BatchesService,
+    private readonly users: UsersRepository,
+  ) {}
+
+  // ---- shikshak roster (admin web) ---------------------------------------
+
+  /**
+   * City-scoped roster of shikshak (Guruji / Didi) users. super_admin /
+   * state_admin see all cities; city_admin / sanchalak see their own city.
+   */
+  @Roles('sanchalak')
+  @Get('/v1/admin/shikshaks')
+  async listShikshaks(@CurrentUser() user: CurrentUserPayload | undefined) {
+    const actor = toActor(user);
+    const cityId = GLOBAL_ROLES.includes(actor.role) ? undefined : user?.scope.city_id;
+    const rows = await this.users.listShikshaks(cityId);
+    const items = rows.map((u) => ({
+      id: u.id,
+      full_name: u.full_name,
+      phone: u.phone,
+      gender: u.gender,
+      centre_id_default: u.centre_id_default,
+    }));
+    return { items, page_size: items.length };
+  }
 
   // ---- by centre ---------------------------------------------------------
 

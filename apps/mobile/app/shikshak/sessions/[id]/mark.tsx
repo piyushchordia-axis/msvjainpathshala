@@ -27,7 +27,7 @@ import { ulid } from 'ulid';
 
 import { ApiError } from '@/api/client';
 import { Header } from '@/components/ui';
-import { JPColors, JPRadius, JPSpacing } from '@/constants/colors';
+import { JPColors, JPFonts, JPRadius, JPSpacing } from '@/constants/colors';
 import {
   attendanceApi,
   type MarkItem,
@@ -206,11 +206,21 @@ export default function MarkAttendanceScreen() {
       ) : null}
 
       <View style={styles.summary}>
-        <SummaryChip label="P" value={totals.present} bg="#DCEEDD" fg="#166534" />
-        <SummaryChip label="A" value={totals.absent} bg="#FBE5E5" fg="#B91C1C" />
-        <SummaryChip label="L" value={totals.late} bg="#FBEED0" fg="#B45309" />
-        <SummaryChip label="Ex" value={totals.excused} bg="#DDE3F4" fg="#1E3A8A" />
-        <SummaryChip label="—" value={totals.unmarked} bg="#F5EDE0" fg="#8B6F5E" />
+        <SummaryChip
+          label="P"
+          value={totals.present}
+          bg={JPColors.successBg}
+          fg={JPColors.success}
+        />
+        <SummaryChip label="A" value={totals.absent} bg={JPColors.errorBg} fg={JPColors.error} />
+        <SummaryChip label="L" value={totals.late} bg={JPColors.warningBg} fg={JPColors.warning} />
+        <SummaryChip label="Ex" value={totals.excused} bg={JPColors.infoBg} fg={JPColors.info} />
+        <SummaryChip
+          label="—"
+          value={totals.unmarked}
+          bg={JPColors.creamDark}
+          fg={JPColors.textSub}
+        />
       </View>
 
       <ScrollView contentContainerStyle={styles.scrollContent}>
@@ -315,19 +325,19 @@ function StudentRow({
       <View style={styles.segmented}>
         <Segment
           label="Present"
-          tint="#166534"
+          tint={JPColors.success}
           active={current === 'present'}
           onPress={() => onMark('present')}
         />
         <Segment
           label="Absent"
-          tint="#B91C1C"
+          tint={JPColors.error}
           active={current === 'absent'}
           onPress={() => onMark('absent')}
         />
         <Segment
           label="Late"
-          tint="#B45309"
+          tint={JPColors.warning}
           active={current === 'late'}
           onPress={() => onMark('late')}
         />
@@ -385,13 +395,14 @@ function SummaryChip({
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: JPColors.cream },
   offlineBanner: {
-    backgroundColor: '#DDE3F4',
+    backgroundColor: JPColors.infoBg,
     paddingVertical: 8,
     alignItems: 'center',
   },
   offlineBannerText: {
-    color: '#1E3A8A',
-    fontFamily: 'Mukta_600SemiBold',
+    color: JPColors.info,
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
     fontSize: 13,
   },
   summary: {
@@ -407,7 +418,8 @@ const styles = StyleSheet.create({
   },
   summaryChipLabel: {
     fontSize: 12,
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
   },
   scrollContent: {
     paddingHorizontal: JPSpacing.sp4,
@@ -429,12 +441,13 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   rowName: {
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
     fontSize: 15,
     color: JPColors.textPrimary,
   },
   rowCode: {
-    fontFamily: 'JetBrainsMono_400Regular',
+    fontFamily: JPFonts.mono,
     fontSize: 11,
     color: JPColors.textSub,
     marginTop: 2,
@@ -452,18 +465,21 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   segmentLabel: {
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
     fontSize: 13,
   },
   hasNote: {
     marginTop: 6,
     fontSize: 12,
     color: JPColors.textSub,
-    fontFamily: 'Mukta_500Medium',
+    fontFamily: JPFonts.body,
+    fontWeight: '500',
   },
   errorText: {
-    color: '#B91C1C',
-    fontFamily: 'Mukta_500Medium',
+    color: JPColors.error,
+    fontFamily: JPFonts.body,
+    fontWeight: '500',
     textAlign: 'center',
     paddingHorizontal: JPSpacing.sp4,
     paddingVertical: 8,
@@ -489,7 +505,8 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: {
     color: '#FFFFFF',
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
     fontSize: 16,
   },
   modalRoot: {
@@ -504,7 +521,8 @@ const styles = StyleSheet.create({
     padding: JPSpacing.sp4,
   },
   modalTitle: {
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
     fontSize: 17,
     marginBottom: 12,
   },
@@ -513,7 +531,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: JPRadius.md,
     padding: 12,
-    fontFamily: 'Mukta_400Regular',
+    fontFamily: JPFonts.body,
     color: JPColors.textPrimary,
     textAlignVertical: 'top',
     borderColor: JPColors.creamDeeper,
@@ -531,7 +549,8 @@ const styles = StyleSheet.create({
   },
   modalCancelText: {
     color: JPColors.textSub,
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
   },
   modalSave: {
     backgroundColor: JPColors.saffron,
@@ -541,6 +560,7 @@ const styles = StyleSheet.create({
   },
   modalSaveText: {
     color: '#FFFFFF',
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
   },
 });

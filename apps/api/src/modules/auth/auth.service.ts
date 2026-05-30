@@ -25,6 +25,7 @@ import { AuditService } from '../audit/audit.service';
 
 import { DeviceSessionService } from './services/device-session.service';
 import { OtpService } from './services/otp.service';
+import { ScopeResolverService } from './services/scope-resolver.service';
 import { TokenRotationService } from './services/token-rotation.service';
 
 export interface VerifyOtpInput {
@@ -68,6 +69,7 @@ export class AuthService {
     private readonly tokens: TokenRotationService,
     private readonly audit: AuditService,
     private readonly config: SystemConfigService,
+    private readonly scopeResolver: ScopeResolverService,
   ) {}
 
   async verifyOtpAndIssue(input: VerifyOtpInput): Promise<VerifyOtpResult> {
@@ -109,10 +111,11 @@ export class AuthService {
     // 5. Mint tokens + insert family row (FK to session now satisfied),
     //    then overwrite the session's placeholder hash with the real one
     //    so refresh-rotation can verify against device_sessions too.
+    const scope = await this.scopeResolver.forUser(user);
     const pair = await this.tokens.issueInitialPair({
       userId: user.id,
       userRole,
-      scope: {},
+      scope,
       viewContext: 'parent',
       deviceSessionId: sessionId,
       ...(input.requestId !== undefined ? { requestId: input.requestId } : {}),

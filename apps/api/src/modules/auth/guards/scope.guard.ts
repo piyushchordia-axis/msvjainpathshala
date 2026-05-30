@@ -72,6 +72,17 @@ export class ScopeGuard implements CanActivate {
     switch (meta.kind) {
       case 'centre': {
         const resolved = await this.centres.findScopeById(paramValue);
+        // A shikshak is batch-scoped; grant centre reach for any centre that
+        // hosts one of their batches (so they can list sibling batches in
+        // their own centres — mirrors how CentresService derives their
+        // centre list from batch assignments).
+        if (ctx.role === 'shikshak' && ctx.batch_ids && ctx.batch_ids.length > 0) {
+          const scopes = await Promise.all(ctx.batch_ids.map((b) => this.batches.findScopeById(b)));
+          const batchCentreIds = scopes
+            .filter((s): s is NonNullable<typeof s> => s !== null)
+            .map((s) => s.centre_id);
+          ctx.centre_ids = Array.from(new Set([...(ctx.centre_ids ?? []), ...batchCentreIds]));
+        }
         assertCentreScope(ctx, paramValue, resolved);
         return true;
       }

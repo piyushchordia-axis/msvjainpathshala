@@ -1,13 +1,12 @@
+/**
+ * Super admin → operations. National operational signals: open service
+ * requests, the MSV approval pipeline, and recent notices.
+ */
+
 import React from 'react';
 
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
+import { OperationsScreen } from '@/components/admin/AdminScreen';
 
 export default function SuperAdminOperations() {
-  return (
-    <PlaceholderScreen
-      title="Operations"
-      subtitle="Cross-state controls"
-      emptyBody="Queue dashboards, impersonation, system-wide toggles. Lands in a later step."
-    />
-  );
+  return <OperationsScreen title="Operations" subtitle="Cross-state operational signals" />;
 }

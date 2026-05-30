@@ -193,6 +193,19 @@ export class CurriculumRepository {
     return rows.map((r) => r.kind as CurriculumKind);
   }
 
+  /** Active curricula (id + kind) assigned to a batch — used to resolve a
+   *  student's curriculum for the parent-facing progress view. */
+  async findActiveCurriculaForBatch(
+    batchId: string,
+  ): Promise<Array<{ curriculum_id: string; kind: CurriculumKind }>> {
+    const rows = await this.drizzle.dbRead
+      .select({ curriculum_id: curriculum_assignments.curriculum_id, kind: curricula.kind })
+      .from(curriculum_assignments)
+      .innerJoin(curricula, eq(curricula.id, curriculum_assignments.curriculum_id))
+      .where(and(eq(curriculum_assignments.batch_id, batchId), eq(curricula.status, 'active')));
+    return rows.map((r) => ({ curriculum_id: r.curriculum_id, kind: r.kind as CurriculumKind }));
+  }
+
   // ===========================================================================
   // Progress
   // ===========================================================================

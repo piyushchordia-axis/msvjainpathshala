@@ -24,6 +24,7 @@ import { DeviceSessionService } from './services/device-session.service';
 import { ImpersonationService } from './services/impersonation.service';
 import { JwtService } from './services/jwt.service';
 import { OtpService } from './services/otp.service';
+import { ScopeResolverService } from './services/scope-resolver.service';
 import { TokenRotationService } from './services/token-rotation.service';
 import { ViewSwitchService } from './services/view-switch.service';
 
@@ -38,6 +39,7 @@ import { ViewSwitchService } from './services/view-switch.service';
     DeviceSessionService,
     ViewSwitchService,
     ImpersonationService,
+    ScopeResolverService,
 
     // SMS provider — pick by env. `MSG91_AUTH_KEY` presence selects prod
     // path; everything else falls back to the console stub.

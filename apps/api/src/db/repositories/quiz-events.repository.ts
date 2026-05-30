@@ -8,7 +8,7 @@
  */
 
 import { Injectable } from '@nestjs/common';
-import { and, asc, desc, eq, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, lte } from 'drizzle-orm';
 
 import { DrizzleService } from '../../core/database/drizzle.service';
 import { quiz_attempts, quiz_event_questions, quiz_events } from '../schema';
@@ -61,8 +61,8 @@ export class QuizEventsRepository {
       .where(
         and(
           eq(quiz_events.city_id, cityId),
-          sql`${quiz_events.start_at} <= ${now}`,
-          sql`${quiz_events.end_at} >= ${now}`,
+          lte(quiz_events.start_at, now),
+          gte(quiz_events.end_at, now),
         ),
       )
       .orderBy(asc(quiz_events.start_at));

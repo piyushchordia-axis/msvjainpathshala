@@ -7,16 +7,18 @@
 import React from 'react';
 import { StyleSheet, Text, View, type ViewStyle } from 'react-native';
 
+import { JPColors, JPFonts } from '@/constants/colors';
+
 import type { AttendanceStatus } from '@jp/shared';
 
 const PALETTE: Record<AttendanceStatus, { bg: string; fg: string; label: string }> = {
-  present: { bg: '#DCEEDD', fg: '#166534', label: 'Present' },
-  absent: { bg: '#FBE5E5', fg: '#B91C1C', label: 'Absent' },
-  late: { bg: '#FBEED0', fg: '#B45309', label: 'Late' },
-  excused: { bg: '#DDE3F4', fg: '#1E3A8A', label: 'Excused' },
+  present: { bg: JPColors.successBg, fg: JPColors.success, label: 'Present' },
+  absent: { bg: JPColors.errorBg, fg: JPColors.error, label: 'Absent' },
+  late: { bg: JPColors.warningBg, fg: JPColors.warning, label: 'Late' },
+  excused: { bg: JPColors.infoBg, fg: JPColors.info, label: 'Excused' },
 };
 
-const NOT_MARKED = { bg: '#F5EDE0', fg: '#8B6F5E', label: 'Not marked' };
+const NOT_MARKED = { bg: JPColors.creamDark, fg: JPColors.textSub, label: 'Not marked' };
 
 export interface AttendanceStatusChipProps {
   status: AttendanceStatus | null;
@@ -57,6 +59,7 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   label: {
+    fontFamily: JPFonts.body,
     fontWeight: '600',
   },
 });

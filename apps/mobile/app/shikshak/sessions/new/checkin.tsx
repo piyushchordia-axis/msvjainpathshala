@@ -16,7 +16,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ulid } from 'ulid';
 
 import { Header } from '@/components/ui';
-import { JPColors, JPRadius, JPSpacing } from '@/constants/colors';
+import { JPColors, JPFonts, JPRadius, JPSpacing } from '@/constants/colors';
 import { attendanceApi } from '@/features/attendance/attendance.api';
 import { getCurrentPosition, type GpsFix } from '@/location/gps';
 
@@ -117,7 +117,7 @@ export function CheckinScreen({ mode }: { mode: 'new' | 'existing' }) {
                 <Text
                   style={[
                     styles.accuracyValue,
-                    { color: isAccurateEnough ? '#166534' : '#B45309' },
+                    { color: isAccurateEnough ? JPColors.success : JPColors.warning },
                   ]}
                 >
                   {fix.accuracy_m} m
@@ -193,24 +193,26 @@ const styles = StyleSheet.create({
   },
   gpsLabel: {
     color: JPColors.textSub,
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
     fontSize: 12,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
     marginBottom: 8,
   },
   coords: {
-    fontFamily: 'JetBrainsMono_400Regular',
+    fontFamily: JPFonts.mono,
     fontSize: 14,
     color: JPColors.textPrimary,
   },
   gpsHint: {
     color: JPColors.textSub,
-    fontFamily: 'Mukta_400Regular',
+    fontFamily: JPFonts.body,
   },
   errorText: {
-    color: '#B91C1C',
-    fontFamily: 'Mukta_500Medium',
+    color: JPColors.error,
+    fontFamily: JPFonts.body,
+    fontWeight: '500',
     fontSize: 14,
     marginTop: 4,
   },
@@ -222,33 +224,37 @@ const styles = StyleSheet.create({
   },
   accuracyLabel: {
     color: JPColors.textSub,
-    fontFamily: 'Mukta_500Medium',
+    fontFamily: JPFonts.body,
+    fontWeight: '500',
     fontSize: 13,
   },
   accuracyValue: {
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
     fontSize: 13,
   },
   warnBanner: {
-    backgroundColor: '#FBEED0',
+    backgroundColor: JPColors.warningBg,
     borderRadius: JPRadius.md,
     padding: JPSpacing.sp3,
     marginTop: JPSpacing.sp3,
   },
   warnText: {
-    color: '#B45309',
-    fontFamily: 'Mukta_500Medium',
+    color: JPColors.warning,
+    fontFamily: JPFonts.body,
+    fontWeight: '500',
     fontSize: 13,
   },
   errorBanner: {
-    backgroundColor: '#FBE5E5',
+    backgroundColor: JPColors.errorBg,
     borderRadius: JPRadius.md,
     padding: JPSpacing.sp3,
     marginTop: JPSpacing.sp3,
   },
   errorBannerText: {
-    color: '#B91C1C',
-    fontFamily: 'Mukta_500Medium',
+    color: JPColors.error,
+    fontFamily: JPFonts.body,
+    fontWeight: '500',
     fontSize: 13,
   },
   primaryBtn: {
@@ -263,7 +269,8 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: {
     color: '#FFFFFF',
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
     fontSize: 16,
   },
   secondaryBtn: {
@@ -277,7 +284,8 @@ const styles = StyleSheet.create({
   },
   secondaryBtnText: {
     color: JPColors.textPrimary,
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
     fontSize: 13,
   },
   cancelBtn: {
@@ -287,6 +295,7 @@ const styles = StyleSheet.create({
   },
   cancelBtnText: {
     color: JPColors.textSub,
-    fontFamily: 'Mukta_500Medium',
+    fontFamily: JPFonts.body,
+    fontWeight: '500',
   },
 });

@@ -1,12 +1,12 @@
+/**
+ * State admin → reports. Scoped attendance / engagement / niyam / donations
+ * series from /v1/admin/analytics/* (state-scoped by JWT).
+ */
+
 import React from 'react';
 
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
+import { ReportsScreen } from '@/components/admin/AdminScreen';
 
 export default function StateAdminReports() {
-  return (
-    <PlaceholderScreen
-      title="Reports"
-      emptyBody="State-wide attendance, Punya, and enrolment reports. Lands in a later step."
-    />
-  );
+  return <ReportsScreen title="Reports" subtitle="State-wide attendance and donations" />;
 }

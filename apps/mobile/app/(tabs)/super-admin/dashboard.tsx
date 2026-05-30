@@ -1,14 +1,19 @@
+/**
+ * Super admin → dashboard. National roll-up from the analytics overview
+ * (GET /v1/admin/analytics/overview). The super_admin scope is national, so
+ * the same overview component renders the platform-wide slice.
+ */
+
 import React from 'react';
 
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
+import { OverviewDashboard } from '@/components/admin/AdminScreen';
 
 export default function SuperAdminDashboard() {
   return (
-    <PlaceholderScreen
-      title="Super Admin"
-      subtitle="National overview"
-      emptyTitle="Dashboard"
-      emptyBody="Cross-state KPIs land in a later step. For now this confirms the super_admin tab navigator is wired and themed."
+    <OverviewDashboard
+      title="National overview"
+      subtitle="Platform-wide KPIs"
+      scopeNoun="network"
     />
   );
 }

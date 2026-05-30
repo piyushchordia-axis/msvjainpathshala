@@ -69,16 +69,23 @@ export default function middleware(req: NextRequest): NextResponse {
   if (!hasAccess) {
     const loginUrl = req.nextUrl.clone();
     loginUrl.pathname = `/${locale}/admin/login`;
-    loginUrl.search = `?next=${encodeURIComponent(pathname + search)}`;
+    // Strip the locale from the next-path: the login page hands this to
+    // next-intl's `redirect({ href, locale })`, which re-prefixes the locale.
+    // Leaving `/en/...` here would produce `/en/en/...` after re-prefixing.
+    const localeStrippedPath = pathname.replace(/^\/(en|hi)/, '') || '/admin';
+    loginUrl.search = `?next=${encodeURIComponent(localeStrippedPath + search)}`;
     return NextResponse.redirect(loginUrl);
   }
 
   const user = readUserCookie(req);
   if (!canAccessAdminPanel(user?.role)) {
-    const home = req.nextUrl.clone();
-    home.pathname = `/${locale}`;
-    home.search = '';
-    return NextResponse.redirect(home);
+    // Signed in, but this role (parent/student/guest) has no panel access.
+    // Send them to the login page with an error flag so it can explain via a
+    // toast — rather than silently dumping them on the public homepage.
+    const loginUrl = req.nextUrl.clone();
+    loginUrl.pathname = `/${locale}/admin/login`;
+    loginUrl.search = '?error=not_admin';
+    return NextResponse.redirect(loginUrl);
   }
 
   return intlResponse;

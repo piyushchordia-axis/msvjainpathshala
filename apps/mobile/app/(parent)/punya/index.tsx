@@ -358,7 +358,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   card: {
-    backgroundColor: JPColors.cream === '#FDF8F2' ? '#FFFFFF' : JPColors.cream,
+    backgroundColor: '#FFFFFF',
     borderColor: JPColors.border,
     borderWidth: 1,
     borderRadius: JPRadius.lg,

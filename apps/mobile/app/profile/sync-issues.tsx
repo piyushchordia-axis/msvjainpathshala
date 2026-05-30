@@ -10,7 +10,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
-import { JPColors, JPRadius, JPSpacing } from '@/constants/colors';
+import { JPColors, JPFonts, JPRadius, JPSpacing } from '@/constants/colors';
 import {
   acknowledgementsQueue,
   attendanceQueue,
@@ -123,13 +123,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   emptyTitle: {
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
     fontSize: 18,
     color: JPColors.maroon,
     marginBottom: JPSpacing.sp1,
   },
   emptyBody: {
-    fontFamily: 'Mukta_400Regular',
+    fontFamily: JPFonts.body,
     fontSize: 14,
     color: JPColors.textPrimary,
     textAlign: 'center',
@@ -145,22 +146,23 @@ const styles = StyleSheet.create({
   },
   row: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline' },
   opKind: {
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
     fontSize: 14,
     color: JPColors.maroon,
   },
   failedAt: {
-    fontFamily: 'Mukta_400Regular',
+    fontFamily: JPFonts.body,
     fontSize: 11,
     color: JPColors.textSub,
   },
   errorCode: {
-    fontFamily: 'JetBrainsMono_400Regular',
+    fontFamily: JPFonts.mono,
     fontSize: 11,
     color: JPColors.warning,
   },
   errorMessage: {
-    fontFamily: 'Mukta_400Regular',
+    fontFamily: JPFonts.body,
     fontSize: 13,
     color: JPColors.textPrimary,
     lineHeight: 18,
@@ -174,13 +176,15 @@ const styles = StyleSheet.create({
   btnPrimary: { backgroundColor: JPColors.saffron },
   btnPrimaryText: {
     color: '#FFFFFF',
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
     fontSize: 13,
   },
   btnGhost: { borderWidth: 1, borderColor: JPColors.maroon300 },
   btnGhostText: {
     color: JPColors.maroon,
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
     fontSize: 13,
   },
 });

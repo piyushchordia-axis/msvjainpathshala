@@ -1,12 +1,12 @@
+/**
+ * City admin → centres. Lists centres in the admin's city (GET /v1/centres),
+ * with expandable batch lists per centre.
+ */
+
 import React from 'react';
 
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
+import { CentresList } from '@/components/admin/CentresList';
 
 export default function CityAdminCentres() {
-  return (
-    <PlaceholderScreen
-      title="Centres"
-      emptyBody="Centres in your city — capacity, sanchalak, holidays. Lands when the centres UI ships."
-    />
-  );
+  return <CentresList title="Centres" subtitle="Centres across your city" />;
 }

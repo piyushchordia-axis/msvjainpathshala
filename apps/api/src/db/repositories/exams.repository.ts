@@ -8,7 +8,7 @@
  */
 
 import { Injectable } from '@nestjs/common';
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, lte } from 'drizzle-orm';
 
 import { DrizzleService } from '../../core/database/drizzle.service';
 import {
@@ -73,8 +73,8 @@ export class ExamsRepository {
   ): Promise<OnlineExam[]> {
     const where = [eq(online_exams.city_id, cityId)];
     if (opts.inWindow && opts.now) {
-      where.push(sql`${online_exams.window_start} <= ${opts.now}`);
-      where.push(sql`${online_exams.window_end} >= ${opts.now}`);
+      where.push(lte(online_exams.window_start, opts.now));
+      where.push(gte(online_exams.window_end, opts.now));
     }
     return this.drizzle.dbRead
       .select()

@@ -12,7 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ulid } from 'ulid';
 
 import { Header } from '@/components/ui';
-import { JPColors, JPRadius, JPSpacing } from '@/constants/colors';
+import { JPColors, JPFonts, JPRadius, JPSpacing } from '@/constants/colors';
 import { attendanceApi } from '@/features/attendance/attendance.api';
 import { getCurrentPosition, type GpsFix } from '@/location/gps';
 
@@ -122,31 +122,34 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   cardTitle: {
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
     fontSize: 15,
     color: JPColors.textPrimary,
     marginBottom: 8,
   },
   coords: {
-    fontFamily: 'JetBrainsMono_400Regular',
+    fontFamily: JPFonts.mono,
     fontSize: 13,
     color: JPColors.textSub,
   },
   errorText: {
-    color: '#B91C1C',
-    fontFamily: 'Mukta_500Medium',
+    color: JPColors.error,
+    fontFamily: JPFonts.body,
+    fontWeight: '500',
     fontSize: 13,
   },
   successBanner: {
     marginTop: JPSpacing.sp3,
-    backgroundColor: '#DCEEDD',
+    backgroundColor: JPColors.successBg,
     padding: JPSpacing.sp3,
     borderRadius: JPRadius.md,
     alignItems: 'center',
   },
   successText: {
-    color: '#166534',
-    fontFamily: 'Mukta_700Bold',
+    color: JPColors.success,
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
   },
   primaryBtn: {
     marginTop: JPSpacing.sp4,
@@ -160,7 +163,8 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: {
     color: '#FFFFFF',
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
     fontSize: 16,
   },
   secondaryBtn: {
@@ -170,6 +174,7 @@ const styles = StyleSheet.create({
   },
   secondaryBtnText: {
     color: JPColors.textSub,
-    fontFamily: 'Mukta_500Medium',
+    fontFamily: JPFonts.body,
+    fontWeight: '500',
   },
 });

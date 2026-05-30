@@ -2,11 +2,12 @@ import { Tabs } from 'expo-router';
 import React from 'react';
 import { View } from 'react-native';
 
+import { Icon } from '@/components/ui';
 import { TabBarBadge } from '@/components/ui/feedback';
-import { JPColors } from '@/constants/colors';
 import { useSyncIssuesStore } from '@/stores/sync-issues.store';
 import { useSyncStore } from '@/stores/sync.store';
-import { tabScreenOptions } from '@/theme/tabs';
+import { tabIcon } from '@/theme/tab-icon';
+import { useTabScreenOptions } from '@/theme/tabs';
 
 /**
  * Step 14 — overlay the pending-ops dot on the Today tab (any queued work)
@@ -21,23 +22,14 @@ import { tabScreenOptions } from '@/theme/tabs';
 
 type IconProps = { focused: boolean; color: string; size: number };
 
-function dotStyle(color: string, size: number, focused: boolean) {
-  return {
-    width: size * 0.55,
-    height: size * 0.55,
-    borderRadius: size,
-    backgroundColor: color,
-    opacity: focused ? 1 : 0.55,
-  } as const;
-}
-
-function PendingIcon({ focused, color, size }: IconProps) {
+function PendingIcon({ color, size }: IconProps) {
   const pending = useSyncStore((s) => s.pending_count);
+  const dim = size ? Math.min(size, 24) : 22;
   return (
-    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
-      <View style={dotStyle(color, size, focused)} />
+    <View style={{ width: dim, height: dim, alignItems: 'center', justifyContent: 'center' }}>
+      <Icon name="home" size={dim} color={color} />
       {pending > 0 ? (
-        <View style={{ position: 'absolute', top: 0, right: 0 }}>
+        <View style={{ position: 'absolute', top: -2, right: -4 }}>
           <TabBarBadge dot variant="primary" size="sm" accessibilityLabel="Pending sync" />
         </View>
       ) : null}
@@ -45,11 +37,12 @@ function PendingIcon({ focused, color, size }: IconProps) {
   );
 }
 
-function FailedIcon({ focused, color, size }: IconProps) {
+function FailedIcon({ color, size }: IconProps) {
   const failed = useSyncIssuesStore((s) => s.failed_count);
+  const dim = size ? Math.min(size, 24) : 22;
   return (
-    <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
-      <View style={dotStyle(color, size, focused)} />
+    <View style={{ width: dim, height: dim, alignItems: 'center', justifyContent: 'center' }}>
+      <Icon name="user" size={dim} color={color} />
       {failed > 0 ? (
         <View style={{ position: 'absolute', top: -2, right: -4 }}>
           <TabBarBadge
@@ -65,16 +58,15 @@ function FailedIcon({ focused, color, size }: IconProps) {
 }
 
 export default function ShikshakTabsLayout() {
-  void JPColors; // keep the import alive for downstream tweaks
   return (
-    <Tabs screenOptions={tabScreenOptions}>
+    <Tabs screenOptions={useTabScreenOptions()}>
       <Tabs.Screen
         name="today"
         options={{ title: 'Today', tabBarIcon: (p) => <PendingIcon {...p} /> }}
       />
-      <Tabs.Screen name="batches" options={{ title: 'Batches' }} />
-      <Tabs.Screen name="niyams" options={{ title: 'Niyams' }} />
-      <Tabs.Screen name="library" options={{ title: 'Library' }} />
+      <Tabs.Screen name="batches" options={{ title: 'Batches', tabBarIcon: tabIcon('user') }} />
+      <Tabs.Screen name="niyams" options={{ title: 'Niyams', tabBarIcon: tabIcon('flame') }} />
+      <Tabs.Screen name="library" options={{ title: 'Library', tabBarIcon: tabIcon('book') }} />
       <Tabs.Screen
         name="profile"
         options={{ title: 'Profile', tabBarIcon: (p) => <FailedIcon {...p} /> }}

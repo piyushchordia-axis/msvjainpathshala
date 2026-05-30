@@ -418,14 +418,36 @@ export class CurriculumService {
     return this.repo.listByCity(actor.city_id, opts.kind ? { kind: opts.kind } : {});
   }
 
+  /** Resolve the curriculum a student should see: the active Standard track
+   *  assigned to their batch, else any active assignment. Null if none. */
+  private async resolveCurriculumForStudent(student: Student): Promise<string | null> {
+    if (!student.batch_id) return null;
+    const active = await this.repo.findActiveCurriculaForBatch(student.batch_id);
+    if (active.length === 0) return null;
+    const standard = active.find((a) => a.kind === 'standard');
+    return (standard ?? active[0]!).curriculum_id;
+  }
+
   async getStudentProgress(
     actor: ScopedActor,
     studentId: string,
-    curriculumId: string,
+    curriculumId?: string,
   ): Promise<StudentProgressResponse> {
     const student = await this.requireStudent(studentId);
     await this.assertReachStudent(actor, student);
-    const curriculum = await this.requireCurriculum(curriculumId);
+    // Parents can't list curricula (admin-only), so when no curriculum_id is
+    // supplied we resolve the one assigned to the student's batch (preferring
+    // the active Standard track, else any active assignment).
+    const resolvedId = curriculumId ?? (await this.resolveCurriculumForStudent(student));
+    if (!resolvedId) {
+      throw new AppError({
+        code: ERROR_CODES.ERR_RESOURCE_NOT_FOUND,
+        message: "No curriculum has been assigned to this student's batch yet",
+        statusCode: 404,
+      });
+    }
+    const curriculum = await this.requireCurriculum(resolvedId);
+    curriculumId = resolvedId;
     const sections = await this.repo.listSectionsByCurriculum(curriculumId);
     const items = await this.repo.listItemsForSections(sections.map((s) => s.id));
     const progressRows = await this.repo.listProgressForStudent(

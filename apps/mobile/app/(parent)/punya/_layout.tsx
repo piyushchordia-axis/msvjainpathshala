@@ -24,6 +24,9 @@ export default function PunyaStackLayout() {
         headerTitleStyle: { fontFamily: JPFonts.display, fontWeight: '600' },
         contentStyle: { backgroundColor: JPColors.cream },
       }}
-    />
+    >
+      <Stack.Screen name="index" options={{ title: 'Punya' }} />
+      <Stack.Screen name="leaderboard" options={{ title: 'Leaderboard' }} />
+    </Stack>
   );
 }

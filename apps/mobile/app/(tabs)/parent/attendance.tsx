@@ -22,16 +22,16 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApiError } from '@/api/client';
 import { studentsApi, type StudentDto } from '@/api/endpoints/students';
 import { Header } from '@/components/ui';
-import { JPColors, JPRadius, JPSpacing } from '@/constants/colors';
+import { JPColors, JPFonts, JPRadius, JPSpacing } from '@/constants/colors';
 import { attendanceApi } from '@/features/attendance/attendance.api';
 
 import type { AttendanceStatus } from '@jp/shared';
 
 const PALETTE: Record<AttendanceStatus, string> = {
-  present: '#DCEEDD',
-  absent: '#FBE5E5',
-  late: '#FBEED0',
-  excused: '#DDE3F4',
+  present: JPColors.successBg,
+  absent: JPColors.errorBg,
+  late: JPColors.warningBg,
+  excused: JPColors.infoBg,
 };
 const NEUTRAL_BG = '#FFFFFF';
 
@@ -330,7 +330,8 @@ const styles = StyleSheet.create({
     borderColor: JPColors.saffron,
   },
   childChipLabel: {
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
     fontSize: 13,
     color: JPColors.textPrimary,
   },
@@ -352,12 +353,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   navBtnText: {
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
     fontSize: 18,
     color: JPColors.textPrimary,
   },
   monthLabel: {
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
     fontSize: 17,
     color: JPColors.textPrimary,
   },
@@ -370,7 +373,8 @@ const styles = StyleSheet.create({
   gridHeader: {
     width: `${100 / 7 - 1}%`,
     textAlign: 'center',
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
     color: JPColors.textSub,
     fontSize: 12,
     paddingVertical: 6,
@@ -389,7 +393,8 @@ const styles = StyleSheet.create({
     aspectRatio: 1,
   },
   cellNum: {
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
     fontSize: 13,
     color: JPColors.textPrimary,
   },
@@ -412,7 +417,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   legendText: {
-    fontFamily: 'Mukta_500Medium',
+    fontFamily: JPFonts.body,
+    fontWeight: '500',
     fontSize: 12,
     color: JPColors.textSub,
   },
@@ -425,12 +431,14 @@ const styles = StyleSheet.create({
   },
   absenceBtnText: {
     color: '#FFFFFF',
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
     fontSize: 14,
   },
   errorText: {
-    color: '#B91C1C',
-    fontFamily: 'Mukta_500Medium',
+    color: JPColors.error,
+    fontFamily: JPFonts.body,
+    fontWeight: '500',
     textAlign: 'center',
     marginTop: 8,
   },
@@ -446,12 +454,14 @@ const styles = StyleSheet.create({
     padding: JPSpacing.sp4,
   },
   modalTitle: {
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
     fontSize: 17,
     marginBottom: 12,
   },
   modalLabel: {
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
     fontSize: 12,
     color: JPColors.textSub,
     textTransform: 'uppercase',
@@ -463,7 +473,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderRadius: JPRadius.md,
     padding: 12,
-    fontFamily: 'Mukta_400Regular',
+    fontFamily: JPFonts.body,
     color: JPColors.textPrimary,
     borderColor: JPColors.creamDeeper,
     borderWidth: 1,
@@ -480,7 +490,8 @@ const styles = StyleSheet.create({
   },
   modalCancelText: {
     color: JPColors.textSub,
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
   },
   modalSave: {
     backgroundColor: JPColors.saffron,
@@ -490,6 +501,7 @@ const styles = StyleSheet.create({
   },
   modalSaveText: {
     color: '#FFFFFF',
-    fontFamily: 'Mukta_700Bold',
+    fontFamily: JPFonts.body,
+    fontWeight: '700',
   },
 });

@@ -1,12 +1,12 @@
+/**
+ * City admin → operations. Open service requests, MSV approval pipeline, and
+ * recent notices — all city-scoped via the caller's JWT.
+ */
+
 import React from 'react';
 
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
+import { OperationsScreen } from '@/components/admin/AdminScreen';
 
 export default function CityAdminOperations() {
-  return (
-    <PlaceholderScreen
-      title="Operations"
-      emptyBody="Approvals, notice broadcasts, service requests, shivirs. Lands when those features ship."
-    />
-  );
+  return <OperationsScreen title="Operations" subtitle="Requests, MSV pipeline and notices" />;
 }

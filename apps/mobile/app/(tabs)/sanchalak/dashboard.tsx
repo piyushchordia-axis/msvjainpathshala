@@ -1,13 +1,18 @@
+/**
+ * Sanchalak → dashboard. Centre roll-up from the analytics overview
+ * (GET /v1/admin/analytics/overview, scoped to the sanchalak's centres).
+ */
+
 import React from 'react';
 
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
+import { OverviewDashboard } from '@/components/admin/AdminScreen';
 
 export default function SanchalakDashboard() {
   return (
-    <PlaceholderScreen
-      title="Sanchalak"
-      subtitle="Centre overview"
-      emptyBody="Today's check-ins, pending enrolments, shikshak attendance. Lands in a later step."
+    <OverviewDashboard
+      title="Centre overview"
+      subtitle="Across the centres you sanchalak"
+      scopeNoun="centre"
     />
   );
 }

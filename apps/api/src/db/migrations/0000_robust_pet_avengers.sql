@@ -1,5 +1,5 @@
 CREATE TYPE "public"."age_group_enum" AS ENUM('bal', 'kishor', 'tarun', 'yuva');--> statement-breakpoint
-CREATE TYPE "public"."attendance_status_enum" AS ENUM('present', 'absent', 'late');--> statement-breakpoint
+CREATE TYPE "public"."attendance_status_enum" AS ENUM('present', 'absent', 'late', 'excused');--> statement-breakpoint
 CREATE TYPE "public"."audit_action_enum" AS ENUM('create', 'update', 'delete', 'approve', 'reject', 'transfer', 'login', 'logout', 'config_change');--> statement-breakpoint
 CREATE TYPE "public"."curriculum_level_enum" AS ENUM('not_started', 'in_progress', 'completed', 'mastered');--> statement-breakpoint
 CREATE TYPE "public"."donation_frequency_enum" AS ENUM('one_time', 'recurring');--> statement-breakpoint
@@ -28,7 +28,7 @@ CREATE TYPE "public"."session_status_enum" AS ENUM('scheduled', 'in_progress', '
 CREATE TYPE "public"."shivir_attendance_mode_enum" AS ENUM('in_out', 'present_only');--> statement-breakpoint
 CREATE TYPE "public"."shivir_scan_kind_enum" AS ENUM('check_in', 'check_out', 'present');--> statement-breakpoint
 CREATE TYPE "public"."student_status_enum" AS ENUM('active', 'inactive');--> statement-breakpoint
-CREATE TYPE "public"."sync_op_status_enum" AS ENUM('success', 'duplicate', 'failed');--> statement-breakpoint
+CREATE TYPE "public"."sync_op_status_enum" AS ENUM('processing', 'success', 'duplicate', 'failed');--> statement-breakpoint
 CREATE TYPE "public"."tier_enum" AS ENUM('jigyasu', 'shravak', 'sadhak', 'shraman', 'tirthankar');--> statement-breakpoint
 CREATE TABLE "cities" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
@@ -65,6 +65,7 @@ CREATE TABLE "device_tokens" (
 	"user_id" uuid NOT NULL,
 	"platform" text NOT NULL,
 	"token" text NOT NULL,
+	"device_id" text,
 	"last_seen_at" timestamp with time zone,
 	"revoked_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -113,6 +114,7 @@ CREATE TABLE "users" (
 	"is_active" boolean DEFAULT true NOT NULL,
 	"last_login_at" timestamp with time zone,
 	"gallery_visibility_opt_in" boolean DEFAULT false NOT NULL,
+	"notification_preferences" jsonb DEFAULT '{"push":true,"sms":true,"email":true,"in_app":true}'::jsonb NOT NULL,
 	"deleted_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -154,6 +156,7 @@ CREATE TABLE "batches" (
 	"academic_year" text,
 	"status" text DEFAULT 'active' NOT NULL,
 	"capacity" integer DEFAULT 50 NOT NULL,
+	"language_preference" text,
 	"deleted_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -182,7 +185,7 @@ CREATE TABLE "centres" (
 	"pincode" varchar(10),
 	"lat" numeric(10, 7),
 	"lng" numeric(10, 7),
-	"gps_radius_m" integer DEFAULT 150 NOT NULL,
+	"gps_radius_m" integer DEFAULT 500 NOT NULL,
 	"contact_phone" varchar(15),
 	"contact_email" varchar(255),
 	"status" text DEFAULT 'active' NOT NULL,
@@ -332,7 +335,7 @@ CREATE TABLE "attendance" (
 	"status" "attendance_status_enum" NOT NULL,
 	"marked_at" timestamp with time zone NOT NULL,
 	"marked_by" uuid NOT NULL,
-	"client_op_id" uuid,
+	"client_op_id" text,
 	"notes" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
@@ -578,7 +581,7 @@ CREATE TABLE "shivir_attendance_scans" (
 	"volunteer_user_id" uuid NOT NULL,
 	"scan_kind" "shivir_scan_kind_enum" NOT NULL,
 	"scanned_at" timestamp with time zone NOT NULL,
-	"client_op_id" uuid,
+	"client_op_id" text,
 	"device_offline" boolean DEFAULT false NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
@@ -665,7 +668,9 @@ CREATE TABLE "competitions" (
 	"event_date" date,
 	"winner_points" integer DEFAULT 0 NOT NULL,
 	"participant_points" integer DEFAULT 0 NOT NULL,
+	"max_participants" integer,
 	"status" text DEFAULT 'draft' NOT NULL,
+	"results_published_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"created_by" uuid,
@@ -816,6 +821,20 @@ CREATE TABLE "online_exams" (
 	"updated_by" uuid
 );
 --> statement-breakpoint
+CREATE TABLE "ai_generation_jobs" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"actor_user_id" uuid NOT NULL,
+	"topic" text NOT NULL,
+	"age_group" "age_group_enum",
+	"language" "language_enum" DEFAULT 'en' NOT NULL,
+	"count" integer DEFAULT 10 NOT NULL,
+	"status" text DEFAULT 'queued' NOT NULL,
+	"result_question_ids" uuid[],
+	"error" text,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
 CREATE TABLE "push_quiz_attempts" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"push_quiz_id" uuid NOT NULL,
@@ -865,6 +884,8 @@ CREATE TABLE "questions" (
 	"ai_generation_id" uuid,
 	"reviewed" text,
 	"reviewed_by" uuid,
+	"is_ai_generated" boolean DEFAULT false NOT NULL,
+	"ai_review_status" text,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -980,8 +1001,20 @@ CREATE TABLE "donation_campaigns" (
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
 );
 --> statement-breakpoint
+CREATE TABLE "donation_webhook_events" (
+	"event_id" text PRIMARY KEY NOT NULL,
+	"event_type" text NOT NULL,
+	"razorpay_payment_id" text,
+	"razorpay_order_id" text,
+	"donation_id" uuid,
+	"payload" jsonb NOT NULL,
+	"received_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"processed_at" timestamp with time zone
+);
+--> statement-breakpoint
 CREATE TABLE "donations" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"donor_user_id" uuid,
 	"donor_name" text NOT NULL,
 	"donor_phone" varchar(15),
 	"donor_email" varchar(255),
@@ -998,7 +1031,9 @@ CREATE TABLE "donations" (
 	"payment_captured_at" timestamp with time zone,
 	"eighty_g_eligible" boolean DEFAULT false NOT NULL,
 	"receipt_number" text,
+	"receipt_asset_id" uuid,
 	"eighty_g_certificate_asset_id" uuid,
+	"financial_year" text,
 	"notes" text,
 	"deleted_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
@@ -1079,7 +1114,7 @@ CREATE TABLE "audit_logs" (
 CREATE TABLE "sync_operations" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"user_id" uuid NOT NULL,
-	"client_op_id" uuid NOT NULL,
+	"client_op_id" text NOT NULL,
 	"op_kind" text NOT NULL,
 	"request_payload" jsonb,
 	"response_payload" jsonb,
@@ -1112,6 +1147,28 @@ CREATE TABLE "student_notes" (
 	"deleted_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "export_jobs" (
+	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
+	"requested_by_user_id" uuid NOT NULL,
+	"kind" text NOT NULL,
+	"scope_entity_kind" text NOT NULL,
+	"scope_entity_id" uuid NOT NULL,
+	"status" text DEFAULT 'pending' NOT NULL,
+	"asset_id" uuid,
+	"error" text,
+	"started_at" timestamp with time zone,
+	"completed_at" timestamp with time zone,
+	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL
+);
+--> statement-breakpoint
+CREATE TABLE "system_config" (
+	"key" text PRIMARY KEY NOT NULL,
+	"value" jsonb NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_by" uuid
 );
 --> statement-breakpoint
 ALTER TABLE "cities" ADD CONSTRAINT "cities_state_id_states_id_fk" FOREIGN KEY ("state_id") REFERENCES "public"."states"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
@@ -1254,6 +1311,7 @@ ALTER TABLE "exam_questions" ADD CONSTRAINT "exam_questions_exam_id_online_exams
 ALTER TABLE "online_exams" ADD CONSTRAINT "online_exams_city_id_cities_id_fk" FOREIGN KEY ("city_id") REFERENCES "public"."cities"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "online_exams" ADD CONSTRAINT "online_exams_created_by_users_id_fk" FOREIGN KEY ("created_by") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "online_exams" ADD CONSTRAINT "online_exams_updated_by_users_id_fk" FOREIGN KEY ("updated_by") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "ai_generation_jobs" ADD CONSTRAINT "ai_generation_jobs_actor_user_id_users_id_fk" FOREIGN KEY ("actor_user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "push_quiz_attempts" ADD CONSTRAINT "push_quiz_attempts_push_quiz_id_push_quizzes_id_fk" FOREIGN KEY ("push_quiz_id") REFERENCES "public"."push_quizzes"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "push_quiz_attempts" ADD CONSTRAINT "push_quiz_attempts_student_id_students_id_fk" FOREIGN KEY ("student_id") REFERENCES "public"."students"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "push_quiz_questions" ADD CONSTRAINT "push_quiz_questions_push_quiz_id_push_quizzes_id_fk" FOREIGN KEY ("push_quiz_id") REFERENCES "public"."push_quizzes"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -1282,6 +1340,8 @@ ALTER TABLE "library_access_logs" ADD CONSTRAINT "library_access_logs_user_id_us
 ALTER TABLE "library_items" ADD CONSTRAINT "library_items_uploaded_by_user_id_users_id_fk" FOREIGN KEY ("uploaded_by_user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "library_items" ADD CONSTRAINT "library_items_city_id_cities_id_fk" FOREIGN KEY ("city_id") REFERENCES "public"."cities"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "donation_campaigns" ADD CONSTRAINT "donation_campaigns_city_id_cities_id_fk" FOREIGN KEY ("city_id") REFERENCES "public"."cities"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "donation_webhook_events" ADD CONSTRAINT "donation_webhook_events_donation_id_donations_id_fk" FOREIGN KEY ("donation_id") REFERENCES "public"."donations"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "donations" ADD CONSTRAINT "donations_donor_user_id_users_id_fk" FOREIGN KEY ("donor_user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "donations" ADD CONSTRAINT "donations_campaign_id_donation_campaigns_id_fk" FOREIGN KEY ("campaign_id") REFERENCES "public"."donation_campaigns"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "donor_profiles" ADD CONSTRAINT "donor_profiles_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "notifications" ADD CONSTRAINT "notifications_user_id_users_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."users"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
@@ -1292,6 +1352,8 @@ ALTER TABLE "sync_operations" ADD CONSTRAINT "sync_operations_user_id_users_id_f
 ALTER TABLE "progress_reports" ADD CONSTRAINT "progress_reports_student_id_students_id_fk" FOREIGN KEY ("student_id") REFERENCES "public"."students"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "student_notes" ADD CONSTRAINT "student_notes_student_id_students_id_fk" FOREIGN KEY ("student_id") REFERENCES "public"."students"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "student_notes" ADD CONSTRAINT "student_notes_author_user_id_users_id_fk" FOREIGN KEY ("author_user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "export_jobs" ADD CONSTRAINT "export_jobs_requested_by_user_id_users_id_fk" FOREIGN KEY ("requested_by_user_id") REFERENCES "public"."users"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "system_config" ADD CONSTRAINT "system_config_updated_by_users_id_fk" FOREIGN KEY ("updated_by") REFERENCES "public"."users"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 CREATE UNIQUE INDEX "device_tokens_token_unique" ON "device_tokens" USING btree ("token");--> statement-breakpoint
 CREATE UNIQUE INDEX "users_phone_unique" ON "users" USING btree ("phone");--> statement-breakpoint
 CREATE UNIQUE INDEX "digital_id_cards_student_unique" ON "digital_id_cards" USING btree ("student_id");--> statement-breakpoint

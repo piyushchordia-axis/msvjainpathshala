@@ -13,7 +13,7 @@ import React, { useEffect, useRef } from 'react';
 import { Animated, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { JPColors, JPRadius } from '@/constants/colors';
+import { JPColors, JPFonts, JPRadius } from '@/constants/colors';
 import { useSyncIssuesStore } from '@/stores/sync-issues.store';
 
 const AUTO_DISMISS_MS = 3_500;
@@ -105,12 +105,13 @@ const styles = StyleSheet.create({
   },
   body: { flex: 1 },
   title: {
-    fontFamily: 'Mukta_600SemiBold',
+    fontFamily: JPFonts.body,
+    fontWeight: '600',
     fontSize: 14,
     color: JPColors.textPrimary,
   },
   subtitle: {
-    fontFamily: 'Mukta_400Regular',
+    fontFamily: JPFonts.body,
     fontSize: 12,
     color: JPColors.textSub,
     marginTop: 2,

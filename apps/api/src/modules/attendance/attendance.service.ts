@@ -521,7 +521,15 @@ export class AttendanceService {
       });
     }
     const items = await this.attendanceRepo.findByStudentMonth(studentId, month);
-    const absences = await this.absenceRepo.listByStudent(studentId, `${month}-01`, `${month}-31`);
+    // Compute the actual last day of the month — hardcoding `-31` produces an
+    // invalid date for 30-day months and February (e.g. "2026-04-31"), which
+    // Postgres rejects with a 500.
+    const [yearStr, monthStr] = month.split('-');
+    const year = Number(yearStr);
+    const monthNum = Number(monthStr); // 1-based
+    const lastDay = new Date(Date.UTC(year, monthNum, 0)).getUTCDate();
+    const monthEnd = `${month}-${String(lastDay).padStart(2, '0')}`;
+    const absences = await this.absenceRepo.listByStudent(studentId, `${month}-01`, monthEnd);
     return {
       items,
       absences: absences.map((a) => ({ date: a.expected_date, reason: a.reason })),

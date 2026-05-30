@@ -19,6 +19,7 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 
+import { runRefresh } from '@/api/client';
 import { authApi, type AuthUser, type OtpVerifyResponse } from '@/api/endpoints/auth';
 import { registerDeviceToken, unregisterDeviceToken } from '@/notifications/device-token';
 import { authStore } from '@/storage/stores/auth.store';
@@ -86,14 +87,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         return;
       }
       try {
-        const tokens = await authApi.refresh(refresh);
-        authStore.setAccessToken(tokens.access_token);
-        await authStore.setRefreshToken(tokens.refresh_token);
-        authStore.setSnapshot({
-          ...snap,
-          access_expires_at: tokens.access_expires_at,
-          refresh_expires_at: tokens.refresh_expires_at,
-        });
+        // Funnel through the client's single-flight runRefresh() so this and
+        // any request-interceptor pre-emptive refresh share ONE in-flight
+        // call — otherwise two concurrent refreshes reuse the same token and
+        // the backend's reuse-detection revokes the family (everything 401s).
+        // The refresh handler (endpoints/auth.ts) already persists the new
+        // access + refresh tokens and updates the snapshot.
+        await runRefresh();
       } catch {
         await authStore.logout();
         setUser(null);

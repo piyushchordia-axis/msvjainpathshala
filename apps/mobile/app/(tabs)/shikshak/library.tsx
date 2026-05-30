@@ -1,12 +1,12 @@
+/**
+ * Shikshak → library. Curated audio / video / PDFs visible to the teacher
+ * (GET /v1/library — tier-filtered server-side).
+ */
+
 import React from 'react';
 
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
+import { LibraryList } from '@/components/admin/LibraryList';
 
 export default function ShikshakLibrary() {
-  return (
-    <PlaceholderScreen
-      title="Library"
-      emptyBody="Curated audio, video, and PDFs to share with your students. Lands when the library step ships."
-    />
-  );
+  return <LibraryList title="Library" subtitle="Resources to share with your students" />;
 }

@@ -5,120 +5,15 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1779964367346,
-      "tag": "0001_initial_schema",
+      "when": 1780025556636,
+      "tag": "0000_robust_pet_avengers",
       "breakpoints": true
     },
     {
       "idx": 1,
       "version": "7",
-      "when": 1779964367347,
-      "tag": "0002_indexes",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1779964367348,
-      "tag": "0003_audit_logs_role_grants",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1779964367349,
-      "tag": "0004_seed_static_data",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1779964367350,
-      "tag": "0005_system_config",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1779964367351,
-      "tag": "0006_step6_extras",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1779964367352,
-      "tag": "0007_step12_notifications",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1779964367353,
-      "tag": "0008_step13_attendance",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1779964367354,
-      "tag": "0009_step14_sync",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "7",
-      "when": 1779964367355,
-      "tag": "0010_step15_shivirs",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "7",
-      "when": 1779964367356,
-      "tag": "0011_step16_punya",
-      "breakpoints": true
-    },
-    {
-      "idx": 11,
-      "version": "7",
-      "when": 1779964367357,
-      "tag": "0012_step17_niyams_gallery",
-      "breakpoints": true
-    },
-    {
-      "idx": 12,
-      "version": "7",
-      "when": 1779964367358,
-      "tag": "0013_step18_homework_notices_competitions",
-      "breakpoints": true
-    },
-    {
-      "idx": 13,
-      "version": "7",
-      "when": 1779964367359,
-      "tag": "0014_step19_curriculum_exams",
-      "breakpoints": true
-    },
-    {
-      "idx": 14,
-      "version": "7",
-      "when": 1779964367360,
-      "tag": "0015_step20_quizzes",
-      "breakpoints": true
-    },
-    {
-      "idx": 15,
-      "version": "7",
-      "when": 1779964367361,
-      "tag": "0016_step21_donations_ai",
-      "breakpoints": true
-    },
-    {
-      "idx": 16,
-      "version": "7",
-      "when": 1779964367362,
-      "tag": "0017_step22_analytics_reports",
+      "when": 1780026000000,
+      "tag": "0001_audit_writer_grants",
       "breakpoints": true
     }
   ]

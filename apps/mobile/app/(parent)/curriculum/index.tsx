@@ -53,16 +53,10 @@ export default function CurriculumScreen() {
         setState({ ...INITIAL, loading: false, error: 'No active student found' });
         return;
       }
-      // The mobile client lists active curricula assigned to this batch via
-      // the admin endpoint — for the MVP we just pick the first 'active' row
-      // of the Standard kind.
-      const list = await curriculumApi.listForAdmin({ kind: 'standard' });
-      const active = list.items.find((c) => c.status === 'active') ?? list.items[0];
-      if (!active) {
-        setState({ ...INITIAL, loading: false, child, hasNoCurriculum: true });
-        return;
-      }
-      const data = await curriculumApi.studentProgress(child.id, active.id);
+      // Parents can't list curricula (admin-only). The backend resolves the
+      // curriculum assigned to the child's batch and returns its progress; a
+      // 404 means nothing is assigned yet.
+      const data = await curriculumApi.studentProgress(child.id);
       setState({
         loading: false,
         error: null,
@@ -71,6 +65,10 @@ export default function CurriculumScreen() {
         hasNoCurriculum: false,
       });
     } catch (err) {
+      if (err instanceof ApiError && err.code === 'ERR_RESOURCE_NOT_FOUND') {
+        setState({ ...INITIAL, loading: false, hasNoCurriculum: true });
+        return;
+      }
       setState({
         ...INITIAL,
         loading: false,

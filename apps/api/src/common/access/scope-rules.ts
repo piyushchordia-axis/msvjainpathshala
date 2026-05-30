@@ -61,13 +61,17 @@ export function assertCentreScope(
       }
       return;
     case 'sanchalak':
+    case 'shikshak':
+      // sanchalak: centre_ids come from their assignments.
+      // shikshak: the ScopeGuard pre-populates centre_ids from the centres
+      // hosting their batches, so they can read batches in centres where they
+      // teach.
       if (!ctx.centre_ids?.includes(centreId)) {
         throw outOfScope('centre');
       }
       return;
     default:
-      // shikshak / parent / student have no inherent centre-scope rights
-      // unless their decorator-defined role check accepts them. We block here.
+      // parent / student have no inherent centre-scope rights.
       throw outOfScope('centre');
   }
 }

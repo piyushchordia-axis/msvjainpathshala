@@ -1,12 +1,12 @@
+/**
+ * Sanchalak → reports. Scoped attendance / engagement / niyam / donations
+ * series from /v1/admin/analytics/* (centre-scoped by JWT).
+ */
+
 import React from 'react';
 
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
+import { ReportsScreen } from '@/components/admin/AdminScreen';
 
 export default function SanchalakReports() {
-  return (
-    <PlaceholderScreen
-      title="Reports"
-      emptyBody="Centre-level attendance, Punya, niyam compliance. Lands in a later step."
-    />
-  );
+  return <ReportsScreen title="Reports" subtitle="Centre attendance and niyam compliance" />;
 }

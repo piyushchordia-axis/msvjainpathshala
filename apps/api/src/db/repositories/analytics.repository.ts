@@ -92,7 +92,14 @@ export class AnalyticsRepository {
         JOIN centres c ON c.id = mv.centre_id
        WHERE mv.academic_month >= to_char(now() - (${monthsBack}::text || ' months')::interval, 'YYYY-MM')
          ${opts.city_id ? sql`AND c.city_id = ${opts.city_id}` : sql``}
-         ${opts.centre_ids && opts.centre_ids.length > 0 ? sql`AND mv.centre_id = ANY(${opts.centre_ids})` : sql``}
+         ${
+           opts.centre_ids && opts.centre_ids.length > 0
+             ? sql`AND mv.centre_id = ANY(ARRAY[${sql.join(
+                 opts.centre_ids.map((id) => sql`${id}`),
+                 sql`, `,
+               )}]::uuid[])`
+             : sql``
+         }
        ORDER BY mv.centre_id, mv.academic_month
     `);
     return rows as unknown as CentreEngagementRow[];

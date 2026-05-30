@@ -75,11 +75,11 @@ export const curriculumApi = {
 
   async studentProgress(
     studentId: string,
-    curriculumId: string,
+    curriculumId?: string,
   ): Promise<StudentProgressResponseDto> {
     return unwrap<StudentProgressResponseDto>(
       api.get(`/v1/students/${studentId}/curriculum-progress`, {
-        params: { curriculum_id: curriculumId },
+        params: curriculumId ? { curriculum_id: curriculumId } : {},
       }),
     );
   },

@@ -69,7 +69,15 @@ export function setRefreshHandler(fn: RefreshFn): void {
   refreshFnRef = fn;
 }
 
-async function runRefresh(): Promise<string> {
+/**
+ * Single-flight refresh. ALL refresh paths — the response-interceptor's
+ * expired-token retry, the request-interceptor's cold-start pre-emptive
+ * refresh, AND AuthProvider.hydrate() — must funnel through here so a cold
+ * start never fires two concurrent `/v1/auth/refresh` calls with the same
+ * refresh token (which the backend's reuse-detection would treat as a replay
+ * and revoke the whole token family).
+ */
+export async function runRefresh(): Promise<string> {
   if (!refreshFnRef) {
     throw new ApiError('ERR_AUTH_TOKEN_EXPIRED', 'Session expired (no refresh handler wired)', 401);
   }
@@ -116,8 +124,28 @@ export function createApiClient(): AxiosInstance {
     headers: { Accept: 'application/json' },
   });
 
-  instance.interceptors.request.use((config) => {
-    const access = authStore.getAccessToken();
+  instance.interceptors.request.use(async (config) => {
+    let access = authStore.getAccessToken();
+    // Cold-start / deep-link race: the access token lives in memory only and
+    // is restored asynchronously by AuthProvider.hydrate() (which refreshes
+    // using the persisted refresh token). A screen that fetches on mount can
+    // fire BEFORE that completes — sending no Authorization header and getting
+    // a 401 "Authorization header missing". Pre-emptively run the (single-
+    // flight) refresh here so the first authed request after launch carries a
+    // token. Skip for auth + public endpoints, which need no bearer.
+    if (!access) {
+      const url = config.url ?? '';
+      const needsAuth = !url.includes('/auth/') && !url.includes('/public/');
+      if (needsAuth) {
+        try {
+          access = await runRefresh();
+        } catch {
+          // Logged out / no refresh token — proceed unauthenticated and let
+          // the caller surface its normal empty/error state.
+          access = null;
+        }
+      }
+    }
     if (access) {
       config.headers.set('Authorization', `Bearer ${access}`);
     }

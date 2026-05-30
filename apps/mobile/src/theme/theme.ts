@@ -7,7 +7,7 @@
  * via `StyleSheet.create()` — no theme context lookup required.
  */
 
-import { JPColors } from '@/constants/colors';
+import { JPColors, JPFonts } from '@/constants/colors';
 
 import type { Theme } from '@react-navigation/native';
 
@@ -22,9 +22,9 @@ export const JPNavTheme: Theme = {
     notification: JPColors.maroon,
   },
   fonts: {
-    regular: { fontFamily: 'Mukta_400Regular', fontWeight: '400' },
-    medium: { fontFamily: 'Mukta_500Medium', fontWeight: '500' },
-    bold: { fontFamily: 'Mukta_700Bold', fontWeight: '700' },
-    heavy: { fontFamily: 'Mukta_700Bold', fontWeight: '700' },
+    regular: { fontFamily: JPFonts.body, fontWeight: '400' },
+    medium: { fontFamily: JPFonts.body, fontWeight: '500' },
+    bold: { fontFamily: JPFonts.body, fontWeight: '700' },
+    heavy: { fontFamily: JPFonts.body, fontWeight: '700' },
   },
 };

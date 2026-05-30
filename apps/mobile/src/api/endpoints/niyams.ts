@@ -8,6 +8,22 @@ import { api, unwrap } from '../client';
 export type NiyamType = 'daily' | 'weekly' | 'monthly';
 export type ProofType = 'photo' | 'video' | 'either';
 
+export interface NiyamAdminRow {
+  id: string;
+  title_en: string;
+  title_hi: string;
+  description_en: string | null;
+  description_hi: string | null;
+  type: NiyamType;
+  start_date: string;
+  end_date: string | null;
+  proof_type: ProofType;
+  points_value: number;
+  msv_only: boolean;
+  status: string;
+  created_at: string;
+}
+
 export interface NiyamForCaller {
   id: string;
   title_en: string;
@@ -59,6 +75,13 @@ export interface SubmitNiyamResult {
 }
 
 export const niyamsApi = {
+  /** Admin niyam catalogue for shikshak+ (city-scoped server-side). */
+  async listForAdmin(
+    opts: { type?: NiyamType; limit?: number; offset?: number } = {},
+  ): Promise<{ items: NiyamAdminRow[] }> {
+    return unwrap<{ items: NiyamAdminRow[] }>(api.get('/v1/admin/niyams', { params: opts }));
+  },
+
   async listForCaller(
     studentId: string,
     opts: { type?: NiyamType } = {},

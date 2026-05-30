@@ -34,6 +34,12 @@ export const libraryApi = {
   async list(opts: { content_type?: LibraryContentType; limit?: number; offset?: number } = {}) {
     return unwrap<{ items: LibraryItemDto[] }>(api.get('/v1/library', { params: opts }));
   },
+  /** Public (unauthenticated) library — guest surface only. */
+  async listPublic(
+    opts: { content_type?: LibraryContentType; limit?: number; offset?: number } = {},
+  ) {
+    return unwrap<{ items: LibraryItemDto[] }>(api.get('/v1/public/library', { params: opts }));
+  },
   async getById(id: string) {
     return unwrap<LibraryItemDto>(api.get(`/v1/library/${id}`));
   },

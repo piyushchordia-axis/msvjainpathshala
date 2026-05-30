@@ -1,12 +1,7 @@
-import React from 'react';
+/**
+ * Student view → niyams. Reuses the full niyams experience from
+ * `app/(parent)/niyams/index.tsx`; in student-view context the parent's
+ * session is switched, so the same child-scoped niyam data applies.
+ */
 
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
-
-export default function StudentViewNiyams() {
-  return (
-    <PlaceholderScreen
-      title="Niyams"
-      emptyBody="Your active niyams and submission streak. Lands when the niyam step ships."
-    />
-  );
-}
+export { default } from '../../(parent)/niyams/index';

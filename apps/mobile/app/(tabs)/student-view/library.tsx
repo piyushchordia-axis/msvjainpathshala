@@ -1,12 +1,12 @@
+/**
+ * Student view → library. Resources visible to the student's account
+ * (GET /v1/library — tier-filtered server-side for the active context).
+ */
+
 import React from 'react';
 
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
+import { LibraryList } from '@/components/admin/LibraryList';
 
 export default function StudentViewLibrary() {
-  return (
-    <PlaceholderScreen
-      title="Library"
-      emptyBody="Recommended audio, video, and PDFs for your age group. Lands when the library step ships."
-    />
-  );
+  return <LibraryList title="Library" subtitle="Recommended for your age group" />;
 }

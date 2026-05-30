@@ -75,6 +75,16 @@ function NetworkProvider({ children }: { children: React.ReactNode }) {
 
 export default function RootLayout() {
   const [fontsLoaded] = useMuktaFonts({
+    // Register the plain family names that the design system (`JPFonts`)
+    // references — JPFonts.body='Mukta', display='Tiro Devanagari Sanskrit',
+    // mono='JetBrains Mono'. Without these aliases `fontFamily: JPFonts.body`
+    // never resolves on native and every screen silently falls back to the
+    // system font. The web build (Next.js) already expects these names.
+    Mukta: Mukta_400Regular,
+    'Tiro Devanagari Sanskrit': TiroDevanagariSanskrit_400Regular,
+    'JetBrains Mono': JetBrainsMono_400Regular,
+    // Weight-suffixed variants — referenced directly by a few screens and by
+    // expo-font weight matching.
     Mukta_400Regular,
     Mukta_500Medium,
     Mukta_600SemiBold,

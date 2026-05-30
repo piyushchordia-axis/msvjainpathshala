@@ -34,9 +34,15 @@ import { AppError, ERROR_CODES, type Role, type ScopeContext } from '@jp/shared'
 
 import { DrizzleService } from '../../../core/database/drizzle.service';
 import { SystemConfigService } from '../../../core/system-config/system-config.service';
-import { DeviceSessionsRepository, RefreshTokenFamiliesRepository } from '../../../db/repositories';
+import {
+  DeviceSessionsRepository,
+  RefreshTokenFamiliesRepository,
+  UsersRepository,
+} from '../../../db/repositories';
 import { refresh_token_families } from '../../../db/schema';
 import { AuditService } from '../../audit/audit.service';
+
+import { ScopeResolverService } from './scope-resolver.service';
 
 import { JwtService } from './jwt.service';
 
@@ -65,7 +71,9 @@ export class TokenRotationService {
     private readonly config: SystemConfigService,
     private readonly families: RefreshTokenFamiliesRepository,
     private readonly sessions: DeviceSessionsRepository,
+    private readonly users: UsersRepository,
     private readonly audit: AuditService,
+    private readonly scopeResolver: ScopeResolverService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -134,7 +142,6 @@ export class TokenRotationService {
   async rotate(
     presentedRefreshToken: string,
     opts: {
-      userRole: Role;
       requestId?: string;
       ip?: string | null;
       userAgent?: string | null;
@@ -159,6 +166,21 @@ export class TokenRotationService {
         statusCode: 401,
       });
     }
+
+    // Resolve the user's CURRENT role + scope from the user record. The
+    // refresh request is unauthenticated (it carries only the refresh token),
+    // so we must never trust a caller-supplied role — otherwise every rotated
+    // access token would carry whatever placeholder the controller passed
+    // (previously 'guest'), silently downgrading the user on every refresh.
+    const user = await this.users.findById(claims.sub);
+    if (!user || !user.is_active || user.deleted_at) {
+      throw new AppError({
+        code: ERROR_CODES.ERR_AUTH_TOKEN_INVALID,
+        message: 'Account is no longer active',
+        statusCode: 401,
+      });
+    }
+    const resolvedRole = user.role as Role;
 
     // Critical section: lock the family row, compare, rotate or revoke.
     const result = await this.drizzle.db.transaction(async (tx) => {
@@ -206,11 +228,16 @@ export class TokenRotationService {
         },
         refreshTtl,
       );
+      // Re-resolve scope from the user record so the rotated access token
+      // keeps its city/centre/batch reach. Resetting to {} here would strip
+      // a city_admin/sanchalak/shikshak of all scoped reads after the first
+      // 15-minute access-token expiry.
+      const scope = await this.scopeResolver.forUser(user);
       const newAccess = await this.jwt.signAccess(
         {
           sub: claims.sub,
-          role: opts.userRole,
-          scope: {},
+          role: resolvedRole,
+          scope,
           view_context: 'parent',
           device_session_id: session.id,
           jti: ulid(),
@@ -253,7 +280,7 @@ export class TokenRotationService {
       await this.sessions.revokeAllForUser(claims.sub);
       await this.audit.emit({
         actor_user_id: claims.sub,
-        actor_role: opts.userRole,
+        actor_role: resolvedRole,
         action: 'auth.refresh.reuse_detected',
         entity_kind: 'refresh_token_family',
         entity_id: claims.family_id,
@@ -272,7 +299,7 @@ export class TokenRotationService {
     // Success → audit + return
     await this.audit.emit({
       actor_user_id: claims.sub,
-      actor_role: opts.userRole,
+      actor_role: resolvedRole,
       action: 'auth.refresh.rotated',
       entity_kind: 'device_session',
       entity_id: session.id,

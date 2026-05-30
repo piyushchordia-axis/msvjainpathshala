@@ -1,12 +1,12 @@
+/**
+ * Guest → library. Publicly available resources only
+ * (GET /v1/public/library — unauthenticated, public-tier items).
+ */
+
 import React from 'react';
 
-import { PlaceholderScreen } from '@/components/PlaceholderScreen';
+import { LibraryList } from '@/components/admin/LibraryList';
 
 export default function GuestLibrary() {
-  return (
-    <PlaceholderScreen
-      title="Library"
-      emptyBody="Publicly available audio, video, and PDFs. Lands when the library step ships."
-    />
-  );
+  return <LibraryList title="Library" subtitle="Free resources, open to everyone" publicOnly />;
 }

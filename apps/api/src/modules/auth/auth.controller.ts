@@ -135,13 +135,11 @@ export class AuthController {
     @Body(new ZodValidationPipe(refreshSchema)) body: { refresh_token: string },
     @Req() req: Request,
   ) {
-    // We don't know the actor's role until we verify — but the JWT carries
-    // `sub`. We'll look up the role after rotation to audit cleanly.
-    // For Step 5 we use a placeholder 'guest' role on the audit path; Step 6
-    // tightens this by resolving the user inside TokenRotationService.
+    // The refresh request is unauthenticated (carries only the refresh
+    // token), so the actor's role is resolved from the user record inside
+    // TokenRotationService.rotate — never trusted from the request.
     const ip = (req.ip ?? '').replace(/^::ffff:/, '') || null;
     const pair = await this.tokens.rotate(body.refresh_token, {
-      userRole: 'guest' as Role,
       ...(getRequestContext()?.request_id !== undefined
         ? { requestId: getRequestContext()!.request_id }
         : {}),

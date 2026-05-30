@@ -29,6 +29,11 @@ import { ApiError } from '@/api/client';
 import { noticesApi, type NoticeDto } from '@/api/endpoints/notices';
 import { Header } from '@/components/ui';
 import { JPColors, JPFonts, JPRadius, JPSpacing } from '@/constants/colors';
+import { useLanguage } from '@/features/language/use-language';
+
+function noticeBody(notice: NoticeDto, lang: 'en' | 'hi'): string {
+  return lang === 'hi' && notice.content_hi ? notice.content_hi : notice.content_en;
+}
 
 interface State {
   loading: boolean;
@@ -46,6 +51,7 @@ const INITIAL: State = {
 
 export default function NoticesScreen() {
   const insets = useSafeAreaInsets();
+  const lang = useLanguage();
   const [state, setState] = useState<State>(INITIAL);
 
   const load = useCallback(async (mode: 'initial' | 'refresh') => {
@@ -131,10 +137,10 @@ export default function NoticesScreen() {
           </View>
         ) : null}
         {pinned.map((n) => (
-          <NoticeCard key={n.id} notice={n} onAcknowledge={acknowledge} />
+          <NoticeCard key={n.id} notice={n} lang={lang} onAcknowledge={acknowledge} />
         ))}
         {others.map((n) => (
-          <NoticeCard key={n.id} notice={n} onAcknowledge={acknowledge} />
+          <NoticeCard key={n.id} notice={n} lang={lang} onAcknowledge={acknowledge} />
         ))}
       </ScrollView>
     </View>
@@ -143,10 +149,12 @@ export default function NoticesScreen() {
 
 interface NoticeCardProps {
   notice: NoticeDto;
+  lang: 'en' | 'hi';
   onAcknowledge: (n: NoticeDto) => void;
 }
 
-function NoticeCard({ notice, onAcknowledge }: NoticeCardProps) {
+function NoticeCard({ notice, lang, onAcknowledge }: NoticeCardProps) {
+  const body = noticeBody(notice, lang);
   if (notice.is_critical) {
     return (
       <View style={[styles.card, styles.cardCritical]}>
@@ -154,7 +162,7 @@ function NoticeCard({ notice, onAcknowledge }: NoticeCardProps) {
           <Text style={styles.criticalBannerText}>Important — please read and acknowledge</Text>
         </View>
         <Text style={[styles.bodyText, styles.bodyTextOnCritical]} numberOfLines={6}>
-          {notice.content_en}
+          {body}
         </Text>
         {!notice.is_read ? (
           <Pressable
@@ -181,7 +189,7 @@ function NoticeCard({ notice, onAcknowledge }: NoticeCardProps) {
         </View>
       ) : null}
       <Text style={styles.bodyText} numberOfLines={6}>
-        {notice.content_en}
+        {body}
       </Text>
       {notice.is_read ? (
         <View style={styles.readChip}>

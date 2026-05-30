@@ -21,10 +21,16 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { toast } from '@/components/ui/toast';
 import { useRouter } from '@/i18n/navigation';
+import { canAccessAdminPanel } from '@/lib/role-access';
+
+import type { Role } from '@jp/shared';
 
 interface Props {
   nextPath: string;
+  /** Set when middleware bounced a signed-in non-admin to the login page. */
+  initialError?: 'not_admin';
 }
 
 type Phase = 'phone' | 'otp';
@@ -40,7 +46,11 @@ function getDeviceId(): string {
   return id;
 }
 
-export function LoginForm({ nextPath }: Props) {
+const NOT_ADMIN_TITLE = 'This number is not an admin account';
+const NOT_ADMIN_BODY =
+  'Parents and students use the mobile app. Ask your Sanchalak or city admin if you should have panel access.';
+
+export function LoginForm({ nextPath, initialError }: Props) {
   const router = useRouter();
   const [phase, setPhase] = useState<Phase>('phone');
   const [digits, setDigits] = useState('');
@@ -58,6 +68,14 @@ export function LoginForm({ nextPath }: Props) {
   useEffect(() => {
     setError(null);
   }, [phase]);
+
+  // Middleware bounced a signed-in non-admin here → explain via toast
+  // (instead of silently dumping them on the public homepage).
+  useEffect(() => {
+    if (initialError === 'not_admin') {
+      toast.error(NOT_ADMIN_TITLE, NOT_ADMIN_BODY);
+    }
+  }, [initialError]);
 
   const sendOtp = async () => {
     if (!phoneValid) return;
@@ -117,10 +135,32 @@ export function LoginForm({ nextPath }: Props) {
         } | null;
         throw new Error(body?.error?.message ?? 'That OTP did not work. Try again.');
       }
+      const body = (await res.json().catch(() => null)) as {
+        data?: { user?: { role?: Role; full_name?: string } };
+      } | null;
+      const role = body?.data?.user?.role;
+
+      // Role gate: a valid OTP can belong to a parent/student/guest who has
+      // no admin-panel access. Rather than redirect to /admin and let the
+      // middleware bounce them to the public homepage, surface a clear toast
+      // here and clear the half-set session.
+      if (!canAccessAdminPanel(role)) {
+        await fetch('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
+        toast.error(NOT_ADMIN_TITLE, NOT_ADMIN_BODY);
+        setOtp('');
+        setPhase('phone');
+        setBusy(false);
+        return;
+      }
+
+      const name = body?.data?.user?.full_name?.trim();
+      toast.success('Signed in', name ? `Welcome back, ${name}.` : 'Welcome back.');
       router.replace(nextPath as `/${string}`);
       router.refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'That OTP did not work. Try again.');
+      const msg = err instanceof Error ? err.message : 'That OTP did not work. Try again.';
+      setError(msg);
+      toast.error('Could not sign in', msg);
       setBusy(false);
     }
   };
