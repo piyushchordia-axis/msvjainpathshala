@@ -2,12 +2,13 @@
  * Notification preferences — Step 12.
  *
  * Lets a user choose which channels (push / SMS / email / in-app) they
- * receive notifications on. Current values load from `/v1/users/me`; each
+ * receive notifications on. Current values load from `/v1/auth/me`; each
  * change persists immediately via PATCH /v1/users/me/notification-preferences.
  * SMS/email to opted-out users is suppressed server-side (see CLAUDE.md
  * notification rules), so this screen is the single source of consent.
  */
 
+import { Stack } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -43,10 +44,10 @@ export default function NotificationPreferencesScreen() {
     setLoading(true);
     setError(null);
     try {
-      const me = await unwrap<{
-        user?: { notification_preferences?: Partial<NotificationPreferences> };
-      }>(api.get('/v1/users/me'));
-      setPrefs({ ...DEFAULTS, ...(me.user?.notification_preferences ?? {}) });
+      const me = await unwrap<{ notification_preferences?: Partial<NotificationPreferences> }>(
+        api.get('/v1/auth/me'),
+      );
+      setPrefs({ ...DEFAULTS, ...(me.notification_preferences ?? {}) });
     } catch (err) {
       // Fall back to sensible defaults so the screen stays usable.
       setPrefs(DEFAULTS);
@@ -87,6 +88,7 @@ export default function NotificationPreferencesScreen() {
   if (loading) {
     return (
       <View style={[styles.centered, { paddingTop: insets.top }]}>
+        <Stack.Screen options={{ title: 'Notifications' }} />
         <ActivityIndicator color={JPColors.saffron} />
       </View>
     );
@@ -97,6 +99,7 @@ export default function NotificationPreferencesScreen() {
       style={[styles.screen, { paddingTop: insets.top }]}
       contentContainerStyle={styles.scroll}
     >
+      <Stack.Screen options={{ title: 'Notifications' }} />
       <Text style={styles.title}>Notifications</Text>
       <Text style={styles.subtle}>
         Choose how you'd like to hear from us. You can change these anytime.
