@@ -22,6 +22,7 @@ import { AppError, ERROR_CODES, type Role } from '@jp/shared';
 
 import { DrizzleService } from '../../core/database/drizzle.service';
 import { PdfService } from '../../core/pdf/pdf.service';
+import { progressReportPdfFromSnapshot } from '../../core/pdf/report-snapshot.mapper';
 import { StorageService } from '../../core/storage/storage.service';
 import { CentresRepository } from '../../db/repositories/centres.repository';
 import { ExportJobsRepository } from '../../db/repositories/export-jobs.repository';
@@ -80,23 +81,9 @@ export class ReportsService {
     const snapshot = await this.snapshotFor(studentId, periodKind, periodLabel);
     const report = await this.upsertReport(studentId, periodKind, periodLabel, snapshot);
     const centre = await this.centresRepo.findById(snapshot.student.centre_id);
-    const stats = [
-      { label: 'Attendance', value: `${snapshot.attendance.rate_pct}%` },
-      { label: 'Sessions', value: `${snapshot.attendance.present}/${snapshot.attendance.total}` },
-      { label: 'Punya awarded', value: String(snapshot.punya.points_awarded) },
-      { label: 'Reversals', value: String(snapshot.punya.reversals) },
-    ];
-    const pdf = await this.pdf.renderProgressReport({
-      orgName: 'Megh Sanskar Vatika',
-      studentName: snapshot.student.full_name,
-      studentCode: snapshot.student.student_code,
-      centreName: centre?.name ?? '—',
-      periodKind,
-      periodLabel,
-      generatedAt: new Date(),
-      shikshakComment: report.shikshak_comment,
-      stats,
-    });
+    const pdf = await this.pdf.renderProgressReport(
+      progressReportPdfFromSnapshot(snapshot, centre?.name ?? '—', report.shikshak_comment),
+    );
     const key = `reports/${studentId}/${periodKind}-${periodLabel}.pdf`;
     await this.storage.adapter.putObject('exports', key, {
       body: pdf,

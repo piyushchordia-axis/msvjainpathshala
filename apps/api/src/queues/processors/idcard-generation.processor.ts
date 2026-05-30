@@ -4,8 +4,7 @@
  * Flow per job:
  *   1. Load student + parent + centre + batch + (optional) photo asset
  *   2. Render apps/api/src/templates/id-card.hbs with the student data
- *   3. Convert HTML → PNG (1080×1700px) via puppeteer when available, else
- *      via a sharp/SVG fallback (keeps dev usable without Chromium)
+ *   3. Convert template HTML → PNG (1080×1700px) via sharp + SVG rasterisation
  *   4. Encode the QR payload (https://jainpathshala.org/s/{uuid_short})
  *      with the `qrcode` package — embedded as a data: URL in the template
  *   5. Upload the PNG to jp-{env}-media-public/idcards/{student_id}.png
@@ -83,15 +82,6 @@ interface TemplateContext {
 const QR_BASE_URL = 'https://jainpathshala.org/s';
 const PNG_WIDTH = 1080;
 const PNG_HEIGHT = 1700;
-
-interface PuppeteerPage {
-  setViewport(opts: { width: number; height: number; deviceScaleFactor?: number }): Promise<void>;
-  setContent(html: string, opts?: { waitUntil?: string }): Promise<void>;
-  $(selector: string): Promise<{
-    screenshot: (opts: { type: 'png'; omitBackground?: boolean }) => Promise<Buffer | Uint8Array>;
-  } | null>;
-  screenshot(opts: { type: 'png'; fullPage?: boolean }): Promise<Buffer | Uint8Array>;
-}
 
 function initials(fullName: string): string {
   return fullName
@@ -255,8 +245,8 @@ export class IdCardGenerationProcessor extends BaseProcessor<
     };
     const html = getTemplate()(context);
 
-    // ----- Render PNG (puppeteer preferred, sharp fallback) ----------------
-    const png = await this.renderHtmlToPng(html);
+    // ----- Render PNG (sharp + SVG; no headless browser) -------------------
+    const png = await this.renderIdCardPng(html);
 
     // ----- Upload to the public bucket under idcards/{student_id}.png -----
     const objectKey = `idcards/${student.id}.png`;
@@ -349,87 +339,15 @@ export class IdCardGenerationProcessor extends BaseProcessor<
     };
   }
 
-  // ---------------------------------------------------------------------------
-  // HTML → PNG
-  //
-  // Prefer puppeteer when a Chromium binary is available — it gives us
-  // pixel-accurate rendering matching the design system preview. When
-  // puppeteer.launch() can't find a browser (common in CI / dev containers
-  // without Chromium downloaded) we fall back to a sharp+SVG path that
-  // produces a deterministic PNG with all the same data fields so the
-  // upstream test (assert digital_id_cards row + signed URL) still passes.
-  // ---------------------------------------------------------------------------
-  private async renderHtmlToPng(html: string): Promise<Buffer> {
-    const viaPuppeteer = await this.tryPuppeteer(html);
-    if (viaPuppeteer) return viaPuppeteer;
-    return this.renderSvgFallback(html);
-  }
-
-  private async tryPuppeteer(html: string): Promise<Buffer | null> {
-    try {
-      // Dynamic import so the worker still boots when Chromium isn't on disk.
-      // Use `unknown` cast because the CJS interop wrapping varies between
-      // versions and we only need `.launch()`.
-      const mod = (await import('puppeteer').catch(() => null)) as unknown as {
-        launch: (opts: unknown) => Promise<unknown>;
-        default?: { launch: (opts: unknown) => Promise<unknown> };
-      } | null;
-      if (!mod) return null;
-      const puppeteer = mod.default ?? mod;
-      const browser = (await puppeteer
-        .launch({
-          headless: true,
-          args: ['--no-sandbox', '--disable-setuid-sandbox'],
-        })
-        .catch(() => null)) as null | {
-        newPage: () => Promise<PuppeteerPage>;
-        close: () => Promise<void>;
-      };
-      if (!browser) return null;
-      try {
-        const page = await browser.newPage();
-        await page.setViewport({
-          width: 540,
-          height: 340,
-          deviceScaleFactor: 2,
-        });
-        await page.setContent(html, { waitUntil: 'load' });
-        const card = await page.$('.card-frame');
-        const png = card
-          ? await card.screenshot({ type: 'png', omitBackground: true })
-          : await page.screenshot({ type: 'png', fullPage: true });
-        const pngBuffer = Buffer.isBuffer(png) ? png : Buffer.from(png as Uint8Array);
-        // Upscale to 1080×1700 per Step 11 spec — sharp preserves aspect ratio
-        // by fitting into the target box.
-        return sharp(pngBuffer)
-          .resize({
-            width: PNG_WIDTH,
-            height: PNG_HEIGHT,
-            fit: 'contain',
-            background: { r: 253, g: 248, b: 242, alpha: 1 },
-          })
-          .png()
-          .toBuffer();
-      } finally {
-        await browser.close().catch(() => undefined);
-      }
-    } catch (err) {
-      this.localLogger.warn(
-        `puppeteer render failed, using sharp fallback: ${(err as Error).message}`,
-      );
-      return null;
-    }
-  }
-
   /**
-   * Sharp+SVG fallback. Produces a 1080×1700 PNG with the saffron / maroon
+   * Sharp+SVG rasterisation. Produces a 1080×1700 PNG with the saffron / maroon
    * / cream palette and embeds the data variables as plain SVG text. The
    * Handlebars HTML is parsed by stripping tags and pulling out a minimal
    * subset of fields via regex (defensive — works for both the live template
    * and any future variants we keep simple). The visual layout is a faithful
    * but simplified port of jp-design-system/preview/id-card.html.
    */
-  private async renderSvgFallback(html: string): Promise<Buffer> {
+  private async renderIdCardPng(html: string): Promise<Buffer> {
     const pick = (label: RegExp): string => html.match(label)?.[1]?.trim() ?? '';
     const studentNameEn = pick(/class="name-en">([^<]+)</);
     const studentNameHi = pick(/class="name-hi">([^<]+)</);
