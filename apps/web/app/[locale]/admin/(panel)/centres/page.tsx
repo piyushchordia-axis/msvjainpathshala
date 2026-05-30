@@ -7,6 +7,7 @@
 
 import { listAdminCentres, type CentreRow } from '@/api/admin-misc';
 import { Card } from '@/components/ui/card';
+import { Link } from '@/i18n/navigation';
 
 export default async function AdminCentresPage() {
   let items: CentreRow[] = [];
@@ -20,11 +21,19 @@ export default async function AdminCentresPage() {
 
   return (
     <div className="space-y-6">
-      <header>
-        <h2 className="font-display text-2xl text-secondary">Centres</h2>
-        <p className="text-sm text-muted-foreground">
-          Pathshala locations across your city. GPS radius bounds geofenced attendance.
-        </p>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <h2 className="font-display text-2xl text-secondary">Centres</h2>
+          <p className="text-sm text-muted-foreground">
+            Pathshala locations across your city. GPS radius bounds geofenced attendance.
+          </p>
+        </div>
+        <Link
+          href="/admin/centres/new"
+          className="rounded-md bg-saffron px-3 py-2 text-sm font-semibold text-white hover:bg-saffron-700"
+        >
+          New centre
+        </Link>
       </header>
 
       {error ? (
