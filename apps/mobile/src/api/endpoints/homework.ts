@@ -35,11 +35,27 @@ export interface HomeworkForStudentRow {
   submission: HomeworkSubmissionDto;
 }
 
+/** Shikshak assign-homework body (SPEC §6.12 — POST /v1/admin/homework). */
+export interface CreateHomeworkInput {
+  batch_id: string;
+  title: string;
+  description?: string;
+  due_date: string; // YYYY-MM-DD
+  attachment_asset_id?: string;
+  target_student_ids?: string[];
+  is_msv?: boolean;
+}
+
 export const homeworkApi = {
   async listForStudent(studentId: string): Promise<{ items: HomeworkForStudentRow[] }> {
     return unwrap<{ items: HomeworkForStudentRow[] }>(
       api.get(`/v1/students/${studentId}/homework`),
     );
+  },
+
+  /** Assign homework to a batch in the shikshak's scope (shikshak+). */
+  async create(input: CreateHomeworkInput): Promise<HomeworkAssignmentDto> {
+    return unwrap<HomeworkAssignmentDto>(api.post('/v1/admin/homework', input));
   },
 
   async markDone(

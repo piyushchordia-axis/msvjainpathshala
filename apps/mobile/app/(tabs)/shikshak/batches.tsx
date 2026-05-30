@@ -5,6 +5,7 @@
  * session slots from the timetable (GET /v1/batches/:id/timetable).
  */
 
+import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -17,6 +18,7 @@ import { useAuth } from '@/features/auth/auth-context';
 const DAY_LABELS = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 function BatchCard({ batch, mine }: { batch: BatchDto; mine: boolean }) {
+  const router = useRouter();
   const [expanded, setExpanded] = useState(false);
   const [slots, setSlots] = useState<TimetableSlot[] | null>(null);
   const [loading, setLoading] = useState(false);
@@ -57,6 +59,17 @@ function BatchCard({ batch, mine }: { batch: BatchDto; mine: boolean }) {
           ) : null}
         </View>
         <Text style={styles.hint}>{expanded ? 'Hide schedule' : 'Show upcoming sessions'}</Text>
+      </Pressable>
+      <Pressable
+        style={styles.assignBtn}
+        onPress={() =>
+          router.push({
+            pathname: '/shikshak/homework/new',
+            params: { batchId: batch.id, batchName: batch.name },
+          } as never)
+        }
+      >
+        <Text style={styles.assignBtnText}>Assign homework</Text>
       </Pressable>
       {expanded ? (
         loading ? (
@@ -172,4 +185,17 @@ const styles = StyleSheet.create({
   },
   slotDate: { fontFamily: JPFonts.body, fontSize: 13, color: JPColors.textPrimary },
   err: { fontFamily: JPFonts.body, fontSize: 13, color: JPColors.error },
+  assignBtn: {
+    marginTop: JPSpacing.sp2,
+    backgroundColor: JPColors.saffron50,
+    borderRadius: JPRadius.md,
+    paddingVertical: JPSpacing.sp2,
+    alignItems: 'center',
+  },
+  assignBtnText: {
+    fontFamily: JPFonts.body,
+    fontSize: 13,
+    fontWeight: '700',
+    color: JPColors.saffron,
+  },
 });
