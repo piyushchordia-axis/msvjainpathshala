@@ -29,6 +29,7 @@ export { GalleryItemsRepository } from './gallery-items.repository';
 export { GeographyRepository } from './geography.repository';
 export { HomeworkAssignmentsRepository } from './homework-assignments.repository';
 export { HomeworkSubmissionsRepository } from './homework-submissions.repository';
+export { IdCardsRepository } from './id-cards.repository';
 export { LibraryRepository } from './library.repository';
 export { MediaAssetsRepository } from './media-assets.repository';
 export { MsvEnrolmentsRepository } from './msv-enrolments.repository';

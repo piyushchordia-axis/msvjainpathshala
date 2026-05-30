@@ -63,11 +63,101 @@ export class StudentsService {
     private readonly repo: StudentsRepository,
     private readonly centresRepo: CentresRepository,
     private readonly audit: AuditService,
+    private readonly idCards: IdCardsRepository,
+    private readonly pdf: PdfService,
+    private readonly storage: StorageService,
+    private readonly cfg: AppConfigService,
     redis: RedisService,
   ) {
     this.idCardQueue = new Queue(QUEUES.ID_CARD_GENERATION, {
       connection: redis.bullmqClient,
     });
+  }
+
+  // ===========================================================================
+  // Digital ID card (synchronous, on-demand pdfkit generation)
+  // ===========================================================================
+
+  /**
+   * Return the student's ID card, generating + uploading a fresh PDF and a
+   * signed download URL. Creates the card row on first access.
+   */
+  async getIdCard(
+    actor: ScopedActor,
+    studentId: string,
+  ): Promise<{ card: DigitalIdCard; url: string }> {
+    const student = await this.repo.findById(studentId);
+    if (!student) {
+      throw new AppError({
+        code: ERROR_CODES.ERR_RESOURCE_NOT_FOUND,
+        message: 'Student not found',
+        statusCode: 404,
+      });
+    }
+    await this.assertInScope(actor, student);
+    let card = await this.idCards.findByStudent(studentId);
+    if (!card) card = await this.persistCard(student);
+    const url = await this.renderAndUpload(student, card);
+    return { card, url };
+  }
+
+  /** Force a new card version (e.g. after a transfer / MSV approval / photo update). */
+  async regenerateIdCard(
+    actor: ScopedActor,
+    studentId: string,
+  ): Promise<{ card: DigitalIdCard; url: string }> {
+    const student = await this.repo.findById(studentId);
+    if (!student) {
+      throw new AppError({
+        code: ERROR_CODES.ERR_RESOURCE_NOT_FOUND,
+        message: 'Student not found',
+        statusCode: 404,
+      });
+    }
+    await this.assertInScope(actor, student);
+    const card = await this.persistCard(student);
+    const url = await this.renderAndUpload(student, card);
+    return { card, url };
+  }
+
+  /** Upsert the digital_id_cards row (signs the QR payload via HMAC). */
+  private async persistCard(student: Student): Promise<DigitalIdCard> {
+    const shortId = student.id.replace(/-/g, '').slice(0, 12);
+    const qrPayload = `https://jainpathshala.org/s/${shortId}`;
+    const secret = this.cfg.raw.AI_SERVICE_HMAC_SECRET || 'jp-dev-qr-secret';
+    const signature = createHmac('sha256', secret).update(`${student.id}:${shortId}`).digest('hex');
+    return this.idCards.upsert({
+      student_id: student.id,
+      card_number: student.student_code,
+      qr_payload: qrPayload,
+      qr_payload_signature: signature,
+      msv_badge: student.msv_status === 'approved',
+      version_no: 1,
+      generated_at: new Date(),
+    });
+  }
+
+  /** Render the card PDF, upload to the private bucket, return a signed URL. */
+  private async renderAndUpload(student: Student, card: DigitalIdCard): Promise<string> {
+    const centre = await this.centresRepo.findById(student.centre_id);
+    const pdf = await this.pdf.renderIdCard({
+      orgName: 'Megh Sanskar Vatika',
+      studentName: student.full_name,
+      studentCode: student.student_code,
+      ageGroup: student.age_group,
+      centreName: centre?.name ?? '—',
+      cardNumber: card.card_number,
+      issuedAt: card.generated_at,
+      qrPayload: card.qr_payload,
+    });
+    const key = `id-cards/${student.id}/${card.card_number}-v${card.version_no}.pdf`;
+    await this.storage.adapter.putObject('private', key, {
+      body: pdf,
+      contentType: 'application/pdf',
+      contentDisposition: `inline; filename="id-card-${card.card_number}.pdf"`,
+      cacheControl: 'private,max-age=0,no-cache',
+    });
+    return this.storage.signedReadUrl('private', key);
   }
 
   // ---- Reads ------------------------------------------------------------

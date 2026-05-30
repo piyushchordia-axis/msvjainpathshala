@@ -73,7 +73,8 @@ export class StudentsController {
   @Roles('parent')
   @Get('/students/:id/id-card')
   async getIdCard(@CurrentUser() user: CurrentUserPayload | undefined, @Param('id') id: string) {
-    return this.service.getIdCard(toActor(user), id);
+    assertActor(user);
+    return this.service.getIdCard(toScopedActor(user), id);
   }
 
   @Roles('sanchalak')
@@ -83,7 +84,8 @@ export class StudentsController {
     @CurrentUser() user: CurrentUserPayload | undefined,
     @Param('id') id: string,
   ) {
-    return this.service.regenerateIdCard(toActor(user), id);
+    assertActor(user);
+    return this.service.regenerateIdCard(toScopedActor(user), id);
   }
 
   // ---- Parent's own children -----------------------------------------
