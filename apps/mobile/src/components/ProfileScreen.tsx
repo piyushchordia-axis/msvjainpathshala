@@ -105,6 +105,10 @@ export function ProfileScreen() {
             onPress={() => router.push('/service-requests' as never)}
           />
           <SettingsRow
+            label={t('profile.donations', { defaultValue: 'Donations' })}
+            onPress={() => router.push('/donations' as never)}
+          />
+          <SettingsRow
             label={t('profile.sync_issues', { defaultValue: 'Sync & offline' })}
             onPress={() => router.push('/profile/sync-issues' as never)}
           />
