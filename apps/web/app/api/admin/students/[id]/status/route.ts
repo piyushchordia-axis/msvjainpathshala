@@ -11,7 +11,14 @@ import { z } from 'zod';
 import { ApiError, authenticatedServerClient } from '@/api/server-client';
 import { readAccessToken } from '@/lib/auth-cookies';
 
-const body = z.object({ action: z.enum(['deactivate', 'reactivate']) });
+const body = z
+  .object({
+    action: z.enum(['deactivate', 'reactivate']),
+    reason: z.string().max(500).optional(),
+  })
+  .refine((v) => v.action !== 'deactivate' || !!v.reason?.trim(), {
+    message: 'A reason is required to deactivate a student.',
+  });
 
 export async function POST(
   req: Request,
@@ -38,7 +45,8 @@ export async function POST(
 
   try {
     const client = await authenticatedServerClient();
-    const res = await client.post(`/v1/students/${id}/${parsed.action}`, {});
+    const payload = parsed.action === 'deactivate' ? { reason: parsed.reason } : {};
+    const res = await client.post(`/v1/students/${id}/${parsed.action}`, payload);
     return NextResponse.json({ data: res.data?.data ?? { ok: true } }, { status: 200 });
   } catch (err) {
     if (err instanceof ApiError) {

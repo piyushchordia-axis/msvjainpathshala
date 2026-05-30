@@ -18,12 +18,21 @@ export function StudentActions({ id, status }: { id: string; status: string }) {
   const action = isActive ? 'deactivate' : 'reactivate';
 
   function run() {
+    let reason: string | undefined;
+    if (isActive) {
+      const r = window.prompt('Reason for deactivating this student (required):')?.trim();
+      if (!r) {
+        toast.error('Deactivation cancelled', 'A reason is required.');
+        return;
+      }
+      reason = r;
+    }
     startTransition(async () => {
       try {
         const res = await fetch(`/api/admin/students/${id}/status`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action }),
+          body: JSON.stringify({ action, ...(reason ? { reason } : {}) }),
         });
         const j = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
         if (!res.ok) throw new Error(j?.error?.message ?? `Could not update (${res.status})`);
