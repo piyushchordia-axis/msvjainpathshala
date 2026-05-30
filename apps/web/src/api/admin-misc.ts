@@ -289,20 +289,3 @@ export async function listQuizEvents(): Promise<{ items: QuizEventRow[] }> {
   const res = await client.get('/v1/quiz-events');
   return res.data.data as { items: QuizEventRow[] };
 }
-
-export interface QuizQuestionRow {
-  id: string;
-  stem: string;
-  options: string[];
-  correct_index: number;
-  language: string;
-  age_groups: string[] | null;
-  difficulty: number | null;
-}
-
-/** Approved questions available to compose a quiz event from (city_admin+). */
-export async function listAdminQuestions(): Promise<{ items: QuizQuestionRow[] }> {
-  const client = await authenticatedServerClient();
-  const res = await client.get('/v1/admin/questions');
-  return res.data.data as { items: QuizQuestionRow[] };
-}
