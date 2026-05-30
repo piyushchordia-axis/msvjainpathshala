@@ -1,20 +1,18 @@
+'use client';
+
 /**
  * Holidays manager (SPEC §5.10) — client island.
  *
- * Pick a centre, then view / add / delete its attendance-calendar holidays.
- * Holidays suppress auto-generated attendance sessions for that date.
- *
- *   GET    /v1/centres/:centreId/holidays
- *   POST   /v1/centres/:centreId/holidays   { date, name }   (sanchalak+)
- *   DELETE /v1/centres/:centreId/holidays/:id                (sanchalak+)
+ * Pick a centre, then view / add / remove its attendance-calendar holidays.
+ * Holidays suppress auto-generated attendance sessions for those dates. A
+ * holiday is a date range (single-day = same start & end). Mutations go
+ * through the Next.js route handlers under /api/admin/centres/:id/holidays
+ * which proxy to the API with the caller's bearer token.
  */
-
-'use client';
 
 import { useCallback, useEffect, useState } from 'react';
 
-import { apiClient, ApiError } from '@/lib/api-client';
-import { useToast } from '@/lib/toast-context';
+import { toast } from '@/components/ui/toast';
 
 interface CentreOption {
   id: string;
@@ -24,8 +22,9 @@ interface CentreOption {
 
 interface HolidayRow {
   id: string;
-  date: string;
   name: string;
+  start_date: string;
+  end_date: string;
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -34,46 +33,48 @@ function fmtDate(iso: string): string {
   const d = new Date(iso);
   return Number.isNaN(d.getTime())
     ? iso
-    : d.toLocaleDateString('en-IN', {
-        weekday: 'short',
-        day: 'numeric',
-        month: 'short',
-        year: 'numeric',
-      });
+    : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function rangeLabel(h: HolidayRow): string {
+  return h.start_date === h.end_date
+    ? fmtDate(h.start_date)
+    : `${fmtDate(h.start_date)} – ${fmtDate(h.end_date)}`;
+}
+
+async function errorMessage(res: Response): Promise<string> {
+  const j = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
+  return j?.error?.message ?? `Request failed (${res.status})`;
 }
 
 export function HolidaysManager({ centres }: { centres: CentreOption[] }) {
-  const { push } = useToast();
   const [centreId, setCentreId] = useState<string>(centres[0]?.id ?? '');
   const [holidays, setHolidays] = useState<HolidayRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const [date, setDate] = useState('');
   const [name, setName] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const load = useCallback(
-    async (cid: string) => {
-      if (!cid) {
-        setHolidays([]);
-        return;
-      }
-      setLoading(true);
-      try {
-        const data = await apiClient.get<{ items: HolidayRow[] }>(`/v1/centres/${cid}/holidays`);
-        setHolidays([...(data.items ?? [])].sort((a, b) => a.date.localeCompare(b.date)));
-      } catch (err) {
-        push({
-          tone: 'error',
-          title: 'Could not load holidays',
-          description: err instanceof ApiError ? err.message : 'Try again',
-        });
-        setHolidays([]);
-      } finally {
-        setLoading(false);
-      }
-    },
-    [push],
-  );
+  const load = useCallback(async (cid: string) => {
+    if (!cid) {
+      setHolidays([]);
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/admin/centres/${cid}/holidays`);
+      if (!res.ok) throw new Error(await errorMessage(res));
+      const j = (await res.json()) as { data?: { items?: HolidayRow[] }; items?: HolidayRow[] };
+      const items = j.data?.items ?? j.items ?? [];
+      setHolidays([...items].sort((a, b) => a.start_date.localeCompare(b.start_date)));
+    } catch (err) {
+      toast.error('Could not load holidays', err instanceof Error ? err.message : 'Try again');
+      setHolidays([]);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     void load(centreId);
@@ -82,30 +83,41 @@ export function HolidaysManager({ centres }: { centres: CentreOption[] }) {
   async function addHoliday(e: React.FormEvent) {
     e.preventDefault();
     if (!centreId) {
-      push({ tone: 'error', title: 'Pick a centre first' });
-      return;
-    }
-    if (!DATE_RE.test(date)) {
-      push({ tone: 'error', title: 'Check the date', description: 'Use the format YYYY-MM-DD.' });
+      toast.error('Pick a centre first');
       return;
     }
     if (name.trim().length < 1) {
-      push({ tone: 'error', title: 'Add a name', description: 'e.g. Paryushan, Diwali.' });
+      toast.error('Add a name', 'e.g. Paryushan, Diwali.');
+      return;
+    }
+    if (!DATE_RE.test(startDate)) {
+      toast.error('Check the start date', 'Use the format YYYY-MM-DD.');
+      return;
+    }
+    const end = endDate || startDate;
+    if (!DATE_RE.test(end)) {
+      toast.error('Check the end date', 'Use the format YYYY-MM-DD.');
+      return;
+    }
+    if (end < startDate) {
+      toast.error('Invalid range', 'The end date is before the start date.');
       return;
     }
     setBusy(true);
     try {
-      await apiClient.post(`/v1/centres/${centreId}/holidays`, { date, name: name.trim() });
-      push({ tone: 'success', title: 'Holiday added' });
-      setDate('');
+      const res = await fetch(`/api/admin/centres/${centreId}/holidays`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), start_date: startDate, end_date: end }),
+      });
+      if (!res.ok) throw new Error(await errorMessage(res));
+      toast.success('Holiday added', name.trim());
       setName('');
+      setStartDate('');
+      setEndDate('');
       await load(centreId);
     } catch (err) {
-      push({
-        tone: 'error',
-        title: 'Could not add holiday',
-        description: err instanceof ApiError ? err.message : 'Try again',
-      });
+      toast.error('Could not add holiday', err instanceof Error ? err.message : 'Try again');
     } finally {
       setBusy(false);
     }
@@ -114,15 +126,14 @@ export function HolidaysManager({ centres }: { centres: CentreOption[] }) {
   async function removeHoliday(id: string) {
     setBusy(true);
     try {
-      await apiClient.delete(`/v1/centres/${centreId}/holidays/${id}`);
-      push({ tone: 'success', title: 'Holiday removed' });
+      const res = await fetch(`/api/admin/centres/${centreId}/holidays/${id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok && res.status !== 204) throw new Error(await errorMessage(res));
+      toast.success('Holiday removed');
       setHolidays((prev) => prev.filter((h) => h.id !== id));
     } catch (err) {
-      push({
-        tone: 'error',
-        title: 'Could not remove holiday',
-        description: err instanceof ApiError ? err.message : 'Try again',
-      });
+      toast.error('Could not remove holiday', err instanceof Error ? err.message : 'Try again');
     } finally {
       setBusy(false);
     }
@@ -157,18 +168,6 @@ export function HolidaysManager({ centres }: { centres: CentreOption[] }) {
         onSubmit={addHoliday}
         className="flex flex-wrap items-end gap-3 rounded-lg border border-border bg-cream-dark p-4"
       >
-        <div>
-          <label className="block text-sm font-medium text-secondary" htmlFor="date">
-            Date
-          </label>
-          <input
-            id="date"
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="mt-1 rounded-md border border-border bg-white px-3 py-2 text-ink"
-          />
-        </div>
         <div className="flex-1 min-w-[12rem]">
           <label className="block text-sm font-medium text-secondary" htmlFor="name">
             Holiday name
@@ -179,8 +178,32 @@ export function HolidaysManager({ centres }: { centres: CentreOption[] }) {
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="e.g. Paryushan"
-            maxLength={160}
+            maxLength={200}
             className="mt-1 w-full rounded-md border border-border bg-white px-3 py-2 text-ink"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-secondary" htmlFor="start">
+            Start
+          </label>
+          <input
+            id="start"
+            type="date"
+            value={startDate}
+            onChange={(e) => setStartDate(e.target.value)}
+            className="mt-1 rounded-md border border-border bg-white px-3 py-2 text-ink"
+          />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-secondary" htmlFor="end">
+            End (optional)
+          </label>
+          <input
+            id="end"
+            type="date"
+            value={endDate}
+            onChange={(e) => setEndDate(e.target.value)}
+            className="mt-1 rounded-md border border-border bg-white px-3 py-2 text-ink"
           />
         </div>
         <button
@@ -203,7 +226,7 @@ export function HolidaysManager({ centres }: { centres: CentreOption[] }) {
             {holidays.map((h) => (
               <li key={h.id} className="flex items-center justify-between py-3">
                 <div>
-                  <span className="font-medium text-ink">{fmtDate(h.date)}</span>
+                  <span className="font-medium text-ink">{rangeLabel(h)}</span>
                   <span className="ml-3 text-sm text-muted-foreground">{h.name}</span>
                 </div>
                 <button

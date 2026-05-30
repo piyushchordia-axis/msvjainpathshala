@@ -2,37 +2,31 @@
  * Holidays admin (SPEC §5.10). Server component: fetches the centre roster
  * server-side, then hands it to the client island that manages per-centre
  * attendance-calendar holidays (add / remove). Holidays suppress
- * auto-generated attendance sessions for that date.
+ * auto-generated attendance sessions for those dates.
  */
 
-import { serverApiGet } from '@/lib/server-api';
+import { listAdminCentres } from '@/api/admin-misc';
 
 import { HolidaysManager } from './holidays-manager';
 
-interface CentreRow {
-  id: string;
-  name: string;
-  locality?: string | null;
-}
-
 export default async function HolidaysPage() {
-  let centres: CentreRow[] = [];
+  let centres: { id: string; name: string; locality: string | null }[] = [];
   let error: string | null = null;
   try {
-    const data = await serverApiGet<{ items: CentreRow[] }>('/v1/admin/centres');
-    centres = data.items ?? [];
+    const res = await listAdminCentres();
+    centres = res.items.map((c) => ({ id: c.id, name: c.name, locality: c.locality }));
   } catch (err) {
     error = err instanceof Error ? err.message : 'Failed to load centres';
   }
 
   return (
-    <div className="container py-8">
-      <h1 className="font-display text-3xl text-secondary">Holiday calendar</h1>
-      <p className="mt-2 max-w-2xl text-muted-foreground">
+    <div className="space-y-2">
+      <h2 className="font-display text-2xl text-secondary">Holiday calendar</h2>
+      <p className="max-w-2xl text-sm text-muted-foreground">
         Mark dates when a centre is closed. Attendance sessions are not generated for holiday dates.
       </p>
       {error ? (
-        <p className="mt-4 text-destructive">{error}</p>
+        <p className="mt-4 text-sm text-destructive">{error}</p>
       ) : (
         <HolidaysManager centres={centres} />
       )}
