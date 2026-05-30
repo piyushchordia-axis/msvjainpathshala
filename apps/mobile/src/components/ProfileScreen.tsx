@@ -15,6 +15,7 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Avatar, Header, Icon } from '@/components/ui';
+import { appToast } from '@/components/ui/feedback/AppToast';
 import { JPColors, JPFonts, JPRadius, JPSpacing } from '@/constants/colors';
 import { useAuth } from '@/features/auth/auth-context';
 import { LanguageToggle } from '@/features/language/LanguageToggle';
@@ -34,12 +35,22 @@ function initialsOf(name: string | undefined | null): string {
 export function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user, signOut } = useAuth();
+  const { user, view, signOut, switchView } = useAuth();
   const { t } = useTranslation();
 
   const onLogout = useCallback(() => {
     void signOut();
   }, [signOut]);
+
+  const onBackToParent = useCallback(async () => {
+    try {
+      await switchView('parent');
+      appToast.success('Parent view', 'Switched back to your account.');
+      router.replace('/' as never);
+    } catch (err) {
+      appToast.error('Could not switch', err instanceof Error ? err.message : 'Please try again.');
+    }
+  }, [switchView, router]);
 
   const roleLabel = t(`roles.${user?.role ?? 'guest'}`, { defaultValue: user?.role ?? '' });
 
@@ -89,6 +100,12 @@ export function ProfileScreen() {
             label={t('profile.sync_issues', { defaultValue: 'Sync & offline' })}
             onPress={() => router.push('/profile/sync-issues' as never)}
           />
+          {view === 'student' ? (
+            <SettingsRow
+              label={t('profile.back_to_parent', { defaultValue: 'Switch back to parent view' })}
+              onPress={onBackToParent}
+            />
+          ) : null}
           <SettingsRow
             label={t('profile.logout', { defaultValue: 'Log out' })}
             onPress={onLogout}

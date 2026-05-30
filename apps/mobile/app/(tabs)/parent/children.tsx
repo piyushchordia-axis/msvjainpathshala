@@ -12,7 +12,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ApiError } from '@/api/client';
 import { studentsApi, type StudentDto } from '@/api/endpoints/students';
 import { EmptyState, Header, PrimaryButton } from '@/components/ui';
+import { appToast } from '@/components/ui/feedback/AppToast';
 import { JPColors, JPFonts, JPRadius, JPSpacing } from '@/constants/colors';
+import { useAuth } from '@/features/auth/auth-context';
 
 type StatusVariant = 'success' | 'warning' | 'error' | 'neutral';
 
@@ -57,6 +59,8 @@ function StatusPill({ status }: { status: StudentDto['status'] }) {
 export default function ParentChildren() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
+  const { switchView } = useAuth();
+  const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [items, setItems] = useState<StudentDto[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -77,6 +81,25 @@ export default function ParentChildren() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const viewAs = useCallback(
+    async (studentId: string, name: string) => {
+      setSwitchingId(studentId);
+      try {
+        await switchView('student', studentId);
+        appToast.success('Student view', `You're now viewing as ${name.split(' ')[0]}.`);
+        router.replace('/' as never);
+      } catch (err) {
+        appToast.error(
+          'Could not switch view',
+          err instanceof ApiError ? err.message : 'This child must be at least 13 years old.',
+        );
+      } finally {
+        setSwitchingId(null);
+      }
+    },
+    [switchView, router],
+  );
 
   return (
     <View style={[styles.root, { paddingTop: insets.top }]}>
@@ -109,6 +132,17 @@ export default function ParentChildren() {
                   MSV: <Text style={styles.metaValue}>{s.msv_status}</Text>
                 </Text>
               </View>
+              {s.status === 'active' ? (
+                <Pressable
+                  onPress={() => viewAs(s.id, s.full_name)}
+                  disabled={switchingId === s.id}
+                  style={styles.viewAsBtn}
+                >
+                  <Text style={styles.viewAsText}>
+                    {switchingId === s.id ? 'Switching…' : `View as ${s.full_name.split(' ')[0]}`}
+                  </Text>
+                </Pressable>
+              ) : null}
               {s.status === 'inactive' && s.deactivated_at ? (
                 <Text style={styles.deactivatedNote}>
                   Deactivated {new Date(s.deactivated_at).toLocaleDateString('en-GB')}. Ask your
@@ -178,6 +212,21 @@ const styles = StyleSheet.create({
     fontFamily: JPFonts.body,
     fontSize: 12,
     color: JPColors.warning,
+  },
+  viewAsBtn: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderColor: JPColors.saffron,
+    backgroundColor: JPColors.saffron50,
+    borderRadius: JPRadius.pill,
+    paddingHorizontal: JPSpacing.sp4,
+    paddingVertical: 8,
+  },
+  viewAsText: {
+    fontFamily: JPFonts.body,
+    fontSize: 13,
+    fontWeight: '600',
+    color: JPColors.saffron,
   },
   errorCard: {
     backgroundColor: JPColors.errorBg,

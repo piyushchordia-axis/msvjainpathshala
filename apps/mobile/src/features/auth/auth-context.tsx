@@ -58,6 +58,12 @@ interface AuthContextValue {
   signIn(response: OtpVerifyResponse): Promise<void>;
   signOut(): Promise<void>;
   refreshMe(): Promise<void>;
+  /**
+   * Switch the active view context (parent ↔ student). The backend enforces
+   * the 13+ gate (Q4) and returns a fresh token set scoped to the new
+   * context; we apply it exactly like a sign-in.
+   */
+  switchView(target: 'parent' | 'student', studentId?: string): Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -172,8 +178,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const switchView = useCallback(async (target: 'parent' | 'student', studentId?: string) => {
+    const res = await authApi.switchView(target, studentId);
+    authStore.setAccessToken(res.tokens.access_token);
+    await authStore.setRefreshToken(res.tokens.refresh_token);
+    const snap: AuthSnapshot = {
+      user: res.user,
+      view: target,
+      access_expires_at: res.tokens.access_expires_at,
+      refresh_expires_at: res.tokens.refresh_expires_at,
+    };
+    authStore.setSnapshot(snap);
+    setUser(res.user);
+    setView(target);
+  }, []);
+
   return (
-    <AuthContext.Provider value={{ status, user, view, signIn, signOut, refreshMe }}>
+    <AuthContext.Provider value={{ status, user, view, signIn, signOut, refreshMe, switchView }}>
       {children}
     </AuthContext.Provider>
   );
