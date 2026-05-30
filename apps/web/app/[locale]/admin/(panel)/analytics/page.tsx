@@ -15,6 +15,7 @@
 
 import { TrendingDown, TrendingUp } from 'lucide-react';
 
+import { authenticatedServerClient } from '@/api/server-client';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { readSessionUser } from '@/lib/auth-cookies';
 
@@ -47,13 +48,17 @@ interface AttendanceRow {
   total_marks: number;
 }
 
+/**
+ * Fetch an admin analytics endpoint through the authenticated server client so
+ * the panel's JWT cookie is forwarded. The previous implementation used a bare
+ * `fetch` with no Authorization header, so every call 401'd and the dashboard
+ * silently rendered all-zero KPIs for every admin role.
+ */
 async function safeFetch<T>(path: string): Promise<T | null> {
   try {
-    const base = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3000';
-    const res = await fetch(`${base}${path}`, { cache: 'no-store' });
-    if (!res.ok) return null;
-    const json = (await res.json()) as { data: T };
-    return json.data;
+    const client = await authenticatedServerClient();
+    const res = await client.get<{ data: T }>(path);
+    return res.data.data;
   } catch {
     return null;
   }
