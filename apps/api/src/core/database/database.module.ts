@@ -8,6 +8,7 @@ import {
   EnrolmentsRepository,
   FormConfigsRepository,
   GeographyRepository,
+  IdCardsRepository,
   MsvEnrolmentsRepository,
   PhoneOtpAttemptsRepository,
   PunyaFeaturesRepository,
@@ -47,6 +48,7 @@ const REPOSITORIES = [
   ShikshakAssignmentsRepository,
   FormConfigsRepository,
   StudentsRepository,
+  IdCardsRepository,
   EnrolmentsRepository,
   MsvEnrolmentsRepository,
 ] as const;

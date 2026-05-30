@@ -18,11 +18,16 @@ import { Queue } from 'bullmq';
 
 import { AppError, ERROR_CODES, QUEUES, type Role, StudentStatus } from '@jp/shared';
 
+import { createHmac } from 'node:crypto';
+
+import { AppConfigService } from '../../core/config/app-config.service';
+import { PdfService } from '../../core/pdf/pdf.service';
 import { RedisService } from '../../core/redis/redis.service';
-import { CentresRepository, StudentsRepository } from '../../db/repositories';
+import { StorageService } from '../../core/storage/storage.service';
+import { CentresRepository, IdCardsRepository, StudentsRepository } from '../../db/repositories';
 import { AuditService } from '../audit/audit.service';
 
-import type { Student } from '../../db/schema';
+import type { DigitalIdCard, Student } from '../../db/schema';
 
 export interface ScopedActor {
   user_id: string;

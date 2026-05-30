@@ -21,6 +21,9 @@ import { sql } from 'drizzle-orm';
 import { AppError, ERROR_CODES, type Role } from '@jp/shared';
 
 import { DrizzleService } from '../../core/database/drizzle.service';
+import { PdfService } from '../../core/pdf/pdf.service';
+import { StorageService } from '../../core/storage/storage.service';
+import { CentresRepository } from '../../db/repositories/centres.repository';
 import { ExportJobsRepository } from '../../db/repositories/export-jobs.repository';
 import { ProgressReportsRepository } from '../../db/repositories/progress-reports.repository';
 import { StudentsRepository } from '../../db/repositories/students.repository';
@@ -52,10 +55,73 @@ export class ReportsService {
     private readonly studentsRepo: StudentsRepository,
     private readonly reportsRepo: ProgressReportsRepository,
     private readonly exports: ExportJobsRepository,
+    private readonly centresRepo: CentresRepository,
+    private readonly pdf: PdfService,
+    private readonly storage: StorageService,
     @InjectQueue(QUEUES.REPORT_GENERATION) private readonly reportQ: Queue,
     @InjectQueue(QUEUES.EXPORT_STUDENT_PDF) private readonly studentExportQ: Queue,
     @InjectQueue(QUEUES.EXPORT_BULK_ZIP) private readonly bulkExportQ: Queue,
   ) {}
+
+  // ===========================================================================
+  // Synchronous, on-demand PDF generation (pdfkit)
+  // ===========================================================================
+
+  /**
+   * Generate (or regenerate) a progress-report PDF right now and return a
+   * signed download URL alongside the persisted row. Q11: snapshotFor throws
+   * for inactive students.
+   */
+  async generateNow(
+    studentId: string,
+    periodKind: 'monthly' | 'termly',
+    periodLabel: string,
+  ): Promise<{ report: ProgressReport; url: string }> {
+    const snapshot = await this.snapshotFor(studentId, periodKind, periodLabel);
+    const report = await this.upsertReport(studentId, periodKind, periodLabel, snapshot);
+    const centre = await this.centresRepo.findById(snapshot.student.centre_id);
+    const stats = [
+      { label: 'Attendance', value: `${snapshot.attendance.rate_pct}%` },
+      { label: 'Sessions', value: `${snapshot.attendance.present}/${snapshot.attendance.total}` },
+      { label: 'Punya awarded', value: String(snapshot.punya.points_awarded) },
+      { label: 'Reversals', value: String(snapshot.punya.reversals) },
+    ];
+    const pdf = await this.pdf.renderProgressReport({
+      orgName: 'Megh Sanskar Vatika',
+      studentName: snapshot.student.full_name,
+      studentCode: snapshot.student.student_code,
+      centreName: centre?.name ?? '—',
+      periodKind,
+      periodLabel,
+      generatedAt: new Date(),
+      shikshakComment: report.shikshak_comment,
+      stats,
+    });
+    const key = `reports/${studentId}/${periodKind}-${periodLabel}.pdf`;
+    await this.storage.adapter.putObject('exports', key, {
+      body: pdf,
+      contentType: 'application/pdf',
+      contentDisposition: `inline; filename="report-${snapshot.student.student_code}-${periodLabel}.pdf"`,
+      cacheControl: 'private,max-age=0,no-cache',
+    });
+    const url = await this.storage.signedReadUrl('exports', key);
+    return { report, url };
+  }
+
+  /** Resolve a signed download URL for an already-generated report. */
+  async getReportDownloadUrl(reportId: string): Promise<{ report: ProgressReport; url: string }> {
+    const report = await this.reportsRepo.findById(reportId);
+    if (!report) {
+      throw new AppError({
+        code: ERROR_CODES.ERR_REPORT_NOT_FOUND,
+        message: 'Progress report not found',
+        statusCode: 404,
+      });
+    }
+    const key = `reports/${report.student_id}/${report.period_kind}-${report.period_label}.pdf`;
+    const url = await this.storage.signedReadUrl('exports', key);
+    return { report, url };
+  }
 
   // ===========================================================================
   // Monthly cron entry

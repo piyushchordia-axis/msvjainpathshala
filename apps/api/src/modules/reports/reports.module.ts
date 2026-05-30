@@ -10,6 +10,7 @@
 import { Module } from '@nestjs/common';
 
 import {
+  CentresRepository,
   ExportJobsRepository,
   ProgressReportsRepository,
   StudentsRepository,
@@ -20,7 +21,13 @@ import { ReportsService } from './reports.service';
 
 @Module({
   controllers: [ReportsController],
-  providers: [ReportsService, StudentsRepository, ProgressReportsRepository, ExportJobsRepository],
+  providers: [
+    ReportsService,
+    StudentsRepository,
+    ProgressReportsRepository,
+    ExportJobsRepository,
+    CentresRepository,
+  ],
   exports: [ReportsService, ProgressReportsRepository, ExportJobsRepository],
 })
 export class ReportsModule {}

@@ -68,6 +68,24 @@ function toScopedActor(user: CurrentUserPayload): ScopedActor {
 export class StudentsController {
   constructor(private readonly service: StudentsService) {}
 
+  // Digital ID card -----------------------------------------------------------
+
+  @Roles('parent')
+  @Get('/students/:id/id-card')
+  async getIdCard(@CurrentUser() user: CurrentUserPayload | undefined, @Param('id') id: string) {
+    return this.service.getIdCard(toActor(user), id);
+  }
+
+  @Roles('sanchalak')
+  @Post('/admin/students/:id/id-card')
+  @HttpCode(200)
+  async regenerateIdCard(
+    @CurrentUser() user: CurrentUserPayload | undefined,
+    @Param('id') id: string,
+  ) {
+    return this.service.regenerateIdCard(toActor(user), id);
+  }
+
   // ---- Parent's own children -----------------------------------------
   @Get('/parents/me/students')
   async myChildren(@CurrentUser() user: CurrentUserPayload | undefined) {

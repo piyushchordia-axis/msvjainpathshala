@@ -8,6 +8,7 @@ import { ConfigModule } from './core/config/config.module';
 import { DatabaseModule } from './core/database/database.module';
 import { HealthModule } from './core/health/health.module';
 import { LoggerModule } from './core/logger/logger.module';
+import { PdfModule } from './core/pdf/pdf.module';
 import { RedisModule } from './core/redis/redis.module';
 import { StorageModule } from './core/storage/storage.module';
 import { SystemConfigModule } from './core/system-config/system-config.module';
@@ -68,6 +69,7 @@ import { RealtimeModule } from './realtime/realtime.module';
     DatabaseModule,
     RedisModule,
     StorageModule,
+    PdfModule,
     SystemConfigModule,
     GlobalThrottlerModule,
     QueuesModule.forRoot(),
