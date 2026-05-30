@@ -8,6 +8,8 @@
 import { listAdminStudents, type AdminStudentRow } from '@/api/admin-misc';
 import { Card } from '@/components/ui/card';
 
+import { StudentActions } from './student-actions';
+
 export default async function AdminStudentsPage() {
   let items: AdminStudentRow[] = [];
   let error: string | null = null;
@@ -44,12 +46,13 @@ export default async function AdminStudentsPage() {
                 <th className="px-4 py-3">DOB</th>
                 <th className="px-4 py-3">MSV</th>
                 <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-6 text-center text-muted-foreground">
+                  <td colSpan={7} className="px-4 py-6 text-center text-muted-foreground">
                     No students in scope yet.
                   </td>
                 </tr>
@@ -81,6 +84,9 @@ export default async function AdminStudentsPage() {
                       >
                         {s.status}
                       </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <StudentActions id={s.id} status={s.status} />
                     </td>
                   </tr>
                 ))
