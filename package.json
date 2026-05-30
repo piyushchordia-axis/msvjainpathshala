@@ -19,10 +19,16 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "pnpm --filter @jp/api db:generate",
+    "db:push": "pnpm --filter @jp/api db:push",
     "db:migrate": "pnpm --filter @jp/api db:migrate",
     "db:studio": "pnpm --filter @jp/api db:studio",
     "db:seed:dev": "pnpm --filter @jp/api db:seed:dev",
-    "prepare": "husky"
+    "db:seed:demo": "pnpm --filter @jp/api db:seed:demo",
+    "db:seed:demo:extra": "pnpm --filter @jp/api db:seed:demo:extra",
+    "db:seed:full": "pnpm --filter @jp/api db:seed:full",
+    "db:reset:dev": "pnpm --filter @jp/api db:reset:dev",
+    "prepare": "husky",
+    "db:seed:demo:newbackends": "pnpm --filter @jp/api db:seed:demo:newbackends"
   },
   "devDependencies": {
     "@commitlint/cli": "^19.5.0",

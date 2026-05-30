@@ -15,10 +15,16 @@
     "test": "vitest run --config vitest.config.ts",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "db:generate": "tsx --env-file=.env.development node_modules/drizzle-kit/bin.cjs generate --config drizzle.config.ts",
+    "db:push": "tsx --env-file=.env.development node_modules/drizzle-kit/bin.cjs push --config drizzle.config.ts",
     "db:migrate": "tsx --env-file=.env.development src/db/migrate.ts",
     "db:studio": "tsx --env-file=.env.development node_modules/drizzle-kit/bin.cjs studio --config drizzle.config.ts",
     "db:seed:dev": "tsx --env-file=.env.development src/db/seed.ts",
-    "clean": "rm -rf dist .turbo"
+    "db:seed:demo": "tsx --env-file=.env.development scripts/run-psql-seed.ts seed-dev-demo.sql",
+    "db:seed:demo:extra": "tsx --env-file=.env.development scripts/run-psql-seed.ts seed-dev-demo-extra.sql",
+    "db:seed:full": "pnpm db:seed:dev && pnpm db:seed:demo && pnpm db:seed:demo:extra && pnpm db:seed:demo:newbackends",
+    "db:reset:dev": "tsx --env-file=.env.development scripts/db-reset-dev.ts",
+    "clean": "rm -rf dist .turbo",
+    "db:seed:demo:newbackends": "tsx --env-file=.env.development scripts/run-psql-seed.ts seed-dev-demo-newbackends.sql"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1055.0",
