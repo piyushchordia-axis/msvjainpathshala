@@ -1,5 +1,5 @@
 /**
- * Drizzle Kit config (used by `pnpm db:generate` and `pnpm db:studio`).
+ * Drizzle Kit config (used by `pnpm db:generate`, `db:push`, and `db:studio`).
  *
  * Step 3 lands an empty `src/db/schema/` and `src/db/migrations/`. Step 4
  * populates them with the full Section 5 schema. The migration runner

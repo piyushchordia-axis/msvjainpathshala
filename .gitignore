@@ -70,6 +70,13 @@ drizzle/meta/_journal.json.bak
 # --- Storybook ---
 storybook-static/
 
+# --- Terraform (provider plugins are downloaded locally; never commit) ---
+**/.terraform/
+*.tfstate
+*.tfstate.*
+.terraform.tfstate.lock.info
+crash.log
+
 # --- Docker volumes (local) ---
 infra/docker/volumes/
 
