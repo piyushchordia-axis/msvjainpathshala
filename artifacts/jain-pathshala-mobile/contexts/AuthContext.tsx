@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
   useContext,
@@ -27,6 +28,7 @@ const AuthContext = createContext<AuthContextValue>({
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const queryClient = useQueryClient();
   const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -47,6 +49,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   async function signIn(nextUser: SessionUser, tokens: AuthTokens) {
+    // Drop any cached data belonging to a previously signed-in account on this
+    // device before the new user's queries run.
+    queryClient.clear();
     setAuthToken(tokens.access_token);
     setUser(nextUser);
     await Promise.all([
@@ -61,6 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {}
     setAuthToken(null);
     setUser(null);
+    queryClient.clear();
     await Promise.all([
       AsyncStorage.removeItem(TOKEN_KEY),
       AsyncStorage.removeItem(USER_KEY),

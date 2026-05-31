@@ -8,6 +8,7 @@ import publicRouter from "./v1/public";
 import adminRouter from "./v1/admin";
 import noticesRouter from "./v1/notices";
 import galleryRouter from "./v1/gallery";
+import meRouter from "./v1/me";
 
 const router: IRouter = Router();
 
@@ -15,5 +16,6 @@ router.use("/public", publicRouter);
 router.use("/admin", adminRouter);
 router.use("/notices", noticesRouter);
 router.use("/gallery", galleryRouter);
+router.use("/me", meRouter);
 
 export default router;

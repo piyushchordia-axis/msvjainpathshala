@@ -18,6 +18,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { LanguageToggle } from "@/components/AppHeader";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { LocaleProvider } from "@/contexts/LocaleContext";
+import { SessionViewProvider } from "@/contexts/SessionViewContext";
 import { fonts } from "@/constants/typography";
 import colors from "@/constants/colors";
 
@@ -38,18 +39,20 @@ function RootLayoutNav() {
         contentStyle: { backgroundColor: colors.light.background },
       }}
     >
-      <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      {/* Entry + persona tab groups (each owns its own header) */}
+      <Stack.Screen name="index" options={{ headerShown: false }} />
+      <Stack.Screen name="auth" options={{ headerShown: false }} />
+      <Stack.Screen name="guest" options={{ headerShown: false }} />
+      <Stack.Screen name="parent" options={{ headerShown: false }} />
+      <Stack.Screen name="student" options={{ headerShown: false }} />
+      <Stack.Screen name="shikshak" options={{ headerShown: false }} />
+      <Stack.Screen name="admin" options={{ headerShown: false }} />
+
+      {/* Shared detail screens (pushed from any persona) */}
       <Stack.Screen name="centre/[id]" options={{ title: "Centre" }} />
       <Stack.Screen name="shivir/[id]" options={{ title: "Shivir" }} />
-      <Stack.Screen name="library" options={{ title: "Library" }} />
-      <Stack.Screen name="gallery" options={{ title: "Punya Wall" }} />
       <Stack.Screen name="info/[slug]" options={{ title: "" }} />
-      <Stack.Screen name="admin/login" options={{ title: "Admin sign in", headerRight: undefined }} />
-      <Stack.Screen name="admin/index" options={{ title: "Dashboard" }} />
-      <Stack.Screen name="admin/students" options={{ title: "Students" }} />
-      <Stack.Screen name="admin/enrolments" options={{ title: "Enrolments" }} />
-      <Stack.Screen name="admin/batches" options={{ title: "Batches" }} />
-      <Stack.Screen name="admin/modules" options={{ title: "Admin modules" }} />
+      <Stack.Screen name="gallery" options={{ title: "Punya Wall" }} />
     </Stack>
   );
 }
@@ -77,11 +80,13 @@ export default function RootLayout() {
         <QueryClientProvider client={queryClient}>
           <LocaleProvider>
             <AuthProvider>
-              <GestureHandlerRootView>
-                <KeyboardProvider>
-                  <RootLayoutNav />
-                </KeyboardProvider>
-              </GestureHandlerRootView>
+              <SessionViewProvider>
+                <GestureHandlerRootView>
+                  <KeyboardProvider>
+                    <RootLayoutNav />
+                  </KeyboardProvider>
+                </GestureHandlerRootView>
+              </SessionViewProvider>
             </AuthProvider>
           </LocaleProvider>
         </QueryClientProvider>

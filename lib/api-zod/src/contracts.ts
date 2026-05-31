@@ -260,3 +260,81 @@ export const galleryItemSchema = z.object({
   created_at: z.string(),
 });
 export type PublicGalleryItem = z.infer<typeof galleryItemSchema>;
+
+/* ------------------------------------------------------------------ */
+/* Persona ("me") DTOs — parent / student / shikshak scoped reads      */
+/* ------------------------------------------------------------------ */
+
+export const childRowSchema = z.object({
+  id: z.string(),
+  full_name: z.string(),
+  student_code: z.string(),
+  age_group: z.string(),
+  centre_name: z.string().nullable(),
+  batch_name: z.string().nullable(),
+  msv_status: z.string(),
+  status: studentStatusSchema,
+  total_points: z.number(),
+  tier: z.string(),
+});
+export type ChildRow = z.infer<typeof childRowSchema>;
+
+export const attendanceRowSchema = z.object({
+  id: z.string(),
+  session_date: z.string(),
+  status: z.string(),
+  topic: z.string().nullable(),
+  batch_name: z.string().nullable(),
+});
+export type AttendanceRow = z.infer<typeof attendanceRowSchema>;
+
+export const punyaTransactionSchema = z.object({
+  id: z.string(),
+  feature_key: z.string(),
+  points: z.number(),
+  note: z.string().nullable(),
+  created_at: z.string(),
+});
+export type PunyaTransaction = z.infer<typeof punyaTransactionSchema>;
+
+export const punyaSummarySchema = z.object({
+  total_points: z.number(),
+  tier: z.string(),
+  transactions: z.array(punyaTransactionSchema),
+});
+export type PunyaSummary = z.infer<typeof punyaSummarySchema>;
+
+export const niyamSubmissionRowSchema = z.object({
+  id: z.string(),
+  niyam_title_en: z.string(),
+  niyam_title_hi: z.string(),
+  niyam_type: z.string(),
+  submission_date: z.string(),
+  status: z.string(),
+  points_awarded: z.number(),
+  is_featured: z.boolean(),
+});
+export type NiyamSubmissionRow = z.infer<typeof niyamSubmissionRowSchema>;
+
+export const niyamCatalogRowSchema = z.object({
+  id: z.string(),
+  title_en: z.string(),
+  title_hi: z.string(),
+  description_en: z.string().nullable(),
+  description_hi: z.string().nullable(),
+  niyam_type: z.string(),
+  points: z.number(),
+});
+export type NiyamCatalogRow = z.infer<typeof niyamCatalogRowSchema>;
+
+export const shikshakSessionRowSchema = z.object({
+  id: z.string(),
+  session_date: z.string(),
+  status: z.string(),
+  topic: z.string().nullable(),
+  batch_name: z.string().nullable(),
+  centre_name: z.string().nullable(),
+  present_count: z.number(),
+  total_count: z.number(),
+});
+export type ShikshakSessionRow = z.infer<typeof shikshakSessionRowSchema>;

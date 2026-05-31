@@ -1,22 +1,16 @@
-import { useQuery } from "@tanstack/react-query";
 import { View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
-import { apiGet } from "@/lib/api";
-import type { ListResponse, NoticeItem } from "@/lib/types";
+import { useNotices } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
 import { Body, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
-export default function NoticesScreen() {
+export default function GuestNoticesScreen() {
   const c = useColors();
   const { hi } = useLocale();
 
-  const { data, isLoading, isError, refetch, isRefetching } = useQuery({
-    queryKey: ["public-notices"],
-    queryFn: () => apiGet<ListResponse<NoticeItem>>("/v1/notices/public?limit=50"),
-  });
-
+  const { data, isLoading, isError, refetch, isRefetching } = useNotices();
   const items = data?.items ?? [];
 
   return (
@@ -29,7 +23,13 @@ export default function NoticesScreen() {
         {isLoading ? (
           <StateView status="loading" emptyText="" />
         ) : isError ? (
-          <StateView status="error" emptyText="" errorText={hi ? "सूचनाएँ लोड नहीं हो सकीं।" : "Could not load notices."} onRetry={refetch} retryLabel={hi ? "पुनः प्रयास करें" : "Try again"} />
+          <StateView
+            status="error"
+            emptyText=""
+            errorText={hi ? "सूचनाएँ लोड नहीं हो सकीं।" : "Could not load notices."}
+            onRetry={refetch}
+            retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
+          />
         ) : items.length === 0 ? (
           <StateView status="empty" emptyText={hi ? "अभी कोई सूचना नहीं है।" : "No notices right now."} />
         ) : (

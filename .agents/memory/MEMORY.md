@@ -1,2 +1,1 @@
-- [API server runtime & envelope](api-server-conventions.md) — PORT-bound (not 5000), web proxies /api+/v1, single {data,meta} envelope, client unwraps one layer.
-- [Workspace typecheck quirks](workspace-typecheck-quirks.md) — pre-existing @types/react dup breaks shadcn ui typecheck; req.params is string|string[] here.
+- [Expo persona app](expo-persona-app.md) — per-role tab groups use REAL path segments (not `(groups)`) to avoid same-name screen collisions; clear React Query cache on every auth transition to prevent cross-account leaks.
