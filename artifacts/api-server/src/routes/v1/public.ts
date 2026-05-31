@@ -1,0 +1,170 @@
+import { Router, type IRouter, type Request, type Response } from "express";
+import {
+  db,
+  centres,
+  cities,
+  states,
+  batches,
+  shivir_events,
+  library_items,
+} from "@workspace/db";
+import { and, asc, count, desc, eq, gte, sql } from "drizzle-orm";
+import { ok, fail } from "../../lib/envelope";
+
+const router: IRouter = Router();
+
+function clampLimit(raw: unknown, fallback: number, max: number): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(Math.floor(n), max);
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/* GET /v1/public/centres */
+router.get("/centres", async (_req: Request, res: Response) => {
+  const rows = await db
+    .select({
+      id: centres.id,
+      name: centres.name,
+      locality: centres.locality,
+      city_name: cities.name,
+      state_name: states.name,
+      batch_count: sql<number>`count(${batches.id})::int`,
+    })
+    .from(centres)
+    .innerJoin(cities, eq(cities.id, centres.city_id))
+    .innerJoin(states, eq(states.id, centres.state_id))
+    .leftJoin(batches, and(eq(batches.centre_id, centres.id), eq(batches.status, "active")))
+    .where(eq(centres.status, "active"))
+    .groupBy(centres.id, cities.name, states.name)
+    .orderBy(asc(states.name), asc(cities.name), asc(centres.name));
+
+  ok(res, { items: rows }, { count: rows.length });
+});
+
+/* GET /v1/public/centres/:id */
+router.get("/centres/:id", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  if (!UUID_RE.test(id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Centre not found.");
+    return;
+  }
+  const [centre] = await db
+    .select({
+      id: centres.id,
+      name: centres.name,
+      locality: centres.locality,
+      pincode: centres.pincode,
+      contact_phone: centres.contact_phone,
+      contact_email: centres.contact_email,
+      city_name: cities.name,
+      state_name: states.name,
+    })
+    .from(centres)
+    .innerJoin(cities, eq(cities.id, centres.city_id))
+    .innerJoin(states, eq(states.id, centres.state_id))
+    .where(and(eq(centres.id, id), eq(centres.status, "active")))
+    .limit(1);
+
+  if (!centre) {
+    fail(res, 404, "ERR_NOT_FOUND", "Centre not found.");
+    return;
+  }
+
+  const batchRows = await db
+    .select({
+      id: batches.id,
+      name: batches.name,
+      age_group: batches.age_group,
+      day_of_week: batches.day_of_week,
+      start_time: batches.start_time,
+      end_time: batches.end_time,
+      capacity: batches.capacity,
+      language_preference: batches.language_preference,
+    })
+    .from(batches)
+    .where(and(eq(batches.centre_id, id), eq(batches.status, "active")))
+    .orderBy(asc(batches.name));
+
+  ok(res, { centre, batches: batchRows });
+});
+
+/* GET /v1/public/shivirs */
+router.get("/shivirs", async (_req: Request, res: Response) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = await db
+    .select({
+      id: shivir_events.id,
+      name: shivir_events.name,
+      description: shivir_events.description,
+      start_date: shivir_events.start_date,
+      end_date: shivir_events.end_date,
+      location_text: shivir_events.location_text,
+      city_name: cities.name,
+    })
+    .from(shivir_events)
+    .innerJoin(cities, eq(cities.id, shivir_events.city_id))
+    .where(and(eq(shivir_events.is_published, true), gte(shivir_events.end_date, today)))
+    .orderBy(asc(shivir_events.start_date));
+
+  ok(res, { items: rows }, { count: rows.length });
+});
+
+/* GET /v1/public/shivirs/:id */
+router.get("/shivirs/:id", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  if (!UUID_RE.test(id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Shivir not found.");
+    return;
+  }
+  const [shivir] = await db
+    .select({
+      id: shivir_events.id,
+      name: shivir_events.name,
+      description: shivir_events.description,
+      start_date: shivir_events.start_date,
+      end_date: shivir_events.end_date,
+      location_text: shivir_events.location_text,
+      city_name: cities.name,
+      state_name: states.name,
+      capacity: shivir_events.capacity,
+      contact_info: shivir_events.contact_info,
+    })
+    .from(shivir_events)
+    .innerJoin(cities, eq(cities.id, shivir_events.city_id))
+    .innerJoin(states, eq(states.id, cities.state_id))
+    .where(and(eq(shivir_events.id, id), eq(shivir_events.is_published, true)))
+    .limit(1);
+
+  if (!shivir) {
+    fail(res, 404, "ERR_NOT_FOUND", "Shivir not found.");
+    return;
+  }
+  ok(res, shivir);
+});
+
+/* GET /v1/public/library?limit= */
+router.get("/library", async (req: Request, res: Response) => {
+  const limit = clampLimit(req.query.limit, 60, 200);
+  const rows = await db
+    .select({
+      id: library_items.id,
+      content_type: library_items.content_type,
+      title_en: library_items.title_en,
+      title_hi: library_items.title_hi,
+      description_en: library_items.description_en,
+      description_hi: library_items.description_hi,
+      embed_url: library_items.embed_url,
+    })
+    .from(library_items)
+    .where(and(eq(library_items.is_published, true), eq(library_items.access_tier, "public")))
+    .orderBy(desc(library_items.created_at))
+    .limit(limit);
+
+  ok(res, { items: rows }, { count: rows.length });
+});
+
+void count;
+
+export default router;

@@ -42,11 +42,11 @@ export default function DashboardPage() {
   const [pending, setPending] = useState<EnrolmentRow[]>([]);
 
   useEffect(() => {
-    apiGet<{ data: OverviewPayload }>('/v1/admin/analytics/overview')
-      .then((r) => setOverview(r.data ?? EMPTY))
+    apiGet<OverviewPayload>('/v1/admin/analytics/overview')
+      .then((r) => setOverview(r ?? EMPTY))
       .catch(() => {});
-    apiGet<{ data: { items: EnrolmentRow[] } }>('/v1/admin/enrolments?status=pending&limit=8')
-      .then((r) => setPending(r.data?.items ?? []))
+    apiGet<{ items: EnrolmentRow[] }>('/v1/admin/enrolments?status=pending&limit=8')
+      .then((r) => setPending(r?.items ?? []))
       .catch(() => {});
   }, []);
 

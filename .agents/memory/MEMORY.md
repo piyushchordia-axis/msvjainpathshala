@@ -1,0 +1,2 @@
+- [API server runtime & envelope](api-server-conventions.md) — PORT-bound (not 5000), web proxies /api+/v1, single {data,meta} envelope, client unwraps one layer.
+- [Workspace typecheck quirks](workspace-typecheck-quirks.md) — pre-existing @types/react dup breaks shadcn ui typecheck; req.params is string|string[] here.

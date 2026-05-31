@@ -1,144 +1,230 @@
-import { Router, type IRouter, type Request, type Response } from 'express';
-import { z } from 'zod';
+import { Router, type IRouter, type Request, type Response } from "express";
+import { z } from "zod";
+import { db, users, otp_codes, device_sessions } from "@workspace/db";
+import { and, eq, isNull } from "drizzle-orm";
+import {
+  loginRequestSchema,
+  type SessionUser,
+} from "@workspace/api-zod";
+import { fail } from "../lib/envelope";
+import {
+  generateOtpCode,
+  generateOtpToken,
+  generateRefreshToken,
+  hashSecret,
+  signAccessToken,
+  TOKEN_TTL,
+  verifyAccessToken,
+} from "../lib/tokens";
+import { setAuthCookies, clearAuthCookies } from "../lib/cookies";
 
 const router: IRouter = Router();
 
-const API_BASE = process.env.INTERNAL_API_BASE_URL ?? 'http://localhost:3001';
+const OTP_TTL_SECONDS = 5 * 60;
+const MAX_OTP_ATTEMPTS = 5;
+const isProd = process.env.NODE_ENV === "production";
 
-const sendBodySchema = z.object({
-  phase: z.literal('send'),
-  phone: z.string().regex(/^\+[1-9]\d{6,14}$/, 'Phone must be E.164 (+91…)'),
-});
-
-const verifyBodySchema = z.object({
-  phase: z.literal('verify'),
-  otp_token: z.string().min(16),
-  code: z.string().length(6).regex(/^\d{6}$/),
-  device_id: z.string().min(1).max(128),
-});
-
-const requestBodySchema = z.discriminatedUnion('phase', [sendBodySchema, verifyBodySchema]);
-
-function proxyError(err: unknown, res: Response): void {
-  const code = (err as { code?: string }).code ?? 'ERR_INTERNAL';
-  const message = err instanceof Error ? err.message : 'Internal error';
-  res.status(500).json({ error: { code, message } });
+function toSessionUser(u: typeof users.$inferSelect): SessionUser {
+  return {
+    id: u.id,
+    phone: u.phone,
+    role: u.role,
+    full_name: u.full_name,
+    preferred_language: u.preferred_language,
+  };
 }
 
-async function backendFetch(path: string, body: unknown): Promise<{ status: number; data: unknown; headers: Headers }> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json().catch(() => ({}));
-  return { status: res.status, data, headers: res.headers };
-}
-
-router.post('/login', async (req: Request, res: Response) => {
-  let parsed: z.infer<typeof requestBodySchema>;
+router.post("/login", async (req: Request, res: Response) => {
+  let parsed: z.infer<typeof loginRequestSchema>;
   try {
-    parsed = requestBodySchema.parse(req.body);
+    parsed = loginRequestSchema.parse(req.body);
   } catch (err) {
-    const msg =
-      err instanceof z.ZodError
-        ? (err.errors[0]?.message ?? 'Invalid body')
-        : 'Invalid body';
-    res.status(422).json({ error: { code: 'ERR_VALIDATION_FAILED', message: msg } });
+    const msg = err instanceof z.ZodError ? (err.issues[0]?.message ?? "Invalid body") : "Invalid body";
+    fail(res, 422, "ERR_VALIDATION_FAILED", msg);
     return;
   }
 
-  try {
-    if (parsed.phase === 'send') {
-      const { status, data } = await backendFetch('/v1/auth/otp/send', { phone: parsed.phone });
-      res.status(status).json(data);
-      return;
-    }
+  if (parsed.phase === "send") {
+    // Only registered (seeded) phones can receive a code.
+    const [user] = await db
+      .select()
+      .from(users)
+      .where(and(eq(users.phone, parsed.phone), isNull(users.deleted_at)))
+      .limit(1);
 
-    const { status, data, headers } = await backendFetch('/v1/auth/otp/verify', {
-      otp_token: parsed.otp_token,
-      code: parsed.code,
-      device_id: parsed.device_id,
-      platform: 'web',
+    const otpToken = generateOtpToken();
+    const code = generateOtpCode();
+    const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
+
+    // Always create a token row so timing does not leak whether the phone exists.
+    await db.insert(otp_codes).values({
+      phone: parsed.phone,
+      otp_token: otpToken,
+      code_hash: hashSecret(code),
+      expires_at: expiresAt,
     });
 
-    if (status >= 200 && status < 300) {
-      const payload = data as {
-        data?: {
-          tokens?: {
-            access_token?: string;
-            refresh_token?: string;
-            access_expires_at?: string;
-            refresh_expires_at?: string;
-          };
-          user?: Record<string, unknown>;
-        };
-      };
-      const tokens = payload?.data?.tokens;
-      const user = payload?.data?.user;
-
-      if (tokens?.access_token) {
-        const accessExp = tokens.access_expires_at
-          ? new Date(tokens.access_expires_at)
-          : new Date(Date.now() + 15 * 60 * 1000);
-        const refreshExp = tokens.refresh_expires_at
-          ? new Date(tokens.refresh_expires_at)
-          : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
-
-        res.cookie('jp_access', tokens.access_token, {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === 'production',
-          sameSite: 'lax',
-          expires: accessExp,
-          path: '/',
-        });
-
-        if (tokens.refresh_token) {
-          res.cookie('jp_refresh', tokens.refresh_token, {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax',
-            expires: refreshExp,
-            path: '/',
-          });
-        }
-
-        if (user) {
-          res.cookie('jp_user', JSON.stringify(user), {
-            httpOnly: false,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: 'lax',
-            expires: refreshExp,
-            path: '/',
-          });
-        }
-      }
-    }
-
-    res.status(status).json(data);
-  } catch (err) {
-    proxyError(err, res);
+    const payload: { otp_token: string; expires_in_seconds: number; dev_code?: string } = {
+      otp_token: otpToken,
+      expires_in_seconds: OTP_TTL_SECONDS,
+    };
+    // Dev convenience: surface the code (no real SMS). Never in production.
+    // Only returned for registered phones so the flow mirrors production gating.
+    if (!isProd && user) payload.dev_code = code;
+    res.status(200).json({ data: payload });
+    return;
   }
+
+  // phase === "verify"
+  const [otp] = await db
+    .select()
+    .from(otp_codes)
+    .where(eq(otp_codes.otp_token, parsed.otp_token))
+    .limit(1);
+
+  if (!otp || otp.consumed_at || otp.expires_at.getTime() < Date.now()) {
+    fail(res, 401, "ERR_OTP_INVALID", "This code has expired. Please request a new one.");
+    return;
+  }
+  if (otp.attempts_count >= MAX_OTP_ATTEMPTS) {
+    fail(res, 429, "ERR_OTP_LOCKED", "Too many attempts. Please request a new code.");
+    return;
+  }
+
+  if (otp.code_hash !== hashSecret(parsed.code)) {
+    await db
+      .update(otp_codes)
+      .set({ attempts_count: otp.attempts_count + 1 })
+      .where(eq(otp_codes.id, otp.id));
+    fail(res, 401, "ERR_OTP_INVALID", "Incorrect code. Please try again.");
+    return;
+  }
+
+  const [user] = await db
+    .select()
+    .from(users)
+    .where(and(eq(users.phone, otp.phone), isNull(users.deleted_at)))
+    .limit(1);
+
+  if (!user || !user.is_active) {
+    fail(res, 403, "ERR_NO_ACCOUNT", "No active account is registered for this number.");
+    return;
+  }
+
+  await db.update(otp_codes).set({ consumed_at: new Date() }).where(eq(otp_codes.id, otp.id));
+
+  const access = signAccessToken(user.id);
+  const refresh = generateRefreshToken();
+
+  await db.insert(device_sessions).values({
+    user_id: user.id,
+    device_id: parsed.device_id,
+    platform: "web",
+    refresh_token_hash: refresh.hash,
+    expires_at: refresh.expiresAt,
+    last_used_at: new Date(),
+  });
+  await db.update(users).set({ last_login_at: new Date() }).where(eq(users.id, user.id));
+
+  const sessionUser = toSessionUser(user);
+  setAuthCookies(res, sessionUser, access.token, access.expiresAt, refresh.token, refresh.expiresAt);
+
+  res.status(200).json({
+    data: {
+      user: sessionUser,
+      tokens: {
+        access_token: access.token,
+        refresh_token: refresh.token,
+        access_expires_at: access.expiresAt.toISOString(),
+        refresh_expires_at: refresh.expiresAt.toISOString(),
+      },
+    },
+  });
+});
+
+router.post("/refresh", async (req: Request, res: Response) => {
+  const incoming = (req.cookies as Record<string, string> | undefined)?.jp_refresh
+    ?? (typeof req.body?.refresh_token === "string" ? req.body.refresh_token : undefined);
+  if (!incoming) {
+    fail(res, 401, "ERR_NO_REFRESH", "No refresh token provided.");
+    return;
+  }
+  const [session] = await db
+    .select()
+    .from(device_sessions)
+    .where(eq(device_sessions.refresh_token_hash, hashSecret(incoming)))
+    .limit(1);
+  if (!session || session.revoked_at || session.expires_at.getTime() < Date.now()) {
+    fail(res, 401, "ERR_REFRESH_INVALID", "Session expired. Please sign in again.");
+    return;
+  }
+  const [user] = await db.select().from(users).where(eq(users.id, session.user_id)).limit(1);
+  if (!user || !user.is_active) {
+    fail(res, 401, "ERR_USER_INACTIVE", "Account is not active.");
+    return;
+  }
+
+  const access = signAccessToken(user.id);
+  const refresh = generateRefreshToken();
+  await db
+    .update(device_sessions)
+    .set({ refresh_token_hash: refresh.hash, expires_at: refresh.expiresAt, last_used_at: new Date() })
+    .where(eq(device_sessions.id, session.id));
+
+  const sessionUser = toSessionUser(user);
+  setAuthCookies(res, sessionUser, access.token, access.expiresAt, refresh.token, refresh.expiresAt);
+  res.status(200).json({
+    data: {
+      user: sessionUser,
+      tokens: {
+        access_token: access.token,
+        refresh_token: refresh.token,
+        access_expires_at: access.expiresAt.toISOString(),
+        refresh_expires_at: refresh.expiresAt.toISOString(),
+      },
+    },
+  });
+});
+
+router.get("/me", async (req: Request, res: Response) => {
+  const cookie = (req.cookies as Record<string, string> | undefined)?.jp_access;
+  const header = req.headers.authorization?.startsWith("Bearer ")
+    ? req.headers.authorization.slice(7)
+    : undefined;
+  const token = header ?? cookie;
+  if (!token) {
+    fail(res, 401, "ERR_UNAUTHENTICATED", "Not signed in.");
+    return;
+  }
+  const verified = verifyAccessToken(token);
+  if (!verified) {
+    fail(res, 401, "ERR_TOKEN_INVALID", "Session expired.");
+    return;
+  }
+  const [user] = await db.select().from(users).where(eq(users.id, verified.uid)).limit(1);
+  if (!user || !user.is_active) {
+    fail(res, 401, "ERR_USER_INACTIVE", "Account is not active.");
+    return;
+  }
+  res.status(200).json({ data: { user: toSessionUser(user) } });
 });
 
 async function handleLogout(req: Request, res: Response): Promise<void> {
-  const accessToken = req.cookies?.jp_access;
-
-  if (accessToken) {
-    await fetch(`${API_BASE}/v1/auth/logout`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${accessToken}`, Accept: 'application/json' },
-    }).catch(() => undefined);
+  const refresh = (req.cookies as Record<string, string> | undefined)?.jp_refresh;
+  if (refresh) {
+    await db
+      .update(device_sessions)
+      .set({ revoked_at: new Date() })
+      .where(eq(device_sessions.refresh_token_hash, hashSecret(refresh)))
+      .catch(() => undefined);
   }
-
-  for (const name of ['jp_access', 'jp_refresh', 'jp_user', 'jp_imp_active', 'jp_imp_origin_name']) {
-    res.clearCookie(name, { path: '/' });
-  }
-
+  clearAuthCookies(res);
   res.status(204).end();
 }
 
-router.post('/logout', handleLogout);
-router.delete('/logout', handleLogout);
+router.post("/logout", handleLogout);
+router.delete("/logout", handleLogout);
+
+void TOKEN_TTL;
 
 export default router;

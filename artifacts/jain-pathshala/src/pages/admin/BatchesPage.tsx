@@ -65,8 +65,8 @@ export default function BatchesPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await apiGet<{ data: { items: AdminBatchRow[] } }>('/v1/admin/batches');
-      setItems(res.data?.items ?? []);
+      const res = await apiGet<{ items: AdminBatchRow[] }>('/v1/admin/batches');
+      setItems(res?.items ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load batches.');
     } finally {

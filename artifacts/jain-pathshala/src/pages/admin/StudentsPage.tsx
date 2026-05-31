@@ -85,10 +85,10 @@ export default function StudentsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await apiGet<{ data: { items: AdminStudentRow[] } }>(
+      const res = await apiGet<{ items: AdminStudentRow[] }>(
         '/v1/admin/students?limit=100',
       );
-      setItems(res.data?.items ?? []);
+      setItems(res?.items ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load students.');
     } finally {

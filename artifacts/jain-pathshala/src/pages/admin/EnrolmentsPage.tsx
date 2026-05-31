@@ -105,8 +105,8 @@ export default function EnrolmentsPage() {
     setError(null);
     try {
       const qs = statusFilter !== 'all' ? `?status=${statusFilter}` : '';
-      const res = await apiGet<{ data: { items: EnrolmentRow[] } }>(`/v1/admin/enrolments${qs}`);
-      setItems(res.data?.items ?? []);
+      const res = await apiGet<{ items: EnrolmentRow[] }>(`/v1/admin/enrolments${qs}`);
+      setItems(res?.items ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load enrolments.');
     } finally {
