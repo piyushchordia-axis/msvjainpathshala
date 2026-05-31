@@ -60,7 +60,7 @@ function DecideActions({ id, status, onChanged }: DecideActionsProps) {
     }
     setBusy(action);
     try {
-      await apiPost(`/v1/enrolments/${id}/${action}`, body);
+      await apiPost(`/v1/admin/enrolments/${id}/${action}`, body);
       toast.success(`Enrolment ${action}ed.`);
       onChanged();
     } catch (err) {
@@ -105,7 +105,7 @@ export default function EnrolmentsPage() {
     setError(null);
     try {
       const qs = statusFilter !== 'all' ? `?status=${statusFilter}` : '';
-      const res = await apiGet<{ data: { items: EnrolmentRow[] } }>(`/v1/enrolments${qs}`);
+      const res = await apiGet<{ data: { items: EnrolmentRow[] } }>(`/v1/admin/enrolments${qs}`);
       setItems(res.data?.items ?? []);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not load enrolments.');

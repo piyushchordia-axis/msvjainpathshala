@@ -8,7 +8,7 @@ export function ImpersonationBanner({ subjectName, subjectRole }: { subjectName:
         <span className="font-semibold">Impersonating {subjectName}</span>{' '}
         <span className="text-destructive/80">— acting as {subjectRole}.</span>
       </div>
-      <form action="/api/admin/impersonate/stop" method="POST">
+      <form action="/v1/admin/impersonate/stop" method="POST">
         <button
           type="submit"
           className="rounded-md border border-destructive bg-card px-3 py-1 text-xs font-medium text-destructive hover:bg-destructive hover:text-destructive-foreground"
