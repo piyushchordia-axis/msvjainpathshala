@@ -121,7 +121,7 @@ router.post('/login', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/logout', async (req: Request, res: Response) => {
+async function handleLogout(req: Request, res: Response): Promise<void> {
   const accessToken = req.cookies?.jp_access;
 
   if (accessToken) {
@@ -136,6 +136,9 @@ router.post('/logout', async (req: Request, res: Response) => {
   }
 
   res.status(204).end();
-});
+}
+
+router.post('/logout', handleLogout);
+router.delete('/logout', handleLogout);
 
 export default router;

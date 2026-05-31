@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { readSessionUserFromCookie, clearSessionCookies, type SessionUser } from '@/lib/auth';
-import { del } from '@/lib/api-client';
+import { post } from '@/lib/api-client';
 
 interface AuthContextValue {
   user: SessionUser | null;
@@ -27,7 +27,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   async function logout() {
     try {
-      await del('/api/auth/logout');
+      await post('/api/auth/logout', {});
     } catch {}
     clearSessionCookies();
     setUser(null);
