@@ -30,6 +30,7 @@ import {
   shivir_events,
   library_items,
   gallery_items,
+  settings,
 } from "./schema";
 import { tierForPoints } from "./schema/enums";
 import { sql } from "drizzle-orm";
@@ -59,7 +60,7 @@ async function main(): Promise<void> {
       digital_id_cards, msv_enrolments, enrolments, students,
       shikshak_batch_assignments, sanchalak_centre_assignments,
       centre_holidays, batches, centres,
-      notice_reads, library_access_logs,
+      notice_reads, library_access_logs, settings,
       otp_codes, device_sessions, users,
       cities, states
     restart identity cascade
@@ -596,8 +597,15 @@ async function main(): Promise<void> {
     },
   ]);
 
+  /* ---------------- Settings ---------------- */
+  await db.insert(settings).values({
+    key: "default_otp_code",
+    value: "123456",
+    updated_at: new Date(),
+  });
+
   console.log("Seed complete.");
-  console.log("\nLogin phones (dev OTP code is returned by the API):");
+  console.log("\nLogin phones (OTP code: 123456 for all users via settings):");
   console.log("  super_admin : +919800000001");
   console.log("  state_admin : +919800000002");
   console.log("  city_admin  : +919800000003");

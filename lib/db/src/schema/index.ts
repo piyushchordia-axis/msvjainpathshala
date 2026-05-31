@@ -10,3 +10,4 @@ export * from "./notices";
 export * from "./shivirs";
 export * from "./library";
 export * from "./gallery";
+export * from "./settings";

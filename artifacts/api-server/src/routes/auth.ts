@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { z } from "zod";
-import { db, users, otp_codes, device_sessions } from "@workspace/db";
+import { db, users, otp_codes, device_sessions, settings } from "@workspace/db";
 import { and, eq, isNull } from "drizzle-orm";
 import {
   loginRequestSchema,
@@ -53,7 +53,18 @@ router.post("/login", async (req: Request, res: Response) => {
       .limit(1);
 
     const otpToken = generateOtpToken();
-    const code = generateOtpCode();
+    let code = generateOtpCode();
+
+    // Check settings table for a default OTP override (e.g. "123456").
+    const [otpSetting] = await db
+      .select()
+      .from(settings)
+      .where(eq(settings.key, "default_otp_code"))
+      .limit(1);
+    if (otpSetting?.value) {
+      code = otpSetting.value;
+    }
+
     const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
 
     // Always create a token row so timing does not leak whether the phone exists.
@@ -68,9 +79,8 @@ router.post("/login", async (req: Request, res: Response) => {
       otp_token: otpToken,
       expires_in_seconds: OTP_TTL_SECONDS,
     };
-    // Dev convenience: surface the code (no real SMS). Never in production.
-    // Only returned for registered phones so the flow mirrors production gating.
-    if (!isProd && user) payload.dev_code = code;
+    // Surface the code in the response for registered users (no real SMS).
+    if (user) payload.dev_code = code;
     res.status(200).json({ data: payload });
     return;
   }
