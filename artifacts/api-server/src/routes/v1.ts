@@ -27,8 +27,16 @@ async function proxy(req: Request, res: Response, upstreamPath: string): Promise
   const url = `${INTERNAL_API_BASE}${upstreamPath}${qs}`;
   const headers: Record<string, string> = { Accept: "application/json" };
 
-  const auth = (req.cookies as Record<string, string> | undefined)?.jp_access;
-  if (auth) headers["Authorization"] = `Bearer ${auth}`;
+  // Mobile clients send a bearer token via the Authorization header (no cookies);
+  // the web client relies on the jp_access cookie. Honor the header first, then
+  // fall back to the cookie so existing web behavior is unchanged.
+  const incomingAuth = req.headers.authorization;
+  const cookieAuth = (req.cookies as Record<string, string> | undefined)?.jp_access;
+  if (incomingAuth) {
+    headers["Authorization"] = incomingAuth;
+  } else if (cookieAuth) {
+    headers["Authorization"] = `Bearer ${cookieAuth}`;
+  }
 
   if (req.method !== "GET" && req.method !== "HEAD") {
     headers["Content-Type"] = "application/json";
