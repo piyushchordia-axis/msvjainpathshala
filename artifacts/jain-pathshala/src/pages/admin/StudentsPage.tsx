@@ -48,7 +48,7 @@ function StudentRowActions({
     if (status === 'active' && !reason) return;
     setBusy(true);
     try {
-      await apiPost(`/api/admin/students/${id}/status`, {
+      await apiPost(`/v1/admin/students/${id}/status`, {
         action,
         ...(reason ? { reason } : {}),
       });

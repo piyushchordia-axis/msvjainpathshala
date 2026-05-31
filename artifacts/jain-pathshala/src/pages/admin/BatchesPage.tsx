@@ -39,7 +39,7 @@ function BatchRowActions({ id, status, onChanged }: { id: string; status: string
     const action = status === 'active' ? 'deactivate' : 'activate';
     setBusy(true);
     try {
-      await apiPost(`/api/admin/batches/${id}/${action}`, {});
+      await apiPost(`/v1/admin/batches/${id}/${action}`, {});
       toast.success(`Batch ${action}d.`);
       onChanged();
     } catch (err) {
