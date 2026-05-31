@@ -56,7 +56,7 @@ _Populate as you build — explicit user instructions worth remembering across s
 
 ## Gotchas
 
-- Admin panel routes: `/admin` (exact) and `/admin/:rest+` both route to `AdminRoutes`. The wouter pattern `/admin/:rest*` does NOT match bare `/admin` — always use both routes.
+- Admin panel routes: `/admin` (exact) and `/admin/*?` both route to `AdminRoutes`. In wouter v3, `:rest+` does NOT match multi-segment paths like `/admin/punya/configs` — use `/admin/*?` (optional wildcard) for the catch-all. Always keep both routes so bare `/admin` also matches.
 - Apostrophes in JS string literals delimited by single quotes will crash esbuild. Use double-quoted strings or backtick templates when the value contains `'`.
 - `ulid` is a runtime dep of `@workspace/jain-pathshala` (not devDep) — it generates device IDs in the login flow.
 - `VITE_API_BASE_URL` must be set (or left empty for same-origin) before wiring up the real backend.
