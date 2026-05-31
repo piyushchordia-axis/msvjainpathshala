@@ -72,6 +72,8 @@ export function generateOtpToken(): string {
 }
 
 export function generateOtpCode(): string {
-  // 6-digit numeric, zero-padded
+  // Dev convenience: always return 123456 so testers don't need to read a
+  // dynamic code. In production we generate a random 6-digit code.
+  if (process.env.NODE_ENV !== "production") return "123456";
   return String(Math.floor(Math.random() * 1_000_000)).padStart(6, "0");
 }
