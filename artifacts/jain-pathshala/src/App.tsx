@@ -12,6 +12,7 @@ import HomePage from '@/pages/public/HomePage';
 import CentresPage from '@/pages/public/CentresPage';
 import CentreDetailPage from '@/pages/public/CentreDetailPage';
 import ShivirsPage from '@/pages/public/ShivirsPage';
+import ShivirDetailPage from '@/pages/public/ShivirDetailPage';
 import NoticesPage from '@/pages/public/NoticesPage';
 import LibraryPage from '@/pages/public/LibraryPage';
 import GalleryPage from '@/pages/public/GalleryPage';
@@ -66,6 +67,7 @@ function PublicRoutes() {
         <Route path="/centres" component={CentresPage} />
         <Route path="/centres/:id" component={CentreDetailPage} />
         <Route path="/shivirs" component={ShivirsPage} />
+        <Route path="/shivirs/:id" component={ShivirDetailPage} />
         <Route path="/notices" component={NoticesPage} />
         <Route path="/library" component={LibraryPage} />
         <Route path="/gallery" component={GalleryPage} />

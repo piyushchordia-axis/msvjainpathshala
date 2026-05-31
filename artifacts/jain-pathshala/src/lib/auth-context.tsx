@@ -4,21 +4,25 @@ import { del } from '@/lib/api-client';
 
 interface AuthContextValue {
   user: SessionUser | null;
+  loading: boolean;
   setUser: (u: SessionUser | null) => void;
   logout: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue>({
   user: null,
+  loading: true,
   setUser: () => {},
   logout: async () => {},
 });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     setUser(readSessionUserFromCookie());
+    setLoading(false);
   }, []);
 
   async function logout() {
@@ -31,7 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, setUser, logout }}>
+    <AuthContext.Provider value={{ user, loading, setUser, logout }}>
       {children}
     </AuthContext.Provider>
   );

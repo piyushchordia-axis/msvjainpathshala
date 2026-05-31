@@ -6,20 +6,28 @@ import { useAuth } from '@/lib/auth-context';
 import { canAccessAdminPanel } from '@/lib/auth';
 
 function readCookie(name: string): string | null {
+  if (typeof document === 'undefined') return null;
   const m = document.cookie.split(';').map(c => c.trim()).find(c => c.startsWith(`${name}=`));
   return m ? decodeURIComponent(m.slice(name.length + 1)) : null;
 }
 
 export function AdminLayout({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
-  const [pathname] = useLocation();
+  const { user, loading } = useAuth();
+  const [_pathname] = useLocation();
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" aria-label="Loading…" />
+      </div>
+    );
+  }
 
   if (!user || !canAccessAdminPanel(user.role)) {
     return <Redirect to="/admin/login" />;
   }
 
   const impActive = readCookie('jp_imp_active') === 'true';
-  const impOriginName = readCookie('jp_imp_origin_name') ?? 'Administrator';
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">
