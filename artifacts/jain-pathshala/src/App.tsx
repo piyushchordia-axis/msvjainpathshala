@@ -1,0 +1,149 @@
+import { Switch, Route, Router as WouterRouter } from 'wouter';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { TooltipProvider } from '@/components/ui/tooltip';
+import { ToasterJP } from '@/components/ui/toast-jp';
+import { AuthProvider } from '@/lib/auth-context';
+import { LocaleProvider } from '@/lib/locale-context';
+
+import { PublicLayout } from '@/pages/public/PublicLayout';
+import { AdminLayout } from '@/pages/admin/AdminLayout';
+
+import HomePage from '@/pages/public/HomePage';
+import CentresPage from '@/pages/public/CentresPage';
+import {
+  AboutPage,
+  ContactPage,
+  DonatePage,
+  EnquirePage,
+  GalleryPage,
+  LibraryPage,
+  MsvPage,
+  NoticesPage,
+  ShivirsPage,
+} from '@/pages/public/PublicStubs';
+
+import LoginPage from '@/pages/admin/LoginPage';
+import DashboardPage from '@/pages/admin/DashboardPage';
+import {
+  AnalyticsPage,
+  StudentsPage,
+  EnrolmentsPage,
+  MsvEnrolmentsPage,
+  ShikshaksPage,
+  BatchesPage,
+  CurriculumPage,
+  ExamsPage,
+  NiyamsPage,
+  ShivirsPage as AdminShivirsPage,
+  PunyaAwardPage,
+  PunyaConfigsPage,
+  PunyaAuditPage,
+  CentresPage as AdminCentresPage,
+  HolidaysPage,
+  NoticesPage as AdminNoticesPage,
+  GalleryPage as AdminGalleryPage,
+  LibraryPage as AdminLibraryPage,
+  DonationsPage,
+  ServiceRequestsPage,
+  ReportsPage,
+  AuditPage,
+  GeographyPage,
+  SettingsPage,
+  QueuesPage,
+} from '@/pages/admin/AdminStubs';
+
+import NotFound from '@/pages/not-found';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      retry: 1,
+      staleTime: 30_000,
+    },
+  },
+});
+
+function PublicRoutes() {
+  return (
+    <PublicLayout>
+      <Switch>
+        <Route path="/" component={HomePage} />
+        <Route path="/centres" component={CentresPage} />
+        <Route path="/shivirs" component={ShivirsPage} />
+        <Route path="/notices" component={NoticesPage} />
+        <Route path="/library" component={LibraryPage} />
+        <Route path="/gallery" component={GalleryPage} />
+        <Route path="/about" component={AboutPage} />
+        <Route path="/contact" component={ContactPage} />
+        <Route path="/donate" component={DonatePage} />
+        <Route path="/enquire" component={EnquirePage} />
+        <Route path="/msv" component={MsvPage} />
+        <Route component={NotFound} />
+      </Switch>
+    </PublicLayout>
+  );
+}
+
+function AdminRoutes() {
+  return (
+    <AdminLayout>
+      <Switch>
+        <Route path="/admin" component={DashboardPage} />
+        <Route path="/admin/analytics" component={AnalyticsPage} />
+        <Route path="/admin/students" component={StudentsPage} />
+        <Route path="/admin/enrolments" component={EnrolmentsPage} />
+        <Route path="/admin/msv-enrolments" component={MsvEnrolmentsPage} />
+        <Route path="/admin/shikshaks" component={ShikshaksPage} />
+        <Route path="/admin/batches" component={BatchesPage} />
+        <Route path="/admin/curriculum" component={CurriculumPage} />
+        <Route path="/admin/exams" component={ExamsPage} />
+        <Route path="/admin/niyams" component={NiyamsPage} />
+        <Route path="/admin/shivirs" component={AdminShivirsPage} />
+        <Route path="/admin/punya/manual-award" component={PunyaAwardPage} />
+        <Route path="/admin/punya/configs" component={PunyaConfigsPage} />
+        <Route path="/admin/punya/audit" component={PunyaAuditPage} />
+        <Route path="/admin/centres" component={AdminCentresPage} />
+        <Route path="/admin/holidays" component={HolidaysPage} />
+        <Route path="/admin/notices" component={AdminNoticesPage} />
+        <Route path="/admin/gallery" component={AdminGalleryPage} />
+        <Route path="/admin/library" component={AdminLibraryPage} />
+        <Route path="/admin/donations" component={DonationsPage} />
+        <Route path="/admin/service-requests" component={ServiceRequestsPage} />
+        <Route path="/admin/reports" component={ReportsPage} />
+        <Route path="/admin/audit" component={AuditPage} />
+        <Route path="/admin/geography" component={GeographyPage} />
+        <Route path="/admin/settings" component={SettingsPage} />
+        <Route path="/admin/queues" component={QueuesPage} />
+        <Route component={NotFound} />
+      </Switch>
+    </AdminLayout>
+  );
+}
+
+function Router() {
+  return (
+    <Switch>
+      <Route path="/admin/login" component={LoginPage} />
+      <Route path="/admin" component={AdminRoutes} />
+      <Route path="/admin/:rest+" component={AdminRoutes} />
+      <Route component={PublicRoutes} />
+    </Switch>
+  );
+}
+
+export default function App() {
+  return (
+    <QueryClientProvider client={queryClient}>
+      <TooltipProvider>
+        <LocaleProvider>
+          <AuthProvider>
+            <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+              <Router />
+            </WouterRouter>
+            <ToasterJP />
+          </AuthProvider>
+        </LocaleProvider>
+      </TooltipProvider>
+    </QueryClientProvider>
+  );
+}

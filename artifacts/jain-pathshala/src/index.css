@@ -1,0 +1,223 @@
+@import url('https://fonts.googleapis.com/css2?family=Mukta:wght@300;400;500;600;700;800&family=Tiro+Devanagari+Sanskrit&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+
+  --font-sans: var(--font-body), sans-serif;
+  --font-serif: var(--font-display), serif;
+  --font-mono: var(--font-mono-family), monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  --background: 33 55% 97%;
+  --foreground: 21 100% 5%;
+  --card: 0 0% 100%;
+  --card-foreground: 21 100% 5%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 21 100% 5%;
+
+  --primary: 22 78% 47%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 0 65% 28%;
+  --secondary-foreground: 33 55% 97%;
+
+  --muted: 35 47% 92%;
+  --muted-foreground: 24 19% 46%;
+
+  --accent: 33 71% 95%;
+  --accent-foreground: 22 78% 35%;
+
+  --destructive: 0 70% 42%;
+  --destructive-foreground: 0 0% 100%;
+
+  --border: 33 41% 83%;
+  --input: 33 41% 83%;
+  --ring: 22 78% 47%;
+
+  --radius: 0.75rem;
+
+  --font-display: 'Tiro Devanagari Sanskrit';
+  --font-body: 'Mukta';
+  --font-mono-family: 'JetBrains Mono';
+
+  /* Extended palette */
+  --cream: 33 55% 97%;
+  --cream-dark: 35 47% 92%;
+  --ink-sub: 24 19% 46%;
+  --ink-dim: 24 15% 58%;
+
+  --status-success: 142 69% 28%;
+  --status-success-soft: 142 69% 94%;
+  --status-warning: 32 95% 44%;
+  --status-warning-soft: 32 95% 94%;
+  --status-error: 0 70% 42%;
+  --status-error-soft: 0 70% 94%;
+  --status-info: 213 94% 39%;
+  --status-info-soft: 213 94% 94%;
+
+  --gold: #C8941F;
+  --saffron: #D4621A;
+  --maroon-700: #6B1212;
+}
+
+[data-theme='dark'] {
+  --background: 21 100% 5%;
+  --foreground: 33 55% 97%;
+  --card: 21 30% 9%;
+  --card-foreground: 33 55% 97%;
+  --popover: 21 30% 9%;
+  --popover-foreground: 33 55% 97%;
+  --primary: 22 78% 60%;
+  --primary-foreground: 21 100% 5%;
+  --secondary: 0 50% 38%;
+  --secondary-foreground: 33 55% 97%;
+  --muted: 21 20% 14%;
+  --muted-foreground: 33 25% 65%;
+  --accent: 22 50% 18%;
+  --accent-foreground: 22 78% 70%;
+  --destructive: 0 70% 55%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 21 20% 22%;
+  --input: 21 20% 22%;
+  --ring: 22 78% 55%;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-family: var(--font-body), sans-serif;
+  }
+
+  .font-display {
+    font-family: var(--font-display), serif;
+  }
+
+  .font-mono {
+    font-family: var(--font-mono-family), monospace;
+  }
+}
+
+@layer utilities {
+  .container {
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+    max-width: 80rem;
+  }
+
+  .rounded-pill {
+    border-radius: 9999px;
+  }
+
+  .text-ink-sub {
+    color: hsl(var(--ink-sub));
+  }
+  .text-ink-dim {
+    color: hsl(var(--ink-dim));
+  }
+  .bg-cream-dark {
+    background-color: hsl(var(--cream-dark));
+  }
+  .bg-accent\/50 {
+    background-color: hsl(var(--accent) / 0.5);
+  }
+  .text-gold {
+    color: var(--gold);
+  }
+  .bg-gold\/15 {
+    background-color: color-mix(in srgb, var(--gold) 15%, transparent);
+  }
+  .text-saffron {
+    color: var(--saffron);
+  }
+  .bg-saffron {
+    background-color: var(--saffron);
+  }
+  .hover\:bg-saffron-700:hover {
+    background-color: #b8521a;
+  }
+  .bg-maroon-50 {
+    background-color: #fdf0f0;
+  }
+  .bg-maroon-700\/40 {
+    background-color: color-mix(in srgb, var(--maroon-700) 40%, transparent);
+  }
+  .hover\:bg-maroon-700:hover {
+    background-color: var(--maroon-700);
+  }
+  .border-maroon-700\/40 {
+    border-color: color-mix(in srgb, var(--maroon-700) 40%, transparent);
+  }
+  .text-cream {
+    color: hsl(var(--cream));
+  }
+  .text-cream-deeper\/70 {
+    color: hsl(33 45% 88% / 0.7);
+  }
+  .text-cream-deeper\/80 {
+    color: hsl(33 45% 88% / 0.8);
+  }
+  .text-cream-deeper\/85 {
+    color: hsl(33 45% 88% / 0.85);
+  }
+
+  .text-status-success { color: hsl(var(--status-success)); }
+  .text-status-warning { color: hsl(var(--status-warning)); }
+  .text-status-error   { color: hsl(var(--status-error)); }
+  .text-status-info    { color: hsl(var(--status-info)); }
+  .bg-status-success-soft { background-color: hsl(var(--status-success-soft)); }
+  .bg-status-warning-soft { background-color: hsl(var(--status-warning-soft)); }
+  .bg-status-error-soft   { background-color: hsl(var(--status-error-soft)); }
+  .bg-status-info-soft    { background-color: hsl(var(--status-info-soft)); }
+  .ring-status-success\/40 { --tw-ring-color: hsl(var(--status-success) / 0.4); }
+  .ring-status-warning\/40 { --tw-ring-color: hsl(var(--status-warning) / 0.4); }
+  .ring-status-error\/40   { --tw-ring-color: hsl(var(--status-error) / 0.4); }
+  .ring-status-info\/40    { --tw-ring-color: hsl(var(--status-info) / 0.4); }
+
+  .shadow-1 { box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05); }
+  .shadow-2 { box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1); }
+  .hover\:shadow-2:hover { box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1); }
+  .shadow-lg { box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1); }
+}

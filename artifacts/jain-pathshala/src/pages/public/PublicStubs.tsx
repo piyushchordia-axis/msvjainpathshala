@@ -1,0 +1,91 @@
+import { PageStub } from '@/components/public/PageStub';
+
+export function AboutPage() {
+  return (
+    <PageStub
+      kicker="About"
+      title="The Megh Sanskar Vatika story"
+      body="Our centres are sustained by Pratishthatha families, run by Sanchalaks, and taught by Gurujis and Didis who have come up through the same tradition they now share."
+    />
+  );
+}
+
+export function ContactPage() {
+  return (
+    <PageStub
+      kicker="Contact"
+      title="Talk to the MSV team"
+      body="Email and phone for the central MSV office. Contact form coming soon."
+    />
+  );
+}
+
+export function DonatePage() {
+  return (
+    <PageStub
+      kicker="Donate"
+      title="Support Jain education"
+      body="Every donation helps keep centres running, fund curriculum, and support Gurujis and Didis."
+    />
+  );
+}
+
+export function EnquirePage() {
+  return (
+    <PageStub
+      kicker="Enquire"
+      title="Get in touch"
+      body="Want to enrol a child, set up a new centre, or partner with MSV? Drop us a message."
+    />
+  );
+}
+
+export function GalleryPage() {
+  return (
+    <PageStub
+      kicker="Gallery"
+      title="Life at Jain Pathshala"
+      body="Photos from across the network — shivirs, competitions, daily learning, and celebrations."
+    />
+  );
+}
+
+export function LibraryPage() {
+  return (
+    <PageStub
+      kicker="Library"
+      title="Learning resources"
+      body="Curriculum materials, stotras, study guides, and more for students and teachers."
+    />
+  );
+}
+
+export function MsvPage() {
+  return (
+    <PageStub
+      kicker="MSV"
+      title="Megh Sanskar Vatika"
+      body="The MSV programme nurtures exceptional students through advanced Jain spiritual education."
+    />
+  );
+}
+
+export function NoticesPage() {
+  return (
+    <PageStub
+      kicker="Notices"
+      title="Latest notices"
+      body="Announcements from your centre and the wider MSV network."
+    />
+  );
+}
+
+export function ShivirsPage() {
+  return (
+    <PageStub
+      kicker="Shivirs"
+      title="Upcoming shivirs"
+      body="Residential and day camps across the network. Enrol through the mobile app."
+    />
+  );
+}

@@ -1,0 +1,31 @@
+kind = "web"
+previewPath = "/"
+title = "Jain Pathshala"
+version = "1.0.0"
+id = "artifacts/jain-pathshala"
+router = "path"
+
+[[integratedSkills]]
+name = "react-vite"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24588
+
+[services.development]
+run = "pnpm --filter @workspace/jain-pathshala run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/jain-pathshala", "run", "build" ]
+publicDir = "artifacts/jain-pathshala/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24588"
+BASE_PATH = "/"
