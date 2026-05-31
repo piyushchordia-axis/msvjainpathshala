@@ -40,52 +40,12 @@ export function EnquirePage() {
   );
 }
 
-export function GalleryPage() {
-  return (
-    <PageStub
-      kicker="Gallery"
-      title="Life at Jain Pathshala"
-      body="Photos from across the network — shivirs, competitions, daily learning, and celebrations."
-    />
-  );
-}
-
-export function LibraryPage() {
-  return (
-    <PageStub
-      kicker="Library"
-      title="Learning resources"
-      body="Curriculum materials, stotras, study guides, and more for students and teachers."
-    />
-  );
-}
-
 export function MsvPage() {
   return (
     <PageStub
       kicker="MSV"
       title="Megh Sanskar Vatika"
       body="The MSV programme nurtures exceptional students through advanced Jain spiritual education."
-    />
-  );
-}
-
-export function NoticesPage() {
-  return (
-    <PageStub
-      kicker="Notices"
-      title="Latest notices"
-      body="Announcements from your centre and the wider MSV network."
-    />
-  );
-}
-
-export function ShivirsPage() {
-  return (
-    <PageStub
-      kicker="Shivirs"
-      title="Upcoming shivirs"
-      body="Residential and day camps across the network. Enrol through the mobile app."
     />
   );
 }

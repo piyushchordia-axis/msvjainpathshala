@@ -10,27 +10,22 @@ import { AdminLayout } from '@/pages/admin/AdminLayout';
 
 import HomePage from '@/pages/public/HomePage';
 import CentresPage from '@/pages/public/CentresPage';
-import {
-  AboutPage,
-  ContactPage,
-  DonatePage,
-  EnquirePage,
-  GalleryPage,
-  LibraryPage,
-  MsvPage,
-  NoticesPage,
-  ShivirsPage,
-} from '@/pages/public/PublicStubs';
+import CentreDetailPage from '@/pages/public/CentreDetailPage';
+import ShivirsPage from '@/pages/public/ShivirsPage';
+import NoticesPage from '@/pages/public/NoticesPage';
+import LibraryPage from '@/pages/public/LibraryPage';
+import GalleryPage from '@/pages/public/GalleryPage';
+import { AboutPage, ContactPage, DonatePage, EnquirePage, MsvPage } from '@/pages/public/PublicStubs';
 
 import LoginPage from '@/pages/admin/LoginPage';
 import DashboardPage from '@/pages/admin/DashboardPage';
+import StudentsPage from '@/pages/admin/StudentsPage';
+import EnrolmentsPage from '@/pages/admin/EnrolmentsPage';
+import BatchesPage from '@/pages/admin/BatchesPage';
 import {
   AnalyticsPage,
-  StudentsPage,
-  EnrolmentsPage,
   MsvEnrolmentsPage,
   ShikshaksPage,
-  BatchesPage,
   CurriculumPage,
   ExamsPage,
   NiyamsPage,
@@ -69,6 +64,7 @@ function PublicRoutes() {
       <Switch>
         <Route path="/" component={HomePage} />
         <Route path="/centres" component={CentresPage} />
+        <Route path="/centres/:id" component={CentreDetailPage} />
         <Route path="/shivirs" component={ShivirsPage} />
         <Route path="/notices" component={NoticesPage} />
         <Route path="/library" component={LibraryPage} />
