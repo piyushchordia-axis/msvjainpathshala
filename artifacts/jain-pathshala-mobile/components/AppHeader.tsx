@@ -1,5 +1,5 @@
 import { Pressable, Text, View } from "react-native";
-import { fonts } from "@/constants/typography";
+import { bodyFamily } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { Body, Row, Title, useWebTopInset } from "@/components/ui";
@@ -20,12 +20,12 @@ export function LanguageToggle() {
       }}
     >
       <View style={{ paddingHorizontal: 11, paddingVertical: 5, backgroundColor: locale === "en" ? c.primary : "transparent" }}>
-        <Text style={{ fontFamily: fonts.bodySemiBold, fontSize: 12, color: locale === "en" ? c.primaryForeground : c.mutedForeground }}>
+        <Text style={{ fontFamily: bodyFamily(false, "semibold"), fontSize: 12, color: locale === "en" ? c.primaryForeground : c.mutedForeground }}>
           EN
         </Text>
       </View>
       <View style={{ paddingHorizontal: 11, paddingVertical: 5, backgroundColor: locale === "hi" ? c.primary : "transparent" }}>
-        <Text style={{ fontFamily: fonts.bodySemiBold, fontSize: 12, color: locale === "hi" ? c.primaryForeground : c.mutedForeground }}>
+        <Text style={{ fontFamily: bodyFamily(true, "semibold"), fontSize: 12, color: locale === "hi" ? c.primaryForeground : c.mutedForeground }}>
           हिं
         </Text>
       </View>

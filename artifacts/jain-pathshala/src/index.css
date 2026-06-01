@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Mukta:wght@300;400;500;600;700;800&family=Tiro+Devanagari+Sanskrit&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Mukta:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800;900&family=Tiro+Devanagari+Sanskrit&display=swap');
 
 @import "tailwindcss";
 @import "tw-animate-css";
@@ -72,9 +72,10 @@
 
   --radius: 0.75rem;
 
-  --font-display: 'Tiro Devanagari Sanskrit';
-  --font-body: 'Mukta';
-  --font-mono-family: 'JetBrains Mono';
+  --font-ui: 'Outfit', 'Mukta', sans-serif;
+  --font-display: 'Outfit', 'Tiro Devanagari Sanskrit', sans-serif;
+  --font-body: var(--font-ui);
+  --font-mono-family: 'DM Mono', ui-monospace, monospace;
 
   /* Extended palette */
   --cream: 33 55% 97%;
@@ -125,15 +126,18 @@
 
   body {
     @apply bg-background text-foreground antialiased;
-    font-family: var(--font-body), sans-serif;
+    font-family: var(--font-body);
   }
 
   .font-display {
-    font-family: var(--font-display), serif;
+    font-family: var(--font-display);
+    font-weight: 700;
   }
 
-  .font-mono {
-    font-family: var(--font-mono-family), monospace;
+  .font-mono,
+  .font-numeric {
+    font-family: var(--font-mono-family);
+    font-variant-numeric: tabular-nums;
   }
 }
 

@@ -1,9 +1,18 @@
 import { useEffect, useState } from 'react';
+import { Plus } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
+} from '@/components/ui/dialog';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 
 interface AdminStudentRow {
   id: string;
@@ -76,6 +85,123 @@ function StudentRowActions({
   );
 }
 
+interface CentreOpt { id: string; name: string; }
+interface BatchOpt { id: string; name: string; centre_id: string; }
+
+const AGE_GROUPS_S = ['bal', 'kishor', 'tarun', 'yuva'] as const;
+
+function AddStudentDialog({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [centres, setCentres] = useState<CentreOpt[]>([]);
+  const [batches, setBatches] = useState<BatchOpt[]>([]);
+  const [fullName, setFullName] = useState('');
+  const [centreId, setCentreId] = useState('');
+  const [batchId, setBatchId] = useState('');
+  const [ageGroup, setAgeGroup] = useState('');
+  const [gender, setGender] = useState('');
+  const [dob, setDob] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    void apiGet<{ items: CentreOpt[] }>('/v1/admin/centres').then((r) => setCentres(r?.items ?? []));
+    void apiGet<{ items: BatchOpt[] }>('/v1/admin/batches').then((r) => setBatches(r?.items ?? []));
+  }, [open]);
+
+  const filteredBatches = centreId ? batches.filter((b) => b.centre_id === centreId) : batches;
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!fullName.trim() || !centreId || !ageGroup) return;
+    setBusy(true);
+    try {
+      const res = await apiPost<{ student_code: string }>('/v1/admin/students', {
+        full_name: fullName.trim(),
+        centre_id: centreId,
+        batch_id: batchId || undefined,
+        age_group: ageGroup,
+        gender: gender || undefined,
+        dob: dob || undefined,
+      });
+      toast.success(`Student registered (${res.student_code}).`);
+      setOpen(false);
+      setFullName(''); setCentreId(''); setBatchId(''); setAgeGroup(''); setGender(''); setDob('');
+      onAdded();
+    } catch (err) {
+      toast.error('Failed to register student.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm"><Plus className="mr-1 h-4 w-4" />Add student</Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Register student</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Full name *</Label>
+            <Input value={fullName} onChange={(e) => setFullName(e.target.value)} required />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Centre *</Label>
+            <Select value={centreId} onValueChange={(v) => { setCentreId(v); setBatchId(''); }}>
+              <SelectTrigger><SelectValue placeholder="Select centre" /></SelectTrigger>
+              <SelectContent>
+                {centres.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Age group *</Label>
+            <Select value={ageGroup} onValueChange={setAgeGroup}>
+              <SelectTrigger><SelectValue placeholder="Select age group" /></SelectTrigger>
+              <SelectContent>
+                {AGE_GROUPS_S.map((g) => <SelectItem key={g} value={g} className="capitalize">{g}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Batch (optional)</Label>
+            <Select value={batchId} onValueChange={setBatchId} disabled={filteredBatches.length === 0}>
+              <SelectTrigger><SelectValue placeholder="Select batch" /></SelectTrigger>
+              <SelectContent>
+                {filteredBatches.map((b) => <SelectItem key={b.id} value={b.id}>{b.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs font-medium">Gender</Label>
+              <Select value={gender} onValueChange={setGender}>
+                <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="male">Male</SelectItem>
+                  <SelectItem value="female">Female</SelectItem>
+                  <SelectItem value="other">Other</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs font-medium">Date of birth</Label>
+              <Input type="date" value={dob} onChange={(e) => setDob(e.target.value)} />
+            </div>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !fullName.trim() || !centreId || !ageGroup}>
+              {busy ? 'Saving…' : 'Register'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function StudentsPage() {
   const [items, setItems] = useState<AdminStudentRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -107,6 +233,7 @@ export default function StudentsPage() {
             Roster across your centres and batches. Inactive students stay on record.
           </p>
         </div>
+        <AddStudentDialog onAdded={load} />
       </header>
 
       {error ? (

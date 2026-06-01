@@ -14,9 +14,19 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": false
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true,
+          "NSAllowsArbitraryLoads": false
+        },
+        "NSLocalNetworkUsageDescription": "Jain Pathshala connects to your development server on the same Wi‑Fi network to sign in and load your data.",
+        "NSBonjourServices": ["_expo._tcp"]
+      }
     },
-    "android": {},
+    "android": {
+      "usesCleartextTraffic": true
+    },
     "web": {
       "favicon": "./assets/images/icon.png"
     },

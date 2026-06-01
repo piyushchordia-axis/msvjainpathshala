@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
-import { fonts } from "@/constants/typography";
+import { bodyFamily, fonts } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -103,7 +103,7 @@ export default function OtpScreen() {
               paddingVertical: 10,
             }}
           >
-            <Text style={{ fontFamily: fonts.bodyMedium, color: c.infoText, fontSize: 13 }}>
+            <Text style={{ fontFamily: bodyFamily(hi, "medium"), color: c.infoText, fontSize: 13 }}>
               {hi ? "डेव कोड" : "Dev code"}: {dev_code}
             </Text>
           </View>
@@ -119,12 +119,12 @@ export default function OtpScreen() {
               paddingVertical: 10,
             }}
           >
-            <Text style={{ fontFamily: fonts.body, color: c.errorText, fontSize: 13 }}>{error}</Text>
+            <Text style={{ fontFamily: bodyFamily(hi), color: c.errorText, fontSize: 13 }}>{error}</Text>
           </View>
         ) : null}
 
         <View style={{ marginTop: 16, gap: 12 }}>
-          <Text style={{ fontFamily: fonts.bodySemiBold, fontSize: 13, color: c.foreground }}>
+          <Text style={{ fontFamily: bodyFamily(hi, "semibold"), fontSize: 13, color: c.foreground }}>
             {hi ? "एक बार का कोड" : "One-time code"}
           </Text>
           <TextInput
@@ -139,7 +139,7 @@ export default function OtpScreen() {
               borderRadius: c.radius,
               paddingHorizontal: 14,
               paddingVertical: 12,
-              fontFamily: fonts.body,
+              fontFamily: fonts.mono,
               fontSize: 20,
               letterSpacing: 6,
               color: c.foreground,
@@ -152,7 +152,7 @@ export default function OtpScreen() {
             loading={busy}
           />
           <Pressable onPress={() => router.back()} style={{ paddingVertical: 6, alignItems: "center" }}>
-            <Text style={{ fontFamily: fonts.bodyMedium, color: c.mutedForeground }}>
+            <Text style={{ fontFamily: bodyFamily(hi, "medium"), color: c.mutedForeground }}>
               ← {hi ? "नंबर बदलें" : "Change number"}
             </Text>
           </Pressable>

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -11,7 +12,27 @@ import { useAdminList } from '@/hooks/useAdminList';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
 import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/lib/auth-context';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
+} from '@/components/ui/dialog';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+
+interface GeoCity { id: string; name: string; state_name?: string; }
+
+function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1">
+      <Label className="text-xs font-medium">{label}</Label>
+      {children}
+    </div>
+  );
+}
 
 function formatInr(paise: number): string {
   return `₹${(paise / 100).toLocaleString('en-IN')}`;
@@ -28,8 +49,79 @@ interface CurriculumRow {
   section_count: number;
 }
 
+const NO_CITY = '__none__';
+
+function AddCurriculumDialog({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [cities, setCities] = useState<GeoCity[]>([]);
+  const [name, setName] = useState('');
+  const [kind, setKind] = useState('standard');
+  const [year, setYear] = useState('');
+  const [cityId, setCityId] = useState(NO_CITY);
+
+  useEffect(() => {
+    if (!open) return;
+    void apiGet<{ cities: GeoCity[] }>('/v1/admin/geography').then((r) => setCities(r?.cities ?? []));
+  }, [open]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim()) return;
+    setBusy(true);
+    try {
+      await apiPost('/v1/admin/curricula', {
+        name: name.trim(), kind,
+        academic_year: year.trim() || undefined,
+        city_id: cityId === NO_CITY ? undefined : cityId,
+      });
+      toast.success('Curriculum created.');
+      setOpen(false); setName(''); setKind('standard'); setYear(''); setCityId(NO_CITY);
+      onAdded();
+    } catch (err) {
+      toast.error('Failed.', err instanceof ApiError ? err.message : undefined);
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild><Button size="sm"><Plus className="mr-1 h-4 w-4" />New curriculum</Button></DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Create curriculum</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="Name *"><Input value={name} onChange={(e) => setName(e.target.value)} required /></FormRow>
+          <FormRow label="Kind">
+            <Select value={kind} onValueChange={setKind}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {['standard', 'msv', 'shikshak', 'special'].map((k) => (
+                  <SelectItem key={k} value={k} className="capitalize">{k}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormRow>
+          <FormRow label="Academic year"><Input value={year} onChange={(e) => setYear(e.target.value)} placeholder="e.g. 2025-26" /></FormRow>
+          <FormRow label="City (optional)">
+            <Select value={cityId} onValueChange={setCityId}>
+              <SelectTrigger><SelectValue placeholder="All cities" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_CITY}>All cities</SelectItem>
+                {cities.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}{c.state_name ? ` (${c.state_name})` : ''}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </FormRow>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !name.trim()}>{busy ? 'Saving…' : 'Create'}</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function CurriculumPage() {
-  const { items, loading, error } = useAdminList<CurriculumRow>('/v1/admin/curricula');
+  const { items, loading, error, reload } = useAdminList<CurriculumRow>('/v1/admin/curricula');
   const [treeId, setTreeId] = useState<string | null>(null);
   const [tree, setTree] = useState<{
     curriculum: { name: string; kind: string };
@@ -48,7 +140,7 @@ export function CurriculumPage() {
   }
 
   return (
-    <AdminPageShell title="Curriculum" subtitle="Lesson plans and study materials by city.">
+    <AdminPageShell title="Curriculum" subtitle="Lesson plans and study materials by city." actions={<AddCurriculumDialog onAdded={reload} />}>
       {error ? <AdminError message={error} /> : null}
       <AdminTable
         columns={['Name', 'Kind', 'Year', 'City', 'Sections', '']}
@@ -110,6 +202,77 @@ interface ExamRow {
   attempt_count: number;
 }
 
+function AddExamDialog({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [cities, setCities] = useState<GeoCity[]>([]);
+  const [title, setTitle] = useState('');
+  const [cityId, setCityId] = useState('');
+  const [windowStart, setWindowStart] = useState('');
+  const [windowEnd, setWindowEnd] = useState('');
+  const [totalMarks, setTotalMarks] = useState('100');
+  const [passMark, setPassMark] = useState('40');
+  const [otp, setOtp] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    void apiGet<{ cities: GeoCity[] }>('/v1/admin/geography').then((r) => setCities(r?.cities ?? []));
+  }, [open]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim() || !cityId || !windowStart || !windowEnd) return;
+    setBusy(true);
+    try {
+      const res = await apiPost<{ exam_otp: string }>('/v1/admin/exams', {
+        title_en: title.trim(), city_id: cityId,
+        window_start: new Date(windowStart).toISOString(),
+        window_end: new Date(windowEnd).toISOString(),
+        total_marks: Number(totalMarks), pass_mark: Number(passMark),
+        exam_otp: otp.trim() || undefined,
+      });
+      toast.success(`Exam created. OTP: ${res.exam_otp}`);
+      setOpen(false); setTitle(''); setCityId(''); setWindowStart(''); setWindowEnd(''); setOtp('');
+      onAdded();
+    } catch (err) {
+      toast.error('Failed.', err instanceof ApiError ? err.message : undefined);
+    } finally { setBusy(false); }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild><Button size="sm"><Plus className="mr-1 h-4 w-4" />New exam</Button></DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Create exam</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="Title *"><Input value={title} onChange={(e) => setTitle(e.target.value)} required /></FormRow>
+          <FormRow label="City *">
+            <Select value={cityId} onValueChange={setCityId}>
+              <SelectTrigger><SelectValue placeholder="Select city" /></SelectTrigger>
+              <SelectContent>
+                {cities.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}{c.state_name ? ` (${c.state_name})` : ''}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </FormRow>
+          <div className="grid grid-cols-2 gap-3">
+            <FormRow label="Window start *"><Input type="datetime-local" value={windowStart} onChange={(e) => setWindowStart(e.target.value)} required /></FormRow>
+            <FormRow label="Window end *"><Input type="datetime-local" value={windowEnd} onChange={(e) => setWindowEnd(e.target.value)} required /></FormRow>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <FormRow label="Total marks"><Input type="number" value={totalMarks} onChange={(e) => setTotalMarks(e.target.value)} /></FormRow>
+            <FormRow label="Pass mark"><Input type="number" value={passMark} onChange={(e) => setPassMark(e.target.value)} /></FormRow>
+          </div>
+          <FormRow label="OTP (auto-generated if blank)"><Input value={otp} onChange={(e) => setOtp(e.target.value)} placeholder="e.g. ABC123" className="font-mono" /></FormRow>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !title.trim() || !cityId || !windowStart || !windowEnd}>{busy ? 'Saving…' : 'Create'}</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function ExamsPage() {
   const { items, loading, error, reload } = useAdminList<ExamRow>('/v1/admin/exams?limit=50');
   const [busy, setBusy] = useState<string | null>(null);
@@ -128,7 +291,7 @@ export function ExamsPage() {
   }
 
   return (
-    <AdminPageShell title="Exams" subtitle="Online exams, OTP codes, and result release.">
+    <AdminPageShell title="Exams" subtitle="Online exams, OTP codes, and result release." actions={<AddExamDialog onAdded={reload} />}>
       {error ? <AdminError message={error} /> : null}
       <AdminTable
         columns={['Exam', 'City', 'Window', 'OTP', 'Attempts', 'Results', 'Actions']}
@@ -203,8 +366,8 @@ export function DonationsPage() {
           <tr key={c.id}>
             <td className="px-4 py-3 font-medium">{c.name}</td>
             <td className="px-4 py-3 text-xs">{c.city_name ?? '—'}</td>
-            <td className="px-4 py-3">{formatInr(c.raised_amount_paise)}</td>
-            <td className="px-4 py-3">{c.target_amount_paise ? formatInr(c.target_amount_paise) : '—'}</td>
+            <td className="px-4 py-3 font-mono">{formatInr(c.raised_amount_paise)}</td>
+            <td className="px-4 py-3 font-mono">{c.target_amount_paise ? formatInr(c.target_amount_paise) : '—'}</td>
             <td className="px-4 py-3">{c.is_public ? 'Yes' : 'No'}</td>
           </tr>
         ))}
@@ -224,7 +387,7 @@ export function DonationsPage() {
         {donations.map((d) => (
           <tr key={d.id} className="hover:bg-muted/30">
             <td className="px-4 py-3 font-medium">{d.donor_name}</td>
-            <td className="px-4 py-3 font-semibold">{formatInr(d.amount_paise)}</td>
+            <td className="px-4 py-3 font-mono font-semibold">{formatInr(d.amount_paise)}</td>
             <td className="px-4 py-3 text-xs capitalize">{d.purpose}</td>
             <td className="px-4 py-3 text-xs">{d.campaign_name ?? '—'}</td>
             <td className="px-4 py-3">{d.eighty_g_eligible ? 'Yes' : '—'}</td>

@@ -2,10 +2,10 @@ import { useMemo, useState } from "react";
 import { Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
-import { fonts } from "@/constants/typography";
+import { bodyFamily, fonts } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
-import { apiPost } from "@/lib/api";
+import { ApiError, apiPost } from "@/lib/api";
 import type { OtpSendResponse } from "@/lib/auth";
 import { Body, Button, Card, Kicker, Title } from "@/components/ui";
 
@@ -44,11 +44,13 @@ export default function PhoneScreen() {
       });
     } catch (err) {
       setError(
-        err instanceof Error
+        err instanceof ApiError
           ? err.message
-          : hi
-            ? "ओटीपी नहीं भेजा जा सका। पुनः प्रयास करें।"
-            : "Could not send OTP. Try again.",
+          : err instanceof Error
+            ? err.message
+            : hi
+              ? "ओटीपी नहीं भेजा जा सका। पुनः प्रयास करें।"
+              : "Could not send OTP. Try again.",
       );
     } finally {
       setBusy(false);
@@ -92,12 +94,12 @@ export default function PhoneScreen() {
               paddingVertical: 10,
             }}
           >
-            <Text style={{ fontFamily: fonts.body, color: c.errorText, fontSize: 13 }}>{error}</Text>
+            <Text style={{ fontFamily: bodyFamily(hi), color: c.errorText, fontSize: 13 }}>{error}</Text>
           </View>
         ) : null}
 
         <View style={{ marginTop: 16, gap: 12 }}>
-          <Text style={{ fontFamily: fonts.bodySemiBold, fontSize: 13, color: c.foreground }}>
+          <Text style={{ fontFamily: bodyFamily(hi, "semibold"), fontSize: 13, color: c.foreground }}>
             {hi ? "मोबाइल नंबर" : "Mobile number"}
           </Text>
           <View
@@ -111,7 +113,7 @@ export default function PhoneScreen() {
             }}
           >
             <View style={{ paddingHorizontal: 12, paddingVertical: 12, backgroundColor: c.muted }}>
-              <Text style={{ fontFamily: fonts.bodyMedium, color: c.mutedForeground }}>+91</Text>
+              <Text style={{ fontFamily: fonts.monoMedium, color: c.mutedForeground }}>+91</Text>
             </View>
             <TextInput
               value={digits}
@@ -123,7 +125,7 @@ export default function PhoneScreen() {
                 flex: 1,
                 paddingHorizontal: 12,
                 paddingVertical: 12,
-                fontFamily: fonts.body,
+                fontFamily: fonts.mono,
                 fontSize: 16,
                 color: c.foreground,
               }}

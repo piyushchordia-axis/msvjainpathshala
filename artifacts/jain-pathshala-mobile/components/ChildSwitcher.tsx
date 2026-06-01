@@ -1,5 +1,5 @@
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { fonts } from "@/constants/typography";
+import { bodyFamily } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
@@ -19,7 +19,7 @@ export function ChildSwitcher() {
     <View style={{ gap: 8 }}>
       <Text
         style={{
-          fontFamily: fonts.bodySemiBold,
+          fontFamily: bodyFamily(hi, "semibold"),
           fontSize: 12,
           letterSpacing: 1,
           textTransform: "uppercase",
@@ -48,7 +48,7 @@ export function ChildSwitcher() {
             >
               <Text
                 style={{
-                  fontFamily: fonts.bodySemiBold,
+                  fontFamily: bodyFamily(hi, "semibold"),
                   fontSize: 14,
                   color: active ? c.primaryForeground : c.mutedForeground,
                 }}

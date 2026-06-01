@@ -1,21 +1,81 @@
 /**
- * Mobile data layer — mirrors the web artifact's hand-written fetch helper
- * (src/lib/api-client.ts). Same endpoints, same { data } unwrapping, same
- * ApiError envelope. Differences from web:
- *   - Base URL is the deployed domain (EXPO_PUBLIC_DOMAIN) since Expo runs
- *     outside the web proxy and needs absolute URLs.
- *   - Auth uses a Bearer token (no cookies on native) supplied via
- *     setAuthToken() from the AuthContext.
+ * Mobile data layer — mirrors the web artifact's hand-written fetch helper.
+ * Auth uses Bearer tokens (no cookies on native).
  */
+import Constants from "expo-constants";
+import { Platform } from "react-native";
+
+const API_PORT = process.env.EXPO_PUBLIC_API_PORT ?? "8080";
+const REQUEST_TIMEOUT_MS = 30_000;
+
+/** RN's AbortSignal polyfill does not implement AbortSignal.timeout (crashes or breaks fetch). */
+function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  ms: number,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  const { signal: _ignored, ...rest } = init;
+  return fetch(url, { ...rest, signal: controller.signal }).finally(() =>
+    clearTimeout(timer),
+  );
+}
+
+function hostFromExpoManifest(): string | null {
+  const raw =
+    Constants.expoGoConfig?.debuggerHost ??
+    Constants.expoConfig?.hostUri ??
+    (Constants.manifest2?.extra?.expoClient?.hostUri as string | undefined);
+
+  if (!raw) return null;
+  const host = String(raw).split(":")[0];
+  if (!host || host === "localhost" || host === "127.0.0.1") return null;
+  return host;
+}
 
 function resolveApiBase(): string {
-  const explicit = process.env.EXPO_PUBLIC_API_BASE_URL;
-  if (explicit) return explicit.replace(/\/$/, "");
+  const explicit = process.env.EXPO_PUBLIC_API_BASE_URL?.replace(/\/$/, "");
+  if (explicit) return rewriteLocalhostForDevice(explicit);
+
+  const fromExtra = (
+    Constants.expoConfig?.extra as { apiBaseUrl?: string } | undefined
+  )?.apiBaseUrl?.replace(/\/$/, "");
+  if (fromExtra) return rewriteLocalhostForDevice(fromExtra);
 
   const domain = process.env.EXPO_PUBLIC_DOMAIN;
-  if (!domain) return "";
-  if (/^https?:\/\//i.test(domain)) return domain.replace(/\/$/, "");
-  return `https://${domain}`;
+  if (domain) {
+    if (/^https?:\/\//i.test(domain)) return domain.replace(/\/$/, "");
+    return `https://${domain}`;
+  }
+
+  if (__DEV__) {
+    const metroPort = process.env.EXPO_PUBLIC_METRO_PORT ?? "8081";
+    const host = hostFromExpoManifest();
+    if (host) return `http://${host}:${metroPort}`;
+  }
+
+  const host = hostFromExpoManifest();
+  if (host) return `http://${host}:${API_PORT}`;
+
+  return "";
+}
+
+/** In dev on a physical device, localhost in env must become the Metro host IP. */
+function rewriteLocalhostForDevice(base: string): string {
+  if (!__DEV__) return base;
+  if (!/localhost|127\.0\.0\.1/i.test(base)) return base;
+
+  const host = hostFromExpoManifest();
+  if (host) {
+    return base.replace(/localhost|127\.0\.0\.1/gi, host);
+  }
+
+  if (Platform.OS === "android") {
+    return `http://10.0.2.2:${API_PORT}`;
+  }
+
+  return base;
 }
 
 export const API_BASE = resolveApiBase();
@@ -44,24 +104,53 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      Accept: "application/json",
-      ...(init.body ? { "Content-Type": "application/json" } : {}),
-      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-      ...(init.headers ?? {}),
-    },
-  });
+  if (!API_BASE) {
+    throw new ApiError(
+      "ERR_CONFIG",
+      "API URL is not configured. Run `pnpm run dev` in jain-pathshala-mobile (API is proxied via Metro on port 8081).",
+      0,
+    );
+  }
+
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(`${API_BASE}${path}`, {
+      ...init,
+      headers: {
+        Accept: "application/json",
+        ...(init.body ? { "Content-Type": "application/json" } : {}),
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        ...(init.headers ?? {}),
+      },
+    }, REQUEST_TIMEOUT_MS);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (
+      /network request failed|failed to fetch|network error|timed out|timeout|aborted/i.test(
+        msg,
+      )
+    ) {
+      throw new ApiError(
+        "ERR_NETWORK",
+        `Cannot reach the API at ${API_BASE}. Same Wi‑Fi as PC, enable Local Network for Expo Go (iOS Settings), restart \`pnpm run dev\`, reload Expo Go. Test in phone Safari: ${API_BASE}/api/healthz`,
+        0,
+      );
+    }
+    throw err;
+  }
   if (!res.ok) {
     let data: Partial<ApiErrorEnvelope> = {};
     try {
       data = (await res.json()) as Partial<ApiErrorEnvelope>;
     } catch {}
     const env = data?.error;
+    const fallback =
+      res.status >= 500
+        ? `Server error (${res.status}). Start Docker Desktop, run docker start jp-postgres, then retry.`
+        : `Request failed (${res.status})`;
     throw new ApiError(
       env?.code ?? "ERR_HTTP",
-      env?.message ?? `Request failed (${res.status})`,
+      env?.message ?? fallback,
       res.status,
       env?.details,
     );

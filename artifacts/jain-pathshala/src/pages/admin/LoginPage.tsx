@@ -153,6 +153,7 @@ export default function LoginPage() {
                   onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
                   onKeyDown={(e) => e.key === 'Enter' && verifyOtp()}
                   autoComplete="one-time-code"
+                  className="font-mono tracking-[0.35em]"
                 />
                 <Button onClick={verifyOtp} disabled={!otpValid || busy} className="w-full">
                   {busy ? 'Verifying…' : 'Verify'}

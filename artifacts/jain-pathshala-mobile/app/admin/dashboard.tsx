@@ -7,7 +7,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useOverview } from "@/lib/queries";
 import { formatPaise } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
-import { Body, Button, Card, Row, Screen, StateView, Title } from "@/components/ui";
+import { Body, Button, Card, Numeric, Row, Screen, StateView, Title } from "@/components/ui";
 
 export default function DashboardScreen() {
   const c = useColors();
@@ -50,7 +50,7 @@ export default function DashboardScreen() {
               {stats.map((s) => (
                 <Card key={s.label} style={{ width: "47%" }}>
                   <Ionicons name={s.icon} size={20} color={c.primary} />
-                  <Title style={{ fontSize: 24, marginTop: 8 }}>{s.value}</Title>
+                  <Numeric style={{ fontSize: 24, marginTop: 8 }}>{s.value}</Numeric>
                   <Body muted style={{ fontSize: 12, marginTop: 2 }}>{s.label}</Body>
                 </Card>
               ))}

@@ -76,7 +76,7 @@ export default function DashboardPage() {
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{s.label}</div>
-                  <div className="mt-1 font-display text-2xl leading-none text-secondary">{s.value}</div>
+                  <div className="mt-1 font-mono text-2xl leading-none text-secondary">{s.value}</div>
                   <div className="mt-1 truncate text-xs text-muted-foreground">{s.delta}</div>
                 </div>
               </CardContent>
@@ -101,7 +101,7 @@ export default function DashboardPage() {
               ].map(({ label, value }) => (
                 <div key={label}>
                   <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</dt>
-                  <dd className="mt-1 font-display text-2xl leading-none text-secondary">{typeof value === 'number' ? value.toLocaleString('en-IN') : value}</dd>
+                  <dd className="mt-1 font-mono text-2xl leading-none text-secondary">{typeof value === 'number' ? value.toLocaleString('en-IN') : value}</dd>
                 </div>
               ))}
             </dl>

@@ -85,17 +85,25 @@ const html = `<!DOCTYPE html>
 fs.writeFileSync(htmlPath, html, "utf-8");
 console.log(`QR page written: ${htmlPath}`);
 
-if (process.platform === "win32") {
-  spawnSync("cmd", ["/c", "start", "", htmlPath], { stdio: "ignore", shell: true });
-} else if (process.platform === "darwin") {
-  spawnSync("open", [htmlPath], { stdio: "ignore" });
-} else {
-  spawnSync("xdg-open", [htmlPath], { stdio: "ignore" });
+/** Open a file in the default app (paths with spaces must not use shell: true on Windows). */
+function openFile(filePath) {
+  if (process.platform === "win32") {
+    spawnSync("cmd.exe", ["/d", "/s", "/c", "start", "", filePath], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+  } else if (process.platform === "darwin") {
+    spawnSync("open", [filePath], { stdio: "ignore" });
+  } else {
+    spawnSync("xdg-open", [filePath], { stdio: "ignore" });
+  }
 }
+
+openFile(htmlPath);
 
 console.log("Opened QR page in your default browser.\n");
 
 spawnSync("npx", ["-y", "qrcode-terminal@0.12.0", expUrl], {
   stdio: "inherit",
-  shell: true,
+  cwd: projectRoot,
 });

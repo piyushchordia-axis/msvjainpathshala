@@ -7,7 +7,7 @@ import { useAttendance, usePunya } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
-import { Body, Card, Kicker, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { Body, Card, Kicker, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 export default function ParentHome() {
   const c = useColors();
@@ -178,7 +178,7 @@ export default function ParentHome() {
                 />
               ) : (
                 <Row style={{ gap: 10, marginTop: 12, alignItems: "center" }}>
-                  <Title style={{ fontSize: 28 }}>{punya.data?.total_points ?? 0}</Title>
+                  <Numeric style={{ fontSize: 28 }}>{punya.data?.total_points ?? 0}</Numeric>
                   <Body muted>{hi ? "कुल अंक" : "total points"}</Body>
                   {punya.data?.tier ? (
                     <View style={{ marginLeft: "auto" }}>

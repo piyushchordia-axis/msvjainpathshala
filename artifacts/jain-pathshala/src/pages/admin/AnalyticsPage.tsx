@@ -60,7 +60,7 @@ export default function AnalyticsPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="font-display text-3xl text-secondary">
+              <div className="font-mono text-3xl text-secondary">
                 {loading ? '…' : typeof m.value === 'number' ? m.value.toLocaleString('en-IN') : m.value}
               </div>
             </CardContent>

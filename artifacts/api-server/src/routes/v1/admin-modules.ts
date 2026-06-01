@@ -16,9 +16,14 @@ import {
   donations,
   queue_stats,
   queue_dlq_jobs,
+  niyams,
+  punya_configs,
+  centre_holidays,
+  library_items,
   type User,
 } from "@workspace/db";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState } from "../../lib/scope";
@@ -280,6 +285,164 @@ router.get("/donations", async (req: Request, res: Response) => {
     payment_captured_at: r.payment_captured_at ? r.payment_captured_at.toISOString() : null,
   }));
   ok(res, { items }, { count: items.length });
+});
+
+/* ═══════════════════ CREATE routes ═══════════════════ */
+
+const createCurriculumSchema = z.object({
+  name: z.string().min(1).max(300),
+  kind: z.string().default("standard"),
+  academic_year: z.string().max(20).optional(),
+  city_id: z.string().uuid().optional(),
+});
+
+/* POST /v1/admin/curricula */
+router.post("/curricula", async (req: Request, res: Response) => {
+  let body: z.infer<typeof createCurriculumSchema>;
+  try { body = createCurriculumSchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid curriculum data."); return; }
+  const [row] = await db.insert(curricula).values({
+    name: body.name,
+    kind: body.kind,
+    academic_year: body.academic_year ?? null,
+    city_id: body.city_id ?? null,
+  }).returning({ id: curricula.id, name: curricula.name });
+  ok(res, row);
+});
+
+const createExamSchema = z.object({
+  title_en: z.string().min(1).max(500),
+  title_hi: z.string().max(500).optional(),
+  city_id: z.string().uuid(),
+  window_start: z.string().datetime(),
+  window_end: z.string().datetime(),
+  total_marks: z.coerce.number().int().min(1).default(100),
+  pass_mark: z.coerce.number().int().min(0).default(40),
+  max_attempts: z.coerce.number().int().min(1).default(1),
+  exam_otp: z.string().max(20).optional(),
+});
+
+/* POST /v1/admin/exams */
+router.post("/exams", async (req: Request, res: Response) => {
+  let body: z.infer<typeof createExamSchema>;
+  try { body = createExamSchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid exam data."); return; }
+  const cityIds = await cityIdsForUser(req.authUser!);
+  if (cityIds !== null && !cityIds.includes(body.city_id)) {
+    fail(res, 403, "ERR_FORBIDDEN", "City not in your scope."); return;
+  }
+  const otp = body.exam_otp ?? Math.random().toString(36).slice(2, 8).toUpperCase();
+  const [row] = await db.insert(online_exams).values({
+    title_en: body.title_en,
+    title_hi: body.title_hi ?? body.title_en,
+    city_id: body.city_id,
+    window_start: new Date(body.window_start),
+    window_end: new Date(body.window_end),
+    total_marks: body.total_marks,
+    pass_mark: body.pass_mark,
+    max_attempts: body.max_attempts,
+    exam_otp: otp,
+  }).returning({ id: online_exams.id, title_en: online_exams.title_en, exam_otp: online_exams.exam_otp });
+  ok(res, row);
+});
+
+const createNiyamSchema = z.object({
+  title_en: z.string().min(1).max(300),
+  title_hi: z.string().max(300).optional(),
+  description_en: z.string().max(2000).optional(),
+  niyam_type: z.enum(["daily", "weekly", "monthly"]).default("daily"),
+  proof_type: z.enum(["photo", "video", "either"]).default("either"),
+  points: z.coerce.number().int().min(0).max(1000).default(10),
+  is_active: z.boolean().default(true),
+});
+
+/* POST /v1/admin/niyams */
+router.post("/niyams", async (req: Request, res: Response) => {
+  let body: z.infer<typeof createNiyamSchema>;
+  try { body = createNiyamSchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid niyam data."); return; }
+  const [row] = await db.insert(niyams).values({
+    title_en: body.title_en,
+    title_hi: body.title_hi ?? body.title_en,
+    description_en: body.description_en ?? null,
+    niyam_type: body.niyam_type,
+    proof_type: body.proof_type,
+    points: body.points,
+    is_active: body.is_active,
+  }).returning({ id: niyams.id, title_en: niyams.title_en });
+  ok(res, row);
+});
+
+const createPunyaConfigSchema = z.object({
+  feature_key: z.string().min(1).max(100),
+  points: z.coerce.number().int().min(0).max(10000),
+  is_active: z.boolean().default(true),
+});
+
+/* POST /v1/admin/punya/configs */
+router.post("/punya/configs", async (req: Request, res: Response) => {
+  let body: z.infer<typeof createPunyaConfigSchema>;
+  try { body = createPunyaConfigSchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid punya config data."); return; }
+  const [row] = await db.insert(punya_configs).values({
+    feature_key: body.feature_key,
+    points: body.points,
+    is_active: body.is_active,
+  }).returning({ id: punya_configs.id, feature_key: punya_configs.feature_key });
+  ok(res, row);
+});
+
+const createHolidaySchema = z.object({
+  centre_id: z.string().uuid(),
+  holiday_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  reason: z.string().max(500).optional(),
+});
+
+/* POST /v1/admin/holidays */
+router.post("/holidays", async (req: Request, res: Response) => {
+  let body: z.infer<typeof createHolidaySchema>;
+  try { body = createHolidaySchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid holiday data."); return; }
+  const scope = await resolveAdminScope(req.authUser!);
+  const centreIds = scope.centreIds;
+  if (centreIds !== null && !centreIds.includes(body.centre_id)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope."); return;
+  }
+  const [row] = await db.insert(centre_holidays).values({
+    centre_id: body.centre_id,
+    holiday_date: body.holiday_date,
+    reason: body.reason ?? null,
+  }).returning({ id: centre_holidays.id, holiday_date: centre_holidays.holiday_date });
+  ok(res, row);
+});
+
+const createLibrarySchema = z.object({
+  title_en: z.string().min(1).max(500),
+  title_hi: z.string().max(500).optional(),
+  content_type: z.enum(["pdf", "video", "audio", "image"]),
+  access_tier: z.enum(["public", "student", "msv", "shikshak"]).default("public"),
+  embed_url: z.string().url().max(2000).optional(),
+  file_url: z.string().url().max(2000).optional(),
+  description_en: z.string().max(2000).optional(),
+  is_published: z.boolean().default(true),
+});
+
+/* POST /v1/admin/library */
+router.post("/library", async (req: Request, res: Response) => {
+  let body: z.infer<typeof createLibrarySchema>;
+  try { body = createLibrarySchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid library item data."); return; }
+  const [row] = await db.insert(library_items).values({
+    title_en: body.title_en,
+    title_hi: body.title_hi ?? null,
+    content_type: body.content_type,
+    access_tier: body.access_tier,
+    embed_url: body.embed_url ?? null,
+    file_url: body.file_url ?? null,
+    description_en: body.description_en ?? null,
+    is_published: body.is_published,
+  }).returning({ id: library_items.id, title_en: library_items.title_en });
+  ok(res, row);
 });
 
 /* Queues — super_admin only */

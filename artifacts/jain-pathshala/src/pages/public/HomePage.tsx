@@ -87,7 +87,7 @@ export default function HomePage() {
         <div className="grid gap-4 md:grid-cols-3">
           {STATS.map((s) => (
             <Card key={s.k} className="p-6">
-              <div className="font-display text-3xl text-secondary">{s.v}</div>
+              <div className="font-mono text-3xl text-secondary">{s.v}</div>
               <div className="mt-2 text-sm text-muted-foreground">{s.k}</div>
             </Card>
           ))}

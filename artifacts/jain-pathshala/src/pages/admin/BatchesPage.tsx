@@ -1,8 +1,17 @@
 import { useEffect, useState } from 'react';
+import { Plus } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
+} from '@/components/ui/dialog';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 
 interface AdminBatchRow {
   id: string;
@@ -56,6 +65,132 @@ function BatchRowActions({ id, status, onChanged }: { id: string; status: string
   );
 }
 
+interface CentreOption { id: string; name: string; }
+
+const DAYS = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const AGE_GROUPS = ['bal', 'kishor', 'tarun', 'yuva'] as const;
+
+function AddBatchDialog({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [centres, setCentres] = useState<CentreOption[]>([]);
+  const [name, setName] = useState('');
+  const [centreId, setCentreId] = useState('');
+  const [ageGroup, setAgeGroup] = useState('');
+  const [startTime, setStartTime] = useState('');
+  const [endTime, setEndTime] = useState('');
+  const [selectedDays, setSelectedDays] = useState<number[]>([]);
+  const [capacity, setCapacity] = useState('30');
+
+  useEffect(() => {
+    if (!open) return;
+    void apiGet<{ items: CentreOption[] }>('/v1/admin/centres').then((r) => setCentres(r?.items ?? []));
+  }, [open]);
+
+  function toggleDay(d: number) {
+    setSelectedDays((prev) => prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d]);
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !centreId || !ageGroup || !startTime || !endTime) return;
+    setBusy(true);
+    try {
+      await apiPost('/v1/admin/batches', {
+        centre_id: centreId,
+        name: name.trim(),
+        age_group: ageGroup,
+        start_time: startTime,
+        end_time: endTime,
+        day_of_week: selectedDays,
+        capacity: Number(capacity) || 30,
+      });
+      toast.success('Batch created.');
+      setOpen(false);
+      setName(''); setCentreId(''); setAgeGroup(''); setStartTime(''); setEndTime(''); setSelectedDays([]); setCapacity('30');
+      onAdded();
+    } catch (err) {
+      toast.error('Failed to create batch.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm"><Plus className="mr-1 h-4 w-4" />Add batch</Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Add batch</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Batch name *</Label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Morning Bal Batch" required />
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Centre *</Label>
+            <Select value={centreId} onValueChange={setCentreId}>
+              <SelectTrigger><SelectValue placeholder="Select centre" /></SelectTrigger>
+              <SelectContent>
+                {centres.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Age group *</Label>
+            <Select value={ageGroup} onValueChange={setAgeGroup}>
+              <SelectTrigger><SelectValue placeholder="Select age group" /></SelectTrigger>
+              <SelectContent>
+                {AGE_GROUPS.map((g) => <SelectItem key={g} value={g} className="capitalize">{g}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs font-medium">Start time *</Label>
+              <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} required />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs font-medium">End time *</Label>
+              <Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} required />
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Days of week</Label>
+            <div className="flex flex-wrap gap-2 pt-1">
+              {DAYS.slice(1).map((d, i) => {
+                const day = i + 1;
+                const active = selectedDays.includes(day);
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    onClick={() => toggleDay(day)}
+                    className={`rounded px-2 py-1 text-xs font-medium border transition-colors ${active ? 'bg-primary text-primary-foreground border-primary' : 'border-input bg-background hover:bg-muted'}`}
+                  >
+                    {d}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Capacity</Label>
+            <Input type="number" min={1} max={500} value={capacity} onChange={(e) => setCapacity(e.target.value)} />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !name.trim() || !centreId || !ageGroup || !startTime || !endTime}>
+              {busy ? 'Saving…' : 'Create batch'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function BatchesPage() {
   const [items, setItems] = useState<AdminBatchRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -83,6 +218,7 @@ export default function BatchesPage() {
           <h2 className="font-display text-2xl text-secondary">Batches</h2>
           <p className="text-sm text-muted-foreground">Batches across your centres, with their schedule and assigned Guruji.</p>
         </div>
+        <AddBatchDialog onAdded={load} />
       </header>
 
       {error ? (

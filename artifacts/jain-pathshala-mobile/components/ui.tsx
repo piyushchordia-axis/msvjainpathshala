@@ -15,7 +15,8 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
-import { fonts } from "@/constants/typography";
+import { bodyFamily, displayFamily, fonts } from "@/constants/typography";
+import { useLocale } from "@/contexts/LocaleContext";
 import { useColors } from "@/hooks/useColors";
 
 /** Web-only top inset for the status bar (see expo skill "Insets"). */
@@ -78,10 +79,11 @@ export function Screen({
 
 export function Kicker({ children, light }: { children: ReactNode; light?: boolean }) {
   const c = useColors();
+  const { hi } = useLocale();
   return (
     <Text
       style={{
-        fontFamily: fonts.bodySemiBold,
+        fontFamily: bodyFamily(hi, "semibold"),
         fontSize: 12,
         letterSpacing: 1.6,
         textTransform: "uppercase",
@@ -103,10 +105,38 @@ export function Title({
   light?: boolean;
 }) {
   const c = useColors();
+  const { hi } = useLocale();
   return (
     <Text
       style={[
-        { fontFamily: fonts.display, fontSize: 26, lineHeight: 32, color: light ? "#FFFFFF" : c.secondary },
+        { fontFamily: displayFamily(hi), fontSize: 26, lineHeight: 32, color: light ? "#FFFFFF" : c.secondary },
+        style,
+      ]}
+    >
+      {children}
+    </Text>
+  );
+}
+
+/** Amounts, stats, dates, OTP — DM Mono */
+export function Numeric({
+  children,
+  style,
+  medium,
+}: {
+  children: ReactNode;
+  style?: StyleProp<TextStyle>;
+  medium?: boolean;
+}) {
+  const c = useColors();
+  return (
+    <Text
+      style={[
+        {
+          fontFamily: medium ? fonts.monoMedium : fonts.mono,
+          fontVariant: ["tabular-nums"],
+          color: c.foreground,
+        },
         style,
       ]}
     >
@@ -129,12 +159,13 @@ export function Body({
   numberOfLines?: number;
 }) {
   const c = useColors();
+  const { hi } = useLocale();
   return (
     <Text
       onPress={onPress}
       numberOfLines={numberOfLines}
       style={[
-        { fontFamily: fonts.body, fontSize: 15, lineHeight: 22, color: muted ? c.mutedForeground : c.foreground },
+        { fontFamily: bodyFamily(hi), fontSize: 15, lineHeight: 22, color: muted ? c.mutedForeground : c.foreground },
         style,
       ]}
     >
@@ -186,9 +217,10 @@ export function Pill({
     info: { bg: c.infoSoft, fg: c.infoText },
   };
   const t = map[tone];
+  const { hi } = useLocale();
   return (
     <View style={{ alignSelf: "flex-start", backgroundColor: t.bg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 }}>
-      <Text style={{ fontFamily: fonts.bodySemiBold, fontSize: 11, color: t.fg, letterSpacing: 0.3 }}>{label}</Text>
+      <Text style={{ fontFamily: bodyFamily(hi, "semibold"), fontSize: 11, color: t.fg, letterSpacing: 0.3 }}>{label}</Text>
     </View>
   );
 }
@@ -219,6 +251,7 @@ export function Button({
   };
   const p = palettes[variant];
   const isDisabled = disabled || loading;
+  const { hi } = useLocale();
   return (
     <Pressable
       onPress={() => {
@@ -249,7 +282,7 @@ export function Button({
       ) : (
         <>
           {icon ? <Ionicons name={icon} size={18} color={p.fg} /> : null}
-          <Text style={{ fontFamily: fonts.bodySemiBold, fontSize: 15, color: p.fg }}>{label}</Text>
+          <Text style={{ fontFamily: bodyFamily(hi, "semibold"), fontSize: 15, color: p.fg }}>{label}</Text>
         </>
       )}
     </Pressable>
@@ -270,6 +303,7 @@ export function StateView({
   retryLabel?: string;
 }) {
   const c = useColors();
+  const { hi } = useLocale();
   if (status === "loading") {
     return (
       <View style={styles.stateBox}>
@@ -282,7 +316,7 @@ export function StateView({
   return (
     <View style={styles.stateBox}>
       <Ionicons name={icon as keyof typeof Ionicons.glyphMap} size={36} color={c.inkDim} />
-      <Text style={{ fontFamily: fonts.body, fontSize: 15, color: c.mutedForeground, textAlign: "center", marginTop: 12, maxWidth: 280 }}>
+      <Text style={{ fontFamily: bodyFamily(hi), fontSize: 15, color: c.mutedForeground, textAlign: "center", marginTop: 12, maxWidth: 280 }}>
         {text}
       </Text>
       {status === "error" && onRetry ? (

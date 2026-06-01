@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -13,6 +14,23 @@ import { toast } from '@/components/ui/toast-jp';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
+} from '@/components/ui/dialog';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+
+/* ─── shared form helper ─── */
+function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1">
+      <Label className="text-xs font-medium">{label}</Label>
+      {children}
+    </div>
+  );
+}
 
 /* ——— Centres ——— */
 interface CentreRow {
@@ -26,10 +44,95 @@ interface CentreRow {
   batch_count: number;
 }
 
-export function CentresPage() {
-  const { items, loading, error } = useAdminList<CentreRow>('/v1/admin/centres');
+interface GeoOption { id: string; name: string; state_id?: string; state_name?: string; }
+
+function AddCentreDialog({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [cities, setCities] = useState<GeoOption[]>([]);
+  const [name, setName] = useState('');
+  const [cityId, setCityId] = useState('');
+  const [locality, setLocality] = useState('');
+  const [phone, setPhone] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    void apiGet<{ cities: GeoOption[] }>('/v1/admin/geography').then((r) => {
+      setCities(r?.cities ?? []);
+    });
+  }, [open]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !cityId) return;
+    setBusy(true);
+    const cityOpt = cities.find((c) => c.id === cityId);
+    try {
+      await apiPost('/v1/admin/centres', {
+        name: name.trim(),
+        city_id: cityId,
+        state_id: cityOpt?.state_id ?? '',
+        locality: locality.trim() || undefined,
+        contact_phone: phone.trim() || undefined,
+      });
+      toast.success('Centre created.');
+      setOpen(false);
+      setName(''); setCityId(''); setLocality(''); setPhone('');
+      onAdded();
+    } catch (err) {
+      toast.error('Failed to create centre.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <AdminPageShell title="Centres" subtitle="Manage centres in your scope.">
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm"><Plus className="mr-1 h-4 w-4" />Add centre</Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Add centre</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="Centre name *">
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Andheri Pathshala" required />
+          </FormRow>
+          <FormRow label="City *">
+            <Select value={cityId} onValueChange={setCityId}>
+              <SelectTrigger><SelectValue placeholder="Select city" /></SelectTrigger>
+              <SelectContent>
+                {cities.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>{c.name}{c.state_name ? ` (${c.state_name})` : ''}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormRow>
+          <FormRow label="Locality / area">
+            <Input value={locality} onChange={(e) => setLocality(e.target.value)} placeholder="e.g. Andheri West" />
+          </FormRow>
+          <FormRow label="Contact phone">
+            <Input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+91…" />
+          </FormRow>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !name.trim() || !cityId}>
+              {busy ? 'Saving…' : 'Create centre'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function CentresPage() {
+  const { items, loading, error, reload } = useAdminList<CentreRow>('/v1/admin/centres');
+  return (
+    <AdminPageShell
+      title="Centres"
+      subtitle="Manage centres in your scope."
+      actions={<AddCentreDialog onAdded={reload} />}
+    >
       {error ? <AdminError message={error} /> : null}
       <AdminTable columns={['Centre', 'Location', 'Phone', 'Batches', 'Status']} loading={loading} empty="" colSpan={5}>
         {items.length === 0 && !loading ? <AdminEmptyRow colSpan={5} message="No centres in scope." /> : null}
@@ -60,10 +163,100 @@ interface NoticeRow {
   created_at: string;
 }
 
-export function NoticesPage() {
-  const { items, loading, error } = useAdminList<NoticeRow>('/v1/admin/notices?limit=100');
+const NOTICE_AUDIENCES = ['national', 'state', 'city', 'centre', 'batch', 'msv'] as const;
+
+function AddNoticeDialog({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [title, setTitle] = useState('');
+  const [titleHi, setTitleHi] = useState('');
+  const [content, setContent] = useState('');
+  const [audience, setAudience] = useState<string>('national');
+  const [isPublic, setIsPublic] = useState(true);
+  const [pinned, setPinned] = useState(false);
+  const [critical, setCritical] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim()) return;
+    setBusy(true);
+    try {
+      await apiPost('/v1/admin/notices', {
+        title_en: title.trim(),
+        title_hi: titleHi.trim() || undefined,
+        content_en: content.trim() || undefined,
+        audience,
+        is_public: isPublic,
+        pinned,
+        is_critical: critical,
+        publish_now: true,
+      });
+      toast.success('Notice published.');
+      setOpen(false);
+      setTitle(''); setTitleHi(''); setContent('');
+      onAdded();
+    } catch (err) {
+      toast.error('Failed to create notice.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <AdminPageShell title="Notices" subtitle="Published and draft notices in your scope.">
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm"><Plus className="mr-1 h-4 w-4" />New notice</Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-lg">
+        <DialogHeader><DialogTitle>Create notice</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="Title (English) *">
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} required />
+          </FormRow>
+          <FormRow label="Title (Hindi)">
+            <Input value={titleHi} onChange={(e) => setTitleHi(e.target.value)} />
+          </FormRow>
+          <FormRow label="Content">
+            <Textarea rows={3} value={content} onChange={(e) => setContent(e.target.value)} />
+          </FormRow>
+          <FormRow label="Audience">
+            <Select value={audience} onValueChange={setAudience}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {NOTICE_AUDIENCES.map((a) => (
+                  <SelectItem key={a} value={a} className="capitalize">{a}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormRow>
+          <div className="flex flex-wrap gap-4 text-sm">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} className="rounded" />
+              Public
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={pinned} onChange={(e) => setPinned(e.target.checked)} className="rounded" />
+              Pinned
+            </label>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" checked={critical} onChange={(e) => setCritical(e.target.checked)} className="rounded" />
+              Critical
+            </label>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !title.trim()}>{busy ? 'Publishing…' : 'Publish'}</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function NoticesPage() {
+  const { items, loading, error, reload } = useAdminList<NoticeRow>('/v1/admin/notices?limit=100');
+  return (
+    <AdminPageShell title="Notices" subtitle="Published and draft notices in your scope." actions={<AddNoticeDialog onAdded={reload} />}>
       {error ? <AdminError message={error} /> : null}
       <AdminTable columns={['Title', 'Audience', 'Flags', 'Created']} loading={loading} empty="" colSpan={4}>
         {items.length === 0 && !loading ? <AdminEmptyRow colSpan={4} message="No notices yet." /> : null}
@@ -149,10 +342,89 @@ interface LibraryRow {
   is_published: boolean;
 }
 
-export function LibraryPage() {
-  const { items, loading, error } = useAdminList<LibraryRow>('/v1/admin/library?limit=100');
+function AddLibraryDialog({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [titleEn, setTitleEn] = useState('');
+  const [titleHi, setTitleHi] = useState('');
+  const [contentType, setContentType] = useState('pdf');
+  const [accessTier, setAccessTier] = useState('public');
+  const [embedUrl, setEmbedUrl] = useState('');
+  const [fileUrl, setFileUrl] = useState('');
+  const [descEn, setDescEn] = useState('');
+  const [isPublished, setIsPublished] = useState(true);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!titleEn.trim()) return;
+    setBusy(true);
+    try {
+      await apiPost('/v1/admin/library', {
+        title_en: titleEn.trim(),
+        title_hi: titleHi.trim() || undefined,
+        content_type: contentType,
+        access_tier: accessTier,
+        embed_url: embedUrl.trim() || undefined,
+        file_url: fileUrl.trim() || undefined,
+        description_en: descEn.trim() || undefined,
+        is_published: isPublished,
+      });
+      toast.success('Library item created.');
+      setOpen(false);
+      setTitleEn(''); setTitleHi(''); setEmbedUrl(''); setFileUrl(''); setDescEn('');
+      onAdded();
+    } catch (err) {
+      toast.error('Failed.', err instanceof ApiError ? err.message : undefined);
+    } finally { setBusy(false); }
+  }
+
   return (
-    <AdminPageShell title="Library" subtitle="Learning resources across the network.">
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild><Button size="sm"><Plus className="mr-1 h-4 w-4" />Add item</Button></DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Add library item</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="Title (English) *"><Input value={titleEn} onChange={(e) => setTitleEn(e.target.value)} required /></FormRow>
+          <FormRow label="Title (Hindi)"><Input value={titleHi} onChange={(e) => setTitleHi(e.target.value)} /></FormRow>
+          <div className="grid grid-cols-2 gap-3">
+            <FormRow label="Content type">
+              <Select value={contentType} onValueChange={setContentType}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {['pdf', 'video', 'audio', 'image'].map((t) => <SelectItem key={t} value={t} className="uppercase">{t}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </FormRow>
+            <FormRow label="Access tier">
+              <Select value={accessTier} onValueChange={setAccessTier}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {['public', 'student', 'msv', 'shikshak'].map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </FormRow>
+          </div>
+          <FormRow label="Embed URL"><Input value={embedUrl} onChange={(e) => setEmbedUrl(e.target.value)} placeholder="https://…" /></FormRow>
+          <FormRow label="File URL"><Input value={fileUrl} onChange={(e) => setFileUrl(e.target.value)} placeholder="https://…" /></FormRow>
+          <FormRow label="Description"><Textarea rows={2} value={descEn} onChange={(e) => setDescEn(e.target.value)} /></FormRow>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={isPublished} onChange={(e) => setIsPublished(e.target.checked)} className="rounded" />
+            Published
+          </label>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !titleEn.trim()}>{busy ? 'Saving…' : 'Add item'}</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function LibraryPage() {
+  const { items, loading, error, reload } = useAdminList<LibraryRow>('/v1/admin/library?limit=100');
+  return (
+    <AdminPageShell title="Library" subtitle="Learning resources across the network." actions={<AddLibraryDialog onAdded={reload} />}>
       {error ? <AdminError message={error} /> : null}
       <AdminTable columns={['Title', 'Type', 'Access', 'Published']} loading={loading} empty="" colSpan={4}>
         {items.length === 0 && !loading ? <AdminEmptyRow colSpan={4} message="No library items." /> : null}
@@ -180,10 +452,103 @@ interface ShivirRow {
   capacity: number | null;
 }
 
-export function ShivirsPage() {
-  const { items, loading, error } = useAdminList<ShivirRow>('/v1/admin/shivirs?limit=100');
+function AddShivirDialog({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [cities, setCities] = useState<GeoOption[]>([]);
+  const [name, setName] = useState('');
+  const [cityId, setCityId] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [location, setLocation] = useState('');
+  const [capacity, setCapacity] = useState('');
+  const [description, setDescription] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    void apiGet<{ cities: GeoOption[] }>('/v1/admin/geography').then((r) => setCities(r?.cities ?? []));
+  }, [open]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !cityId || !startDate || !endDate) return;
+    setBusy(true);
+    try {
+      await apiPost('/v1/admin/shivirs', {
+        name: name.trim(),
+        city_id: cityId,
+        start_date: startDate,
+        end_date: endDate,
+        location_text: location.trim() || undefined,
+        capacity: capacity ? Number(capacity) : undefined,
+        description: description.trim() || undefined,
+        is_published: true,
+      });
+      toast.success('Shivir created.');
+      setOpen(false);
+      setName(''); setCityId(''); setStartDate(''); setEndDate(''); setLocation(''); setCapacity(''); setDescription('');
+      onAdded();
+    } catch (err) {
+      toast.error('Failed to create shivir.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <AdminPageShell title="Shivirs" subtitle="Residential and day camps.">
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm"><Plus className="mr-1 h-4 w-4" />New shivir</Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Create shivir</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="Name *">
+            <Input value={name} onChange={(e) => setName(e.target.value)} required />
+          </FormRow>
+          <FormRow label="City *">
+            <Select value={cityId} onValueChange={setCityId}>
+              <SelectTrigger><SelectValue placeholder="Select city" /></SelectTrigger>
+              <SelectContent>
+                {cities.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>{c.name}{c.state_name ? ` (${c.state_name})` : ''}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormRow>
+          <div className="grid grid-cols-2 gap-3">
+            <FormRow label="Start date *">
+              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} required />
+            </FormRow>
+            <FormRow label="End date *">
+              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} required />
+            </FormRow>
+          </div>
+          <FormRow label="Location / venue">
+            <Input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="Venue address" />
+          </FormRow>
+          <FormRow label="Capacity">
+            <Input type="number" min={1} value={capacity} onChange={(e) => setCapacity(e.target.value)} placeholder="e.g. 100" />
+          </FormRow>
+          <FormRow label="Description">
+            <Textarea rows={2} value={description} onChange={(e) => setDescription(e.target.value)} />
+          </FormRow>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !name.trim() || !cityId || !startDate || !endDate}>
+              {busy ? 'Saving…' : 'Create shivir'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function ShivirsPage() {
+  const { items, loading, error, reload } = useAdminList<ShivirRow>('/v1/admin/shivirs?limit=100');
+  return (
+    <AdminPageShell title="Shivirs" subtitle="Residential and day camps." actions={<AddShivirDialog onAdded={reload} />}>
       {error ? <AdminError message={error} /> : null}
       <AdminTable columns={['Name', 'Dates', 'City', 'Capacity', 'Published']} loading={loading} empty="" colSpan={5}>
         {items.length === 0 && !loading ? <AdminEmptyRow colSpan={5} message="No shivirs." /> : null}
@@ -212,10 +577,86 @@ interface NiyamRow {
   is_active: boolean;
 }
 
-export function NiyamsPage() {
-  const { items, loading, error } = useAdminList<NiyamRow>('/v1/admin/niyams');
+function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [titleEn, setTitleEn] = useState('');
+  const [titleHi, setTitleHi] = useState('');
+  const [descEn, setDescEn] = useState('');
+  const [niyamType, setNiyamType] = useState('daily');
+  const [proofType, setProofType] = useState('either');
+  const [points, setPoints] = useState('10');
+  const [isActive, setIsActive] = useState(true);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!titleEn.trim()) return;
+    setBusy(true);
+    try {
+      await apiPost('/v1/admin/niyams', {
+        title_en: titleEn.trim(),
+        title_hi: titleHi.trim() || undefined,
+        description_en: descEn.trim() || undefined,
+        niyam_type: niyamType,
+        proof_type: proofType,
+        points: Number(points),
+        is_active: isActive,
+      });
+      toast.success('Niyam created.');
+      setOpen(false);
+      setTitleEn(''); setTitleHi(''); setDescEn('');
+      onAdded();
+    } catch (err) {
+      toast.error('Failed.', err instanceof ApiError ? err.message : undefined);
+    } finally { setBusy(false); }
+  }
+
   return (
-    <AdminPageShell title="Niyams" subtitle="Spiritual commitments catalogue.">
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild><Button size="sm"><Plus className="mr-1 h-4 w-4" />New niyam</Button></DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Create niyam</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="Title (English) *"><Input value={titleEn} onChange={(e) => setTitleEn(e.target.value)} required /></FormRow>
+          <FormRow label="Title (Hindi)"><Input value={titleHi} onChange={(e) => setTitleHi(e.target.value)} /></FormRow>
+          <FormRow label="Description"><Textarea rows={2} value={descEn} onChange={(e) => setDescEn(e.target.value)} /></FormRow>
+          <div className="grid grid-cols-2 gap-3">
+            <FormRow label="Type">
+              <Select value={niyamType} onValueChange={setNiyamType}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {['daily', 'weekly', 'monthly'].map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </FormRow>
+            <FormRow label="Proof type">
+              <Select value={proofType} onValueChange={setProofType}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {['photo', 'video', 'either'].map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </FormRow>
+          </div>
+          <FormRow label="Points"><Input type="number" min={0} value={points} onChange={(e) => setPoints(e.target.value)} /></FormRow>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} className="rounded" />
+            Active
+          </label>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !titleEn.trim()}>{busy ? 'Saving…' : 'Create'}</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function NiyamsPage() {
+  const { items, loading, error, reload } = useAdminList<NiyamRow>('/v1/admin/niyams');
+  return (
+    <AdminPageShell title="Niyams" subtitle="Spiritual commitments catalogue." actions={<AddNiyamDialog onAdded={reload} />}>
       {error ? <AdminError message={error} /> : null}
       <AdminTable columns={['Title', 'Type', 'Points', 'Active']} loading={loading} empty="" colSpan={4}>
         {items.length === 0 && !loading ? <AdminEmptyRow colSpan={4} message="No niyams defined." /> : null}
@@ -240,10 +681,60 @@ interface PunyaConfigRow {
   is_active: boolean;
 }
 
-export function PunyaConfigsPage() {
-  const { items, loading, error } = useAdminList<PunyaConfigRow>('/v1/admin/punya/configs');
+function AddPunyaConfigDialog({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [featureKey, setFeatureKey] = useState('');
+  const [points, setPoints] = useState('10');
+  const [isActive, setIsActive] = useState(true);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!featureKey.trim()) return;
+    setBusy(true);
+    try {
+      await apiPost('/v1/admin/punya/configs', {
+        feature_key: featureKey.trim(),
+        points: Number(points),
+        is_active: isActive,
+      });
+      toast.success('Punya config created.');
+      setOpen(false);
+      setFeatureKey(''); setPoints('10'); setIsActive(true);
+      onAdded();
+    } catch (err) {
+      toast.error('Failed.', err instanceof ApiError ? err.message : undefined);
+    } finally { setBusy(false); }
+  }
+
   return (
-    <AdminPageShell title="Punya configs" subtitle="Point values per feature key.">
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild><Button size="sm"><Plus className="mr-1 h-4 w-4" />New config</Button></DialogTrigger>
+      <DialogContent className="max-w-sm">
+        <DialogHeader><DialogTitle>Add Punya config</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="Feature key *">
+            <Input value={featureKey} onChange={(e) => setFeatureKey(e.target.value)} placeholder="e.g. attendance_full_week" className="font-mono text-xs" required />
+          </FormRow>
+          <FormRow label="Points"><Input type="number" min={0} value={points} onChange={(e) => setPoints(e.target.value)} /></FormRow>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} className="rounded" />
+            Active
+          </label>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !featureKey.trim()}>{busy ? 'Saving…' : 'Create'}</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function PunyaConfigsPage() {
+  const { items, loading, error, reload } = useAdminList<PunyaConfigRow>('/v1/admin/punya/configs');
+  return (
+    <AdminPageShell title="Punya configs" subtitle="Point values per feature key." actions={<AddPunyaConfigDialog onAdded={reload} />}>
       {error ? <AdminError message={error} /> : null}
       <AdminTable columns={['Feature', 'Points', 'Active']} loading={loading} empty="" colSpan={3}>
         {items.length === 0 && !loading ? <AdminEmptyRow colSpan={3} message="No configs." /> : null}
@@ -441,10 +932,68 @@ interface HolidayRow {
   reason: string | null;
 }
 
-export function HolidaysPage() {
-  const { items, loading, error } = useAdminList<HolidayRow>('/v1/admin/holidays?limit=100');
+function AddHolidayDialog({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [centres, setCentres] = useState<GeoOption[]>([]);
+  const [centreId, setCentreId] = useState('');
+  const [date, setDate] = useState('');
+  const [reason, setReason] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    void apiGet<{ items: GeoOption[] }>('/v1/admin/centres').then((r) => setCentres(r?.items ?? []));
+  }, [open]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!centreId || !date) return;
+    setBusy(true);
+    try {
+      await apiPost('/v1/admin/holidays', {
+        centre_id: centreId,
+        holiday_date: date,
+        reason: reason.trim() || undefined,
+      });
+      toast.success('Holiday added.');
+      setOpen(false);
+      setCentreId(''); setDate(''); setReason('');
+      onAdded();
+    } catch (err) {
+      toast.error('Failed.', err instanceof ApiError ? err.message : undefined);
+    } finally { setBusy(false); }
+  }
+
   return (
-    <AdminPageShell title="Holiday calendar" subtitle="Scheduled centre holidays.">
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild><Button size="sm"><Plus className="mr-1 h-4 w-4" />Add holiday</Button></DialogTrigger>
+      <DialogContent className="max-w-sm">
+        <DialogHeader><DialogTitle>Add holiday</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="Centre *">
+            <Select value={centreId} onValueChange={setCentreId}>
+              <SelectTrigger><SelectValue placeholder="Select centre" /></SelectTrigger>
+              <SelectContent>
+                {centres.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </FormRow>
+          <FormRow label="Date *"><Input type="date" value={date} onChange={(e) => setDate(e.target.value)} required /></FormRow>
+          <FormRow label="Reason"><Input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="e.g. Paryushan Parva" /></FormRow>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !centreId || !date}>{busy ? 'Saving…' : 'Add'}</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+export function HolidaysPage() {
+  const { items, loading, error, reload } = useAdminList<HolidayRow>('/v1/admin/holidays?limit=100');
+  return (
+    <AdminPageShell title="Holiday calendar" subtitle="Scheduled centre holidays." actions={<AddHolidayDialog onAdded={reload} />}>
       {error ? <AdminError message={error} /> : null}
       <AdminTable columns={['Centre', 'Date', 'Reason']} loading={loading} empty="" colSpan={3}>
         {items.length === 0 && !loading ? <AdminEmptyRow colSpan={3} message="No holidays scheduled." /> : null}

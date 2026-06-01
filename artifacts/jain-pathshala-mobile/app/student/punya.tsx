@@ -5,7 +5,7 @@ import { useSessionView } from "@/contexts/SessionViewContext";
 import { usePunya } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
-import { Body, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { Body, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 function humanize(key: string): string {
   return key
@@ -55,7 +55,7 @@ export default function StudentPunya() {
                 <Body muted style={{ fontSize: 13 }}>{hi ? "कुल पुण्य अंक" : "Total punya points"}</Body>
                 <Pill label={summary?.tier ?? "—"} tone="primary" />
               </Row>
-              <Title style={{ fontSize: 44, marginTop: 8 }}>{summary?.total_points ?? 0}</Title>
+              <Numeric style={{ fontSize: 44, marginTop: 8 }}>{summary?.total_points ?? 0}</Numeric>
             </Card>
 
             <Title style={{ fontSize: 17, marginLeft: 2, marginTop: 4 }}>
@@ -87,9 +87,9 @@ export default function StudentPunya() {
                         ) : null}
                         <Body muted style={{ fontSize: 11, marginTop: 2 }}>{formatDate(tx.created_at)}</Body>
                       </View>
-                      <Title style={{ fontSize: 18, color: positive ? c.successText : c.errorText }}>
+                      <Numeric style={{ fontSize: 18, color: positive ? c.successText : c.errorText }}>
                         {positive ? "+" : "-"}{Math.abs(tx.points)}
-                      </Title>
+                      </Numeric>
                     </Row>
                   );
                 })}

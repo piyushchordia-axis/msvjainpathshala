@@ -465,6 +465,7 @@ router.get("/geography", async (_req: Request, res: Response) => {
       id: cities.id,
       name: cities.name,
       code: cities.code,
+      state_id: cities.state_id,
       state_name: states.name,
     })
     .from(cities)
@@ -477,6 +478,180 @@ router.get("/geography", async (_req: Request, res: Response) => {
 router.get("/settings", async (_req: Request, res: Response) => {
   const rows = await db.select().from(settings).orderBy(asc(settings.key));
   ok(res, { items: rows.map((r) => ({ ...r, updated_at: r.updated_at.toISOString() })) });
+});
+
+/* ═══════════════════════════ CREATE endpoints ═══════════════════════════ */
+
+const createCentreSchema = z.object({
+  name: z.string().min(2).max(200),
+  city_id: z.string().uuid(),
+  state_id: z.string().uuid(),
+  locality: z.string().max(200).optional(),
+  pincode: z.string().max(10).optional(),
+  contact_phone: z.string().max(15).optional(),
+  contact_email: z.string().email().max(255).optional(),
+});
+
+/* POST /v1/admin/centres */
+router.post("/centres", async (req: Request, res: Response) => {
+  let body: z.infer<typeof createCentreSchema>;
+  try { body = createCentreSchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid centre data."); return; }
+  const scope = await resolveAdminScope(req.authUser!);
+  if (scope.centreIds !== null && scope.centreIds.length > 0) {
+    fail(res, 403, "ERR_FORBIDDEN", "Only national/state/city admins can create centres.");
+    return;
+  }
+  const [row] = await db.insert(centres).values({
+    name: body.name,
+    city_id: body.city_id,
+    state_id: body.state_id,
+    locality: body.locality ?? null,
+    pincode: body.pincode ?? null,
+    contact_phone: body.contact_phone ?? null,
+    contact_email: body.contact_email ?? null,
+  }).returning({ id: centres.id, name: centres.name });
+  ok(res, row);
+});
+
+const createBatchSchema = z.object({
+  centre_id: z.string().uuid(),
+  name: z.string().min(1).max(200),
+  age_group: z.enum(["bal", "kishor", "tarun", "yuva"]),
+  start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
+  end_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
+  day_of_week: z.array(z.number().int().min(1).max(7)).default([]),
+  capacity: z.coerce.number().int().min(1).max(500).default(30),
+  shikshak_id: z.string().uuid().optional(),
+});
+
+/* POST /v1/admin/batches */
+router.post("/batches", async (req: Request, res: Response) => {
+  let body: z.infer<typeof createBatchSchema>;
+  try { body = createBatchSchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid batch data."); return; }
+  const scope = await resolveAdminScope(req.authUser!);
+  if (!inScope(scope, body.centre_id)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope."); return;
+  }
+  const [row] = await db.insert(batches).values({
+    centre_id: body.centre_id,
+    name: body.name,
+    age_group: body.age_group,
+    start_time: body.start_time,
+    end_time: body.end_time,
+    day_of_week: body.day_of_week,
+    capacity: body.capacity,
+    shikshak_id: body.shikshak_id ?? null,
+  }).returning({ id: batches.id, name: batches.name });
+  ok(res, row);
+});
+
+const createStudentSchema = z.object({
+  full_name: z.string().min(1).max(200),
+  age_group: z.enum(["bal", "kishor", "tarun", "yuva"]),
+  centre_id: z.string().uuid(),
+  batch_id: z.string().uuid().optional(),
+  gender: z.enum(["male", "female", "other"]).optional(),
+  dob: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+});
+
+/* POST /v1/admin/students */
+router.post("/students", async (req: Request, res: Response) => {
+  let body: z.infer<typeof createStudentSchema>;
+  try { body = createStudentSchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid student data."); return; }
+  const scope = await resolveAdminScope(req.authUser!);
+  if (!inScope(scope, body.centre_id)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope."); return;
+  }
+  const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(students);
+  const student_code = `STU${String((total ?? 0) + 1).padStart(6, "0")}`;
+  const [row] = await db.insert(students).values({
+    full_name: body.full_name,
+    student_code,
+    age_group: body.age_group,
+    centre_id: body.centre_id,
+    batch_id: body.batch_id ?? null,
+    gender: body.gender ?? null,
+    dob: body.dob ?? null,
+  }).returning({ id: students.id, student_code: students.student_code, full_name: students.full_name });
+  ok(res, row);
+});
+
+const createNoticeSchema = z.object({
+  title_en: z.string().min(1).max(500),
+  title_hi: z.string().max(500).optional(),
+  content_en: z.string().max(5000).optional(),
+  content_hi: z.string().max(5000).optional(),
+  audience: z.enum(["batch", "centre", "city", "state", "national", "msv"]).default("national"),
+  is_public: z.boolean().default(false),
+  pinned: z.boolean().default(false),
+  is_critical: z.boolean().default(false),
+  centre_id: z.string().uuid().optional(),
+  publish_now: z.boolean().default(true),
+});
+
+/* POST /v1/admin/notices */
+router.post("/notices", async (req: Request, res: Response) => {
+  let body: z.infer<typeof createNoticeSchema>;
+  try { body = createNoticeSchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid notice data."); return; }
+  const scope = await resolveAdminScope(req.authUser!);
+  if (body.centre_id && !inScope(scope, body.centre_id)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope."); return;
+  }
+  const [row] = await db.insert(notices).values({
+    title_en: body.title_en,
+    title_hi: body.title_hi ?? null,
+    content_en: body.content_en ?? null,
+    content_hi: body.content_hi ?? null,
+    audience: body.audience,
+    is_public: body.is_public,
+    pinned: body.pinned,
+    is_critical: body.is_critical,
+    centre_id: body.centre_id ?? null,
+    created_by: req.authUser!.id,
+    published_at: body.publish_now ? new Date() : null,
+  }).returning({ id: notices.id, title_en: notices.title_en });
+  ok(res, row);
+});
+
+const createShivirSchema = z.object({
+  name: z.string().min(1).max(300),
+  description: z.string().max(2000).optional(),
+  city_id: z.string().uuid(),
+  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  location_text: z.string().max(500).optional(),
+  capacity: z.coerce.number().int().min(1).optional(),
+  is_published: z.boolean().default(true),
+  msv_only: z.boolean().default(false),
+});
+
+/* POST /v1/admin/shivirs */
+router.post("/shivirs", async (req: Request, res: Response) => {
+  let body: z.infer<typeof createShivirSchema>;
+  try { body = createShivirSchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid shivir data."); return; }
+  const scope = await resolveAdminScope(req.authUser!);
+  if (scope.centreIds !== null && scope.centreIds.length > 0) {
+    fail(res, 403, "ERR_FORBIDDEN", "Only national/state/city admins can create shivirs."); return;
+  }
+  const [cityRow] = await db.select({ state_id: cities.state_id }).from(cities).where(eq(cities.id, body.city_id)).limit(1);
+  const [row] = await db.insert(shivir_events).values({
+    name: body.name,
+    description: body.description ?? null,
+    city_id: body.city_id,
+    state_id: cityRow?.state_id ?? null,
+    start_date: body.start_date,
+    end_date: body.end_date,
+    location_text: body.location_text ?? null,
+    capacity: body.capacity ?? null,
+    is_published: body.is_published,
+    msv_only: body.msv_only,
+  }).returning({ id: shivir_events.id, name: shivir_events.name });
+  ok(res, row);
 });
 
 export default router;

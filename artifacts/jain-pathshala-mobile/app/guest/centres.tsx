@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { Pressable, Text, View } from "react-native";
-import { fonts } from "@/constants/typography";
+import { bodyFamily } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useCentres } from "@/lib/queries";
@@ -48,7 +48,7 @@ export default function GuestCentresScreen() {
             <View key={state} style={{ gap: 10 }}>
               <Text
                 style={{
-                  fontFamily: fonts.bodySemiBold,
+                  fontFamily: bodyFamily(hi, "semibold"),
                   fontSize: 13,
                   letterSpacing: 1,
                   textTransform: "uppercase",

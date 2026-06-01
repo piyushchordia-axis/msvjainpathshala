@@ -1,11 +1,23 @@
 import {
+  DMMono_400Regular,
+  DMMono_500Medium,
+} from "@expo-google-fonts/dm-mono";
+import {
+  Outfit_400Regular,
+  Outfit_500Medium,
+  Outfit_600SemiBold,
+  Outfit_700Bold,
+  Outfit_800ExtraBold,
+  Outfit_900Black,
+} from "@expo-google-fonts/outfit";
+import {
   Mukta_400Regular,
   Mukta_500Medium,
   Mukta_600SemiBold,
   Mukta_700Bold,
 } from "@expo-google-fonts/mukta";
 import { TiroDevanagariSanskrit_400Regular } from "@expo-google-fonts/tiro-devanagari-sanskrit";
-import { useFonts } from "@expo-google-fonts/inter";
+import { useFonts } from "expo-font";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
@@ -19,6 +31,7 @@ import { LanguageToggle } from "@/components/AppHeader";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { LocaleProvider } from "@/contexts/LocaleContext";
 import { SessionViewProvider } from "@/contexts/SessionViewContext";
+import { API_BASE } from "@/lib/api";
 import { fonts } from "@/constants/typography";
 import colors from "@/constants/colors";
 
@@ -59,6 +72,14 @@ function RootLayoutNav() {
 
 export default function RootLayout() {
   const [fontsLoaded, fontError] = useFonts({
+    Outfit_400Regular,
+    Outfit_500Medium,
+    Outfit_600SemiBold,
+    Outfit_700Bold,
+    Outfit_800ExtraBold,
+    Outfit_900Black,
+    DMMono_400Regular,
+    DMMono_500Medium,
     TiroDevanagariSanskrit_400Regular,
     Mukta_400Regular,
     Mukta_500Medium,
@@ -72,23 +93,29 @@ export default function RootLayout() {
     }
   }, [fontsLoaded, fontError]);
 
+  useEffect(() => {
+    if (__DEV__) {
+      console.log("[Jain Pathshala] API_BASE =", API_BASE);
+    }
+  }, []);
+
   if (!fontsLoaded && !fontError) return null;
 
   return (
     <SafeAreaProvider>
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
-          <LocaleProvider>
-            <AuthProvider>
-              <SessionViewProvider>
-                <GestureHandlerRootView>
-                  <KeyboardProvider>
+          <GestureHandlerRootView style={{ flex: 1 }}>
+            <KeyboardProvider>
+              <LocaleProvider>
+                <AuthProvider>
+                  <SessionViewProvider>
                     <RootLayoutNav />
-                  </KeyboardProvider>
-                </GestureHandlerRootView>
-              </SessionViewProvider>
-            </AuthProvider>
-          </LocaleProvider>
+                  </SessionViewProvider>
+                </AuthProvider>
+              </LocaleProvider>
+            </KeyboardProvider>
+          </GestureHandlerRootView>
         </QueryClientProvider>
       </ErrorBoundary>
     </SafeAreaProvider>
