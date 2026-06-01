@@ -11,3 +11,7 @@ export * from "./shivirs";
 export * from "./library";
 export * from "./gallery";
 export * from "./settings";
+export * from "./curriculum";
+export * from "./exams";
+export * from "./donations";
+export * from "./queues";

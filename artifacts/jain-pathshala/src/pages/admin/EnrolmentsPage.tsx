@@ -14,6 +14,10 @@ interface EnrolmentRow {
   requested_centre_id: string;
   requested_batch_id: string;
   status: EnrolmentStatus;
+  student_name?: string | null;
+  student_code?: string;
+  centre_name?: string;
+  batch_name?: string | null;
 }
 
 const STATUS_FILTERS: Array<{ value: EnrolmentStatus | 'all'; label: string }> = [
@@ -155,6 +159,7 @@ export default function EnrolmentsPage() {
             <thead className="bg-muted/40 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               <tr>
                 <th className="px-4 py-3">Submitted</th>
+                <th className="px-4 py-3">Student</th>
                 <th className="px-4 py-3">Centre</th>
                 <th className="px-4 py-3">Batch</th>
                 <th className="px-4 py-3">Status</th>
@@ -164,15 +169,21 @@ export default function EnrolmentsPage() {
             </thead>
             <tbody className="divide-y divide-border">
               {loading ? (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
               ) : items.length === 0 ? (
-                <tr><td colSpan={6} className="px-4 py-8 text-center text-muted-foreground">No enrolments match the current filter.</td></tr>
+                <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No enrolments match the current filter.</td></tr>
               ) : (
                 items.map((e) => (
                   <tr key={e.id} className="hover:bg-muted/30">
                     <td className="px-4 py-3 text-foreground">{fmtDate(e.created_at)}</td>
-                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{e.requested_centre_id.slice(0, 8)}…</td>
-                    <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{e.requested_batch_id.slice(0, 8)}…</td>
+                    <td className="px-4 py-3">
+                      <div className="font-medium">{e.student_name ?? '—'}</div>
+                      {e.student_code ? (
+                        <div className="font-mono text-xs text-muted-foreground">{e.student_code}</div>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-3 text-xs">{e.centre_name ?? '—'}</td>
+                    <td className="px-4 py-3 text-xs">{e.batch_name ?? '—'}</td>
                     <td className="px-4 py-3">
                       <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${STATUS_STYLES[e.status]}`}>{e.status}</span>
                     </td>

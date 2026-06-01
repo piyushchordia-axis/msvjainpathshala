@@ -31,6 +31,15 @@ import {
   library_items,
   gallery_items,
   settings,
+  curricula,
+  curriculum_sections,
+  curriculum_items,
+  online_exams,
+  exam_attempts,
+  donation_campaigns,
+  donations,
+  queue_stats,
+  queue_dlq_jobs,
 } from "./schema";
 import { tierForPoints } from "./schema/enums";
 import { sql } from "drizzle-orm";
@@ -53,6 +62,8 @@ async function main(): Promise<void> {
   // Clear domain tables (order does not matter with CASCADE).
   await db.execute(sql`
     truncate table
+      queue_dlq_jobs, queue_stats, donations, donation_campaigns,
+      exam_attempts, online_exams, curriculum_items, curriculum_sections, curricula,
       gallery_items, library_items, shivir_events, notices,
       niyam_streaks, niyam_submissions, niyams,
       punya_balances, punya_transactions, punya_configs, punya_features,
@@ -594,6 +605,173 @@ async function main(): Promise<void> {
       embed_url: "https://example.org/pdf/values-guide.pdf",
       access_tier: "student",
       is_published: true,
+    },
+  ]);
+
+  /* ---------------- Curriculum ---------------- */
+  const [curriculumStd] = await db
+    .insert(curricula)
+    .values({
+      city_id: mumbai.id,
+      name: "Foundation Jain Studies 2025-26",
+      kind: "standard",
+      academic_year: "2025-26",
+      status: "active",
+    })
+    .returning();
+
+  const [sec1] = await db
+    .insert(curriculum_sections)
+    .values({
+      curriculum_id: curriculumStd.id,
+      title_en: "Core Values",
+      title_hi: "मूल मूल्य",
+      order_index: 1,
+    })
+    .returning();
+
+  await db.insert(curriculum_items).values([
+    {
+      section_id: sec1.id,
+      title_en: "Ahimsa in daily life",
+      title_hi: "दैनिक जीवन में अहिंसा",
+      order_index: 1,
+    },
+    {
+      section_id: sec1.id,
+      title_en: "Satya and honesty",
+      title_hi: "सत्य और ईमानदारी",
+      order_index: 2,
+    },
+  ]);
+
+  await db.insert(curricula).values({
+    city_id: pune.id,
+    name: "MSV Advanced Curriculum",
+    kind: "msv",
+    academic_year: "2025-26",
+    status: "active",
+  });
+
+  /* ---------------- Exams ---------------- */
+  const [exam1] = await db
+    .insert(online_exams)
+    .values({
+      city_id: mumbai.id,
+      title_en: "Term 1 Assessment",
+      title_hi: "टर्म 1 मूल्यांकन",
+      description_en: "Online assessment covering recent curriculum.",
+      window_start: daysAgo(2),
+      window_end: daysFromNow(5),
+      exam_otp: "482910",
+      total_marks: 50,
+      pass_mark: 25,
+      results_released: false,
+    })
+    .returning();
+
+  const studentRows = await db.select({ id: students.id }).from(students).limit(2);
+  if (studentRows[0]) {
+    await db.insert(exam_attempts).values({
+      exam_id: exam1.id,
+      student_id: studentRows[0].id,
+      started_at: daysAgo(1),
+      submitted_at: daysAgo(1),
+      score: 42,
+      status: "submitted",
+    });
+  }
+
+  /* ---------------- Donations ---------------- */
+  const [campaign] = await db
+    .insert(donation_campaigns)
+    .values({
+      city_id: mumbai.id,
+      name: "Ghatkopar Centre Renovation",
+      description: "Help upgrade classrooms and library space.",
+      target_amount_paise: 500_000_00,
+      raised_amount_paise: 125_000_00,
+      is_public: true,
+    })
+    .returning();
+
+  await db.insert(donations).values([
+    {
+      donor_name: "Rajesh Shah",
+      donor_phone: "+919876543210",
+      amount_paise: 50_000_00,
+      purpose: "infrastructure",
+      campaign_id: campaign.id,
+      frequency: "one_time",
+      status: "captured",
+      payment_captured_at: daysAgo(10),
+      eighty_g_eligible: true,
+      receipt_number: "RCP-2025-001",
+      financial_year: "2025-26",
+    },
+    {
+      donor_name: "Priya Mehta",
+      donor_phone: "+919812345678",
+      amount_paise: 25_000_00,
+      purpose: "general",
+      frequency: "one_time",
+      status: "captured",
+      payment_captured_at: daysAgo(3),
+      eighty_g_eligible: false,
+      receipt_number: "RCP-2025-002",
+      financial_year: "2025-26",
+    },
+    {
+      donor_name: "Anonymous Donor",
+      amount_paise: 10_000_00,
+      purpose: "scholarship",
+      campaign_id: campaign.id,
+      frequency: "one_time",
+      status: "captured",
+      payment_captured_at: daysAgo(1),
+      eighty_g_eligible: true,
+    },
+  ]);
+
+  /* ---------------- Queue stats (dev) ---------------- */
+  await db.insert(queue_stats).values([
+    {
+      queue_name: "notifications.fanout",
+      waiting: 3,
+      active: 1,
+      completed_24h: 128,
+      failed: 2,
+    },
+    {
+      queue_name: "punya.award",
+      waiting: 0,
+      active: 0,
+      completed_24h: 45,
+      failed: 1,
+    },
+    {
+      queue_name: "report.generation",
+      waiting: 1,
+      active: 0,
+      completed_24h: 12,
+      failed: 0,
+    },
+  ]);
+
+  await db.insert(queue_dlq_jobs).values([
+    {
+      queue_name: "notifications.fanout",
+      job_id: "nf-2025-001",
+      payload: { event: "enrolment.approved", user_id: parent.id },
+      error_message: "FCM token expired",
+      failed_at: daysAgo(2),
+    },
+    {
+      queue_name: "punya.award",
+      job_id: "pa-2025-007",
+      payload: { student_id: studentRows[0]?.id, points: 10 },
+      error_message: "Duplicate idempotency key",
+      failed_at: daysAgo(1),
     },
   ]);
 

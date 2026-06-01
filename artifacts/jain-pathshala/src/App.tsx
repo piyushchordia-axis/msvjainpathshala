@@ -23,30 +23,32 @@ import DashboardPage from '@/pages/admin/DashboardPage';
 import StudentsPage from '@/pages/admin/StudentsPage';
 import EnrolmentsPage from '@/pages/admin/EnrolmentsPage';
 import BatchesPage from '@/pages/admin/BatchesPage';
+import AnalyticsPage from '@/pages/admin/AnalyticsPage';
 import {
-  AnalyticsPage,
-  MsvEnrolmentsPage,
-  ShikshaksPage,
-  CurriculumPage,
-  ExamsPage,
-  NiyamsPage,
-  ShivirsPage as AdminShivirsPage,
-  PunyaAwardPage,
-  PunyaConfigsPage,
-  PunyaAuditPage,
   CentresPage as AdminCentresPage,
-  HolidaysPage,
   NoticesPage as AdminNoticesPage,
   GalleryPage as AdminGalleryPage,
   LibraryPage as AdminLibraryPage,
-  DonationsPage,
+  ShivirsPage as AdminShivirsPage,
+  NiyamsPage,
+  PunyaAwardPage,
+  PunyaConfigsPage,
+  PunyaAuditPage,
+  ShikshaksPage,
+  MsvEnrolmentsPage,
+  HolidaysPage,
   ServiceRequestsPage,
   ReportsPage,
   AuditPage,
   GeographyPage,
   SettingsPage,
+} from '@/pages/admin/AdminListPages';
+import {
+  CurriculumPage,
+  ExamsPage,
+  DonationsPage,
   QueuesPage,
-} from '@/pages/admin/AdminStubs';
+} from '@/pages/admin/AdminExtendedPages';
 
 import NotFound from '@/pages/not-found';
 

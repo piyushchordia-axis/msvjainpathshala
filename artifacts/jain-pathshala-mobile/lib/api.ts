@@ -8,8 +8,17 @@
  *     setAuthToken() from the AuthContext.
  */
 
-const DOMAIN = process.env.EXPO_PUBLIC_DOMAIN;
-export const API_BASE = DOMAIN ? `https://${DOMAIN}` : "";
+function resolveApiBase(): string {
+  const explicit = process.env.EXPO_PUBLIC_API_BASE_URL;
+  if (explicit) return explicit.replace(/\/$/, "");
+
+  const domain = process.env.EXPO_PUBLIC_DOMAIN;
+  if (!domain) return "";
+  if (/^https?:\/\//i.test(domain)) return domain.replace(/\/$/, "");
+  return `https://${domain}`;
+}
+
+export const API_BASE = resolveApiBase();
 
 let authToken: string | null = null;
 

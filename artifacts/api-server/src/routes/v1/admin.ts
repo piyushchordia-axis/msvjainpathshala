@@ -23,10 +23,14 @@ import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
+import adminResourcesRouter from "./admin-resources";
+import adminModulesRouter from "./admin-modules";
 
 const router: IRouter = Router();
 
 router.use(requireAuth, requireAdminPanel);
+router.use(adminResourcesRouter);
+router.use(adminModulesRouter);
 
 /** Returns a Drizzle condition limiting `column` to the user's scope, or undefined for unrestricted. */
 function scopedCentreFilter(scope: AdminScope, column: PgColumn) {
@@ -215,6 +219,8 @@ router.get("/enrolments", async (req: Request, res: Response) => {
   }
   const centreFilter = scopedCentreFilter(scope, enrolments.requested_centre_id);
 
+  const reqCentre = centres;
+  const reqBatch = batches;
   const rows = await db
     .select({
       id: enrolments.id,
@@ -223,8 +229,15 @@ router.get("/enrolments", async (req: Request, res: Response) => {
       requested_centre_id: enrolments.requested_centre_id,
       requested_batch_id: enrolments.requested_batch_id,
       status: enrolments.status,
+      student_name: students.full_name,
+      student_code: students.student_code,
+      centre_name: reqCentre.name,
+      batch_name: reqBatch.name,
     })
     .from(enrolments)
+    .innerJoin(students, eq(students.id, enrolments.student_id))
+    .innerJoin(reqCentre, eq(reqCentre.id, enrolments.requested_centre_id))
+    .innerJoin(reqBatch, eq(reqBatch.id, enrolments.requested_batch_id))
     .where(and(statusFilter, centreFilter))
     .orderBy(desc(enrolments.created_at))
     .limit(limit);
