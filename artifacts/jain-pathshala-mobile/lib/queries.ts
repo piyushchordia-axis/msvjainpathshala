@@ -3,8 +3,9 @@
  * screens stay declarative and cache keys never drift. All hooks return the
  * unwrapped DTO (lib/api.ts strips the { data } envelope).
  */
+import { Alert } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost, ApiError } from "@/lib/api";
 import type {
   AdminBatchRow,
   AdminStudentRow,
@@ -47,6 +48,12 @@ export const qk = {
   adminStudents: (s?: string) => ["admin", "students", s ?? "all"] as const,
   adminEnrolments: (s?: string) => ["admin", "enrolments", s ?? "all"] as const,
   adminBatches: ["admin", "batches"] as const,
+  // Wave 4 (new student/parent flows)
+  notifications: ["me", "notifications"] as const,
+  homework: (id: string) => ["me", "homework", id] as const,
+  quizzesAvailable: ["me", "quizzes", "available"] as const,
+  openCompetitions: ["me", "competitions", "open"] as const,
+  idCard: (id: string) => ["me", "id-card", id] as const,
 };
 
 /* ---------------------------------------------------------------- public --- */
@@ -234,5 +241,174 @@ export function useBatchAction() {
     mutationFn: ({ id, action }: { id: string; action: "activate" | "deactivate" }) =>
       apiPost(`/v1/admin/batches/${id}/${action}`, {}),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.adminBatches }),
+  });
+}
+
+/* ---------------------------------------------------- wave 4 (new flows) --- */
+
+// --- Notifications inbox ---
+export type NotificationRow = {
+  id: string;
+  kind: string;
+  title_en: string;
+  title_hi: string;
+  body_en: string | null;
+  body_hi: string | null;
+  read_at: string | null;
+  created_at: string;
+};
+export type NotificationsResponse = { items: NotificationRow[]; unread_count: number };
+
+export function useNotifications(enabled = true) {
+  return useQuery({
+    queryKey: qk.notifications,
+    queryFn: () => apiGet<NotificationsResponse>("/v1/notifications"),
+    enabled,
+  });
+}
+export function useMarkNotificationRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id }: { id: string }) => apiPost(`/v1/notifications/${id}/read`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.notifications }),
+  });
+}
+
+// --- Niyam submission ---
+interface SubmitNiyamInput {
+  studentId: string; // for cache invalidation only; not sent in body
+  niyam_id: string;
+  student_id: string;
+  submission_date?: string;
+  proof_url?: string;
+  notes?: string;
+}
+interface SubmitNiyamResult { id: string; status: string }
+export function useSubmitNiyam() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ studentId: _studentId, ...body }: SubmitNiyamInput) =>
+      apiPost<SubmitNiyamResult>("/v1/niyam-submissions", body),
+    onSuccess: (_res, vars) => {
+      qc.invalidateQueries({ queryKey: qk.niyams(vars.studentId) });
+      qc.invalidateQueries({ queryKey: qk.punya(vars.studentId) });
+    },
+  });
+}
+
+// --- Homework ---
+export interface HomeworkRow {
+  id: string;
+  assignment_id: string;
+  title: string;
+  due_date: string;
+  status: string;
+  submission_url: string | null;
+  feedback_note: string | null;
+  late: boolean;
+}
+export function useHomework(studentId?: string) {
+  return useQuery({
+    queryKey: qk.homework(studentId ?? ""),
+    queryFn: () => apiGet<List<HomeworkRow>>(`/v1/homework/mine?student_id=${studentId}`),
+    enabled: !!studentId,
+  });
+}
+export function useSubmitHomework() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, submission_url }: { id: string; studentId: string; submission_url: string }) =>
+      apiPost<{ id: string; status: string }>(`/v1/homework/submissions/${id}/submit`, { submission_url }),
+    onSuccess: (_data, vars) => qc.invalidateQueries({ queryKey: qk.homework(vars.studentId) }),
+    onError: (err) => Alert.alert("Could not submit", err instanceof Error ? err.message : "Please try again."),
+  });
+}
+
+// --- Quizzes ---
+export interface QuizEventRow {
+  id: string;
+  title_en: string;
+  title_hi: string;
+  start_at: string;
+  end_at: string;
+  already_attempted: boolean;
+  total_questions?: number;
+}
+export interface QuizOption { text_en: string; text_hi: string }
+export interface QuizQuestion { id: string; question_en: string; question_hi: string; options: QuizOption[] }
+export interface QuizStartResponse { attempt_id: string; questions: QuizQuestion[] }
+export interface QuizSubmitResponse { score: number; correct_count: number; total_count: number }
+export function useAvailableQuizzes(enabled = true) {
+  return useQuery({
+    queryKey: qk.quizzesAvailable,
+    queryFn: () => apiGet<List<QuizEventRow>>("/v1/quizzes/events/available"),
+    enabled,
+  });
+}
+export function useStartQuiz() {
+  return useMutation({
+    mutationFn: ({ id, student_id }: { id: string; student_id: string }) =>
+      apiPost<QuizStartResponse>(`/v1/quizzes/events/${id}/start`, { student_id }),
+    onError: (err) => Alert.alert("Could not start quiz", err instanceof Error ? err.message : "Please try again."),
+  });
+}
+export function useSubmitQuiz() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, student_id, answers }: { id: string; student_id: string; answers: Record<string, number[]> }) =>
+      apiPost<QuizSubmitResponse>(`/v1/quizzes/events/${id}/submit`, { student_id, answers }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.quizzesAvailable }),
+    onError: (err) => Alert.alert("Could not submit quiz", err instanceof Error ? err.message : "Please try again."),
+  });
+}
+
+// --- Competitions ---
+export interface OpenCompetitionRow {
+  id: string;
+  name_en: string;
+  name_hi: string;
+  category: string | null;
+  event_date: string;
+  registration_window_end: string;
+  winner_points: number;
+  participant_points: number;
+  eligible_student_ids?: string[] | null;
+}
+export function useOpenCompetitions(enabled = true) {
+  return useQuery({
+    queryKey: qk.openCompetitions,
+    queryFn: () => apiGet<List<OpenCompetitionRow>>("/v1/competitions/open"),
+    enabled,
+  });
+}
+export function useRegisterCompetition() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, student_id }: { id: string; student_id: string }) =>
+      apiPost<{ id: string }>(`/v1/competitions/${id}/register`, { student_id }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.openCompetitions }),
+  });
+}
+
+// --- Digital ID card ---
+export interface IdCardRow {
+  student_id: string;
+  card_number: string;
+  png_url: string;
+  version_no: number;
+  is_active: boolean;
+}
+export function useMyIdCard(studentId?: string) {
+  return useQuery({
+    queryKey: qk.idCard(studentId ?? ""),
+    queryFn: async () => {
+      try {
+        return await apiGet<IdCardRow>(`/v1/id-cards/mine?student_id=${studentId}`);
+      } catch (err) {
+        if (err instanceof ApiError && err.statusCode === 404) return null;
+        throw err;
+      }
+    },
+    enabled: !!studentId,
   });
 }

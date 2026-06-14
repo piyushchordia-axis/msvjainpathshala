@@ -66,6 +66,13 @@ function RootLayoutNav() {
       <Stack.Screen name="shivir/[id]" options={{ title: "Shivir" }} />
       <Stack.Screen name="info/[slug]" options={{ title: "" }} />
       <Stack.Screen name="gallery" options={{ title: "Punya Wall" }} />
+      {/* Wave 4 — new student/parent flows */}
+      <Stack.Screen name="notifications" options={{ title: "Notifications" }} />
+      <Stack.Screen name="niyam-submit" options={{ title: "Submit Niyam" }} />
+      <Stack.Screen name="homework" options={{ title: "Homework" }} />
+      <Stack.Screen name="quizzes" options={{ title: "Quizzes" }} />
+      <Stack.Screen name="competitions" options={{ title: "Competitions" }} />
+      <Stack.Screen name="idcard" options={{ title: "ID Card" }} />
     </Stack>
   );
 }

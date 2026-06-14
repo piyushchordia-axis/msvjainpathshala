@@ -8,6 +8,7 @@ import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { Body, Card, Kicker, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { QuickActions } from "@/components/QuickActions";
 
 export default function ParentHome() {
   const c = useColors();
@@ -109,6 +110,8 @@ export default function ParentHome() {
                 </Row>
               </Card>
             ) : null}
+
+            <QuickActions />
 
             <Card>
               <Row style={{ justifyContent: "space-between", alignItems: "center" }}>

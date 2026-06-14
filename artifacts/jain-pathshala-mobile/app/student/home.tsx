@@ -7,6 +7,7 @@ import { useAttendance, usePunya } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
 import { Body, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { QuickActions } from "@/components/QuickActions";
 
 export default function StudentHome() {
   const c = useColors();
@@ -61,6 +62,7 @@ export default function StudentHome() {
           />
         ) : (
           <>
+            <QuickActions />
             <Card>
               <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
                 <View style={{ flex: 1, paddingRight: 10 }}>
