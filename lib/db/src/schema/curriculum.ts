@@ -1,6 +1,9 @@
-import { integer, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { boolean, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { timestamps } from "./_helpers";
+import { curriculumLevelEnum } from "./enums";
 import { cities } from "./geography";
+import { students } from "./students";
+import { users } from "./identity";
 
 export const curricula = pgTable("curricula", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -35,3 +38,54 @@ export const curriculum_items = pgTable("curriculum_items", {
   order_index: integer("order_index").notNull().default(0),
   ...timestamps(),
 });
+
+// Per-student mastery of a curriculum item (set by shikshak).
+export const student_curriculum_progress = pgTable(
+  "student_curriculum_progress",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    student_id: uuid("student_id")
+      .notNull()
+      .references(() => students.id, { onDelete: "cascade" }),
+    curriculum_item_id: uuid("curriculum_item_id")
+      .notNull()
+      .references(() => curriculum_items.id, { onDelete: "cascade" }),
+    level: curriculumLevelEnum("level").notNull().default("not_started"),
+    note: text("note"),
+    updated_by: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
+    ...timestamps(),
+  },
+  (t) => ({
+    student_item_unique: uniqueIndex("student_curriculum_progress_student_item_unique").on(
+      t.student_id,
+      t.curriculum_item_id,
+    ),
+  }),
+);
+
+// Generated per-period progress report (PDF export + parent release).
+export const progress_reports = pgTable(
+  "progress_reports",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    student_id: uuid("student_id")
+      .notNull()
+      .references(() => students.id, { onDelete: "cascade" }),
+    period_kind: text("period_kind").notNull(), // 'monthly' | 'termly'
+    period_label: text("period_label").notNull(), // e.g. '2026-06', 'term-1'
+    generated_at: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),
+    pdf_url: text("pdf_url"),
+    shikshak_comment: text("shikshak_comment"),
+    released_to_parent: boolean("released_to_parent").notNull().default(false),
+    released_at: timestamp("released_at", { withTimezone: true }),
+    snapshot: jsonb("snapshot").$type<Record<string, unknown>>(),
+    ...timestamps(),
+  },
+  (t) => ({
+    student_period_unique: uniqueIndex("progress_reports_student_period_unique").on(
+      t.student_id,
+      t.period_kind,
+      t.period_label,
+    ),
+  }),
+);

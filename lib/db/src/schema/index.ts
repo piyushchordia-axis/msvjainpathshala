@@ -15,3 +15,7 @@ export * from "./curriculum";
 export * from "./exams";
 export * from "./donations";
 export * from "./queues";
+export * from "./homework";
+export * from "./registration";
+export * from "./services";
+export * from "./audit";

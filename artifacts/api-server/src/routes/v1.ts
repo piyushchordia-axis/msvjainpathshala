@@ -13,6 +13,12 @@ import uploadsRouter from "./v1/uploads";
 import attendanceRouter from "./v1/attendance";
 import niyamSubmissionsRouter from "./v1/niyam-submissions";
 import examsRouter from "./v1/exams";
+import homeworkRouter from "./v1/homework";
+import registrationRouter from "./v1/registration";
+import serviceRequestsRouter from "./v1/service-requests";
+import idCardsRouter from "./v1/id-cards";
+import progressRouter from "./v1/progress";
+import auditLogsRouter from "./v1/audit-logs";
 
 const router: IRouter = Router();
 
@@ -25,5 +31,11 @@ router.use("/uploads", uploadsRouter);
 router.use("/attendance", attendanceRouter);
 router.use("/niyam-submissions", niyamSubmissionsRouter);
 router.use("/exams", examsRouter);
+router.use("/homework", homeworkRouter);
+router.use("/registration", registrationRouter);
+router.use("/service-requests", serviceRequestsRouter);
+router.use("/id-cards", idCardsRouter);
+router.use("/progress", progressRouter);
+router.use("/audit-logs", auditLogsRouter);
 
 export default router;

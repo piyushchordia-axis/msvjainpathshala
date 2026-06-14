@@ -40,9 +40,7 @@ import {
   ShikshaksPage,
   MsvEnrolmentsPage,
   HolidaysPage,
-  ServiceRequestsPage,
   ReportsPage,
-  AuditPage,
   GeographyPage,
   SettingsPage,
 } from '@/pages/admin/AdminListPages';
@@ -52,6 +50,14 @@ import {
   DonationsPage,
   QueuesPage,
 } from '@/pages/admin/AdminExtendedPages';
+// Wave 2 standalone admin pages
+import HomeworkAdminPage from '@/pages/admin/HomeworkPage';
+import RegistrationFormsPage from '@/pages/admin/RegistrationFormsPage';
+import ServiceRequestsAdminPage from '@/pages/admin/ServiceRequestsAdminPage';
+import IdCardsAdminPage from '@/pages/admin/IdCardsPage';
+import ProgressAdminPage from '@/pages/admin/ProgressPage';
+import AuditLogPage from '@/pages/admin/AuditLogPage';
+import RegisterPage from '@/pages/public/RegisterPage';
 
 import NotFound from '@/pages/not-found';
 
@@ -81,6 +87,7 @@ function PublicRoutes() {
         <Route path="/donate" component={DonatePage} />
         <Route path="/enquire" component={EnquirePage} />
         <Route path="/msv" component={MsvPage} />
+        <Route path="/register" component={RegisterPage} />
         <Route component={NotFound} />
       </Switch>
     </PublicLayout>
@@ -103,20 +110,24 @@ function AdminRoutes() {
         <Route path="/admin/exam-builder" component={ExamBuilderPage} />
         <Route path="/admin/niyams" component={NiyamsPage} />
         <Route path="/admin/niyam-review" component={NiyamReviewPage} />
+        <Route path="/admin/homework" component={HomeworkAdminPage} />
+        <Route path="/admin/progress" component={ProgressAdminPage} />
         <Route path="/admin/shivirs" component={AdminShivirsPage} />
         <Route path="/admin/punya/manual-award" component={PunyaAwardPage} />
         <Route path="/admin/punya/configs" component={PunyaConfigsPage} />
         <Route path="/admin/punya/audit" component={PunyaAuditPage} />
         <Route path="/admin/centres" component={AdminCentresPage} />
+        <Route path="/admin/id-cards" component={IdCardsAdminPage} />
         <Route path="/admin/holidays" component={HolidaysPage} />
         <Route path="/admin/attendance" component={AttendancePage} />
         <Route path="/admin/notices" component={AdminNoticesPage} />
         <Route path="/admin/gallery" component={AdminGalleryPage} />
         <Route path="/admin/library" component={AdminLibraryPage} />
         <Route path="/admin/donations" component={DonationsPage} />
-        <Route path="/admin/service-requests" component={ServiceRequestsPage} />
+        <Route path="/admin/service-requests" component={ServiceRequestsAdminPage} />
+        <Route path="/admin/registration-forms" component={RegistrationFormsPage} />
         <Route path="/admin/reports" component={ReportsPage} />
-        <Route path="/admin/audit" component={AuditPage} />
+        <Route path="/admin/audit" component={AuditLogPage} />
         <Route path="/admin/geography" component={GeographyPage} />
         <Route path="/admin/settings" component={SettingsPage} />
         <Route path="/admin/queues" component={QueuesPage} />

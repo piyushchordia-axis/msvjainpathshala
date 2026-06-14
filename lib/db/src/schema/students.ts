@@ -1,4 +1,4 @@
-import { boolean, date, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { boolean, date, integer, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 
 import { softDelete, timestamps } from "./_helpers";
 import {
@@ -58,15 +58,31 @@ export const msv_enrolments = pgTable("msv_enrolments", {
   ...timestamps(),
 });
 
-export const digital_id_cards = pgTable("digital_id_cards", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  student_id: uuid("student_id")
-    .notNull()
-    .references(() => students.id, { onDelete: "cascade" }),
-  qr_token: text("qr_token").notNull(),
-  is_active: boolean("is_active").notNull().default(true),
-  ...timestamps(),
-});
+export const digital_id_cards = pgTable(
+  "digital_id_cards",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    student_id: uuid("student_id")
+      .notNull()
+      .references(() => students.id, { onDelete: "cascade" }),
+    qr_token: text("qr_token").notNull(),
+    // Human-readable card number, signed QR payload, and rendered artefacts.
+    card_number: text("card_number"),
+    qr_payload: text("qr_payload"),
+    qr_signature: text("qr_signature"),
+    png_url: text("png_url"),
+    svg_payload: text("svg_payload"),
+    msv_badge: boolean("msv_badge").notNull().default(false),
+    version_no: integer("version_no").notNull().default(1),
+    generated_at: timestamp("generated_at", { withTimezone: true }),
+    last_regenerated_at: timestamp("last_regenerated_at", { withTimezone: true }),
+    is_active: boolean("is_active").notNull().default(true),
+    ...timestamps(),
+  },
+  (t) => ({
+    student_unique: uniqueIndex("digital_id_cards_student_unique").on(t.student_id),
+  }),
+);
 
 export type Student = typeof students.$inferSelect;
 export type NewStudent = typeof students.$inferInsert;

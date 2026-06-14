@@ -30,6 +30,23 @@ export const SHIVIR_ATTENDANCE_MODES = ["in_out", "present_only"] as const;
 export const SHIVIR_SCAN_KINDS = ["check_in", "check_out", "present"] as const;
 export const LIBRARY_CONTENT_TYPES = ["pdf", "video", "audio", "image"] as const;
 export const LIBRARY_ACCESS_TIERS = ["public", "student", "msv", "shikshak"] as const;
+export const HOMEWORK_STATUSES = ["pending", "submitted", "approved", "starred", "late"] as const;
+export const SERVICE_REQUEST_STATUSES = ["submitted", "in_review", "resolved"] as const;
+export const CURRICULUM_LEVELS = ["not_started", "in_progress", "completed", "mastered"] as const;
+export const AUDIT_ACTIONS = [
+  "create",
+  "update",
+  "delete",
+  "approve",
+  "reject",
+  "assign",
+  "resolve",
+  "grade",
+  "award",
+  "config_change",
+  "login",
+  "logout",
+] as const;
 
 export const TIER_THRESHOLDS: Record<(typeof TIERS)[number], number> = {
   jigyasu: 0,
@@ -67,3 +84,7 @@ export const shivirAttendanceModeEnum = pgEnum("shivir_attendance_mode_enum", SH
 export const shivirScanKindEnum = pgEnum("shivir_scan_kind_enum", SHIVIR_SCAN_KINDS);
 export const libraryContentTypeEnum = pgEnum("library_content_type_enum", LIBRARY_CONTENT_TYPES);
 export const libraryAccessTierEnum = pgEnum("library_access_tier_enum", LIBRARY_ACCESS_TIERS);
+export const homeworkStatusEnum = pgEnum("homework_status_enum", HOMEWORK_STATUSES);
+export const serviceRequestStatusEnum = pgEnum("service_request_status_enum", SERVICE_REQUEST_STATUSES);
+export const curriculumLevelEnum = pgEnum("curriculum_level_enum", CURRICULUM_LEVELS);
+export const auditActionEnum = pgEnum("audit_action_enum", AUDIT_ACTIONS);

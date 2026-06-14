@@ -42,6 +42,15 @@ import {
   donations,
   queue_stats,
   queue_dlq_jobs,
+  homework_assignments,
+  homework_submissions,
+  registration_form_configs,
+  registration_form_responses,
+  service_requests,
+  service_request_messages,
+  student_curriculum_progress,
+  progress_reports,
+  audit_logs,
 } from "./schema";
 import { tierForPoints } from "./schema/enums";
 import { sql } from "drizzle-orm";
@@ -64,6 +73,11 @@ async function main(): Promise<void> {
   // Clear domain tables (order does not matter with CASCADE).
   await db.execute(sql`
     truncate table
+      audit_logs,
+      homework_submissions, homework_assignments,
+      registration_form_responses, registration_form_configs,
+      service_request_messages, service_requests,
+      progress_reports, student_curriculum_progress,
       queue_dlq_jobs, queue_stats, donations, donation_campaigns,
       exam_answers, exam_attempts, exam_question_options, exam_questions, online_exams,
       curriculum_items, curriculum_sections, curricula,
@@ -846,6 +860,130 @@ async function main(): Promise<void> {
     value: "123456",
     updated_at: new Date(),
   });
+
+  /* ---------------- Homework (Wave 2) ---------------- */
+  const [homeworkA1] = await db
+    .insert(homework_assignments)
+    .values({
+      batch_id: batchA1.id,
+      title: "Learn the Navkar Mantra",
+      description: "Memorise and recite the Navkar Mantra; upload a short video.",
+      due_date: "2026-06-30",
+      is_msv: false,
+      target_student_ids: null,
+      created_by: shikshak.id,
+    })
+    .returning();
+  await db.insert(homework_submissions).values([
+    {
+      assignment_id: homeworkA1.id,
+      student_id: insertedStudents[0].id,
+      status: "starred" as const,
+      submission_url: "https://example.com/aarav-navkar.mp4",
+      feedback_note: "Beautifully recited!",
+      marked_by: shikshak.id,
+      marked_at: new Date(),
+      late: false,
+    },
+    {
+      assignment_id: homeworkA1.id,
+      student_id: insertedStudents[1].id,
+      status: "pending" as const,
+    },
+  ]);
+
+  /* ---------------- Registration forms (Wave 2) ---------------- */
+  const [studentRegConfig] = await db
+    .insert(registration_form_configs)
+    .values({
+      city_id: null,
+      form_kind: "student",
+      title_en: "Student Registration",
+      title_hi: "विद्यार्थी पंजीकरण",
+      is_active: true,
+      version_no: 1,
+      fields: [
+        { key: "full_name", label_en: "Full Name", label_hi: "पूरा नाम", type: "text", required: true },
+        {
+          key: "age_group",
+          label_en: "Age Group",
+          label_hi: "आयु वर्ग",
+          type: "select",
+          required: true,
+          options: [
+            { value: "bal", label_en: "Bal", label_hi: "बाल" },
+            { value: "kishor", label_en: "Kishor", label_hi: "किशोर" },
+            { value: "tarun", label_en: "Tarun", label_hi: "तरुण" },
+          ],
+        },
+        { key: "parent_phone", label_en: "Parent Phone", label_hi: "अभिभावक फ़ोन", type: "tel", required: false },
+      ],
+      published_at: new Date(),
+      published_by: superAdmin.id,
+    })
+    .returning();
+  await db.insert(registration_form_responses).values([
+    {
+      form_config_id: studentRegConfig.id,
+      full_name: "Riya Mehta",
+      phone: "+919812345678",
+      status: "submitted",
+      responses: { full_name: "Riya Mehta", age_group: "bal", parent_phone: "+919812345678" },
+    },
+  ]);
+
+  /* ---------------- Service requests (Wave 2) ---------------- */
+  const [serviceReq1] = await db
+    .insert(service_requests)
+    .values({
+      parent_user_id: parent.id,
+      student_id: insertedStudents[0].id,
+      category: "attendance",
+      subject: "Attendance discrepancy this week",
+      description: "Aarav attended on Sunday but is marked absent. Please check.",
+      status: "in_review",
+      assigned_to: superAdmin.id,
+      centre_id: centreA.id,
+      city_id: mumbai.id,
+      last_response_at: new Date(),
+    })
+    .returning();
+  await db.insert(service_request_messages).values([
+    { request_id: serviceReq1.id, author_user_id: parent.id, message: "Aarav attended on Sunday but is shown absent." },
+    { request_id: serviceReq1.id, author_user_id: superAdmin.id, message: "Thanks for flagging — we are reviewing the attendance records." },
+  ]);
+
+  /* ---------------- Student progress + report (Wave 2) ---------------- */
+  const [firstCurriculumItem] = await db.select({ id: curriculum_items.id }).from(curriculum_items).limit(1);
+  if (firstCurriculumItem) {
+    await db.insert(student_curriculum_progress).values([
+      {
+        student_id: insertedStudents[0].id,
+        curriculum_item_id: firstCurriculumItem.id,
+        level: "mastered" as const,
+        note: "Strong understanding demonstrated.",
+        updated_by: shikshak.id,
+      },
+    ]);
+  }
+  await db.insert(progress_reports).values([
+    {
+      student_id: insertedStudents[0].id,
+      period_kind: "monthly",
+      period_label: "2025-12",
+      shikshak_comment: "Consistent progress this month.",
+      released_to_parent: true,
+      released_at: new Date(),
+      snapshot: { items: [] },
+    },
+  ]);
+
+  /* ---------------- Audit logs (Wave 2) ---------------- */
+  await db.insert(audit_logs).values([
+    { actor_user_id: superAdmin.id, actor_role: "super_admin", action: "config_change", entity_kind: "settings", summary: "Updated default OTP" },
+    { actor_user_id: superAdmin.id, actor_role: "super_admin", action: "approve", entity_kind: "enrolment", summary: "Approved a pending enrolment" },
+    { actor_user_id: cityAdmin.id, actor_role: "city_admin", action: "update", entity_kind: "student", summary: "Edited a student profile" },
+  ]);
 
   console.log("Seed complete.");
   console.log("\nLogin phones (OTP code: 123456 for all users via settings):");
