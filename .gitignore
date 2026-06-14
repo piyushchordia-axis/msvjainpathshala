@@ -31,6 +31,10 @@ node_modules
 .env
 .env.local
 
+# uploaded files (local-disk storage provider)
+uploads/
+artifacts/api-server/uploads/
+
 # misc
 /.sass-cache
 /connect.lock

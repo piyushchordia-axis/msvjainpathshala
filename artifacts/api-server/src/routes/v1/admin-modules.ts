@@ -23,6 +23,7 @@ import {
   type User,
 } from "@workspace/db";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
@@ -52,7 +53,7 @@ async function cityIdsForUser(user: User): Promise<string[] | null> {
   return Array.from(new Set(rows.map((r) => r.city_id)));
 }
 
-function cityFilter(column: typeof curricula.city_id, ids: string[] | null) {
+function cityFilter(column: PgColumn, ids: string[] | null) {
   if (ids === null) return undefined;
   if (ids.length === 0) return eq(column, "00000000-0000-0000-0000-000000000000");
   return inArray(column, ids);
