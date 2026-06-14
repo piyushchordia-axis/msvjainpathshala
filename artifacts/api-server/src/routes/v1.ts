@@ -10,6 +10,9 @@ import noticesRouter from "./v1/notices";
 import galleryRouter from "./v1/gallery";
 import meRouter from "./v1/me";
 import uploadsRouter from "./v1/uploads";
+import attendanceRouter from "./v1/attendance";
+import niyamSubmissionsRouter from "./v1/niyam-submissions";
+import examsRouter from "./v1/exams";
 
 const router: IRouter = Router();
 
@@ -19,5 +22,8 @@ router.use("/notices", noticesRouter);
 router.use("/gallery", galleryRouter);
 router.use("/me", meRouter);
 router.use("/uploads", uploadsRouter);
+router.use("/attendance", attendanceRouter);
+router.use("/niyam-submissions", niyamSubmissionsRouter);
+router.use("/exams", examsRouter);
 
 export default router;

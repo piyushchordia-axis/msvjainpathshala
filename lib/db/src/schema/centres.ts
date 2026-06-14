@@ -2,6 +2,7 @@ import {
   boolean,
   date,
   integer,
+  numeric,
   pgTable,
   text,
   time,
@@ -27,6 +28,10 @@ export const centres = pgTable("centres", {
   pincode: varchar("pincode", { length: 10 }),
   contact_phone: varchar("contact_phone", { length: 15 }),
   contact_email: varchar("contact_email", { length: 255 }),
+  // GPS geofence for attendance marking (nullable until configured).
+  lat: numeric("lat", { precision: 10, scale: 7 }),
+  lng: numeric("lng", { precision: 10, scale: 7 }),
+  gps_radius_m: integer("gps_radius_m").notNull().default(200),
   status: studentStatusEnum("status").notNull().default("active"),
   ...softDelete(),
   ...timestamps(),

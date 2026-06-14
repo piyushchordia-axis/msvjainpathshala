@@ -35,6 +35,8 @@ import {
   curriculum_sections,
   curriculum_items,
   online_exams,
+  exam_questions,
+  exam_question_options,
   exam_attempts,
   donation_campaigns,
   donations,
@@ -63,7 +65,8 @@ async function main(): Promise<void> {
   await db.execute(sql`
     truncate table
       queue_dlq_jobs, queue_stats, donations, donation_campaigns,
-      exam_attempts, online_exams, curriculum_items, curriculum_sections, curricula,
+      exam_answers, exam_attempts, exam_question_options, exam_questions, online_exams,
+      curriculum_items, curriculum_sections, curricula,
       gallery_items, library_items, shivir_events, notices,
       niyam_streaks, niyam_submissions, niyams,
       punya_balances, punya_transactions, punya_configs, punya_features,
@@ -191,6 +194,9 @@ async function main(): Promise<void> {
       pincode: "400077",
       contact_phone: "+912200000001",
       contact_email: "ghatkopar@example.org",
+      lat: "19.0861000",
+      lng: "72.9081000",
+      gps_radius_m: 200,
       status: "active",
     })
     .returning();
@@ -500,6 +506,29 @@ async function main(): Promise<void> {
     });
   }
 
+  // A few pending niyam submissions with proof, awaiting shikshak review.
+  await db.insert(niyam_submissions).values([
+    {
+      niyam_id: insertedNiyams[1].id,
+      student_id: insertedStudents[0].id,
+      submission_date: isoDate(daysAgo(0)),
+      status: "pending",
+      points_awarded: 0,
+      proof_url: "https://example.org/proof/sample1.jpg",
+      notes: "Completed chauvihar today.",
+      submitted_by: parent.id,
+    },
+    {
+      niyam_id: insertedNiyams[2].id,
+      student_id: insertedStudents[1].id,
+      submission_date: isoDate(daysAgo(1)),
+      status: "pending",
+      points_awarded: 0,
+      proof_url: "https://example.org/proof/sample2.jpg",
+      submitted_by: parent.id,
+    },
+  ]);
+
   /* ---------------- Notices ---------------- */
   await db.insert(notices).values([
     {
@@ -670,6 +699,41 @@ async function main(): Promise<void> {
     })
     .returning();
 
+  // Questions (two single-choice, 25 marks each) + options.
+  const [q1] = await db
+    .insert(exam_questions)
+    .values({
+      exam_id: exam1.id,
+      question_en: "How many times is the Navkar Mantra recited in the standard practice?",
+      question_hi: "नवकार मंत्र मानक अभ्यास में कितनी बार बोला जाता है?",
+      question_type: "single_choice",
+      marks: 25,
+      order_index: 0,
+    })
+    .returning();
+  await db.insert(exam_question_options).values([
+    { question_id: q1.id, option_en: "3 times", is_correct: false, order_index: 0 },
+    { question_id: q1.id, option_en: "9 times", is_correct: true, order_index: 1 },
+    { question_id: q1.id, option_en: "12 times", is_correct: false, order_index: 2 },
+  ]);
+
+  const [q2] = await db
+    .insert(exam_questions)
+    .values({
+      exam_id: exam1.id,
+      question_en: "Chauvihar means abstaining from food and water after which time?",
+      question_hi: "चौविहार का अर्थ किस समय के बाद भोजन और जल का त्याग है?",
+      question_type: "single_choice",
+      marks: 25,
+      order_index: 1,
+    })
+    .returning();
+  await db.insert(exam_question_options).values([
+    { question_id: q2.id, option_en: "Noon", is_correct: false, order_index: 0 },
+    { question_id: q2.id, option_en: "Sunset", is_correct: true, order_index: 1 },
+    { question_id: q2.id, option_en: "Midnight", is_correct: false, order_index: 2 },
+  ]);
+
   const studentRows = await db.select({ id: students.id }).from(students).limit(2);
   if (studentRows[0]) {
     await db.insert(exam_attempts).values({
@@ -678,6 +742,7 @@ async function main(): Promise<void> {
       started_at: daysAgo(1),
       submitted_at: daysAgo(1),
       score: 42,
+      auto_score: 42,
       status: "submitted",
     });
   }

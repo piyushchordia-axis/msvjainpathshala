@@ -24,6 +24,9 @@ import StudentsPage from '@/pages/admin/StudentsPage';
 import EnrolmentsPage from '@/pages/admin/EnrolmentsPage';
 import BatchesPage from '@/pages/admin/BatchesPage';
 import AnalyticsPage from '@/pages/admin/AnalyticsPage';
+import AttendancePage from '@/pages/admin/AttendancePage';
+import NiyamReviewPage from '@/pages/admin/NiyamReviewPage';
+import ExamBuilderPage from '@/pages/admin/ExamBuilderPage';
 import {
   CentresPage as AdminCentresPage,
   NoticesPage as AdminNoticesPage,
@@ -97,13 +100,16 @@ function AdminRoutes() {
         <Route path="/admin/batches" component={BatchesPage} />
         <Route path="/admin/curriculum" component={CurriculumPage} />
         <Route path="/admin/exams" component={ExamsPage} />
+        <Route path="/admin/exam-builder" component={ExamBuilderPage} />
         <Route path="/admin/niyams" component={NiyamsPage} />
+        <Route path="/admin/niyam-review" component={NiyamReviewPage} />
         <Route path="/admin/shivirs" component={AdminShivirsPage} />
         <Route path="/admin/punya/manual-award" component={PunyaAwardPage} />
         <Route path="/admin/punya/configs" component={PunyaConfigsPage} />
         <Route path="/admin/punya/audit" component={PunyaAuditPage} />
         <Route path="/admin/centres" component={AdminCentresPage} />
         <Route path="/admin/holidays" component={HolidaysPage} />
+        <Route path="/admin/attendance" component={AttendancePage} />
         <Route path="/admin/notices" component={AdminNoticesPage} />
         <Route path="/admin/gallery" component={AdminGalleryPage} />
         <Route path="/admin/library" component={AdminLibraryPage} />

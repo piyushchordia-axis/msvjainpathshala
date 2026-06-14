@@ -1,8 +1,9 @@
-import { boolean, date, integer, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { boolean, date, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
 import { timestamps } from "./_helpers";
 import { niyamSubmissionStatusEnum, niyamTypeEnum, proofTypeEnum } from "./enums";
 import { students } from "./students";
+import { users } from "./identity";
 
 export const niyams = pgTable("niyams", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -29,6 +30,12 @@ export const niyam_submissions = pgTable("niyam_submissions", {
   status: niyamSubmissionStatusEnum("status").notNull().default("auto_approved"),
   points_awarded: integer("points_awarded").notNull().default(0),
   is_featured: boolean("is_featured").notNull().default(false),
+  // Submission provenance + proof + review trail.
+  proof_url: text("proof_url"),
+  notes: text("notes"),
+  submitted_by: uuid("submitted_by").references(() => users.id, { onDelete: "set null" }),
+  reviewed_by: uuid("reviewed_by").references(() => users.id, { onDelete: "set null" }),
+  reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
   ...timestamps(),
 });
 

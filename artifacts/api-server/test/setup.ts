@@ -3,4 +3,5 @@
 process.env.DATABASE_URL ??= "postgres://sumit@localhost:5432/jainpathshala";
 process.env.NODE_ENV ??= "test";
 process.env.JP_AUTH_SECRET ??= "jp-dev-secret-do-not-use-in-production";
+process.env.LOG_LEVEL ??= "silent"; // quiet pino-http request logs during tests
 // PORT is not needed (the app is never listened on in tests).
