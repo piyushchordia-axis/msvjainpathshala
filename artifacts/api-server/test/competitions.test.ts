@@ -149,6 +149,91 @@ describe("competitions", () => {
     expect(afterRepublish).toBe(after);
   });
 
+  it("awards winner Punya exactly once even when publish-results runs twice", async () => {
+    // Focused regression for the atomic CLAIM in publish-results: a sequential
+    // re-publish must be a 409 and must NOT award the winner a second time.
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const cityId = await mumbaiCityId(admin.token);
+
+    const WINNER_POINTS = 91;
+    const start = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const end = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const eventDate = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+    const create = await request(app)
+      .post("/v1/competitions")
+      .set(auth(admin.token))
+      .send({
+        city_id: cityId,
+        name_en: `Vitest DoublePublish ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name_hi: "वीटेस्ट डबल",
+        category: "essay",
+        eligible_age_groups: [],
+        msv_only: false,
+        registration_window_start: start,
+        registration_window_end: end,
+        event_date: eventDate,
+        winner_points: WINNER_POINTS,
+        participant_points: 0,
+      });
+    expect(create.status).toBe(200);
+    const competitionId: string = create.body.data.id;
+
+    // Open -> register Aarav -> close -> record rank 1.
+    const open = await request(app)
+      .post(`/v1/competitions/${competitionId}/status`)
+      .set(auth(admin.token))
+      .send({ status: "open" });
+    expect(open.status).toBe(200);
+
+    const { id: aaravId, total: before } = await aaravState(parent.token);
+    const register = await request(app)
+      .post(`/v1/competitions/${competitionId}/register`)
+      .set(auth(parent.token))
+      .send({ student_id: aaravId });
+    expect(register.status).toBe(200);
+    const registrationId: string = register.body.data.id;
+
+    const close = await request(app)
+      .post(`/v1/competitions/${competitionId}/status`)
+      .set(auth(admin.token))
+      .send({ status: "closed" });
+    expect(close.status).toBe(200);
+
+    const results = await request(app)
+      .post(`/v1/competitions/${competitionId}/results`)
+      .set(auth(admin.token))
+      .send({ results: [{ registration_id: registrationId, rank: 1 }] });
+    expect(results.status).toBe(200);
+
+    // First publish: 200, awards exactly the winner points.
+    const publish1 = await request(app)
+      .post(`/v1/competitions/${competitionId}/publish-results`)
+      .set(auth(admin.token));
+    expect(publish1.status).toBe(200);
+    expect(publish1.body.data.awarded).toBe(1);
+    const { total: afterFirst } = await aaravState(parent.token);
+    expect(afterFirst).toBe(before + WINNER_POINTS);
+
+    // Second publish (sequential): 409, and total is UNCHANGED (no re-award).
+    const publish2 = await request(app)
+      .post(`/v1/competitions/${competitionId}/publish-results`)
+      .set(auth(admin.token));
+    expect(publish2.status).toBe(409);
+    expect(publish2.body.error.code).toBe("ERR_ALREADY_PUBLISHED");
+    const { total: afterSecond } = await aaravState(parent.token);
+    expect(afterSecond).toBe(afterFirst);
+
+    // Defense-in-depth: a third publish is still 409 and still does not award.
+    const publish3 = await request(app)
+      .post(`/v1/competitions/${competitionId}/publish-results`)
+      .set(auth(admin.token));
+    expect(publish3.status).toBe(409);
+    const { total: afterThird } = await aaravState(parent.token);
+    expect(afterThird).toBe(afterFirst);
+  });
+
   it("forbids creating a competition outside the admin's city scope", async () => {
     // city_admin (Mumbai) cannot create in a foreign/non-scoped city.
     const cityAdmin = await loginAs("city_admin");

@@ -20,7 +20,7 @@ import {
   cities,
   type User,
 } from "@workspace/db";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
@@ -365,49 +365,77 @@ router.post("/:id/publish-results", requireAdminPanel, async (req: Request, res:
     return;
   }
 
-  // Idempotency guard: once published, never re-award.
+  // Fast-path idempotency guard (cheap pre-check; the real, race-safe guard is
+  // the conditional CLAIM inside the transaction below).
   if (comp.status === "results_published") {
     fail(res, 409, "ERR_ALREADY_PUBLISHED", "Results already published.");
     return;
   }
 
-  const regs = await db
-    .select({
-      id: competition_registrations.id,
-      student_id: competition_registrations.student_id,
-      result_rank: competition_registrations.result_rank,
-    })
-    .from(competition_registrations)
-    .where(eq(competition_registrations.competition_id, comp.id));
+  // Atomicity: wrap the whole publish in ONE transaction and CLAIM the
+  // draft/open/closed -> results_published transition first via a conditional
+  // UPDATE guarded on `status != 'results_published'`. Exactly one caller can
+  // win that claim (sequential re-publish OR concurrent double-publish); the
+  // losers see zero affected rows and bail. Only the winner runs the award
+  // loop, so Punya is awarded exactly once.
+  const outcome = await db.transaction(async (tx) => {
+    const claimed = await tx
+      .update(competitions)
+      .set({ status: "results_published", results_published_at: new Date() })
+      .where(
+        and(
+          eq(competitions.id, comp.id),
+          ne(competitions.status, "results_published"),
+        ),
+      )
+      .returning({ id: competitions.id });
+    if (claimed.length === 0) {
+      // Lost the race / already published — do NOT award.
+      return { claimed: false as const };
+    }
 
-  let awarded = 0;
-  for (const r of regs) {
-    const points = r.result_rank === 1 ? comp.winner_points : comp.participant_points;
-    if (points <= 0) continue;
-    await awardPunya({
-      studentId: r.student_id,
-      featureKey: "competition",
-      points,
-      note: `${comp.name_en}${r.result_rank === 1 ? " (winner)" : ""}`,
-      awardedBy: req.authUser!.id,
-    });
-    awarded += 1;
+    const regs = await tx
+      .select({
+        id: competition_registrations.id,
+        student_id: competition_registrations.student_id,
+        result_rank: competition_registrations.result_rank,
+      })
+      .from(competition_registrations)
+      .where(eq(competition_registrations.competition_id, comp.id));
+
+    let awarded = 0;
+    for (const r of regs) {
+      // By design: rank-1 earns winner_points; EVERY other registrant (ranked
+      // or not) earns participant_points just for taking part. Participation
+      // points are intentionally granted to all registrants — not a bug.
+      const points = r.result_rank === 1 ? comp.winner_points : comp.participant_points;
+      if (points <= 0) continue;
+      await awardPunya({
+        studentId: r.student_id,
+        featureKey: "competition",
+        points,
+        note: `${comp.name_en}${r.result_rank === 1 ? " (winner)" : ""}`,
+        awardedBy: req.authUser!.id,
+      });
+      awarded += 1;
+    }
+    return { claimed: true as const, awarded, registrations: regs.length };
+  });
+
+  if (!outcome.claimed) {
+    fail(res, 409, "ERR_ALREADY_PUBLISHED", "Results already published.");
+    return;
   }
-
-  await db
-    .update(competitions)
-    .set({ status: "results_published", results_published_at: new Date() })
-    .where(eq(competitions.id, comp.id));
 
   await auditFromReq(req, {
     action: "award",
     entityKind: "competition",
     entityId: comp.id,
-    summary: `Published results; awarded ${awarded} student(s)`,
-    metadata: { registrations: regs.length, awarded },
+    summary: `Published results; awarded ${outcome.awarded} student(s)`,
+    metadata: { registrations: outcome.registrations, awarded: outcome.awarded },
   });
 
-  ok(res, { id: comp.id, status: "results_published", awarded });
+  ok(res, { id: comp.id, status: "results_published", awarded: outcome.awarded });
 });
 
 /* ═══════════════════════════ STUDENT / PARENT — browse + register ═══════════ */
@@ -554,9 +582,16 @@ router.post("/:id/register", async (req: Request, res: Response) => {
     return;
   }
 
-  // Capacity + unique guarded inside one transaction so concurrent registers
-  // cannot both pass the cap check (count-then-insert TOCTOU).
+  // Capacity + unique guarded inside one transaction. A transaction alone is
+  // NOT enough under READ COMMITTED: two concurrent registers could each count
+  // the same pre-insert total and both pass the cap (count-then-insert TOCTOU).
+  // So we first take a per-competition advisory xact lock to serialize all
+  // registrations for this competition; only then do we count + insert. The
+  // lock is held until the transaction commits/rolls back.
   const result = await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${comp.id}::text, 0))`,
+    );
     if (comp.max_participants !== null) {
       const [{ n }] = await tx
         .select({ n: sql<number>`count(*)::int` })

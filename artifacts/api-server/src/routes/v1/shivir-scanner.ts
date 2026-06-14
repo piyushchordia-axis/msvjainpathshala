@@ -4,11 +4,16 @@
  * Shivirs are CITY-scoped. Admin-panel routes (session create/list + dashboard)
  * verify the shivir's city is in the caller's city scope (404 out of scope).
  *
- * The scan endpoint is open to any authed caller who is EITHER a shivir volunteer
- * for that shivir OR an admin-panel role. It verifies the signed ID-card QR with
- * the shared idcard-crypto HMAC, then re-checks the live digital_id_cards row so a
- * stale/revoked QR (bumped version_no or is_active=false) no longer records a scan
- * — the same revocation rule as the id-cards module.
+ * The scan endpoint is open to any authed caller who is EITHER a registered
+ * shivir volunteer for that shivir OR an admin-panel user whose city scope
+ * includes the shivir's city (super_admin = unrestricted); out-of-scope callers
+ * get a 404 (the session is not revealed). It then validates scan_kind against
+ * the session's attendance_mode, verifies the signed ID-card QR with the shared
+ * idcard-crypto HMAC, and — inside one transaction holding a per-student advisory
+ * lock — re-checks the live digital_id_cards row before inserting, so a
+ * stale/revoked QR (bumped version_no or is_active=false), even if revoked
+ * concurrently, no longer records a scan (the same revocation rule as the
+ * id-cards module, made atomic).
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import {
@@ -178,9 +183,13 @@ router.post("/sessions/:sessionId/scan", async (req: Request, res: Response) => 
     return;
   }
 
-  // Resolve the session -> its shivir (for the volunteer authorization check).
+  // Resolve the session -> its shivir (for the authorization + mode checks).
   const [session] = await db
-    .select({ id: shivir_sessions.id, shivir_id: shivir_sessions.shivir_id })
+    .select({
+      id: shivir_sessions.id,
+      shivir_id: shivir_sessions.shivir_id,
+      attendance_mode: shivir_sessions.attendance_mode,
+    })
     .from(shivir_sessions)
     .where(eq(shivir_sessions.id, sessionId))
     .limit(1);
@@ -189,9 +198,18 @@ router.post("/sessions/:sessionId/scan", async (req: Request, res: Response) => 
     return;
   }
 
-  // Authorization: admin-panel role OR a volunteer for this shivir.
+  // Authorization (city-scoped): the caller must EITHER be a registered
+  // volunteer for THIS shivir, OR an admin-panel user whose city scope includes
+  // the shivir's city. Out-of-scope is a 404 (do not reveal the session exists).
   const authUser = req.authUser!;
-  let allowed = canAccessAdminPanel(authUser.role);
+  let allowed = false;
+  if (canAccessAdminPanel(authUser.role)) {
+    const shivir = await getShivir(session.shivir_id);
+    if (shivir) {
+      const cityIds = await cityScopeForUser(authUser);
+      allowed = cityInScope(cityIds, shivir.city_id);
+    }
+  }
   if (!allowed) {
     const [vol] = await db
       .select({ id: shivir_volunteers.id })
@@ -206,7 +224,17 @@ router.post("/sessions/:sessionId/scan", async (req: Request, res: Response) => 
     allowed = !!vol;
   }
   if (!allowed) {
-    fail(res, 403, "ERR_FORBIDDEN", "You are not a volunteer for this shivir.");
+    fail(res, 404, "ERR_NOT_FOUND", "Session not found.");
+    return;
+  }
+
+  // The scan_kind must be compatible with the session's attendance_mode.
+  const validKinds =
+    session.attendance_mode === "present_only"
+      ? (["present"] as const)
+      : (["check_in", "check_out"] as const);
+  if (!(validKinds as readonly string[]).includes(body.scan_kind)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "scan_kind is not valid for this session's attendance mode.");
     return;
   }
 
@@ -221,37 +249,59 @@ router.post("/sessions/:sessionId/scan", async (req: Request, res: Response) => 
     return;
   }
 
-  // Revocation rule: the card must still be active and at the same version_no.
-  const [card] = await db
-    .select({ version_no: digital_id_cards.version_no, is_active: digital_id_cards.is_active })
-    .from(digital_id_cards)
-    .where(eq(digital_id_cards.student_id, parsed.student_id))
-    .limit(1);
-  if (!card || !card.is_active || card.version_no !== parsed.v) {
+  // Atomic revocation re-check + insert: serialize per-student with an advisory
+  // xact lock so a card revoked/version-bumped concurrently cannot still record a
+  // scan (TOCTOU between the revocation read and the insert).
+  const result = await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${parsed.student_id}::text, 0))`,
+    );
+
+    // Revocation rule: the card must still be active and at the same version_no.
+    const [card] = await tx
+      .select({ version_no: digital_id_cards.version_no, is_active: digital_id_cards.is_active })
+      .from(digital_id_cards)
+      .where(eq(digital_id_cards.student_id, parsed.student_id))
+      .limit(1);
+    if (!card || !card.is_active || card.version_no !== parsed.v) {
+      return { status: "revoked" as const };
+    }
+
+    const [student] = await tx
+      .select({ id: students.id, full_name: students.full_name, student_code: students.student_code })
+      .from(students)
+      .where(eq(students.id, parsed.student_id))
+      .limit(1);
+    if (!student) {
+      return { status: "no_student" as const };
+    }
+
+    await tx.insert(shivir_attendance_scans).values({
+      shivir_session_id: sessionId,
+      student_id: student.id,
+      volunteer_user_id: authUser.id,
+      scan_kind: body.scan_kind,
+      scanned_at: new Date(),
+    });
+
+    return { status: "ok" as const, student };
+  });
+
+  if (result.status === "revoked") {
     fail(res, 401, "ERR_SIGNATURE_INVALID", "Signature is invalid.");
     return;
   }
-
-  const [student] = await db
-    .select({ id: students.id, full_name: students.full_name, student_code: students.student_code })
-    .from(students)
-    .where(eq(students.id, parsed.student_id))
-    .limit(1);
-  if (!student) {
+  if (result.status === "no_student") {
     fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
     return;
   }
 
-  await db.insert(shivir_attendance_scans).values({
-    shivir_session_id: sessionId,
-    student_id: student.id,
-    volunteer_user_id: authUser.id,
-    scan_kind: body.scan_kind,
-    scanned_at: new Date(),
-  });
-
   ok(res, {
-    student: { id: student.id, full_name: student.full_name, student_code: student.student_code },
+    student: {
+      id: result.student.id,
+      full_name: result.student.full_name,
+      student_code: result.student.student_code,
+    },
     scan_kind: body.scan_kind,
   });
 });

@@ -10,7 +10,7 @@
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, donations, donation_campaigns } from "@workspace/db";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { payments } from "../../lib/payments";
@@ -133,53 +133,66 @@ async function captureDonation(
   paymentId: string | null,
   signature: string | null,
 ): Promise<string | null> {
-  const [donation] = await db
-    .select({
-      id: donations.id,
-      amount_paise: donations.amount_paise,
-      campaign_id: donations.campaign_id,
-      payment_status: donations.payment_status,
-      receipt_number: donations.receipt_number,
-    })
-    .from(donations)
-    .where(eq(donations.id, donationId))
-    .limit(1);
-  if (!donation) return null;
+  // Wrap the whole capture in one transaction. A per-donation advisory xact lock
+  // serializes concurrent capturers (e.g. /verify racing /webhook) so the
+  // conditional status flip and the campaign increment can never interleave.
+  return db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${donationId}::text, 0))`);
 
-  // Idempotency guard: already captured -> return the existing receipt, no re-award.
-  if (donation.payment_status === "captured") {
-    return donation.receipt_number;
-  }
-
-  const now = new Date();
-  const fy = financialYearFor(now);
-  const receiptNumber = receiptNumberFor(donation.id, fy);
-
-  await db
-    .update(donations)
-    .set({
-      payment_status: "captured",
-      status: "captured",
-      razorpay_payment_id: paymentId,
-      razorpay_signature: signature,
-      payment_captured_at: now,
-      receipt_number: receiptNumber,
-      financial_year: fy,
-      eighty_g_eligible: true,
-    })
-    .where(eq(donations.id, donation.id));
-
-  // Increment the campaign's raised total atomically (only on first capture).
-  if (donation.campaign_id) {
-    await db
-      .update(donation_campaigns)
-      .set({
-        raised_amount_paise: sql`${donation_campaigns.raised_amount_paise} + ${donation.amount_paise}`,
+    const [donation] = await tx
+      .select({
+        id: donations.id,
+        amount_paise: donations.amount_paise,
+        campaign_id: donations.campaign_id,
       })
-      .where(eq(donation_campaigns.id, donation.campaign_id));
-  }
+      .from(donations)
+      .where(eq(donations.id, donationId))
+      .limit(1);
+    if (!donation) return null;
 
-  return receiptNumber;
+    const now = new Date();
+    const fy = financialYearFor(now);
+    const receiptNumber = receiptNumberFor(donation.id, fy);
+
+    // Conditional claim: only the caller that flips payment_status away from
+    // "captured" gets a returned row and is responsible for the campaign credit.
+    const claimed = await tx
+      .update(donations)
+      .set({
+        payment_status: "captured",
+        status: "captured",
+        razorpay_payment_id: paymentId,
+        razorpay_signature: signature,
+        payment_captured_at: now,
+        receipt_number: receiptNumber,
+        financial_year: fy,
+        eighty_g_eligible: true,
+      })
+      .where(and(eq(donations.id, donation.id), ne(donations.payment_status, "captured")))
+      .returning({ receipt_number: donations.receipt_number });
+
+    // Lost the race / already captured: idempotent success, return existing receipt.
+    if (claimed.length === 0) {
+      const [existing] = await tx
+        .select({ receipt_number: donations.receipt_number })
+        .from(donations)
+        .where(eq(donations.id, donation.id))
+        .limit(1);
+      return existing?.receipt_number ?? null;
+    }
+
+    // We won the transition: credit the campaign exactly once.
+    if (donation.campaign_id) {
+      await tx
+        .update(donation_campaigns)
+        .set({
+          raised_amount_paise: sql`${donation_campaigns.raised_amount_paise} + ${donation.amount_paise}`,
+        })
+        .where(eq(donation_campaigns.id, donation.campaign_id));
+    }
+
+    return claimed[0].receipt_number;
+  });
 }
 
 /* ---- POST /v1/donations/verify — confirm checkout signature, capture ---- */

@@ -73,7 +73,12 @@ function cityInScope(cityIds: string[] | null, cityId: string | null): boolean {
 async function ownedStudent(req: Request, studentId: string) {
   const uid = req.authUser!.id;
   const [row] = await db
-    .select({ id: students.id, centre_id: students.centre_id, batch_id: students.batch_id })
+    .select({
+      id: students.id,
+      centre_id: students.centre_id,
+      batch_id: students.batch_id,
+      age_group: students.age_group,
+    })
     .from(students)
     .where(
       and(
@@ -110,12 +115,26 @@ function sameIndexSet(a: number[], b: number[]): boolean {
  * Does this scheduled event apply to the given student? city / centre / batch
  * narrow successively; national/state events apply by the student's city being
  * present (state events still resolve to a concrete city on the event row).
+ *
+ * age_groups targeting: when the event lists one or more age groups, the student
+ * must fall into one of them; an empty list targets all age groups. This gate is
+ * applied on top of the geographic narrowing below.
  */
 function eventMatchesStudent(
-  ev: { scope: string; city_id: string | null; centre_id: string | null; batch_id: string | null },
-  student: { centre_id: string | null; batch_id: string | null },
+  ev: {
+    scope: string;
+    city_id: string | null;
+    centre_id: string | null;
+    batch_id: string | null;
+    age_groups: string[];
+  },
+  student: { centre_id: string | null; batch_id: string | null; age_group: string | null },
   studentCityId: string | null,
 ): boolean {
+  // Age-group targeting: a non-empty list must include the student's age group.
+  if (ev.age_groups.length > 0 && !(student.age_group && ev.age_groups.includes(student.age_group))) {
+    return false;
+  }
   if (ev.batch_id) return ev.batch_id === student.batch_id;
   if (ev.centre_id) return ev.centre_id === student.centre_id;
   if (ev.city_id) return ev.city_id === studentCityId;
@@ -440,6 +459,7 @@ router.get("/events/available", async (req: Request, res: Response) => {
       end_at: quiz_events.end_at,
       participation_points: quiz_events.participation_points,
       win_points: quiz_events.win_points,
+      age_groups: quiz_events.age_groups,
     })
     .from(quiz_events)
     .where(and(lte(quiz_events.start_at, now), gte(quiz_events.end_at, now)))
@@ -512,6 +532,16 @@ router.post("/events/:id/start", async (req: Request, res: Response) => {
   const [event] = await db.select().from(quiz_events).where(eq(quiz_events.id, eventId)).limit(1);
   if (!event) {
     fail(res, 404, "ERR_NOT_FOUND", "Quiz event not found.");
+    return;
+  }
+
+  // Age-group targeting: a targeted event (non-empty age_groups) only admits
+  // students whose age_group is listed. Surface this as a distinct 422.
+  if (
+    event.age_groups.length > 0 &&
+    !(student.age_group && event.age_groups.includes(student.age_group))
+  ) {
+    fail(res, 422, "ERR_NOT_ELIGIBLE", "This quiz is not available for this student's age group.");
     return;
   }
 
@@ -621,18 +651,35 @@ router.post("/events/:id/submit", async (req: Request, res: Response) => {
   const allCorrect = totalCount > 0 && correctCount === totalCount;
   const score = correctCount;
 
-  await db
-    .update(quiz_attempts)
-    .set({
-      submitted_at: now,
-      score,
-      correct_count: correctCount,
-      total_count: totalCount,
-      answers: body.answers,
-    })
-    .where(eq(quiz_attempts.id, attempt.id));
+  // Atomic submit: serialize on the attempt id, then conditionally claim the
+  // attempt by setting submitted_at ONLY if it is still null. Points are awarded
+  // exclusively on the winning transition, so two concurrent submits (or a
+  // re-submit that slipped past the read-time guard above) can never
+  // double-award. `db.transaction` keeps grade-claim-award on one connection.
+  const claimed = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${attempt.id}::text, 0))`);
+    const rows = await tx
+      .update(quiz_attempts)
+      .set({
+        submitted_at: now,
+        score,
+        correct_count: correctCount,
+        total_count: totalCount,
+        answers: body.answers,
+      })
+      .where(and(eq(quiz_attempts.id, attempt.id), isNull(quiz_attempts.submitted_at)))
+      .returning({ id: quiz_attempts.id });
+    return rows.length > 0;
+  });
+
+  // Lost the race / already submitted by a concurrent request: do not re-award.
+  if (!claimed) {
+    fail(res, 409, "ERR_ALREADY_SUBMITTED", "This quiz was already submitted.");
+    return;
+  }
 
   // Award participation once; win bonus only when every question is correct.
+  // Reached only on the winning claim above, so awards happen exactly once.
   let pointsAwarded = 0;
   if (event.participation_points > 0) {
     await awardPunya({
@@ -910,15 +957,36 @@ router.post("/push/:id/submit", async (req: Request, res: Response) => {
   }
   const score = correctCount;
 
-  // Insert the attempt; onConflict guards the unique constraint (race-safe).
-  await db
-    .insert(push_quiz_attempts)
-    .values({ push_quiz_id: pushId, student_id: student.id, answers: body.answers, score, submitted_at: now })
-    .onConflictDoUpdate({
-      target: [push_quiz_attempts.push_quiz_id, push_quiz_attempts.student_id],
-      set: { answers: body.answers, score, submitted_at: now },
-    });
+  // Atomic submit: serialize on (push quiz, student), then upsert the attempt
+  // but only let the update fire when the existing row has NOT been submitted
+  // yet (setWhere: submitted_at IS NULL). `.returning()` yields a row ONLY on
+  // the winning transition (fresh insert, or update of a not-yet-submitted row);
+  // a conflict against an already-submitted row updates nothing and returns [].
+  // Completion points are awarded exclusively on that winning transition, so two
+  // concurrent submits can never double-award.
+  const claimed = await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${pushId + ":" + student.id}::text, 0))`,
+    );
+    const rows = await tx
+      .insert(push_quiz_attempts)
+      .values({ push_quiz_id: pushId, student_id: student.id, answers: body.answers, score, submitted_at: now })
+      .onConflictDoUpdate({
+        target: [push_quiz_attempts.push_quiz_id, push_quiz_attempts.student_id],
+        set: { answers: body.answers, score, submitted_at: now },
+        setWhere: isNull(push_quiz_attempts.submitted_at),
+      })
+      .returning({ id: push_quiz_attempts.id });
+    return rows.length > 0;
+  });
 
+  // Lost the race / already submitted by a concurrent request: do not re-award.
+  if (!claimed) {
+    fail(res, 409, "ERR_ALREADY_SUBMITTED", "You have already submitted this quiz.");
+    return;
+  }
+
+  // Reached only on the winning claim above, so completion points award once.
   let pointsAwarded = 0;
   if (pq.completion_points > 0) {
     await awardPunya({

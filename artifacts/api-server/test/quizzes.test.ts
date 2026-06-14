@@ -182,6 +182,124 @@ describe("quiz system — scheduled events", () => {
       .set(auth(student.token));
     expect(ok.status).toBe(200);
   });
+
+  it("submitting the same event attempt twice awards points exactly once", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+
+    // One question, an event that covers now and targets Aarav (empty age_groups).
+    const tag = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const q = await request(app)
+      .post("/v1/quizzes/questions")
+      .set(auth(admin.token))
+      .send({
+        question_en: `Idem Q ${tag}`,
+        scope: "national",
+        options: [{ text_en: "A" }, { text_en: "B" }],
+        correct_indices: [0],
+      });
+    expect(q.status).toBe(200);
+    const qId: string = q.body.data.id;
+
+    const start = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const end = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `Idem event ${tag}`,
+        scope: "national",
+        start_at: start,
+        end_at: end,
+        participation_points: 5,
+        win_points: 11,
+        question_ids: [qId],
+      });
+    expect(ev.status).toBe(200);
+    const eventId: string = ev.body.data.id;
+
+    const startRes = await request(app)
+      .post(`/v1/quizzes/events/${eventId}/start`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id });
+    expect(startRes.status).toBe(200);
+
+    const before = await punyaTotal(parent.token, aarav.id);
+
+    // First submit: all-correct -> 5 + 11 = 16 awarded.
+    const first = await request(app)
+      .post(`/v1/quizzes/events/${eventId}/submit`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id, answers: { [qId]: [0] } });
+    expect(first.status).toBe(200);
+    expect(first.body.data.points_awarded).toBe(16);
+
+    // Second submit: blocked (idempotent) — no further award.
+    const second = await request(app)
+      .post(`/v1/quizzes/events/${eventId}/submit`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id, answers: { [qId]: [0] } });
+    expect(second.status).toBe(409);
+
+    const after = await punyaTotal(parent.token, aarav.id);
+    expect(after - before).toBe(16); // exactly once, not 32
+  });
+
+  it("a student outside the event's targeted age_groups cannot see or start it", async () => {
+    const admin = await loginAs("super_admin");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent(); // seeded age_group is "bal"
+
+    // Target "kishor" only -> excludes Aarav (a "bal" student).
+    const tag = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const q = await request(app)
+      .post("/v1/quizzes/questions")
+      .set(auth(admin.token))
+      .send({
+        question_en: `Age-gated Q ${tag}`,
+        scope: "national",
+        options: [{ text_en: "A" }, { text_en: "B" }],
+        correct_indices: [0],
+      });
+    expect(q.status).toBe(200);
+    const qId: string = q.body.data.id;
+
+    const start = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const end = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `Age-gated event ${tag}`,
+        scope: "national",
+        start_at: start,
+        end_at: end,
+        participation_points: 7,
+        win_points: 13,
+        age_groups: ["kishor"],
+        question_ids: [qId],
+      });
+    expect(ev.status).toBe(200);
+    const eventId: string = ev.body.data.id;
+
+    // Not surfaced in available (filtered out by age-group targeting).
+    const available = await request(app)
+      .get(`/v1/quizzes/events/available?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    expect(available.status).toBe(200);
+    const avail = available.body.data.items as Array<{ id: string }>;
+    expect(avail.find((e) => e.id === eventId)).toBeUndefined();
+
+    // Starting it is rejected as not eligible (422).
+    const startRes = await request(app)
+      .post(`/v1/quizzes/events/${eventId}/start`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id });
+    expect(startRes.status).toBe(422);
+    expect(startRes.body.error.code).toBe("ERR_NOT_ELIGIBLE");
+  });
 });
 
 describe("quiz system — push quizzes", () => {

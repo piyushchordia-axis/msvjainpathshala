@@ -133,6 +133,39 @@ describe("msv workflow", () => {
     expect(aarav?.msv_status).toBe("approved");
   });
 
+  it("rejects re-approving an already-approved enrolment with 409 and keeps msv_status", async () => {
+    // The enrolment was approved by the prior test; re-deciding must be refused.
+    const res = await request(app)
+      .post(`/v1/msv/${enrolmentId}/approve`)
+      .set(auth(cityAdminToken))
+      .send({ note: "Trying to approve again." });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("ERR_INVALID_STATE");
+
+    // student.msv_status is unchanged (still approved, not desynced).
+    const children = await request(app).get("/v1/me/children").set(auth(parentToken));
+    const aarav = (children.body.data.items as Array<{ id: string; msv_status: string }>).find(
+      (c) => c.id === studentId,
+    );
+    expect(aarav?.msv_status).toBe("approved");
+  });
+
+  it("rejects rejecting an already-approved enrolment with 409", async () => {
+    const res = await request(app)
+      .post(`/v1/msv/${enrolmentId}/reject`)
+      .set(auth(cityAdminToken))
+      .send({ reason: "Trying to flip an approved decision." });
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("ERR_INVALID_STATE");
+
+    // student.msv_status is unchanged.
+    const children = await request(app).get("/v1/me/children").set(auth(parentToken));
+    const aarav = (children.body.data.items as Array<{ id: string; msv_status: string }>).find(
+      (c) => c.id === studentId,
+    );
+    expect(aarav?.msv_status).toBe("approved");
+  });
+
   it("returns 404 approving an out-of-scope or missing enrolment", async () => {
     const res = await request(app)
       .post(`/v1/msv/00000000-0000-0000-0000-000000000000/approve`)

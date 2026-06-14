@@ -6,16 +6,52 @@
  * Self-creating + rerun-safe: a fresh session is created each run, and id-card
  * generate is an idempotent upsert (only bumps version), so re-running against a
  * non-reset DB never fails.
+ *
+ * Also covers the city-scope authz fix (an admin from a DIFFERENT city scanning a
+ * Mumbai shivir session -> 404, no PII leak) and the attendance-mode validation
+ * fix (a check_in scan against a present_only session -> 422). The cross-city
+ * admin is self-created in another city and deleted afterwards.
  */
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import app from "../src/app";
-import { pool } from "@workspace/db";
+import { pool, db, cities, users } from "@workspace/db";
+import { eq, ne } from "drizzle-orm";
 import { loginAs, auth } from "./helpers";
 
 afterAll(async () => {
   await pool.end();
 });
+
+/** Log in by raw phone (for self-created users): registered users get dev_code. */
+async function loginByPhone(phone: string): Promise<string> {
+  const send = await request(app).post("/api/auth/login").send({ phase: "send", phone });
+  expect(send.status).toBe(200);
+  const otpToken: string = send.body.data.otp_token;
+  const code: string = send.body.data.dev_code ?? "123456";
+  const verify = await request(app)
+    .post("/api/auth/login")
+    .send({ phase: "verify", otp_token: otpToken, code, device_id: `test-${phone}` });
+  expect(verify.status).toBe(200);
+  return verify.body.data.tokens.access_token as string;
+}
+
+/** Resolve the Mumbai shivir's city_id and any OTHER city's id (for cross-city tests). */
+async function mumbaiCityAndOtherCity(): Promise<{ mumbaiCityId: string; otherCityId: string }> {
+  const [mumbaiCity] = await db
+    .select({ id: cities.id })
+    .from(cities)
+    .where(eq(cities.name, "Mumbai"))
+    .limit(1);
+  expect(mumbaiCity).toBeTruthy();
+  const [other] = await db
+    .select({ id: cities.id })
+    .from(cities)
+    .where(ne(cities.id, mumbaiCity!.id))
+    .limit(1);
+  expect(other).toBeTruthy();
+  return { mumbaiCityId: mumbaiCity!.id, otherCityId: other!.id };
+}
 
 /** A seeded shivir in Mumbai, via the existing admin shivirs list. */
 async function mumbaiShivirId(token: string): Promise<string> {
@@ -139,5 +175,93 @@ describe("shivir scanner", () => {
       .set(auth(admin.token));
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe("ERR_NOT_FOUND");
+  });
+
+  it("404s when an admin from a different city scans a Mumbai shivir session (no PII leak)", async () => {
+    const admin = await loginAs("super_admin");
+    const shivirId = await mumbaiShivirId(admin.token);
+
+    // super_admin creates a session under the Mumbai shivir.
+    const createSession = await request(app)
+      .post(`/v1/shivir-scanner/shivirs/${shivirId}/sessions`)
+      .set(auth(admin.token))
+      .send({
+        title: `Cross-city Session ${Date.now()}`,
+        session_date: "2026-06-15",
+        attendance_mode: "present_only",
+      });
+    expect(createSession.status).toBe(200);
+    const sessionId: string = createSession.body.data.id;
+
+    // Self-create a city_admin in a DIFFERENT (non-Mumbai) city, then log in.
+    const { otherCityId } = await mumbaiCityAndOtherCity();
+    const phone = `+9197${Date.now().toString().slice(-8)}`;
+    const [outsider] = await db
+      .insert(users)
+      .values({
+        phone,
+        role: "city_admin",
+        full_name: "Out-of-city Admin",
+        preferred_language: "en",
+        city_id: otherCityId,
+      })
+      .returning({ id: users.id });
+    try {
+      const token = await loginByPhone(phone);
+
+      // Even with a (would-be) valid scan body, the out-of-city admin must not
+      // be able to scan into the Mumbai shivir's session -> 404 (session hidden).
+      const res = await request(app)
+        .post(`/v1/shivir-scanner/sessions/${sessionId}/scan`)
+        .set(auth(token))
+        .send({
+          qr_payload: '{"student_id":"00000000-0000-0000-0000-000000000000","card_number":"X","v":1}',
+          qr_signature: "0".repeat(64),
+          scan_kind: "present",
+        });
+      expect(res.status).toBe(404);
+      expect(res.body.error.code).toBe("ERR_NOT_FOUND");
+    } finally {
+      // Clean up the self-created user so reruns against a non-reset DB are safe.
+      await db.delete(users).where(eq(users.id, outsider.id));
+    }
+  });
+
+  it("422s when scan_kind is incompatible with the session's attendance_mode", async () => {
+    const admin = await loginAs("super_admin");
+    const shivirId = await mumbaiShivirId(admin.token);
+    const studentId = await firstStudentId(admin.token);
+
+    // A present_only session must reject check_in / check_out.
+    const createSession = await request(app)
+      .post(`/v1/shivir-scanner/shivirs/${shivirId}/sessions`)
+      .set(auth(admin.token))
+      .send({
+        title: `Mode Session ${Date.now()}`,
+        session_date: "2026-06-15",
+        attendance_mode: "present_only",
+      });
+    expect(createSession.status).toBe(200);
+    const sessionId: string = createSession.body.data.id;
+
+    // Use a real signed card so the only failing check is the scan_kind/mode rule.
+    const gen = await request(app)
+      .post(`/v1/id-cards/generate/${studentId}`)
+      .set(auth(admin.token))
+      .send({});
+    expect(gen.status).toBe(200);
+    const getCard = await request(app).get(`/v1/id-cards/${studentId}`).set(auth(admin.token));
+    expect(getCard.status).toBe(200);
+    const { qr_payload, qr_signature } = getCard.body.data as {
+      qr_payload: string;
+      qr_signature: string;
+    };
+
+    const res = await request(app)
+      .post(`/v1/shivir-scanner/sessions/${sessionId}/scan`)
+      .set(auth(admin.token))
+      .send({ qr_payload, qr_signature, scan_kind: "check_in" });
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe("ERR_VALIDATION_FAILED");
   });
 });

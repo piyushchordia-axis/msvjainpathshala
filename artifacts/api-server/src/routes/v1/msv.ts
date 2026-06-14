@@ -73,31 +73,44 @@ router.post("/apply", async (req: Request, res: Response) => {
     return;
   }
 
-  // Reject duplicate applications: an active enrolment is one already applied or
-  // approved (waitlisted/rejected/revoked may re-apply).
-  const [active] = await db
-    .select({ id: msv_enrolments.id })
-    .from(msv_enrolments)
-    .where(
-      and(
-        eq(msv_enrolments.student_id, student.id),
-        inArray(msv_enrolments.status, ["applied", "approved"]),
-      ),
-    )
-    .limit(1);
-  if (active) {
+  // Serialize concurrent applies for the same student so the duplicate check and
+  // the insert/update happen atomically (no check-then-insert race). The advisory
+  // lock is held until the transaction commits.
+  const result = await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${student.id}::text, 0))`,
+    );
+
+    // Reject duplicate applications: an active enrolment is one already applied or
+    // approved (waitlisted/rejected/revoked may re-apply).
+    const [active] = await tx
+      .select({ id: msv_enrolments.id })
+      .from(msv_enrolments)
+      .where(
+        and(
+          eq(msv_enrolments.student_id, student.id),
+          inArray(msv_enrolments.status, ["applied", "approved"]),
+        ),
+      )
+      .limit(1);
+    if (active) return { duplicate: true as const };
+
+    const [row] = await tx
+      .insert(msv_enrolments)
+      .values({ student_id: student.id, status: "applied" })
+      .returning({ id: msv_enrolments.id, status: msv_enrolments.status });
+
+    await tx.update(students).set({ msv_status: "applied" }).where(eq(students.id, student.id));
+
+    return { duplicate: false as const, row };
+  });
+
+  if (result.duplicate) {
     fail(res, 409, "ERR_ALREADY_APPLIED", "An MSV application is already active for this student.");
     return;
   }
 
-  const [row] = await db
-    .insert(msv_enrolments)
-    .values({ student_id: student.id, status: "applied" })
-    .returning({ id: msv_enrolments.id, status: msv_enrolments.status });
-
-  await db.update(students).set({ msv_status: "applied" }).where(eq(students.id, student.id));
-
-  ok(res, { id: row.id, status: row.status });
+  ok(res, { id: result.row.id, status: result.row.status });
 });
 
 /* GET /v1/msv/mine — the caller's children with their MSV status + latest enrolment */
@@ -245,20 +258,45 @@ router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Respons
     return;
   }
 
-  await db
-    .update(msv_enrolments)
-    .set({
-      status: "approved",
-      reason: body.note ?? null,
-      decided_by: req.authUser!.id,
-      decided_at: new Date(),
-    })
-    .where(eq(msv_enrolments.id, enrolment.id));
+  // Only an undecided application is decidable; reject re-deciding so we never
+  // desync students.msv_status from an already-final enrolment.
+  if (enrolment.status !== "applied" && enrolment.status !== "waitlisted") {
+    fail(res, 409, "ERR_INVALID_STATE", "MSV application is not in a decidable state.");
+    return;
+  }
 
-  await db
-    .update(students)
-    .set({ msv_status: "approved" })
-    .where(eq(students.id, enrolment.student_id));
+  // Claim the decision atomically: conditional update only fires while the row is
+  // still decidable, and both writes commit together. If the claim loses the race
+  // (already decided concurrently) -> 409.
+  const claimed = await db.transaction(async (tx) => {
+    const rows = await tx
+      .update(msv_enrolments)
+      .set({
+        status: "approved",
+        reason: body.note ?? null,
+        decided_by: req.authUser!.id,
+        decided_at: new Date(),
+      })
+      .where(
+        and(
+          eq(msv_enrolments.id, enrolment.id),
+          inArray(msv_enrolments.status, ["applied", "waitlisted"]),
+        ),
+      )
+      .returning({ id: msv_enrolments.id });
+    if (rows.length === 0) return false;
+
+    await tx
+      .update(students)
+      .set({ msv_status: "approved" })
+      .where(eq(students.id, enrolment.student_id));
+    return true;
+  });
+
+  if (!claimed) {
+    fail(res, 409, "ERR_INVALID_STATE", "MSV application is not in a decidable state.");
+    return;
+  }
 
   await auditFromReq(req, {
     action: "approve",
@@ -292,20 +330,45 @@ router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response
     return;
   }
 
-  await db
-    .update(msv_enrolments)
-    .set({
-      status: "rejected",
-      reason: body.reason ?? null,
-      decided_by: req.authUser!.id,
-      decided_at: new Date(),
-    })
-    .where(eq(msv_enrolments.id, enrolment.id));
+  // Only an undecided application is decidable; reject re-deciding so we never
+  // desync students.msv_status from an already-final enrolment.
+  if (enrolment.status !== "applied" && enrolment.status !== "waitlisted") {
+    fail(res, 409, "ERR_INVALID_STATE", "MSV application is not in a decidable state.");
+    return;
+  }
 
-  await db
-    .update(students)
-    .set({ msv_status: "rejected" })
-    .where(eq(students.id, enrolment.student_id));
+  // Claim the decision atomically: conditional update only fires while the row is
+  // still decidable, and both writes commit together. If the claim loses the race
+  // (already decided concurrently) -> 409.
+  const claimed = await db.transaction(async (tx) => {
+    const rows = await tx
+      .update(msv_enrolments)
+      .set({
+        status: "rejected",
+        reason: body.reason ?? null,
+        decided_by: req.authUser!.id,
+        decided_at: new Date(),
+      })
+      .where(
+        and(
+          eq(msv_enrolments.id, enrolment.id),
+          inArray(msv_enrolments.status, ["applied", "waitlisted"]),
+        ),
+      )
+      .returning({ id: msv_enrolments.id });
+    if (rows.length === 0) return false;
+
+    await tx
+      .update(students)
+      .set({ msv_status: "rejected" })
+      .where(eq(students.id, enrolment.student_id));
+    return true;
+  });
+
+  if (!claimed) {
+    fail(res, 409, "ERR_INVALID_STATE", "MSV application is not in a decidable state.");
+    return;
+  }
 
   await auditFromReq(req, {
     action: "reject",
