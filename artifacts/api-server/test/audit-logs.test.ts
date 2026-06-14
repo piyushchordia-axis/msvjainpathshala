@@ -95,6 +95,34 @@ describe("audit-logs", () => {
     expect(Array.isArray(res.body.data.items)).toBe(true);
   });
 
+  it("invalid action + valid entity_kind still honors the entity_kind filter (independent parse)", async () => {
+    const { token } = await loginAs("super_admin");
+
+    // Baseline: the unfiltered superset (what a buggy combined-parse would return).
+    const allRes = await request(app).get("/v1/audit-logs?limit=300").set(auth(token));
+    expect(allRes.status).toBe(200);
+    const allItems = allRes.body.data.items as Array<{ entity_kind: string }>;
+    // The seed contains rows of more than one entity_kind, so the superset is
+    // strictly larger than the settings-only subset — that's the bug surface.
+    const settingsInAll = allItems.filter((r) => r.entity_kind === "settings");
+    const nonSettingsInAll = allItems.filter((r) => r.entity_kind !== "settings");
+    expect(settingsInAll.length).toBeGreaterThanOrEqual(1);
+    expect(nonSettingsInAll.length).toBeGreaterThanOrEqual(1);
+
+    // Invalid action MUST NOT drop the valid entity_kind=settings filter.
+    const res = await request(app)
+      .get("/v1/audit-logs?action=not_a_real_action&entity_kind=settings&limit=300")
+      .set(auth(token));
+    expect(res.status).toBe(200);
+    const items = res.body.data.items as Array<{ entity_kind: string }>;
+
+    // Every returned row is entity_kind=settings (filter honored, not dropped).
+    expect(items.length).toBeGreaterThanOrEqual(1);
+    expect(items.every((r) => r.entity_kind === "settings")).toBe(true);
+    // And it is the settings-only subset, NOT the unfiltered superset.
+    expect(items.length).toBeLessThan(allItems.length);
+  });
+
   it("filters by entity_kind", async () => {
     const { token } = await loginAs("super_admin");
     const res = await request(app)

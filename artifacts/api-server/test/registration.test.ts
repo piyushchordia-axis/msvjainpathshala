@@ -91,6 +91,35 @@ describe("registration forms", () => {
     expect(approve.body.data.status).toBe("approved");
   });
 
+  it("assigns incrementing version_no to sequential publishes for the same (kind, city)", async () => {
+    // Two back-to-back global 'shikshak' publishes must get strictly
+    // increasing version_no values (the read-then-insert path resolves the next
+    // version each time). Self-creating + rerun-safe: we only assert the second
+    // is greater than the first, never absolute numbers.
+    const admin = await loginAs("super_admin");
+    const base = {
+      form_kind: "shikshak" as const,
+      title_en: "Shikshak Registration",
+      fields: [{ key: "name", label_en: "Name", type: "text" as const, required: true }],
+    };
+
+    const first = await request(app)
+      .post("/v1/registration/configs")
+      .set(auth(admin.token))
+      .send(base);
+    expect(first.status).toBe(200);
+    const v1: number = first.body.data.version_no;
+    expect(typeof v1).toBe("number");
+
+    const second = await request(app)
+      .post("/v1/registration/configs")
+      .set(auth(admin.token))
+      .send(base);
+    expect(second.status).toBe(200);
+    const v2: number = second.body.data.version_no;
+    expect(v2).toBe(v1 + 1);
+  });
+
   it("rejects an unknown form kind with 404 (public fetch)", async () => {
     const res = await request(app).get("/v1/registration/forms/teacher");
     expect(res.status).toBe(404);

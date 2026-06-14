@@ -23,7 +23,16 @@ router.use(requireAuth);
 
 const SECRET = process.env["JP_AUTH_SECRET"] ?? "jp-dev-secret-do-not-use-in-production";
 
+/**
+ * Domain-separated key for QR HMACs, derived once from the auth-token secret so
+ * that signing/verifying ID-card QRs never shares a key with auth tokens.
+ */
+const QR_SECRET = createHmac("sha256", SECRET).update("id-card-qr-v1").digest();
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Hex length of an HMAC-SHA256 signature (32 bytes -> 64 hex chars). */
+const SIGNATURE_HEX_LEN = 64;
 
 /* ---- local helper copy-pasted into admin route files ---- */
 function inScope(scope: AdminScope, centreId: string | null): boolean {
@@ -35,13 +44,24 @@ function inScope(scope: AdminScope, centreId: string | null): boolean {
 /** Build the canonical signed payload string and its HMAC-SHA256 signature. */
 function signPayload(studentId: string, cardNumber: string, versionNo: number) {
   const qr_payload = JSON.stringify({ student_id: studentId, card_number: cardNumber, v: versionNo });
-  const qr_signature = createHmac("sha256", SECRET).update(qr_payload).digest("hex");
+  const qr_signature = createHmac("sha256", QR_SECRET).update(qr_payload).digest("hex");
   return { qr_payload, qr_signature };
 }
 
 /** Constant-time hex-string comparison; false on any length/format mismatch. */
 function safeEqualHex(a: string, b: string): boolean {
   if (typeof a !== "string" || typeof b !== "string") return false;
+  // Reject non-canonical signatures before decoding: Buffer.from(hex) silently
+  // truncates at the first non-hex char, so junk appended to a valid signature
+  // would otherwise decode to the same bytes. Require pure-hex of exact length.
+  if (
+    a.length !== SIGNATURE_HEX_LEN ||
+    b.length !== SIGNATURE_HEX_LEN ||
+    !/^[0-9a-f]+$/i.test(a) ||
+    !/^[0-9a-f]+$/i.test(b)
+  ) {
+    return false;
+  }
   const ba = Buffer.from(a, "hex");
   const bb = Buffer.from(b, "hex");
   if (ba.length === 0 || ba.length !== bb.length) return false;
@@ -256,13 +276,13 @@ router.post("/verify", async (req: Request, res: Response) => {
     fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid verify payload.");
     return;
   }
-  const expected = createHmac("sha256", SECRET).update(body.qr_payload).digest("hex");
+  const expected = createHmac("sha256", QR_SECRET).update(body.qr_payload).digest("hex");
   if (!safeEqualHex(expected, body.qr_signature)) {
     fail(res, 401, "ERR_SIGNATURE_INVALID", "Signature is invalid.");
     return;
   }
 
-  let parsedPayload: { student_id?: unknown };
+  let parsedPayload: { student_id?: unknown; v?: unknown };
   try {
     parsedPayload = JSON.parse(body.qr_payload);
   } catch {
@@ -270,7 +290,21 @@ router.post("/verify", async (req: Request, res: Response) => {
     return;
   }
   const studentId = parsedPayload.student_id;
+  const payloadVersion = parsedPayload.v;
   if (typeof studentId !== "string" || !UUID_RE.test(studentId)) {
+    fail(res, 401, "ERR_SIGNATURE_INVALID", "Signature is invalid.");
+    return;
+  }
+
+  // Signature is authentic, but the QR may be stale/revoked: a regenerated card
+  // bumps version_no, and a deactivated card sets is_active=false. Re-check the
+  // current card row so old/revoked QRs no longer verify.
+  const [currentCard] = await db
+    .select({ version_no: digital_id_cards.version_no, is_active: digital_id_cards.is_active })
+    .from(digital_id_cards)
+    .where(eq(digital_id_cards.student_id, studentId))
+    .limit(1);
+  if (!currentCard || !currentCard.is_active || currentCard.version_no !== payloadVersion) {
     fail(res, 401, "ERR_SIGNATURE_INVALID", "Signature is invalid.");
     return;
   }

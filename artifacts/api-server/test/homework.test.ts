@@ -30,6 +30,41 @@ async function firstChildId(parentToken: string): Promise<string> {
   return child.id as string;
 }
 
+/**
+ * Create a brand-new assignment that targets `studentId` and return its fresh
+ * `pending` submission id. Iterates the admin batch list (like the lifecycle
+ * test) until an assignment yields a submission for the student. Rerun-safe:
+ * every call mints a new assignment, so the submission always starts pending.
+ */
+async function freshSubmissionFor(adminToken: string, studentId: string): Promise<string> {
+  const batchesRes = await request(app).get("/v1/admin/batches").set(auth(adminToken));
+  expect(batchesRes.status).toBe(200);
+  const batchList: Array<{ id: string }> = batchesRes.body.data.items;
+  expect(batchList.length).toBeGreaterThan(0);
+
+  for (const b of batchList) {
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(adminToken))
+      .send({ batch_id: b.id, title: `HW ${Date.now()}-${b.id.slice(0, 6)}`, due_date: tomorrow() });
+    expect(create.status).toBe(200);
+
+    const subs = await request(app)
+      .get(`/v1/homework/assignments/${create.body.data.id}/submissions`)
+      .set(auth(adminToken));
+    expect(subs.status).toBe(200);
+    const mine = subs.body.data.items.find((s: { student_id: string }) => s.student_id === studentId);
+    if (mine) return mine.id as string;
+  }
+  throw new Error("could not create a submission targeting the student");
+}
+
+async function totalPunya(parentToken: string, studentId: string): Promise<number> {
+  const res = await request(app).get(`/v1/me/students/${studentId}/punya`).set(auth(parentToken));
+  expect(res.status).toBe(200);
+  return (res.body.data.total_points as number) ?? 0;
+}
+
 describe("homework", () => {
   it("requires auth on the homework feed", async () => {
     const res = await request(app).get("/v1/homework/mine?student_id=00000000-0000-0000-0000-000000000000");
@@ -145,5 +180,93 @@ describe("homework", () => {
 
     // sanity: admin token is a real admin (keeps the var used).
     expect(admin.user.role).toBe("super_admin");
+  });
+
+  it("re-grading is idempotent on punya: approve then star awards points only once", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+
+    // Fresh pending submission for Aarav.
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    const before = await totalPunya(parent.token, studentId);
+
+    // First grade: approve (not-yet-graded -> graded) awards the base amount.
+    const approve = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved", feedback_note: "Good." });
+    expect(approve.status).toBe(200);
+    expect(approve.body.data.status).toBe("approved");
+
+    const afterApprove = await totalPunya(parent.token, studentId);
+    const awarded = afterApprove - before;
+    // Approving awards a positive amount exactly once.
+    expect(awarded).toBeGreaterThan(0);
+    expect(approve.body.data.total_points).toBe(afterApprove);
+
+    // Second grade: star (already-graded -> already-graded) must NOT re-award.
+    const star = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "starred", feedback_note: "Even better." });
+    expect(star.status).toBe(200);
+    expect(star.body.data.status).toBe("starred");
+
+    const afterStar = await totalPunya(parent.token, studentId);
+    // The crux: the second grade added ZERO punya. Total is unchanged from the
+    // single approve award (not before + approve-award + star-award).
+    expect(afterStar).toBe(afterApprove);
+    expect(afterStar - before).toBe(awarded);
+    // The returned total reflects the student's CURRENT (unchanged) balance.
+    expect(star.body.data.total_points).toBe(afterStar);
+
+    // The new status/feedback still persisted despite no re-award.
+    const feed = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}`)
+      .set(auth(parent.token));
+    const graded = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
+    expect(graded.status).toBe("starred");
+    expect(graded.feedback_note).toBe("Even better.");
+  });
+
+  it("rejects re-submitting an already-graded submission with 409", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    // Student submits, shikshak approves -> submission is now graded/locked.
+    const submit = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/first.jpg" });
+    expect(submit.status).toBe(200);
+
+    const grade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved" });
+    expect(grade.status).toBe(200);
+
+    // Re-submitting after grading must be rejected, preserving the grade.
+    const resubmit = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/sneaky-overwrite.jpg" });
+    expect(resubmit.status).toBe(409);
+    expect(resubmit.body.error.code).toBe("ERR_CONFLICT");
+
+    // The grade survived: status stays approved, url not clobbered.
+    const feed = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}`)
+      .set(auth(parent.token));
+    const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
+    expect(row.status).toBe("approved");
+    expect(row.submission_url).toBe("https://example.com/first.jpg");
   });
 });

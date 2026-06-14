@@ -21,24 +21,22 @@ function clampLimit(raw: unknown, fallback: number, max: number): number {
   return Math.min(Math.floor(n), max);
 }
 
-const listQuerySchema = z.object({
-  action: z.enum(AUDIT_ACTIONS).optional(),
-  entity_kind: z.string().min(1).max(120).optional(),
-});
+const actionSchema = z.enum(AUDIT_ACTIONS);
+const entityKindSchema = z.string().min(1).max(120);
 
 /* GET /v1/audit-logs?action?&entity_kind?&limit= — newest first */
 router.get("/", async (req: Request, res: Response) => {
-  const parsed = listQuerySchema.safeParse({
-    action: req.query.action || undefined,
-    entity_kind: req.query.entity_kind || undefined,
-  });
-  const filters = parsed.success ? parsed.data : {};
+  // Parse the two filters INDEPENDENTLY so an invalid action does not also
+  // discard a valid entity_kind filter (and vice versa).
+  const actionParsed = actionSchema.safeParse(req.query.action);
+  const entityKindParsed = entityKindSchema.safeParse(req.query.entity_kind);
 
   const limit = clampLimit(req.query.limit, 100, 300);
 
   const conditions = [];
-  if (filters.action) conditions.push(eq(audit_logs.action, filters.action));
-  if (filters.entity_kind) conditions.push(eq(audit_logs.entity_kind, filters.entity_kind));
+  if (actionParsed.success) conditions.push(eq(audit_logs.action, actionParsed.data));
+  if (entityKindParsed.success)
+    conditions.push(eq(audit_logs.entity_kind, entityKindParsed.data));
   const where = conditions.length ? and(...conditions) : undefined;
 
   const rows = await db

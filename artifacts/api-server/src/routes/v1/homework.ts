@@ -15,7 +15,7 @@
  * 404; an out-of-scope batch on create is a 403.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, homework_assignments, homework_submissions, batches, centres, students } from "@workspace/db";
+import { db, homework_assignments, homework_submissions, batches, centres, students, punya_balances } from "@workspace/db";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
@@ -255,17 +255,23 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     .select({
       id: homework_submissions.id,
       student_id: homework_submissions.student_id,
+      status: homework_submissions.status,
       centre_id: batches.centre_id,
     })
     .from(homework_submissions)
     .innerJoin(homework_assignments, eq(homework_assignments.id, homework_submissions.assignment_id))
     .innerJoin(batches, eq(batches.id, homework_assignments.batch_id))
-    .where(eq(homework_submissions.id, id))
+    .where(and(eq(homework_submissions.id, id), isNull(homework_assignments.deleted_at)))
     .limit(1);
   if (!sub || !inScope(scope, sub.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Submission not found.");
     return;
   }
+
+  // Idempotent on points: re-grading an already-graded submission updates only
+  // the status/feedback metadata and never re-awards punya. Punya is awarded
+  // exactly once, on the transition out of a not-yet-graded state.
+  const alreadyGraded = sub.status === "approved" || sub.status === "starred";
 
   await db
     .update(homework_submissions)
@@ -276,6 +282,26 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       marked_at: new Date(),
     })
     .where(eq(homework_submissions.id, sub.id));
+
+  if (alreadyGraded) {
+    const [bal] = await db
+      .select({ total_points: punya_balances.total_points })
+      .from(punya_balances)
+      .where(eq(punya_balances.student_id, sub.student_id))
+      .limit(1);
+    const totalPoints = bal?.total_points ?? 0;
+
+    await auditFromReq(req, {
+      action: "grade",
+      entityKind: "homework_submission",
+      entityId: sub.id,
+      summary: `Re-graded homework submission as ${body.status} (no punya re-award).`,
+      metadata: { status: body.status, points: 0, re_grade: true },
+    });
+
+    ok(res, { id: sub.id, status: body.status, total_points: totalPoints });
+    return;
+  }
 
   const points = body.status === "starred" ? Math.round(POINTS * 1.2) : POINTS;
   const award = await awardPunya({
@@ -354,14 +380,22 @@ router.post("/submissions/:id/submit", async (req: Request, res: Response) => {
     .select({
       id: homework_submissions.id,
       student_id: homework_submissions.student_id,
+      status: homework_submissions.status,
       due_date: homework_assignments.due_date,
     })
     .from(homework_submissions)
     .innerJoin(homework_assignments, eq(homework_assignments.id, homework_submissions.assignment_id))
-    .where(eq(homework_submissions.id, id))
+    .where(and(eq(homework_submissions.id, id), isNull(homework_assignments.deleted_at)))
     .limit(1);
   if (!sub || !(await ownedStudentId(req, sub.student_id))) {
     fail(res, 404, "ERR_NOT_FOUND", "Submission not found.");
+    return;
+  }
+
+  // A graded submission is locked: a student must not be able to overwrite it
+  // and clobber the awarded grade. Not-yet-graded states may still re-submit.
+  if (sub.status === "approved" || sub.status === "starred") {
+    fail(res, 409, "ERR_CONFLICT", "Submission already graded.");
     return;
   }
 

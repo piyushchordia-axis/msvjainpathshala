@@ -91,6 +91,77 @@ describe("id-cards", () => {
     expect(tamperedPayload.body.error.code).toBe("ERR_SIGNATURE_INVALID");
   });
 
+  it("rejects a stale (regenerated) QR: v1 signature no longer verifies after v2", async () => {
+    const admin = await loginAs("super_admin");
+    const studentId = await firstStudentId(admin.token);
+
+    // Generate a card, then read back the current (v1 or later) signed QR.
+    const genV1 = await request(app)
+      .post(`/v1/id-cards/generate/${studentId}`)
+      .set(auth(admin.token))
+      .send({});
+    expect(genV1.status).toBe(200);
+    const v1VersionNo = genV1.body.data.version_no as number;
+
+    const getV1 = await request(app).get(`/v1/id-cards/${studentId}`).set(auth(admin.token));
+    expect(getV1.status).toBe(200);
+    expect(getV1.body.data.version_no).toBe(v1VersionNo);
+    const v1Payload = getV1.body.data.qr_payload as string;
+    const v1Signature = getV1.body.data.qr_signature as string;
+
+    // The v1 QR verifies right now (authentic + current).
+    const verifyV1 = await request(app)
+      .post("/v1/id-cards/verify")
+      .set(auth(admin.token))
+      .send({ qr_payload: v1Payload, qr_signature: v1Signature });
+    expect(verifyV1.status).toBe(200);
+    expect(verifyV1.body.data.valid).toBe(true);
+
+    // Regenerate -> bumps version_no (now stale-old v1 QR points at a prior version).
+    const genV2 = await request(app)
+      .post(`/v1/id-cards/generate/${studentId}`)
+      .set(auth(admin.token))
+      .send({});
+    expect(genV2.status).toBe(200);
+    expect(genV2.body.data.version_no).toBe(v1VersionNo + 1);
+
+    // The OLD v1 QR (authentic signature, but stale version) must now be rejected.
+    const verifyStale = await request(app)
+      .post("/v1/id-cards/verify")
+      .set(auth(admin.token))
+      .send({ qr_payload: v1Payload, qr_signature: v1Signature });
+    expect(verifyStale.status).toBe(401);
+    expect(verifyStale.body.error.code).toBe("ERR_SIGNATURE_INVALID");
+
+    // The fresh v2 QR still verifies.
+    const getV2 = await request(app).get(`/v1/id-cards/${studentId}`).set(auth(admin.token));
+    expect(getV2.status).toBe(200);
+    const verifyV2 = await request(app)
+      .post("/v1/id-cards/verify")
+      .set(auth(admin.token))
+      .send({ qr_payload: getV2.body.data.qr_payload, qr_signature: getV2.body.data.qr_signature });
+    expect(verifyV2.status).toBe(200);
+    expect(verifyV2.body.data.valid).toBe(true);
+  });
+
+  it("rejects a signature with junk appended (non-canonical hex)", async () => {
+    const admin = await loginAs("super_admin");
+    const studentId = await firstStudentId(admin.token);
+
+    await request(app).post(`/v1/id-cards/generate/${studentId}`).set(auth(admin.token)).send({});
+    const get = await request(app).get(`/v1/id-cards/${studentId}`).set(auth(admin.token));
+    expect(get.status).toBe(200);
+    const { qr_payload, qr_signature } = get.body.data;
+
+    // Valid signature with trailing junk -> rejected (Buffer.from hex truncation guard).
+    const junk = await request(app)
+      .post("/v1/id-cards/verify")
+      .set(auth(admin.token))
+      .send({ qr_payload, qr_signature: qr_signature + "zz" });
+    expect(junk.status).toBe(401);
+    expect(junk.body.error.code).toBe("ERR_SIGNATURE_INVALID");
+  });
+
   it("returns 404 for a card that does not exist in scope", async () => {
     const admin = await loginAs("super_admin");
     const missing = "11111111-1111-1111-1111-111111111111";

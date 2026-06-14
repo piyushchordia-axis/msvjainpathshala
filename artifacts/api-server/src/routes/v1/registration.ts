@@ -316,31 +316,54 @@ router.post(
     const cityMatch = cityId
       ? eq(registration_form_configs.city_id, cityId)
       : isNull(registration_form_configs.city_id);
-    const [{ maxVersion }] = await db
-      .select({
-        maxVersion: sql<number>`coalesce(max(${registration_form_configs.version_no}), 0)::int`,
-      })
-      .from(registration_form_configs)
-      .where(and(eq(registration_form_configs.form_kind, body.form_kind), cityMatch));
-    const nextVersion = (maxVersion ?? 0) + 1;
+    async function maxVersionFor(): Promise<number> {
+      const [{ maxVersion }] = await db
+        .select({
+          maxVersion: sql<number>`coalesce(max(${registration_form_configs.version_no}), 0)::int`,
+        })
+        .from(registration_form_configs)
+        .where(and(eq(registration_form_configs.form_kind, body.form_kind), cityMatch));
+      return maxVersion ?? 0;
+    }
+    async function insertVersion(versionNo: number) {
+      const [inserted] = await db
+        .insert(registration_form_configs)
+        .values({
+          city_id: cityId,
+          form_kind: body.form_kind,
+          title_en: body.title_en,
+          title_hi: body.title_hi ?? null,
+          is_active: true,
+          version_no: versionNo,
+          fields: body.fields,
+          published_at: new Date(),
+          published_by: req.authUser!.id,
+        })
+        .returning({
+          id: registration_form_configs.id,
+          version_no: registration_form_configs.version_no,
+        });
+      return inserted;
+    }
 
-    const [row] = await db
-      .insert(registration_form_configs)
-      .values({
-        city_id: cityId,
-        form_kind: body.form_kind,
-        title_en: body.title_en,
-        title_hi: body.title_hi ?? null,
-        is_active: true,
-        version_no: nextVersion,
-        fields: body.fields,
-        published_at: new Date(),
-        published_by: req.authUser!.id,
-      })
-      .returning({
-        id: registration_form_configs.id,
-        version_no: registration_form_configs.version_no,
-      });
+    // Compute version_no then insert. A concurrent publish for the same
+    // (form_kind, city_id) can win the race and violate the unique index; that
+    // surfaces as a Postgres unique-violation (23505). Wrap JUST this insert in
+    // a narrow try/catch to convert the race 500 into a single re-read + retry,
+    // and a clean 409 if it still conflicts.
+    let row: Awaited<ReturnType<typeof insertVersion>>;
+    try {
+      row = await insertVersion((await maxVersionFor()) + 1);
+    } catch (err) {
+      if ((err as { code?: string }).code !== "23505") throw err;
+      try {
+        row = await insertVersion((await maxVersionFor()) + 1);
+      } catch (retryErr) {
+        if ((retryErr as { code?: string }).code !== "23505") throw retryErr;
+        fail(res, 409, "ERR_CONFLICT", "Version conflict, please retry.");
+        return;
+      }
+    }
 
     await auditFromReq(req, {
       action: "config_change",
