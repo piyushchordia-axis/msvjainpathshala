@@ -446,17 +446,19 @@ router.post("/library", async (req: Request, res: Response) => {
   ok(res, row);
 });
 
-/* Queues — super_admin only */
+/* Queues — super_admin only. NOTE: requireRole is applied PER-ROUTE, not via
+ * queuesRouter.use(...), because this router is mounted at the admin-modules
+ * root (router.use(queuesRouter)); a router-level .use() would leak the
+ * super_admin guard onto every admin-modules route and 403 all other roles. */
 const queuesRouter: IRouter = Router();
-queuesRouter.use(requireRole("super_admin"));
 
-queuesRouter.get("/queues/stats", async (_req: Request, res: Response) => {
+queuesRouter.get("/queues/stats", requireRole("super_admin"), async (_req: Request, res: Response) => {
   const rows = await db.select().from(queue_stats).orderBy(asc(queue_stats.queue_name));
   const items = rows.map((r) => ({ ...r, updated_at: r.updated_at.toISOString() }));
   ok(res, { items }, { count: items.length });
 });
 
-queuesRouter.get("/queues/:queueName/dlq", async (req: Request, res: Response) => {
+queuesRouter.get("/queues/:queueName/dlq", requireRole("super_admin"), async (req: Request, res: Response) => {
   const queueName = String(req.params.queueName);
   const limit = clampLimit(req.query.limit, 50, 200);
   const rows = await db
@@ -476,7 +478,7 @@ queuesRouter.get("/queues/:queueName/dlq", async (req: Request, res: Response) =
   ok(res, { items }, { count: items.length });
 });
 
-queuesRouter.post("/queues/:queueName/dlq/:jobId/replay", async (req: Request, res: Response) => {
+queuesRouter.post("/queues/:queueName/dlq/:jobId/replay", requireRole("super_admin"), async (req: Request, res: Response) => {
   const queueName = String(req.params.queueName);
   const jobId = String(req.params.jobId);
   const [job] = await db

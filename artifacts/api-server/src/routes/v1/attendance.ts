@@ -200,6 +200,7 @@ router.post("/sessions/:id/mark", async (req: Request, res: Response) => {
     .select({
       id: sessions.id,
       batch_id: sessions.batch_id,
+      status: sessions.status,
       gps_required: sessions.gps_required,
       centre_id: batches.centre_id,
       centre_lat: centres.lat,
@@ -214,10 +215,17 @@ router.post("/sessions/:id/mark", async (req: Request, res: Response) => {
   if (!session || !inScope(scope, session.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Session not found."); return;
   }
+  // A cancelled session must not be marked (doing so would un-cancel it).
+  if (session.status === "cancelled") {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Session is cancelled."); return;
+  }
 
   const hasCoords = body.lat !== undefined && body.lng !== undefined;
   let distance: number | null = null;
 
+  // The method reflects whether a geofence was actually ENFORCED. Only a
+  // gps_required session validates client coords against the centre; for a
+  // non-geofenced session client coords are untrusted and ignored entirely.
   if (session.gps_required) {
     const cLat = session.centre_lat !== null ? Number(session.centre_lat) : null;
     const cLng = session.centre_lng !== null ? Number(session.centre_lng) : null;
@@ -227,12 +235,6 @@ router.post("/sessions/:id/mark", async (req: Request, res: Response) => {
     distance = haversine(cLat, cLng, body.lat!, body.lng!);
     if (distance > session.gps_radius_m) {
       fail(res, 403, "ERR_FORBIDDEN", "Outside centre geofence."); return;
-    }
-  } else if (hasCoords) {
-    const cLat = session.centre_lat !== null ? Number(session.centre_lat) : null;
-    const cLng = session.centre_lng !== null ? Number(session.centre_lng) : null;
-    if (cLat !== null && cLng !== null && Number.isFinite(cLat) && Number.isFinite(cLng)) {
-      distance = haversine(cLat, cLng, body.lat!, body.lng!);
     }
   }
 
@@ -247,29 +249,21 @@ router.post("/sessions/:id/mark", async (req: Request, res: Response) => {
     fail(res, 422, "ERR_VALIDATION_FAILED", "One or more students do not belong to this session's batch."); return;
   }
 
-  const method = hasCoords ? "gps" : "manual";
-  const markedLat = hasCoords ? String(body.lat) : null;
-  const markedLng = hasCoords ? String(body.lng) : null;
-  const markedDistance = distance !== null ? Math.round(distance) : null;
+  // gps only when a geofence was enforced; otherwise manual with no coords stored.
+  const method = session.gps_required ? "gps" : "manual";
+  const markedLat = session.gps_required ? String(body.lat) : null;
+  const markedLng = session.gps_required ? String(body.lng) : null;
+  const markedDistance = session.gps_required && distance !== null ? Math.round(distance) : null;
   const now = new Date();
 
-  for (const rec of body.records) {
-    await db
-      .insert(attendance)
-      .values({
-        session_id: session.id,
-        student_id: rec.student_id,
-        status: rec.status,
-        marked_by: req.authUser!.id,
-        marked_at: now,
-        marked_method: method,
-        marked_lat: markedLat,
-        marked_lng: markedLng,
-        marked_distance_m: markedDistance,
-      })
-      .onConflictDoUpdate({
-        target: [attendance.session_id, attendance.student_id],
-        set: {
+  // Atomic: all attendance upserts AND the status flip succeed or none do.
+  await db.transaction(async (tx) => {
+    for (const rec of body.records) {
+      await tx
+        .insert(attendance)
+        .values({
+          session_id: session.id,
+          student_id: rec.student_id,
           status: rec.status,
           marked_by: req.authUser!.id,
           marked_at: now,
@@ -277,11 +271,24 @@ router.post("/sessions/:id/mark", async (req: Request, res: Response) => {
           marked_lat: markedLat,
           marked_lng: markedLng,
           marked_distance_m: markedDistance,
-        },
-      });
-  }
+        })
+        .onConflictDoUpdate({
+          target: [attendance.session_id, attendance.student_id],
+          set: {
+            status: rec.status,
+            marked_by: req.authUser!.id,
+            marked_at: now,
+            marked_method: method,
+            marked_lat: markedLat,
+            marked_lng: markedLng,
+            marked_distance_m: markedDistance,
+          },
+        });
+    }
 
-  await db.update(sessions).set({ status: "completed" }).where(eq(sessions.id, session.id));
+    // Guaranteed non-cancelled by the guard above, so completing is safe.
+    await tx.update(sessions).set({ status: "completed" }).where(eq(sessions.id, session.id));
+  });
 
   ok(res, { session_id: session.id, marked: body.records.length, method });
 });

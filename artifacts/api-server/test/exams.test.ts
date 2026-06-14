@@ -13,6 +13,39 @@ afterAll(async () => {
   await pool.end();
 });
 
+/** Resolve the seeded Mumbai city id via the admin geography endpoint. */
+async function mumbaiCityId(token: string): Promise<string> {
+  const geo = await request(app).get("/v1/admin/geography").set(auth(token));
+  expect(geo.status).toBe(200);
+  const cities: Array<{ id: string; name: string }> = geo.body.data.cities;
+  const mumbai = cities.find((c) => c.name === "Mumbai");
+  expect(mumbai).toBeDefined();
+  return mumbai!.id;
+}
+
+/** Author a fresh, currently-open Mumbai exam (no OTP) and return its id. */
+async function createMumbaiExam(token: string, cityId: string): Promise<string> {
+  const start = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const end = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const createExam = await request(app)
+    .post("/v1/admin/exams")
+    .set(auth(token))
+    .send({
+      title_en: `Vitest Exam ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      city_id: cityId,
+      window_start: start,
+      window_end: end,
+      total_marks: 20,
+      pass_mark: 5,
+      max_attempts: 99,
+      exam_otp: "",
+    });
+  expect(createExam.status).toBe(200);
+  const examId: string = createExam.body.data.id;
+  expect(examId).toBeTruthy();
+  return examId;
+}
+
 describe("online exams", () => {
   it("authors, takes, auto-grades, then manually grades an exam", async () => {
     const admin = await loginAs("super_admin");
@@ -172,7 +205,22 @@ describe("online exams", () => {
     expect(grade.body.data.status).toBe("graded");
     expect(grade.body.data.score).toBe(18); // 10 auto + 8 manual
 
-    // Student result reflects the graded score.
+    // Before results are released, the graded score is withheld from the student.
+    const withheld = await request(app)
+      .get(`/v1/exams/attempts/${attemptId}/result`)
+      .set(auth(student.token));
+    expect(withheld.status).toBe(200);
+    expect(withheld.body.data.status).toBe("graded");
+    expect(withheld.body.data.score).toBeUndefined();
+    expect(withheld.body.data.per_question).toBeUndefined();
+
+    // Admin releases results for this exam.
+    const release = await request(app)
+      .post(`/v1/admin/exams/${examId}/release-results`)
+      .set(auth(admin.token));
+    expect(release.status).toBe(200);
+
+    // Now the student result reflects the graded score.
     const result = await request(app)
       .get(`/v1/exams/attempts/${attemptId}/result`)
       .set(auth(student.token));
@@ -188,5 +236,106 @@ describe("online exams", () => {
       .get("/v1/exams/available")
       .set(auth(admin.token));
     expect(res.status).toBe(403);
+  });
+
+  it("withholds the result score until results are released", async () => {
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+    const examId = await createMumbaiExam(admin.token, cityId);
+
+    // One single_choice question + one text question so grading is needed.
+    const q1 = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({
+        question_en: "Which is a Jain principle?",
+        question_type: "single_choice",
+        marks: 10,
+        options: [
+          { option_en: "Ahimsa", is_correct: true },
+          { option_en: "Himsa", is_correct: false },
+        ],
+      });
+    expect(q1.status).toBe(200);
+    const q1Id: string = q1.body.data.id;
+
+    const q2 = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({ question_en: "Explain aparigraha.", question_type: "text", marks: 10 });
+    expect(q2.status).toBe(200);
+    const q2Id: string = q2.body.data.id;
+
+    // Student starts + submits.
+    const student = await loginAs("student");
+    const startRes = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({});
+    expect(startRes.status).toBe(200);
+    const attemptId: string = startRes.body.data.attempt_id;
+    const startQuestions: Array<{ id: string; options: Array<{ id: string }> }> =
+      startRes.body.data.questions;
+    const choiceQ = startQuestions.find((q) => q.id === q1Id)!;
+    const chosenOptionId = choiceQ.options[0].id;
+
+    const submit = await request(app)
+      .post(`/v1/exams/attempts/${attemptId}/submit`)
+      .set(auth(student.token))
+      .send({
+        answers: [
+          { question_id: q1Id, selected_option_ids: [chosenOptionId] },
+          { question_id: q2Id, text_answer: "Non-possessiveness." },
+        ],
+      });
+    expect(submit.status).toBe(200);
+
+    // Admin grades the text question -> attempt becomes fully graded.
+    const grade = await request(app)
+      .post(`/v1/exams/${examId}/attempts/${attemptId}/grade`)
+      .set(auth(admin.token))
+      .send({ grades: [{ question_id: q2Id, marks_awarded: 6 }] });
+    expect(grade.status).toBe(200);
+    expect(grade.body.data.status).toBe("graded");
+
+    // results_released is still false: score + per_question must be withheld,
+    // even though the attempt is fully graded.
+    const result = await request(app)
+      .get(`/v1/exams/attempts/${attemptId}/result`)
+      .set(auth(student.token));
+    expect(result.status).toBe(200);
+    expect(result.body.data.status).toBeDefined();
+    expect(result.body.data.score).toBeUndefined();
+    expect(result.body.data.passed).toBeUndefined();
+    expect(result.body.data.per_question).toBeUndefined();
+  });
+
+  it("rejects grading an in-progress (never-submitted) attempt with 422", async () => {
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+    const examId = await createMumbaiExam(admin.token, cityId);
+
+    const qt = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({ question_en: "Explain ahimsa.", question_type: "text", marks: 10 });
+    expect(qt.status).toBe(200);
+    const qtId: string = qt.body.data.id;
+
+    // Student starts but never submits -> attempt stays in_progress.
+    const student = await loginAs("student");
+    const startRes = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({});
+    expect(startRes.status).toBe(200);
+    const attemptId: string = startRes.body.data.attempt_id;
+
+    const grade = await request(app)
+      .post(`/v1/exams/${examId}/attempts/${attemptId}/grade`)
+      .set(auth(admin.token))
+      .send({ grades: [{ question_id: qtId, marks_awarded: 5 }] });
+    expect(grade.status).toBe(422);
+    expect(grade.body.error.code).toBe("ERR_VALIDATION_FAILED");
   });
 });

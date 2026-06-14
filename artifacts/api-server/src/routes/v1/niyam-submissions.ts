@@ -12,7 +12,7 @@
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, niyams, niyam_submissions, niyam_streaks, students } from "@workspace/db";
-import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
@@ -131,7 +131,18 @@ router.post("/", async (req: Request, res: Response) => {
     fail(res, 404, "ERR_NOT_FOUND", "Niyam not found."); return;
   }
 
-  const submissionDate = body.submission_date ?? todayIstDate();
+  const today = todayIstDate();
+  const submissionDate = body.submission_date ?? today;
+
+  // submission_date is client-controlled: bound it server-side to prevent
+  // backdated/future point+streak farming. Allow only today or yesterday.
+  if (submissionDate > today) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "submission_date cannot be in the future."); return;
+  }
+  if (submissionDate < previousDate(today)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "submission_date too old."); return;
+  }
+
   const proofUrl = body.proof_url ?? null;
 
   if ((niyam.proof_type === "photo" || niyam.proof_type === "video") && !proofUrl) {
@@ -146,6 +157,9 @@ router.post("/", async (req: Request, res: Response) => {
         eq(niyam_submissions.niyam_id, niyam.id),
         eq(niyam_submissions.student_id, body.student_id),
         eq(niyam_submissions.submission_date, submissionDate),
+        // Ignore rejected rows so a rejected submission can be re-submitted for
+        // this date; still blocks pending/approved/auto_approved duplicates.
+        ne(niyam_submissions.status, "rejected"),
       ),
     )
     .limit(1);
@@ -252,28 +266,37 @@ router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Respons
   if (!sub || !inScope(scope, sub.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Submission not found."); return;
   }
-  if (sub.status !== "pending") {
+
+  // Atomic compare-and-set: only flip pending -> approved if it is STILL
+  // pending, so two concurrent approvals can't both award. The award + streak
+  // run only when this caller actually won the transition.
+  const award = await db.transaction(async (tx) => {
+    const updated = await tx
+      .update(niyam_submissions)
+      .set({
+        status: "approved",
+        points_awarded: sub.points,
+        reviewed_by: req.authUser!.id,
+        reviewed_at: new Date(),
+      })
+      .where(and(eq(niyam_submissions.id, sub.id), eq(niyam_submissions.status, "pending")))
+      .returning({ id: niyam_submissions.id });
+    if (updated.length === 0) return null;
+
+    const result = await awardPunya({
+      studentId: sub.student_id,
+      featureKey: "niyam_submission",
+      points: sub.points,
+      note: sub.notes ?? null,
+      awardedBy: req.authUser!.id,
+    });
+    await bumpStreak(sub.student_id, sub.niyam_id, sub.submission_date);
+    return result;
+  });
+
+  if (!award) {
     fail(res, 409, "ERR_INVALID_STATE", "Submission is not pending."); return;
   }
-
-  await db
-    .update(niyam_submissions)
-    .set({
-      status: "approved",
-      points_awarded: sub.points,
-      reviewed_by: req.authUser!.id,
-      reviewed_at: new Date(),
-    })
-    .where(eq(niyam_submissions.id, sub.id));
-
-  const award = await awardPunya({
-    studentId: sub.student_id,
-    featureKey: "niyam_submission",
-    points: sub.points,
-    note: sub.notes ?? null,
-    awardedBy: req.authUser!.id,
-  });
-  await bumpStreak(sub.student_id, sub.niyam_id, sub.submission_date);
 
   ok(res, { id: sub.id, status: "approved", total_points: award.total_points, tier: award.tier });
 });
@@ -298,11 +321,9 @@ router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response
   if (!sub || !inScope(scope, sub.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Submission not found."); return;
   }
-  if (sub.status !== "pending") {
-    fail(res, 409, "ERR_INVALID_STATE", "Submission is not pending."); return;
-  }
 
-  await db
+  // Atomic compare-and-set: reject only if it is still pending.
+  const rejected = await db
     .update(niyam_submissions)
     .set({
       status: "rejected",
@@ -310,7 +331,11 @@ router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response
       reviewed_by: req.authUser!.id,
       reviewed_at: new Date(),
     })
-    .where(eq(niyam_submissions.id, sub.id));
+    .where(and(eq(niyam_submissions.id, sub.id), eq(niyam_submissions.status, "pending")))
+    .returning({ id: niyam_submissions.id });
+  if (rejected.length === 0) {
+    fail(res, 409, "ERR_INVALID_STATE", "Submission is not pending."); return;
+  }
 
   ok(res, { id: sub.id, status: "rejected" });
 });

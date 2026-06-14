@@ -20,8 +20,9 @@ import {
   cities,
   type User,
 } from "@workspace/db";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
+import { canAccessAdminPanel } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope } from "../../lib/scope";
@@ -91,11 +92,11 @@ function sameIdSet(a: string[], b: string[]): boolean {
 
 /* GET /v1/exams/:id/questions — admin view (includes is_correct) */
 router.get("/:id/questions", async (req: Request, res: Response) => {
-  if (!req.authUser || req.authUser.role === "student" || req.authUser.role === "parent") {
+  if (!canAccessAdminPanel(req.authUser?.role)) {
     fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
     return;
   }
-  const cityIds = await cityScopeForUser(req.authUser);
+  const cityIds = await cityScopeForUser(req.authUser!);
   const examId = String(req.params.id);
   const [exam] = await db
     .select({ id: online_exams.id, city_id: online_exams.city_id })
@@ -161,7 +162,7 @@ const createQuestionSchema = z.object({
 
 /* POST /v1/exams/:id/questions — add a question (+ options) */
 router.post("/:id/questions", async (req: Request, res: Response) => {
-  if (!req.authUser || req.authUser.role === "student" || req.authUser.role === "parent") {
+  if (!canAccessAdminPanel(req.authUser?.role)) {
     fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
     return;
   }
@@ -173,7 +174,7 @@ router.post("/:id/questions", async (req: Request, res: Response) => {
     return;
   }
 
-  const cityIds = await cityScopeForUser(req.authUser);
+  const cityIds = await cityScopeForUser(req.authUser!);
   const examId = String(req.params.id);
   const [exam] = await db
     .select({ id: online_exams.id, city_id: online_exams.city_id })
@@ -241,11 +242,11 @@ router.post("/:id/questions", async (req: Request, res: Response) => {
 
 /* DELETE /v1/exams/:id/questions/:qid — remove a question (options cascade) */
 router.delete("/:id/questions/:qid", async (req: Request, res: Response) => {
-  if (!req.authUser || req.authUser.role === "student" || req.authUser.role === "parent") {
+  if (!canAccessAdminPanel(req.authUser?.role)) {
     fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
     return;
   }
-  const cityIds = await cityScopeForUser(req.authUser);
+  const cityIds = await cityScopeForUser(req.authUser!);
   const examId = String(req.params.id);
   const qid = String(req.params.qid);
   const [exam] = await db
@@ -274,11 +275,11 @@ router.delete("/:id/questions/:qid", async (req: Request, res: Response) => {
 
 /* GET /v1/exams/:id/attempts/:attemptId — attempt detail with answers joined */
 router.get("/:id/attempts/:attemptId", async (req: Request, res: Response) => {
-  if (!req.authUser || req.authUser.role === "student" || req.authUser.role === "parent") {
+  if (!canAccessAdminPanel(req.authUser?.role)) {
     fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
     return;
   }
-  const cityIds = await cityScopeForUser(req.authUser);
+  const cityIds = await cityScopeForUser(req.authUser!);
   const examId = String(req.params.id);
   const attemptId = String(req.params.attemptId);
   const [exam] = await db
@@ -368,7 +369,7 @@ const gradeSchema = z.object({
 
 /* POST /v1/exams/:id/attempts/:attemptId/grade — manual grade text answers */
 router.post("/:id/attempts/:attemptId/grade", async (req: Request, res: Response) => {
-  if (!req.authUser || req.authUser.role === "student" || req.authUser.role === "parent") {
+  if (!canAccessAdminPanel(req.authUser?.role)) {
     fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
     return;
   }
@@ -380,7 +381,7 @@ router.post("/:id/attempts/:attemptId/grade", async (req: Request, res: Response
     return;
   }
 
-  const cityIds = await cityScopeForUser(req.authUser);
+  const cityIds = await cityScopeForUser(req.authUser!);
   const examId = String(req.params.id);
   const attemptId = String(req.params.attemptId);
   const [exam] = await db
@@ -394,12 +395,20 @@ router.post("/:id/attempts/:attemptId/grade", async (req: Request, res: Response
   }
 
   const [attempt] = await db
-    .select({ id: exam_attempts.id, auto_score: exam_attempts.auto_score })
+    .select({
+      id: exam_attempts.id,
+      auto_score: exam_attempts.auto_score,
+      status: exam_attempts.status,
+    })
     .from(exam_attempts)
     .where(and(eq(exam_attempts.id, attemptId), eq(exam_attempts.exam_id, examId)))
     .limit(1);
   if (!attempt) {
     fail(res, 404, "ERR_NOT_FOUND", "Attempt not found.");
+    return;
+  }
+  if (attempt.status === "in_progress") {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Attempt not submitted.");
     return;
   }
 
@@ -423,6 +432,7 @@ router.post("/:id/attempts/:attemptId/grade", async (req: Request, res: Response
   // Recompute manual_score = sum of all graded text answers for this attempt.
   const textIds = textQuestions.map((q) => q.id);
   let manualScore = 0;
+  let ungraded = 0;
   if (textIds.length > 0) {
     const graded = await db
       .select({ marks_awarded: exam_answers.marks_awarded })
@@ -434,23 +444,55 @@ router.post("/:id/attempts/:attemptId/grade", async (req: Request, res: Response
         ),
       );
     manualScore = graded.reduce((sum, r) => sum + (r.marks_awarded ?? 0), 0);
+
+    // Count this attempt's text answers still awaiting a grade (NULL marks).
+    const [{ n }] = await db
+      .select({ n: count() })
+      .from(exam_answers)
+      .where(
+        and(
+          eq(exam_answers.attempt_id, attemptId),
+          inArray(exam_answers.question_id, textIds),
+          isNull(exam_answers.marks_awarded),
+        ),
+      );
+    ungraded = Number(n ?? 0);
   }
 
-  const autoScore = attempt.auto_score ?? 0;
-  const score = autoScore + manualScore;
+  // Only finalize (status=graded, needs_grading=false, recompute score) once
+  // every text answer is graded; otherwise keep it pending with partial marks.
+  if (ungraded === 0) {
+    const autoScore = attempt.auto_score ?? 0;
+    const score = autoScore + manualScore;
+    await db
+      .update(exam_attempts)
+      .set({
+        manual_score: manualScore,
+        score,
+        needs_grading: false,
+        status: "graded",
+        graded_by: req.authUser!.id,
+        graded_at: new Date(),
+      })
+      .where(eq(exam_attempts.id, attemptId));
+
+    ok(res, { attempt_id: attemptId, score, status: "graded" });
+    return;
+  }
+
+  // Partial grading: persist the marks awarded so far but stay submitted.
   await db
     .update(exam_attempts)
     .set({
       manual_score: manualScore,
-      score,
-      needs_grading: false,
-      status: "graded",
-      graded_by: req.authUser.id,
+      needs_grading: true,
+      status: "submitted",
+      graded_by: req.authUser!.id,
       graded_at: new Date(),
     })
     .where(eq(exam_attempts.id, attemptId));
 
-  ok(res, { attempt_id: attemptId, score, status: "graded" });
+  ok(res, { attempt_id: attemptId, status: "submitted", needs_grading: true });
 });
 
 /* ═══════════════════════════ STUDENT — take flow ═══════════════════════════ */
@@ -567,25 +609,33 @@ router.post("/:id/start", async (req: Request, res: Response) => {
     }
   }
 
-  const [{ n }] = await db
-    .select({ n: sql<number>`count(*)::int` })
-    .from(exam_attempts)
-    .where(and(eq(exam_attempts.exam_id, examId), eq(exam_attempts.student_id, student.id)));
-  if ((n ?? 0) >= exam.max_attempts) {
+  // Atomically count existing attempts and insert the new one so two parallel
+  // starts cannot both pass the cap check (count-then-insert TOCTOU).
+  const startResult = await db.transaction(async (tx) => {
+    const [{ n }] = await tx
+      .select({ n: sql<number>`count(*)::int` })
+      .from(exam_attempts)
+      .where(and(eq(exam_attempts.exam_id, examId), eq(exam_attempts.student_id, student.id)));
+    if ((n ?? 0) >= exam.max_attempts) {
+      return { capped: true as const };
+    }
+    const [created] = await tx
+      .insert(exam_attempts)
+      .values({
+        exam_id: examId,
+        student_id: student.id,
+        started_at: now,
+        status: "in_progress",
+        needs_grading: false,
+      })
+      .returning({ id: exam_attempts.id });
+    return { capped: false as const, attempt: created };
+  });
+  if (startResult.capped) {
     fail(res, 409, "ERR_MAX_ATTEMPTS", "You have used all your attempts.");
     return;
   }
-
-  const [attempt] = await db
-    .insert(exam_attempts)
-    .values({
-      exam_id: examId,
-      student_id: student.id,
-      started_at: now,
-      status: "in_progress",
-      needs_grading: false,
-    })
-    .returning({ id: exam_attempts.id });
+  const attempt = startResult.attempt;
 
   const questions = await db
     .select({
@@ -806,7 +856,9 @@ router.get("/attempts/:attemptId/result", async (req: Request, res: Response) =>
     .where(eq(online_exams.id, attempt.exam_id))
     .limit(1);
 
-  if (attempt.status !== "graded" && !(exam && exam.results_released)) {
+  // Gate ALL disclosure on results_released — even objective-only exams that
+  // auto-grade instantly must withhold score + per-question until released.
+  if (!(exam && exam.results_released)) {
     ok(res, { status: attempt.status, needs_grading: attempt.needs_grading });
     return;
   }
