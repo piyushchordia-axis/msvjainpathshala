@@ -1,7 +1,7 @@
-import { boolean, date, integer, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { boolean, date, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
 import { timestamps } from "./_helpers";
-import { shivirAttendanceModeEnum } from "./enums";
+import { shivirAttendanceModeEnum, shivirScanKindEnum } from "./enums";
 import { cities, states } from "./geography";
 import { students } from "./students";
 import { users } from "./identity";
@@ -48,5 +48,34 @@ export const shivir_volunteers = pgTable("shivir_volunteers", {
   ...timestamps(),
 });
 
+// A timed session within a shivir (volunteers scan attendance against it).
+export const shivir_sessions = pgTable("shivir_sessions", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  shivir_id: uuid("shivir_id")
+    .notNull()
+    .references(() => shivir_events.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  session_date: date("session_date").notNull(),
+  attendance_mode: shivirAttendanceModeEnum("attendance_mode").notNull().default("present_only"),
+  ...timestamps(),
+});
+
+// One QR scan event (check_in / check_out / present) by a volunteer.
+export const shivir_attendance_scans = pgTable("shivir_attendance_scans", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  shivir_session_id: uuid("shivir_session_id")
+    .notNull()
+    .references(() => shivir_sessions.id, { onDelete: "cascade" }),
+  student_id: uuid("student_id")
+    .notNull()
+    .references(() => students.id, { onDelete: "cascade" }),
+  volunteer_user_id: uuid("volunteer_user_id").references(() => users.id, { onDelete: "set null" }),
+  scan_kind: shivirScanKindEnum("scan_kind").notNull().default("present"),
+  scanned_at: timestamp("scanned_at", { withTimezone: true }).notNull().defaultNow(),
+  ...timestamps(),
+});
+
 export type ShivirEvent = typeof shivir_events.$inferSelect;
 export type NewShivirEvent = typeof shivir_events.$inferInsert;
+export type ShivirSession = typeof shivir_sessions.$inferSelect;
+export type ShivirAttendanceScan = typeof shivir_attendance_scans.$inferSelect;

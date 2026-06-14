@@ -16,7 +16,10 @@ import ShivirDetailPage from '@/pages/public/ShivirDetailPage';
 import NoticesPage from '@/pages/public/NoticesPage';
 import LibraryPage from '@/pages/public/LibraryPage';
 import GalleryPage from '@/pages/public/GalleryPage';
-import { AboutPage, ContactPage, DonatePage, EnquirePage, MsvPage } from '@/pages/public/PublicStubs';
+import { AboutPage, MsvPage } from '@/pages/public/PublicStubs';
+import ContactPage from '@/pages/public/ContactPage';
+import EnquirePage from '@/pages/public/EnquirePage';
+import DonatePage from '@/pages/public/DonatePage';
 
 import LoginPage from '@/pages/admin/LoginPage';
 import DashboardPage from '@/pages/admin/DashboardPage';
@@ -38,7 +41,6 @@ import {
   PunyaConfigsPage,
   PunyaAuditPage,
   ShikshaksPage,
-  MsvEnrolmentsPage,
   HolidaysPage,
   ReportsPage,
   GeographyPage,
@@ -58,6 +60,12 @@ import IdCardsAdminPage from '@/pages/admin/IdCardsPage';
 import ProgressAdminPage from '@/pages/admin/ProgressPage';
 import AuditLogPage from '@/pages/admin/AuditLogPage';
 import RegisterPage from '@/pages/public/RegisterPage';
+// Wave 3 standalone pages
+import CompetitionsAdminPage from '@/pages/admin/CompetitionsPage';
+import QuizzesAdminPage from '@/pages/admin/QuizzesPage';
+import MsvAdminPage from '@/pages/admin/MsvAdminPage';
+import ShivirDashboardPage from '@/pages/admin/ShivirDashboardPage';
+import EnquiriesAdminPage from '@/pages/admin/EnquiriesPage';
 
 import NotFound from '@/pages/not-found';
 
@@ -102,7 +110,7 @@ function AdminRoutes() {
         <Route path="/admin/analytics" component={AnalyticsPage} />
         <Route path="/admin/students" component={StudentsPage} />
         <Route path="/admin/enrolments" component={EnrolmentsPage} />
-        <Route path="/admin/msv-enrolments" component={MsvEnrolmentsPage} />
+        <Route path="/admin/msv-enrolments" component={MsvAdminPage} />
         <Route path="/admin/shikshaks" component={ShikshaksPage} />
         <Route path="/admin/batches" component={BatchesPage} />
         <Route path="/admin/curriculum" component={CurriculumPage} />
@@ -112,6 +120,8 @@ function AdminRoutes() {
         <Route path="/admin/niyam-review" component={NiyamReviewPage} />
         <Route path="/admin/homework" component={HomeworkAdminPage} />
         <Route path="/admin/progress" component={ProgressAdminPage} />
+        <Route path="/admin/competitions" component={CompetitionsAdminPage} />
+        <Route path="/admin/quizzes" component={QuizzesAdminPage} />
         <Route path="/admin/shivirs" component={AdminShivirsPage} />
         <Route path="/admin/punya/manual-award" component={PunyaAwardPage} />
         <Route path="/admin/punya/configs" component={PunyaConfigsPage} />
@@ -126,6 +136,8 @@ function AdminRoutes() {
         <Route path="/admin/donations" component={DonationsPage} />
         <Route path="/admin/service-requests" component={ServiceRequestsAdminPage} />
         <Route path="/admin/registration-forms" component={RegistrationFormsPage} />
+        <Route path="/admin/shivir-dashboard" component={ShivirDashboardPage} />
+        <Route path="/admin/enquiries" component={EnquiriesAdminPage} />
         <Route path="/admin/reports" component={ReportsPage} />
         <Route path="/admin/audit" component={AuditLogPage} />
         <Route path="/admin/geography" component={GeographyPage} />

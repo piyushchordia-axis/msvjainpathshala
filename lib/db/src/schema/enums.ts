@@ -33,6 +33,10 @@ export const LIBRARY_ACCESS_TIERS = ["public", "student", "msv", "shikshak"] as 
 export const HOMEWORK_STATUSES = ["pending", "submitted", "approved", "starred", "late"] as const;
 export const SERVICE_REQUEST_STATUSES = ["submitted", "in_review", "resolved"] as const;
 export const CURRICULUM_LEVELS = ["not_started", "in_progress", "completed", "mastered"] as const;
+export const QUIZ_SCOPES = ["national", "state", "city", "centre", "batch"] as const;
+export const COMPETITION_STATUSES = ["draft", "open", "closed", "results_published"] as const;
+export const NOTIFICATION_KINDS = ["general", "birthday", "homework", "quiz", "competition", "service_request", "exam", "shivir"] as const;
+export const DONATION_PAYMENT_STATUSES = ["created", "pending", "captured", "failed", "refunded"] as const;
 export const AUDIT_ACTIONS = [
   "create",
   "update",
@@ -88,3 +92,7 @@ export const homeworkStatusEnum = pgEnum("homework_status_enum", HOMEWORK_STATUS
 export const serviceRequestStatusEnum = pgEnum("service_request_status_enum", SERVICE_REQUEST_STATUSES);
 export const curriculumLevelEnum = pgEnum("curriculum_level_enum", CURRICULUM_LEVELS);
 export const auditActionEnum = pgEnum("audit_action_enum", AUDIT_ACTIONS);
+export const quizScopeEnum = pgEnum("quiz_scope_enum", QUIZ_SCOPES);
+export const competitionStatusEnum = pgEnum("competition_status_enum", COMPETITION_STATUSES);
+export const notificationKindEnum = pgEnum("notification_kind_enum", NOTIFICATION_KINDS);
+export const donationPaymentStatusEnum = pgEnum("donation_payment_status_enum", DONATION_PAYMENT_STATUSES);

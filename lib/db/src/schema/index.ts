@@ -19,3 +19,8 @@ export * from "./homework";
 export * from "./registration";
 export * from "./services";
 export * from "./audit";
+export * from "./competitions";
+export * from "./quizzes";
+export * from "./notifications";
+
+// (enquiries lives in ./notifications; no separate file)

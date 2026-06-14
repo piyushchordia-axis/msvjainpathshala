@@ -1,5 +1,6 @@
 import { boolean, integer, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { timestamps } from "./_helpers";
+import { donationPaymentStatusEnum } from "./enums";
 import { cities } from "./geography";
 import { users } from "./identity";
 
@@ -27,6 +28,11 @@ export const donations = pgTable("donations", {
   }),
   frequency: text("frequency").notNull().default("one_time"),
   status: text("status").notNull().default("captured"),
+  // Razorpay payment lifecycle (order created on client checkout, captured via webhook/verify).
+  payment_status: donationPaymentStatusEnum("payment_status").notNull().default("created"),
+  razorpay_order_id: text("razorpay_order_id"),
+  razorpay_payment_id: text("razorpay_payment_id"),
+  razorpay_signature: text("razorpay_signature"),
   payment_captured_at: timestamp("payment_captured_at", { withTimezone: true }),
   eighty_g_eligible: boolean("eighty_g_eligible").notNull().default(false),
   receipt_number: text("receipt_number"),

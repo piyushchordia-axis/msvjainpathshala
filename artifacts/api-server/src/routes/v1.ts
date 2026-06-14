@@ -19,6 +19,13 @@ import serviceRequestsRouter from "./v1/service-requests";
 import idCardsRouter from "./v1/id-cards";
 import progressRouter from "./v1/progress";
 import auditLogsRouter from "./v1/audit-logs";
+import competitionsRouter from "./v1/competitions";
+import quizzesRouter from "./v1/quizzes";
+import donationsRouter from "./v1/donations";
+import msvRouter from "./v1/msv";
+import notificationsRouter from "./v1/notifications";
+import shivirScannerRouter from "./v1/shivir-scanner";
+import enquiriesRouter from "./v1/enquiries";
 
 const router: IRouter = Router();
 
@@ -37,5 +44,12 @@ router.use("/service-requests", serviceRequestsRouter);
 router.use("/id-cards", idCardsRouter);
 router.use("/progress", progressRouter);
 router.use("/audit-logs", auditLogsRouter);
+router.use("/competitions", competitionsRouter);
+router.use("/quizzes", quizzesRouter);
+router.use("/donations", donationsRouter);
+router.use("/msv", msvRouter);
+router.use("/notifications", notificationsRouter);
+router.use("/shivir-scanner", shivirScannerRouter);
+router.use("/enquiries", enquiriesRouter);
 
 export default router;

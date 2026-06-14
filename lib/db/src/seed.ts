@@ -51,6 +51,14 @@ import {
   student_curriculum_progress,
   progress_reports,
   audit_logs,
+  competitions,
+  competition_registrations,
+  questions,
+  quiz_events,
+  quiz_event_questions,
+  push_quizzes,
+  push_quiz_questions,
+  enquiries,
 } from "./schema";
 import { tierForPoints } from "./schema/enums";
 import { sql } from "drizzle-orm";
@@ -74,6 +82,11 @@ async function main(): Promise<void> {
   await db.execute(sql`
     truncate table
       audit_logs,
+      enquiries, notifications, device_push_tokens,
+      shivir_attendance_scans, shivir_sessions,
+      competition_registrations, competitions,
+      push_quiz_attempts, push_quiz_questions, push_quizzes,
+      quiz_attempts, quiz_event_questions, quiz_events, questions,
       homework_submissions, homework_assignments,
       registration_form_responses, registration_form_configs,
       service_request_messages, service_requests,
@@ -983,6 +996,100 @@ async function main(): Promise<void> {
     { actor_user_id: superAdmin.id, actor_role: "super_admin", action: "config_change", entity_kind: "settings", summary: "Updated default OTP" },
     { actor_user_id: superAdmin.id, actor_role: "super_admin", action: "approve", entity_kind: "enrolment", summary: "Approved a pending enrolment" },
     { actor_user_id: cityAdmin.id, actor_role: "city_admin", action: "update", entity_kind: "student", summary: "Edited a student profile" },
+  ]);
+
+  /* ---------------- Competitions (Wave 3) ---------------- */
+  const compNow = Date.now();
+  const [comp1] = await db
+    .insert(competitions)
+    .values({
+      city_id: mumbai.id,
+      name_en: "Tattvarth Sutra Recitation",
+      name_hi: "तत्त्वार्थ सूत्र पाठ",
+      description_en: "Recite assigned sutras with correct pronunciation.",
+      category: "recitation",
+      eligible_age_groups: ["bal", "kishor"],
+      registration_window_start: new Date(compNow - 24 * 60 * 60 * 1000),
+      registration_window_end: new Date(compNow + 7 * 24 * 60 * 60 * 1000),
+      event_date: new Date(compNow + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      winner_points: 100,
+      participant_points: 25,
+      max_participants: 50,
+      status: "open" as const,
+      created_by: superAdmin.id,
+    })
+    .returning();
+  await db.insert(competition_registrations).values([
+    { competition_id: comp1.id, student_id: insertedStudents[0].id },
+    { competition_id: comp1.id, student_id: insertedStudents[1].id },
+  ]);
+
+  /* ---------------- Quizzes (Wave 3) ---------------- */
+  const seededQuizQuestions = await db
+    .insert(questions)
+    .values([
+      {
+        scope: "national" as const,
+        question_en: "Which is a core Jain principle?",
+        question_hi: "कौन सा एक मूल जैन सिद्धांत है?",
+        options: [{ text_en: "Ahimsa", text_hi: "अहिंसा" }, { text_en: "Himsa", text_hi: "हिंसा" }],
+        correct_indices: [0],
+        topic: "Principles",
+        age_groups: ["bal", "kishor"],
+        created_by: superAdmin.id,
+      },
+      {
+        scope: "city" as const,
+        city_id: mumbai.id,
+        question_en: "Pick the two great vows (mahavrata).",
+        options: [{ text_en: "Satya" }, { text_en: "Asteya" }, { text_en: "Greed" }],
+        correct_indices: [0, 1],
+        topic: "Vows",
+        age_groups: ["kishor"],
+        created_by: superAdmin.id,
+      },
+    ])
+    .returning();
+  const [seededQuizEvent] = await db
+    .insert(quiz_events)
+    .values({
+      scope: "city" as const,
+      city_id: mumbai.id,
+      title_en: "Mumbai Weekly Quiz",
+      title_hi: "मुंबई साप्ताहिक प्रश्नोत्तरी",
+      start_at: new Date(Date.now() - 60 * 60 * 1000),
+      end_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      participation_points: 5,
+      win_points: 10,
+      age_groups: ["bal", "kishor"],
+      created_by: superAdmin.id,
+    })
+    .returning();
+  await db.insert(quiz_event_questions).values(
+    seededQuizQuestions.map((q, i) => ({ quiz_event_id: seededQuizEvent.id, question_id: q.id, order_index: i })),
+  );
+  const [seededPushQuiz] = await db
+    .insert(push_quizzes)
+    .values({
+      batch_id: batchA1.id,
+      shikshak_user_id: shikshak.id,
+      expires_at: new Date(Date.now() + 30 * 60 * 1000),
+      completion_points: 5,
+    })
+    .returning();
+  await db.insert(push_quiz_questions).values([
+    {
+      push_quiz_id: seededPushQuiz.id,
+      question_en: "Is honesty (Satya) a Jain vow?",
+      options: [{ text_en: "Yes" }, { text_en: "No" }],
+      correct_indices: [0],
+      order_index: 0,
+    },
+  ]);
+
+  /* ---------------- Enquiries (Wave 3 public inbox) ---------------- */
+  await db.insert(enquiries).values([
+    { kind: "enquire", name: "Riya Sharma", phone: "+919812345678", city: "Mumbai", message: "I would like to enrol my 8-year-old son in the nearest centre.", status: "new" },
   ]);
 
   console.log("Seed complete.");
