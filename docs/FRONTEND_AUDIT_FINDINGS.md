@@ -101,6 +101,27 @@ Legend: 🔴 broken/data-loss · 🟠 functional gap · 🟡 UX/validation · �
 - Public site: 0 console errors; register shows clean "Student Registration" + Bal/Kishor/Tarun/**Yuva**.
 - Preview left logged in as super_admin on `/admin` for the user.
 
+## RBAC + multi-tenant scoping — verified OK (no bugs)
+Tested per-role via UI (nav + scoped lists) and **API tokens** (real boundary):
+- **Nav filtering**: city_admin sees 33 items, none of Queues/Geography/Settings/Audit; shikshak limited to its level.
+- **Data scoping**: super=all · state_admin(MH)=5 students + Ghatkopar/Kothrud (not Maninagar/Gujarat) · city_admin(Mumbai)=4 students + Ghatkopar only (Anaya/Pune not leaked) · sanchalak=4 (centre) · shikshak=4 (batches), centres read scoped to own.
+- **Route guards (API)**: queues/stats → 403 for all non-super; audit-logs → 200 state+/403 below; shikshak POST centre → 403 ("Only national/state/city admins…"), 0 rows created.
+- Minor: some POST handlers run zod validation before the role check (bogus payload → 422 instead of 403), but the action is still denied with a valid payload. Cosmetic ordering, not a hole.
+
+## Reject / decline + delete — verified OK
+- **Enrolment reject** (window.prompt reason) → status=rejected, reason persisted.
+- **MSV reject** (dialog + reason textarea) → status=rejected.
+- **Exam-builder delete question** (confirm) → exam question count 2→1 in DB.
+- Registration/niyam reject use the same handler as their (verified) approve; most admin pages are create-only by design (no edit/delete UI).
+
+## Consumer "take/submit" flows — verified live via student/parent API tokens
+The web admin panel doesn't expose these (they're mobile/student-side); tested against the live seed:
+- **Online exam take**: Aarav `start` (OTP-gated + city-scoped; options correctly hide `is_correct`) → `submit` correct answers → **auto-graded 50/50, status=graded** in DB. Max-attempts cap enforced (`ERR_MAX_ATTEMPTS`).
+- **Niyam submit**: parent submitted Chauvihar for Diya **with proof → pending** (200). Guards work: `ERR_DUPLICATE` (per-date), `Proof required` for proof-type niyams. (Approve→punya verified earlier in admin UI.)
+- **Competition register**: `ERR_ALREADY_REGISTERED` idempotency guard confirmed (seed had the registration).
+- Remaining consume flows (quiz take, homework submit, shivir QR scan, ID-card verify/revoke, attendance) are covered by the **105 passing API integration tests**.
+- **Not done**: driving these through the **mobile app UI** (Expo) — needs the mobile harness on :8081; flagged as a separate pass.
+
 ## Summary
 - **9 findings, all fixed & browser-verified.** Severities: 1×🔴 (F9 service-request thread unreachable), 3×🟠 UX blockers (F6/F7/F8 raw-UUID inputs → dropdowns), 5×🟡/data (F1 day convention, F2 i18n, F3 yuva, F4 student-code, F5 waitlist-approve).
 - **Every screen driven**: 13 public + ~37 admin pages. Every form filled+submitted with **DB-verified persistence**; validation (required/empty) exercised; filters, tabs, status actions, pagination-equivalents, and read-only renders all checked.
