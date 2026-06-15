@@ -14,6 +14,7 @@ import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
+import { auditFromReq } from "../../lib/audit";
 
 const router: IRouter = Router();
 router.use(requireAuth, requireAdminPanel);
@@ -113,6 +114,15 @@ router.post("/sessions", async (req: Request, res: Response) => {
     status: "scheduled",
     conducted_by: req.authUser!.id,
   }).returning({ id: sessions.id, batch_id: sessions.batch_id, session_date: sessions.session_date });
+
+  await auditFromReq(req, {
+    action: "create",
+    entityKind: "attendance_session",
+    entityId: row.id,
+    summary: `Created session for ${body.session_date}.`,
+    metadata: { batch_id: batch.id, session_date: body.session_date, gps_required: body.gps_required ?? false },
+  });
+
   ok(res, row);
 });
 
@@ -288,6 +298,14 @@ router.post("/sessions/:id/mark", async (req: Request, res: Response) => {
 
     // Guaranteed non-cancelled by the guard above, so completing is safe.
     await tx.update(sessions).set({ status: "completed" }).where(eq(sessions.id, session.id));
+  });
+
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "attendance_session",
+    entityId: session.id,
+    summary: `Marked attendance for ${body.records.length} student(s) (${method}).`,
+    metadata: { batch_id: session.batch_id, marked: body.records.length, method },
   });
 
   ok(res, { session_id: session.id, marked: body.records.length, method });

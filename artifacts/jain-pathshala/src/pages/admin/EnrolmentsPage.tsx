@@ -1,9 +1,17 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearch } from 'wouter';
+import { Plus } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
 import { Button } from '@/components/ui/button';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
+} from '@/components/ui/dialog';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
 
 type EnrolmentStatus = 'pending' | 'waitlisted' | 'approved' | 'rejected';
 
@@ -94,6 +102,118 @@ function DecideActions({ id, status, onChanged }: DecideActionsProps) {
   );
 }
 
+interface StudentOption { id: string; full_name: string | null; student_code: string; }
+interface BatchOption { id: string; name: string | null; centre_name: string; status: 'active' | 'inactive'; }
+
+function AddEnrolmentDialog({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [loadingOpts, setLoadingOpts] = useState(false);
+  const [students, setStudents] = useState<StudentOption[]>([]);
+  const [batches, setBatches] = useState<BatchOption[]>([]);
+  const [studentId, setStudentId] = useState('');
+  const [batchId, setBatchId] = useState('');
+  const [approveNow, setApproveNow] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoadingOpts(true);
+    Promise.all([
+      apiGet<{ items: StudentOption[] }>('/v1/admin/students'),
+      apiGet<{ items: BatchOption[] }>('/v1/admin/batches'),
+    ])
+      .then(([s, b]) => {
+        setStudents(s?.items ?? []);
+        // Only active batches can accept enrolments.
+        setBatches((b?.items ?? []).filter((x) => x.status === 'active'));
+      })
+      .catch((err) => toast.error('Could not load students or batches.', err instanceof ApiError ? err.message : undefined))
+      .finally(() => setLoadingOpts(false));
+  }, [open]);
+
+  function reset() {
+    setStudentId(''); setBatchId(''); setApproveNow(false);
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!studentId || !batchId) return;
+    setBusy(true);
+    try {
+      await apiPost('/v1/enrolments', {
+        student_id: studentId,
+        requested_batch_id: batchId,
+        ...(approveNow ? { auto_approve: true } : {}),
+      });
+      toast.success(approveNow ? 'Student enrolled and approved.' : 'Enrolment request created.');
+      setOpen(false);
+      reset();
+      onAdded();
+    } catch (err) {
+      toast.error('Could not create enrolment.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset(); }}>
+      <DialogTrigger asChild>
+        <Button size="sm"><Plus className="mr-1 h-4 w-4" />Add enrolment</Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Add enrolment</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Student *</Label>
+            <Select value={studentId} onValueChange={setStudentId} disabled={loadingOpts}>
+              <SelectTrigger><SelectValue placeholder={loadingOpts ? 'Loading…' : 'Select student'} /></SelectTrigger>
+              <SelectContent>
+                {students.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {(s.full_name ?? '—')} · {s.student_code}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Batch *</Label>
+            <Select value={batchId} onValueChange={setBatchId} disabled={loadingOpts}>
+              <SelectTrigger><SelectValue placeholder={loadingOpts ? 'Loading…' : 'Select batch'} /></SelectTrigger>
+              <SelectContent>
+                {batches.map((b) => (
+                  <SelectItem key={b.id} value={b.id}>
+                    {(b.name ?? '—')} · {b.centre_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {!loadingOpts && batches.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No active batches in your scope.</p>
+            ) : null}
+          </div>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-input"
+              checked={approveNow}
+              onChange={(e) => setApproveNow(e.target.checked)}
+            />
+            <span>Enrol &amp; approve now (attach the student immediately)</span>
+          </label>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !studentId || !batchId}>
+              {busy ? 'Saving…' : approveNow ? 'Enrol & approve' : 'Create request'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function EnrolmentsPage() {
   const search = useSearch();
   const params = new URLSearchParams(search);
@@ -124,9 +244,10 @@ export default function EnrolmentsPage() {
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h2 className="font-display text-2xl text-secondary">Enrolments</h2>
-          <p className="text-sm text-muted-foreground">Approve, waitlist, or reject pending applications.</p>
+          <p className="text-sm text-muted-foreground">Create requests, then approve, waitlist, or reject pending applications.</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <AddEnrolmentDialog onAdded={load} />
           {STATUS_FILTERS.map((f) => {
             const active = statusFilter === f.value;
             const href = f.value === 'all' ? '/admin/enrolments' : `/admin/enrolments?status=${f.value}`;

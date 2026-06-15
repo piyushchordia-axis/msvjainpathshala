@@ -1,0 +1,368 @@
+import { describe, it, expect, afterAll, beforeAll } from "vitest";
+import request from "supertest";
+import app from "../src/app";
+import { pool } from "@workspace/db";
+import { loginAs, auth } from "./helpers";
+
+/**
+ * Notices integration coverage. Everything is self-creating and additive: each
+ * test mints its own notice(s) via the admin authoring endpoint and asserts on
+ * those specific rows (matched by id/title), so reruns never collide and we
+ * never assert on global counts.
+ *
+ * Geography of the seeded personas (from the seed): the parent (+...006), the
+ * student Aarav (+...007), sanchalak, shikshak and city_admin all live in
+ * Mumbai (Maharashtra). Ahmedabad is a different city in a different state and
+ * is therefore used as the "targeted elsewhere" scope that must be excluded
+ * from the member feed.
+ *
+ * Endpoint shapes asserted (see src/routes/v1/notices.ts):
+ *  - POST   /v1/notices/admin          -> 201 { data: { id } }
+ *  - PATCH  /v1/notices/admin/:id       -> 200 { data: { id } }
+ *  - DELETE /v1/notices/admin/:id       -> 200 { data: { id, deleted } }
+ *  - GET    /v1/notices/feed            -> 200 { data: { items, unread_count } }
+ *  - POST   /v1/notices/:id/read        -> 200 { data: { id, read } }
+ *  - GET    /v1/notices/public          -> 200 { data: { items } } (no auth)
+ */
+
+afterAll(async () => {
+  await pool.end(); // close the shared pg pool so vitest exits cleanly
+});
+
+// Resolved at runtime by name — seed UUIDs are DB-generated and change per reseed.
+let AHMEDABAD_CITY: string; // a different city in a different state ("targeted elsewhere")
+const tag = () => `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+beforeAll(async () => {
+  const { rows } = await pool.query(`select id from cities where name = $1`, ["Ahmedabad"]);
+  AHMEDABAD_CITY = rows[0].id;
+});
+
+/**
+ * Resolve the parent's scope (their first child's centre_id + batch_id) for
+ * targeting tests. /v1/me/children only exposes centre_name/batch_name, so we
+ * cross-reference the admin centres/batches lists to recover the ids.
+ */
+async function parentScope(
+  parentToken: string,
+  adminToken: string,
+): Promise<{ studentId: string; centreId: string; batchId: string }> {
+  const kids = await request(app).get("/v1/me/children").set(auth(parentToken));
+  expect(kids.status).toBe(200);
+  const child = kids.body.data.items[0];
+  expect(child).toBeTruthy();
+
+  const centresRes = await request(app).get("/v1/admin/centres?limit=300").set(auth(adminToken));
+  expect(centresRes.status).toBe(200);
+  const centre = centresRes.body.data.items.find((c: { name: string }) => c.name === child.centre_name);
+  expect(centre, `centre named ${child.centre_name}`).toBeTruthy();
+
+  const batchesRes = await request(app).get("/v1/admin/batches?limit=300").set(auth(adminToken));
+  expect(batchesRes.status).toBe(200);
+  const batch = batchesRes.body.data.items.find((b: { name: string }) => b.name === child.batch_name);
+  expect(batch, `batch named ${child.batch_name}`).toBeTruthy();
+
+  return { studentId: child.id, centreId: centre.id, batchId: batch.id };
+}
+
+/** Create a notice as super_admin and return its id. */
+async function createNotice(adminToken: string, body: Record<string, unknown>): Promise<string> {
+  const res = await request(app).post("/v1/notices/admin").set(auth(adminToken)).send(body);
+  expect(res.status).toBe(201);
+  expect(res.body.data.id).toBeTruthy();
+  return res.body.data.id as string;
+}
+
+async function feed(token: string): Promise<{ items: Array<Record<string, any>>; unread: number }> {
+  const res = await request(app).get("/v1/notices/feed?limit=200").set(auth(token));
+  expect(res.status).toBe(200);
+  return { items: res.body.data.items, unread: res.body.data.unread_count };
+}
+
+describe("notices", () => {
+  /* ─────────────────────────── auth gating ─────────────────────────── */
+
+  it("requires auth on the scoped feed and on mark-read", async () => {
+    const f = await request(app).get("/v1/notices/feed");
+    expect(f.status).toBe(401);
+
+    const r = await request(app).post("/v1/notices/00000000-0000-0000-0000-000000000000/read");
+    expect(r.status).toBe(401);
+  });
+
+  it("forbids non-admin roles from creating, and unauthenticated callers too", async () => {
+    const body = { title_en: "Nope", audience: "national" };
+
+    // Unauthenticated -> 401.
+    const anon = await request(app).post("/v1/notices/admin").send(body);
+    expect(anon.status).toBe(401);
+
+    // Member roles (parent, student) lack admin-panel access -> 403.
+    for (const role of ["parent", "student"] as const) {
+      const { token } = await loginAs(role);
+      const res = await request(app).post("/v1/notices/admin").set(auth(token)).send(body);
+      expect(res.status).toBe(403);
+      expect(res.body.error.code).toBe("ERR_FORBIDDEN");
+    }
+  });
+
+  /* ───────────────────── admin create / edit / delete ───────────────────── */
+
+  it("lets an admin create, edit and delete a centre-targeted notice", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const scope = await parentScope(parent.token, admin.token);
+
+    // Create targeting the child's centre.
+    const id = await createNotice(admin.token, {
+      title_en: `Centre notice ${tag()}`,
+      audience: "centre",
+      centre_id: scope.centreId,
+      content_en: "Original body.",
+    });
+
+    // It shows in the admin authoring list with the right targeting.
+    const adminList = await request(app).get("/v1/notices/admin?limit=300").set(auth(admin.token));
+    expect(adminList.status).toBe(200);
+    const listed = adminList.body.data.items.find((n: { id: string }) => n.id === id);
+    expect(listed).toBeTruthy();
+    expect(listed.audience).toBe("centre");
+    expect(listed.centre_id).toBe(scope.centreId);
+
+    // Edit: change title + content (PATCH canonical route).
+    const newTitle = `Centre notice EDITED ${tag()}`;
+    const edit = await request(app)
+      .patch(`/v1/notices/admin/${id}`)
+      .set(auth(admin.token))
+      .send({ title_en: newTitle, audience: "centre", centre_id: scope.centreId, content_en: "Edited body." });
+    expect(edit.status).toBe(200);
+    expect(edit.body.data.id).toBe(id);
+
+    const afterEdit = await request(app).get("/v1/notices/admin?limit=300").set(auth(admin.token));
+    const edited = afterEdit.body.data.items.find((n: { id: string }) => n.id === id);
+    expect(edited.title_en).toBe(newTitle);
+    expect(edited.content_en).toBe("Edited body.");
+
+    // Delete.
+    const del = await request(app).delete(`/v1/notices/admin/${id}`).set(auth(admin.token));
+    expect(del.status).toBe(200);
+    expect(del.body.data.deleted).toBe(true);
+
+    // Gone from the authoring list.
+    const afterDel = await request(app).get("/v1/notices/admin?limit=300").set(auth(admin.token));
+    expect(afterDel.body.data.items.find((n: { id: string }) => n.id === id)).toBeUndefined();
+
+    // Editing a deleted notice now 404s.
+    const editGone = await request(app)
+      .patch(`/v1/notices/admin/${id}`)
+      .set(auth(admin.token))
+      .send({ title_en: "x", audience: "centre", centre_id: scope.centreId });
+    expect(editGone.status).toBe(404);
+  });
+
+  it("forbids a city_admin from targeting national / a foreign city, and from editing out-of-scope notices", async () => {
+    const cityAdmin = await loginAs("city_admin"); // Mumbai
+
+    // National is super_admin only.
+    const national = await request(app)
+      .post("/v1/notices/admin")
+      .set(auth(cityAdmin.token))
+      .send({ title_en: `CA national ${tag()}`, audience: "national" });
+    expect(national.status).toBe(403);
+    expect(national.body.error.code).toBe("ERR_FORBIDDEN");
+
+    // A city the admin does not administer (Ahmedabad) is forbidden.
+    const foreignCity = await request(app)
+      .post("/v1/notices/admin")
+      .set(auth(cityAdmin.token))
+      .send({ title_en: `CA foreign city ${tag()}`, audience: "city", city_id: AHMEDABAD_CITY });
+    expect(foreignCity.status).toBe(403);
+
+    // A super_admin national notice cannot be edited or deleted by the city_admin.
+    const admin = await loginAs("super_admin");
+    const nationalId = await createNotice(admin.token, { title_en: `National ${tag()}`, audience: "national" });
+
+    const edit = await request(app)
+      .patch(`/v1/notices/admin/${nationalId}`)
+      .set(auth(cityAdmin.token))
+      .send({ title_en: "hijack", audience: "national" });
+    expect(edit.status).toBe(404); // out-of-scope rows are indistinguishable from missing
+
+    const del = await request(app).delete(`/v1/notices/admin/${nationalId}`).set(auth(cityAdmin.token));
+    expect(del.status).toBe(404);
+
+    // cleanup
+    await request(app).delete(`/v1/notices/admin/${nationalId}`).set(auth(admin.token));
+  });
+
+  /* ─────────────────── scoped feed: in-scope vs elsewhere ─────────────────── */
+
+  it("shows a member only notices targeted to their scope, excluding ones targeted elsewhere", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const scope = await parentScope(parent.token, admin.token);
+
+    const mark = tag();
+
+    // Visible: targeted to the child's centre.
+    const centreId = await createNotice(admin.token, {
+      title_en: `IN centre ${mark}`,
+      audience: "centre",
+      centre_id: scope.centreId,
+    });
+    // Visible: targeted to the child's batch.
+    const batchId = await createNotice(admin.token, {
+      title_en: `IN batch ${mark}`,
+      audience: "batch",
+      batch_id: scope.batchId,
+    });
+    // Visible: national reaches everyone.
+    const nationalId = await createNotice(admin.token, {
+      title_en: `IN national ${mark}`,
+      audience: "national",
+    });
+    // Excluded: a city in a different state (parent is in Mumbai, not Ahmedabad).
+    const foreignCityId = await createNotice(admin.token, {
+      title_en: `OUT foreign-city ${mark}`,
+      audience: "city",
+      city_id: AHMEDABAD_CITY,
+    });
+
+    const { items } = await feed(parent.token);
+    const ids = new Set(items.map((i) => i.id));
+
+    expect(ids.has(centreId)).toBe(true);
+    expect(ids.has(batchId)).toBe(true);
+    expect(ids.has(nationalId)).toBe(true);
+    // The crux: a notice targeted to a foreign city/state is NOT in the feed.
+    expect(ids.has(foreignCityId)).toBe(false);
+
+    // cleanup
+    for (const id of [centreId, batchId, nationalId, foreignCityId]) {
+      await request(app).delete(`/v1/notices/admin/${id}`).set(auth(admin.token));
+    }
+  });
+
+  /* ───────────────────────── read-tracking ───────────────────────── */
+
+  it("records a read receipt that surfaces on subsequent feed reads (idempotently)", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const scope = await parentScope(parent.token, admin.token);
+
+    const id = await createNotice(admin.token, {
+      title_en: `Read-tracking ${tag()}`,
+      audience: "centre",
+      centre_id: scope.centreId,
+    });
+
+    // Initially unread for the parent.
+    const before = await feed(parent.token);
+    const rowBefore = before.items.find((i) => i.id === id);
+    expect(rowBefore).toBeTruthy();
+    expect(rowBefore!.read_at).toBeNull();
+    const unreadBefore = before.unread;
+
+    // Mark read.
+    const read = await request(app).post(`/v1/notices/${id}/read`).set(auth(parent.token));
+    expect(read.status).toBe(200);
+    expect(read.body.data.read).toBe(true);
+    expect(read.body.data.id).toBe(id);
+
+    // Now the feed reflects the receipt and the unread count dropped by one.
+    const after = await feed(parent.token);
+    const rowAfter = after.items.find((i) => i.id === id);
+    expect(rowAfter!.read_at).not.toBeNull();
+    expect(after.unread).toBe(unreadBefore - 1);
+
+    // Idempotent: re-reading keeps the same read_at and does not change unread.
+    const reread = await request(app).post(`/v1/notices/${id}/read`).set(auth(parent.token));
+    expect(reread.status).toBe(200);
+    const after2 = await feed(parent.token);
+    const rowAfter2 = after2.items.find((i) => i.id === id);
+    expect(rowAfter2!.read_at).toBe(rowAfter!.read_at);
+    expect(after2.unread).toBe(after.unread);
+
+    // Marking a non-existent / malformed notice id 404s.
+    const missing = await request(app)
+      .post("/v1/notices/00000000-0000-0000-0000-000000000000/read")
+      .set(auth(parent.token));
+    expect(missing.status).toBe(404);
+    const malformed = await request(app).post("/v1/notices/not-a-uuid/read").set(auth(parent.token));
+    expect(malformed.status).toBe(404);
+
+    // cleanup
+    await request(app).delete(`/v1/notices/admin/${id}`).set(auth(admin.token));
+  });
+
+  /* ───────────────────────── validation ───────────────────────── */
+
+  it("rejects bad create payloads with a validation error", async () => {
+    const admin = await loginAs("super_admin");
+
+    // Missing title (required).
+    const noTitle = await request(app)
+      .post("/v1/notices/admin")
+      .set(auth(admin.token))
+      .send({ audience: "national" });
+    expect(noTitle.status).toBe(422);
+    expect(noTitle.body.error.code).toBe("ERR_VALIDATION_FAILED");
+
+    // Invalid audience enum.
+    const badAudience = await request(app)
+      .post("/v1/notices/admin")
+      .set(auth(admin.token))
+      .send({ title_en: "x", audience: "galaxy" });
+    expect(badAudience.status).toBe(422);
+
+    // audience=centre but no centre_id (superRefine targeting rule).
+    const missingTarget = await request(app)
+      .post("/v1/notices/admin")
+      .set(auth(admin.token))
+      .send({ title_en: "x", audience: "centre" });
+    expect(missingTarget.status).toBe(422);
+
+    // audience=batch but no batch_id.
+    const missingBatch = await request(app)
+      .post("/v1/notices/admin")
+      .set(auth(admin.token))
+      .send({ title_en: "x", audience: "batch" });
+    expect(missingBatch.status).toBe(422);
+
+    // Non-uuid centre_id.
+    const badUuid = await request(app)
+      .post("/v1/notices/admin")
+      .set(auth(admin.token))
+      .send({ title_en: "x", audience: "centre", centre_id: "nope" });
+    expect(badUuid.status).toBe(422);
+  });
+
+  /* ───────────────────────── public feed (no auth) ───────────────────────── */
+
+  it("exposes only is_public notices on the public endpoint", async () => {
+    const admin = await loginAs("super_admin");
+    const mark = tag();
+
+    const publicId = await createNotice(admin.token, {
+      title_en: `PUBLIC ${mark}`,
+      audience: "national",
+      is_public: true,
+    });
+    const internalId = await createNotice(admin.token, {
+      title_en: `INTERNAL ${mark}`,
+      audience: "national",
+      is_public: false,
+    });
+
+    const res = await request(app).get("/v1/notices/public?limit=200");
+    expect(res.status).toBe(200);
+    const ids = new Set(res.body.data.items.map((i: { id: string }) => i.id));
+    expect(ids.has(publicId)).toBe(true);
+    expect(ids.has(internalId)).toBe(false);
+
+    // cleanup
+    for (const id of [publicId, internalId]) {
+      await request(app).delete(`/v1/notices/admin/${id}`).set(auth(admin.token));
+    }
+  });
+});

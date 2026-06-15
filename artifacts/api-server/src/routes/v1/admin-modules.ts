@@ -29,6 +29,7 @@ import { ok, fail } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState } from "../../lib/scope";
+import { auditFromReq } from "../../lib/audit";
 
 const router: IRouter = Router();
 router.use(requireAuth, requireAdminPanel);
@@ -50,7 +51,7 @@ async function cityIdsForUser(user: User): Promise<string[] | null> {
   const rows = await db
     .select({ city_id: centres.city_id })
     .from(centres)
-    .where(inArray(centres.id, scope.centreIds));
+    .where(and(inArray(centres.id, scope.centreIds), isNull(centres.deleted_at)));
   return Array.from(new Set(rows.map((r) => r.city_id)));
 }
 
@@ -209,7 +210,7 @@ router.get("/exams/:id/attempts", async (req: Request, res: Response) => {
     })
     .from(exam_attempts)
     .innerJoin(students, eq(students.id, exam_attempts.student_id))
-    .where(eq(exam_attempts.exam_id, id))
+    .where(and(eq(exam_attempts.exam_id, id), isNull(students.deleted_at)))
     .orderBy(desc(exam_attempts.started_at));
 
   const items = rows.map((r) => ({
@@ -309,6 +310,13 @@ router.post("/curricula", requireRole("super_admin", "state_admin", "city_admin"
     academic_year: body.academic_year ?? null,
     city_id: body.city_id ?? null,
   }).returning({ id: curricula.id, name: curricula.name });
+  await auditFromReq(req, {
+    action: "create",
+    entityKind: "curriculum",
+    entityId: row.id,
+    summary: `Created curriculum "${row.name}".`,
+    metadata: { kind: body.kind, city_id: body.city_id ?? null },
+  });
   ok(res, row);
 });
 
@@ -444,6 +452,13 @@ router.post("/library", requireRole("super_admin", "state_admin", "city_admin"),
     description_en: body.description_en ?? null,
     is_published: body.is_published,
   }).returning({ id: library_items.id, title_en: library_items.title_en });
+  await auditFromReq(req, {
+    action: "create",
+    entityKind: "library_item",
+    entityId: row.id,
+    summary: `Created library item "${row.title_en}".`,
+    metadata: { content_type: body.content_type, access_tier: body.access_tier },
+  });
   ok(res, row);
 });
 

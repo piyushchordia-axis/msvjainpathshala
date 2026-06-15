@@ -11,23 +11,89 @@ import {
   punya_transactions,
   msv_enrolments,
   donations,
+  device_sessions,
 } from "@workspace/db";
-import { and, asc, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import {
   enrolmentActionSchema,
   studentStatusActionSchema,
   enrolmentStatusSchema,
   type Role,
+  type SessionUser,
 } from "@workspace/api-zod";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
-import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
+import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
+import { auditFromReq } from "../../lib/audit";
+import { signAccessToken, generateRefreshToken, verifyAccessToken } from "../../lib/tokens";
+import { setAuthCookies, setImpersonationCookies, clearAuthCookies } from "../../lib/cookies";
 import adminResourcesRouter from "./admin-resources";
 import adminModulesRouter from "./admin-modules";
+import { canTransitionEnrolment } from "./enrolments";
 
 const router: IRouter = Router();
+
+/* POST /v1/admin/impersonate/stop — end an impersonation session.
+ *
+ * Registered ABOVE the router-level requireAuth/requireAdminPanel guards: while
+ * impersonating, the live cookie session is the SUBJECT (possibly a parent or
+ * student with no admin-panel access), so this cannot gate on the subject's
+ * role. Instead it authenticates off the jp_imp_active cookie, which is only
+ * ever set by a super_admin starting an impersonation. Clearing all auth +
+ * impersonation cookies drops the subject session and the banner flag; the
+ * admin then re-authenticates as themselves. Best-effort audited — we resolve
+ * the subject from the access cookie (if still valid) so the trail records who
+ * was being impersonated.
+ *
+ * The banner posts here via a no-JS native <form>, so we 303-redirect back to
+ * the admin login on success for a clean browser navigation; API/XHR callers
+ * that send X-Requested-With get a JSON envelope instead.
+ */
+router.post("/impersonate/stop", async (req: Request, res: Response) => {
+  const cookies = req.cookies as Record<string, string> | undefined;
+  if (cookies?.jp_imp_active !== "true") {
+    fail(res, 400, "ERR_NO_IMPERSONATION", "No active impersonation session.");
+    return;
+  }
+
+  // Best-effort: record who was being impersonated (resolved from the subject
+  // access cookie) so the audit trail links start↔stop. auditFromReq reads the
+  // actor from req.authUser, which we seed with the subject for context.
+  const token = cookies?.jp_access;
+  if (token) {
+    const verified = verifyAccessToken(token);
+    if (verified) {
+      const [subject] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, verified.uid))
+        .limit(1)
+        .catch(() => [] as (typeof users.$inferSelect)[]);
+      if (subject) req.authUser = subject;
+    }
+  }
+  await auditFromReq(req, {
+    action: "config_change",
+    entityKind: "impersonation",
+    entityId: req.authUser?.id ?? null,
+    summary: "Stopped impersonation session.",
+  });
+
+  clearAuthCookies(res);
+
+  const wantsJson =
+    req.xhr ||
+    typeof req.headers["x-requested-with"] === "string" ||
+    (req.headers.accept ?? "").includes("application/json");
+  if (wantsJson) {
+    ok(res, { stopped: true });
+    return;
+  }
+  // Native form POST -> redirect the browser to a clean re-login.
+  res.redirect(303, "/admin/login");
+});
 
 router.use(requireAuth, requireAdminPanel);
 router.use(adminResourcesRouter);
@@ -46,6 +112,90 @@ function clampLimit(raw: unknown, fallback: number, max: number): number {
   return Math.min(Math.floor(n), max);
 }
 
+function toSessionUser(u: typeof users.$inferSelect): SessionUser {
+  return {
+    id: u.id,
+    phone: u.phone,
+    role: u.role,
+    full_name: u.full_name,
+    preferred_language: u.preferred_language,
+  };
+}
+
+/* POST /v1/admin/impersonate/:userId — start impersonating another account.
+ *
+ * super_admin ONLY. Mints a real session for the SUBJECT (so every downstream
+ * request is authorised exactly as that user would be) and points the auth
+ * cookies at them, then flags the session as an impersonation so AdminLayout
+ * renders the ImpersonationBanner. A super_admin may not impersonate another
+ * super_admin (no lateral privilege grab). Audited as a config_change against
+ * the originating admin, with the subject recorded in metadata.
+ *
+ * This route is below the router-level requireAuth/requireAdminPanel guards, so
+ * it is reachable only by a current admin-panel user; requireRole then narrows
+ * to super_admin. The matching /impersonate/stop is registered ABOVE those
+ * guards (see top of file) because the live cookie session during impersonation
+ * is the SUBJECT — who may be a parent/student with no admin-panel access — so
+ * stop authenticates off the impersonation cookie, not the subject's role.
+ */
+router.post("/impersonate/:userId", requireRole("super_admin"), async (req: Request, res: Response) => {
+  const targetId = String(req.params.userId);
+  if (targetId === req.authUser!.id) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "You cannot impersonate yourself.");
+    return;
+  }
+
+  const [target] = await db
+    .select()
+    .from(users)
+    .where(and(eq(users.id, targetId), isNull(users.deleted_at)))
+    .limit(1);
+  if (!target || !target.is_active) {
+    fail(res, 404, "ERR_NOT_FOUND", "User not found.");
+    return;
+  }
+  // A super_admin must not be able to assume another super_admin's identity.
+  if (target.role === "super_admin") {
+    fail(res, 403, "ERR_FORBIDDEN", "You cannot impersonate another super admin.");
+    return;
+  }
+
+  // Mint a genuine subject session: every later request authorises as the
+  // subject via requireAuth, so impersonation can never exceed their grants.
+  const access = signAccessToken(target.id);
+  const refresh = generateRefreshToken();
+  await db.insert(device_sessions).values({
+    user_id: target.id,
+    device_id: `impersonation:${req.authUser!.id}`,
+    platform: "web",
+    refresh_token_hash: refresh.hash,
+    expires_at: refresh.expiresAt,
+    last_used_at: new Date(),
+  });
+
+  const subject = toSessionUser(target);
+  setAuthCookies(res, subject, access.token, access.expiresAt, refresh.token, refresh.expiresAt);
+  setImpersonationCookies(res, req.authUser!.full_name, refresh.expiresAt);
+
+  await auditFromReq(req, {
+    action: "config_change",
+    entityKind: "impersonation",
+    entityId: target.id,
+    summary: `Started impersonating ${target.full_name} (${target.role}).`,
+    metadata: { subject_id: target.id, subject_role: target.role },
+  });
+
+  ok(res, {
+    user: subject,
+    tokens: {
+      access_token: access.token,
+      refresh_token: refresh.token,
+      access_expires_at: access.expiresAt.toISOString(),
+      refresh_expires_at: refresh.expiresAt.toISOString(),
+    },
+  });
+});
+
 /* GET /v1/admin/analytics/overview */
 router.get("/analytics/overview", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
@@ -55,14 +205,14 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
   const [activeStudents] = await db
     .select({ n: count() })
     .from(students)
-    .where(and(eq(students.status, "active"), centreFilter));
+    .where(and(eq(students.status, "active"), isNull(students.deleted_at), centreFilter));
 
   // Centres in scope.
   const centreScope = scopedCentreFilter(scope, centres.id);
   const [centreCount] = await db
     .select({ n: count() })
     .from(centres)
-    .where(and(eq(centres.status, "active"), centreScope));
+    .where(and(eq(centres.status, "active"), isNull(centres.deleted_at), centreScope));
 
   // Pending enrolments (open requests) in scope.
   const enrolCentreFilter = scopedCentreFilter(scope, enrolments.requested_centre_id);
@@ -75,7 +225,7 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
   const [msvActive] = await db
     .select({ n: count() })
     .from(students)
-    .where(and(eq(students.msv_status, "approved"), centreFilter));
+    .where(and(eq(students.msv_status, "approved"), isNull(students.deleted_at), centreFilter));
 
   // Attendance rate over last 30 days (within scoped batches via session->batch->centre).
   const attendanceCentreFilter =
@@ -102,7 +252,7 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
     .select({ sum: sql<number>`coalesce(sum(${punya_transactions.points}),0)::int` })
     .from(punya_transactions)
     .innerJoin(students, eq(students.id, punya_transactions.student_id))
-    .where(and(gte(punya_transactions.created_at, since), punyaCentreFilter));
+    .where(and(gte(punya_transactions.created_at, since), isNull(students.deleted_at), punyaCentreFilter));
 
   // Captured donations in the current financial year (India: Apr 1 – Mar 31).
   // Donations are donor-based (no centre), so this is an org-wide aggregate.
@@ -143,7 +293,7 @@ router.get("/students", async (req: Request, res: Response) => {
       status: students.status,
     })
     .from(students)
-    .where(centreFilter)
+    .where(and(isNull(students.deleted_at), centreFilter))
     .orderBy(desc(students.created_at))
     .limit(limit);
 
@@ -160,7 +310,11 @@ router.post("/students/:id/status", async (req: Request, res: Response) => {
     return;
   }
   const scope = await resolveAdminScope(req.authUser!);
-  const [student] = await db.select().from(students).where(eq(students.id, String(req.params.id))).limit(1);
+  const [student] = await db
+    .select()
+    .from(students)
+    .where(and(eq(students.id, String(req.params.id)), isNull(students.deleted_at)))
+    .limit(1);
   if (!student || !inScope(scope, student.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Student not found in your scope.");
     return;
@@ -190,7 +344,7 @@ router.get("/batches", async (req: Request, res: Response) => {
     .from(batches)
     .innerJoin(centres, eq(centres.id, batches.centre_id))
     .leftJoin(users, eq(users.id, batches.shikshak_id))
-    .where(centreFilter)
+    .where(and(isNull(batches.deleted_at), centreFilter))
     .orderBy(asc(centres.name), asc(batches.name));
 
   ok(res, { items: rows }, { count: rows.length });
@@ -204,7 +358,11 @@ router.post("/batches/:id/:action", async (req: Request, res: Response) => {
     return;
   }
   const scope = await resolveAdminScope(req.authUser!);
-  const [batch] = await db.select().from(batches).where(eq(batches.id, String(req.params.id))).limit(1);
+  const [batch] = await db
+    .select()
+    .from(batches)
+    .where(and(eq(batches.id, String(req.params.id)), isNull(batches.deleted_at)))
+    .limit(1);
   if (!batch || !inScope(scope, batch.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Batch not found in your scope.");
     return;
@@ -249,7 +407,7 @@ router.get("/enrolments", async (req: Request, res: Response) => {
     .innerJoin(students, eq(students.id, enrolments.student_id))
     .innerJoin(reqCentre, eq(reqCentre.id, enrolments.requested_centre_id))
     .innerJoin(reqBatch, eq(reqBatch.id, enrolments.requested_batch_id))
-    .where(and(statusFilter, centreFilter))
+    .where(and(statusFilter, isNull(students.deleted_at), centreFilter))
     .orderBy(desc(enrolments.created_at))
     .limit(limit);
 
@@ -293,6 +451,12 @@ router.post("/enrolments/:id/:action", async (req: Request, res: Response) => {
     return;
   }
 
+  const gate = canTransitionEnrolment(enrolment.status, nextStatus);
+  if (!gate.ok) {
+    fail(res, 409, "ERR_INVALID_TRANSITION", gate.reason);
+    return;
+  }
+
   await db
     .update(enrolments)
     .set({
@@ -314,6 +478,15 @@ router.post("/enrolments/:id/:action", async (req: Request, res: Response) => {
       })
       .where(eq(students.id, enrolment.student_id));
   }
+
+  const auditAction = nextStatus === "approved" ? "approve" : nextStatus === "rejected" ? "reject" : "update";
+  await auditFromReq(req, {
+    action: auditAction,
+    entityKind: "enrolment",
+    entityId: enrolment.id,
+    summary: `Enrolment ${nextStatus}.`,
+    metadata: { student_id: enrolment.student_id, status: nextStatus, reason: body.reason ?? null },
+  });
 
   ok(res, { id: enrolment.id, status: nextStatus });
 });

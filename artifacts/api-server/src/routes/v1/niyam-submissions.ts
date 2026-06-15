@@ -21,6 +21,7 @@ import { signUploadUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { awardPunya } from "../../lib/punya";
+import { auditFromReq } from "../../lib/audit";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -206,6 +207,14 @@ router.post("/", async (req: Request, res: Response) => {
       awardedBy: req.authUser!.id,
     });
     await bumpStreak(body.student_id, niyam.id, submissionDate);
+
+    await auditFromReq(req, {
+      action: "award",
+      entityKind: "niyam_submission",
+      entityId: row.id,
+      summary: `Auto-approved niyam submission (+${niyam.points}).`,
+      metadata: { niyam_id: niyam.id, student_id: body.student_id, points: niyam.points, submission_date: submissionDate },
+    });
   }
 
   ok(res, {
@@ -309,6 +318,14 @@ router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Respons
     fail(res, 409, "ERR_INVALID_STATE", "Submission is not pending."); return;
   }
 
+  await auditFromReq(req, {
+    action: "approve",
+    entityKind: "niyam_submission",
+    entityId: sub.id,
+    summary: `Approved niyam submission (+${sub.points}).`,
+    metadata: { niyam_id: sub.niyam_id, student_id: sub.student_id, points: sub.points, submission_date: sub.submission_date },
+  });
+
   ok(res, { id: sub.id, status: "approved", total_points: award.total_points, tier: award.tier });
 });
 
@@ -347,6 +364,14 @@ router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response
   if (rejected.length === 0) {
     fail(res, 409, "ERR_INVALID_STATE", "Submission is not pending."); return;
   }
+
+  await auditFromReq(req, {
+    action: "reject",
+    entityKind: "niyam_submission",
+    entityId: sub.id,
+    summary: "Rejected niyam submission.",
+    metadata: { reason: body.reason ?? null },
+  });
 
   ok(res, { id: sub.id, status: "rejected" });
 });

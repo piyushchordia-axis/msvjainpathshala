@@ -11,6 +11,14 @@ if (!process.env.DATABASE_URL) {
 }
 
 export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+// Idle clients can emit errors (e.g. backend termination during a failover or
+// `pg_terminate_backend`). Without a listener, `pg` rethrows on the pool's
+// EventEmitter and crashes the process. Log and let the pool evict the client.
+pool.on("error", (err) => {
+  console.error("[db] idle pg client error", err);
+});
+
 export const db = drizzle(pool, { schema });
 
 export * from "./schema";

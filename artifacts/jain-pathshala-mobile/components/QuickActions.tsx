@@ -12,8 +12,10 @@ const ACTIONS: Action[] = [
   { href: "/niyam-submit", icon: "sparkles-outline", en: "Submit Niyam", hi: "नियम भेजें" },
   { href: "/homework", icon: "book-outline", en: "Homework", hi: "गृहकार्य" },
   { href: "/quizzes", icon: "help-circle-outline", en: "Quizzes", hi: "प्रश्नोत्तरी" },
+  { href: "/exams", icon: "clipboard-outline", en: "Exams", hi: "परीक्षाएँ" },
   { href: "/competitions", icon: "trophy-outline", en: "Competitions", hi: "प्रतियोगिताएँ" },
   { href: "/idcard", icon: "card-outline", en: "ID Card", hi: "पहचान पत्र" },
+  { href: "/service-requests", icon: "chatbubbles-outline", en: "Support", hi: "सहायता" },
 ];
 
 /** A grid of quick links to the student/parent activity screens. */

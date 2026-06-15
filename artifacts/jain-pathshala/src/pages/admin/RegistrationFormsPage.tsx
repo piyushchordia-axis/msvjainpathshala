@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
-import { apiPost, ApiError } from '@/lib/api-client';
+import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
+import { useAuth } from '@/lib/auth-context';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow } from '@/components/admin/AdminPageShell';
 import { Button } from '@/components/ui/button';
@@ -52,6 +53,23 @@ interface ResponseRow {
   reviewed_at: string | null;
 }
 
+interface CityOption { id: string; name: string; state_name: string; }
+
+/**
+ * Sentinel Select value for the "Global (central default)" scope. Radix Select
+ * disallows an empty-string item value, so we use a sentinel and translate it
+ * back to "omit city_id" (= global) when building the request body.
+ */
+const GLOBAL_SCOPE = '__global__';
+
+/**
+ * Roles that explicitly choose the publish scope in the dialog. super_admin may
+ * target the global/central default or any city; state_admin picks a city in
+ * their state. Single-city admins (city_admin/sanchalak/shikshak) do NOT pick —
+ * the API derives their own city from their scope, so we omit city_id for them.
+ */
+const SCOPE_PICKER_ROLES = new Set(['super_admin', 'state_admin']);
+
 function fmtDate(iso?: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -82,19 +100,37 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
 let fieldRowSeq = 0;
 
 function AddConfigDialog({ onAdded }: { onAdded: () => void }) {
+  const { user } = useAuth();
+  const showScopePicker = SCOPE_PICKER_ROLES.has(user?.role ?? '');
+  // super_admin may default to the global/central form; state_admin must pick a
+  // city in their state (they cannot own the global default).
+  const defaultScope = user?.role === 'super_admin' ? GLOBAL_SCOPE : '';
+
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [formKind, setFormKind] = useState('student');
   const [titleEn, setTitleEn] = useState('');
   const [titleHi, setTitleHi] = useState('');
+  const [scope, setScope] = useState(defaultScope);
+  const [cities, setCities] = useState<CityOption[]>([]);
   const [fields, setFields] = useState<(FieldDef & { _rid: number })[]>([
     { _rid: ++fieldRowSeq, key: '', label_en: '', type: 'text', required: true },
   ]);
+
+  // Load city options for the scope picker when the dialog opens (super/state
+  // admins only — single-city admins have their city derived server-side).
+  useEffect(() => {
+    if (!open || !showScopePicker) return;
+    void apiGet<{ cities: CityOption[] }>('/v1/admin/geography')
+      .then((r) => setCities(r?.cities ?? []))
+      .catch(() => {});
+  }, [open, showScopePicker]);
 
   function reset() {
     setFormKind('student');
     setTitleEn('');
     setTitleHi('');
+    setScope(defaultScope);
     setFields([{ _rid: ++fieldRowSeq, key: '', label_en: '', type: 'text', required: true }]);
   }
 
@@ -112,17 +148,25 @@ function AddConfigDialog({ onAdded }: { onAdded: () => void }) {
     .map((f) => ({ key: f.key.trim(), label_en: f.label_en.trim(), type: f.type, required: f.required }))
     .filter((f) => f.key && f.label_en);
 
-  const canSubmit = titleEn.trim().length > 0 && cleanFields.length > 0;
+  // state_admin must choose a concrete city (they cannot publish the global
+  // default, so leaving the picker on its empty placeholder is invalid).
+  const scopeValid = !showScopePicker || user?.role === 'super_admin' || scope.length > 0;
+  const canSubmit = titleEn.trim().length > 0 && cleanFields.length > 0 && scopeValid;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!canSubmit) return;
     setBusy(true);
     try {
+      // Resolve the city_id to send: an explicit picked city for super/state
+      // admins (GLOBAL_SCOPE => omit, i.e. the central default), or undefined
+      // for single-city admins so the API derives their own city.
+      const cityId = showScopePicker && scope !== GLOBAL_SCOPE ? scope : undefined;
       const res = await apiPost<{ version_no: number }>('/v1/registration/configs', {
         form_kind: formKind,
         title_en: titleEn.trim(),
         title_hi: titleHi.trim() || undefined,
+        city_id: cityId || undefined,
         fields: cleanFields,
       });
       toast.success(`Form config published (v${res.version_no}).`);
@@ -162,6 +206,28 @@ function AddConfigDialog({ onAdded }: { onAdded: () => void }) {
           <FormRow label="Title (Hindi)">
             <Input value={titleHi} onChange={(e) => setTitleHi(e.target.value)} />
           </FormRow>
+
+          {showScopePicker ? (
+            <FormRow label={user?.role === 'state_admin' ? 'City *' : 'Scope'}>
+              <Select value={scope} onValueChange={setScope}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select city" />
+                </SelectTrigger>
+                <SelectContent>
+                  {user?.role === 'super_admin' ? (
+                    <SelectItem value={GLOBAL_SCOPE}>Global (central default)</SelectItem>
+                  ) : null}
+                  {cities.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.name} · {c.state_name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormRow>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              This form will be published to your city.
+            </p>
+          )}
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">

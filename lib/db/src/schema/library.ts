@@ -1,4 +1,4 @@
-import { boolean, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 
 import { timestamps } from "./_helpers";
 import { libraryAccessTierEnum, libraryContentTypeEnum } from "./enums";
@@ -18,15 +18,22 @@ export const library_items = pgTable("library_items", {
   ...timestamps(),
 });
 
-export const library_access_logs = pgTable("library_access_logs", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  library_item_id: uuid("library_item_id")
-    .notNull()
-    .references(() => library_items.id, { onDelete: "cascade" }),
-  user_id: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
-  accessed_at: timestamp("accessed_at", { withTimezone: true }).notNull().defaultNow(),
-  ...timestamps(),
-});
+export const library_access_logs = pgTable(
+  "library_access_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    library_item_id: uuid("library_item_id")
+      .notNull()
+      .references(() => library_items.id, { onDelete: "cascade" }),
+    user_id: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    accessed_at: timestamp("accessed_at", { withTimezone: true }).notNull().defaultNow(),
+    ...timestamps(),
+  },
+  (t) => ({
+    item_idx: index("idx_library_access_logs_item").on(t.library_item_id),
+    user_idx: index("idx_library_access_logs_user").on(t.user_id),
+  }),
+);
 
 export type LibraryItem = typeof library_items.$inferSelect;
 export type NewLibraryItem = typeof library_items.$inferInsert;

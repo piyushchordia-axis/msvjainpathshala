@@ -1,12 +1,17 @@
 /**
  * /v1/donations — public donation flow behind the pluggable payment provider.
  *
- * Per-route auth: every endpoint here is PUBLIC (no auth middleware). The flow is
- * order -> (client checkout) -> verify, with a webhook fallback and a mock-only
+ * Per-route auth: the payment flow is PUBLIC (no auth middleware) — order ->
+ * (client checkout) -> verify, with a webhook fallback and a mock-only
  * dev-capture convenience so the demo works without a real Razorpay account.
+ * The one exception is GET /:id/receipt, which is authed (owner/admin-scoped).
  *
  * Money is in paise. Captures are idempotent: re-verifying / re-webhooking an
- * already-captured donation does NOT double-increment a campaign's raised total.
+ * already-captured donation does NOT double-increment a campaign's raised total,
+ * nor re-generate/re-send the 80G receipt (one-time side effects fire only on
+ * the winning capture). On capture the 80G receipt PDF is rendered (lib/pdf),
+ * stored (lib/storage), and emailed best-effort to the donor when a real email
+ * provider is configured (lib/email); it is downloadable via /:id/receipt.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, donations, donation_campaigns } from "@workspace/db";
@@ -14,9 +19,25 @@ import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { payments } from "../../lib/payments";
+import { auditFromReq } from "../../lib/audit";
+import { storage } from "../../lib/storage";
+import { signUploadUrl } from "../../lib/file-tokens";
+import { buildDonationReceiptPdf } from "../../lib/pdf";
+import { getEmailProvider, hasRealEmailProvider } from "../../lib/email";
+import { requireAuth } from "../../middlewares/auth";
+import { logger } from "../../lib/logger";
 
 const router: IRouter = Router();
-// NOTE: no router.use(requireAuth) — this surface is entirely public.
+// NOTE: no blanket router.use(requireAuth) — most of this surface is PUBLIC
+// (the order/verify/webhook flow). Only the receipt download is authed (see
+// below), so requireAuth is applied per-route there.
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Stable storage key for a donation's 80G receipt PDF (deterministic by id). */
+function receiptKey(donationId: string): string {
+  return `receipts/${donationId}.pdf`;
+}
 
 /** Indian financial year (Apr–Mar) for a given date, e.g. 2025 -> "2025-26". */
 function financialYearFor(d: Date): string {
@@ -119,19 +140,31 @@ router.post("/order", async (req: Request, res: Response) => {
 });
 
 /**
+ * Result of a capture attempt. `won` is true only for the single transition that
+ * actually flipped the donation to captured; idempotent replays return won=false
+ * with the existing receipt_number. `null` means the donation row was missing.
+ */
+type CaptureResult = {
+  won: boolean;
+  receiptNumber: string | null;
+} | null;
+
+/**
  * Mark a donation captured once. Idempotent: if it is already captured this is a
  * no-op that returns the existing receipt without re-incrementing the campaign.
- * Returns the receipt_number, or null if the donation row could not be found.
+ * Returns { won, receiptNumber }, or null if the donation row could not be found.
+ * Callers use `won` to fire one-time side effects (receipt PDF + email) exactly
+ * once and skip them on duplicate /verify or /webhook deliveries.
  */
 async function captureDonation(
   donationId: string,
   paymentId: string | null,
   signature: string | null,
-): Promise<string | null> {
+): Promise<CaptureResult> {
   // Wrap the whole capture in one transaction. A per-donation advisory xact lock
   // serializes concurrent capturers (e.g. /verify racing /webhook) so the
   // conditional status flip and the campaign increment can never interleave.
-  return db.transaction(async (tx) => {
+  return db.transaction(async (tx): Promise<CaptureResult> => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${donationId}::text, 0))`);
 
     const [donation] = await tx
@@ -147,8 +180,11 @@ async function captureDonation(
       .limit(1);
     if (!donation) return null;
     // Already captured (e.g. /verify raced /webhook): idempotent success — keep
-    // the existing receipt and do NOT consume a counter number.
-    if (donation.payment_status === "captured") return donation.receipt_number ?? null;
+    // the existing receipt and do NOT consume a counter number or re-fire side
+    // effects (won=false).
+    if (donation.payment_status === "captured") {
+      return { won: false, receiptNumber: donation.receipt_number ?? null };
+    }
 
     const now = new Date();
     const fy = financialYearFor(now);
@@ -189,8 +225,105 @@ async function captureDonation(
         .where(eq(donation_campaigns.id, donation.campaign_id));
     }
 
-    return receiptNumber;
+    return { won: true, receiptNumber };
   });
+}
+
+/** Full donation row used to render an 80G receipt PDF, with its campaign name. */
+async function fetchDonationForReceipt(donationId: string) {
+  const [row] = await db
+    .select({
+      id: donations.id,
+      donor_user_id: donations.donor_user_id,
+      donor_name: donations.donor_name,
+      donor_email: donations.donor_email,
+      donor_phone: donations.donor_phone,
+      amount_paise: donations.amount_paise,
+      purpose: donations.purpose,
+      payment_status: donations.payment_status,
+      payment_captured_at: donations.payment_captured_at,
+      receipt_number: donations.receipt_number,
+      financial_year: donations.financial_year,
+      razorpay_payment_id: donations.razorpay_payment_id,
+      campaign_name: donation_campaigns.name,
+      campaign_city_id: donation_campaigns.city_id,
+    })
+    .from(donations)
+    .leftJoin(donation_campaigns, eq(donation_campaigns.id, donations.campaign_id))
+    .where(eq(donations.id, donationId))
+    .limit(1);
+  return row ?? null;
+}
+
+type ReceiptDonation = NonNullable<Awaited<ReturnType<typeof fetchDonationForReceipt>>>;
+
+/**
+ * Render the 80G receipt PDF for a captured donation and persist it under its
+ * deterministic storage key. Returns the stored URL (unsigned) plus the rendered
+ * bytes (so a caller can attach them without re-reading storage). Idempotent: the
+ * key is derived from the donation id, so a regenerate overwrites in place.
+ */
+async function generateAndStoreReceipt(
+  donation: ReceiptDonation,
+): Promise<{ url: string; pdf: Buffer }> {
+  const pdf = await buildDonationReceiptPdf({
+    receipt_number: donation.receipt_number ?? "—",
+    financial_year: donation.financial_year ?? financialYearFor(donation.payment_captured_at ?? new Date()),
+    captured_at: (donation.payment_captured_at ?? new Date()).toISOString(),
+    donor_name: donation.donor_name,
+    donor_email: donation.donor_email,
+    donor_phone: donation.donor_phone,
+    amount_paise: donation.amount_paise,
+    purpose: donation.purpose,
+    campaign_name: donation.campaign_name,
+    razorpay_payment_id: donation.razorpay_payment_id,
+  });
+  const stored = await storage.put(receiptKey(donation.id), pdf, "application/pdf");
+  return { url: stored.url, pdf };
+}
+
+/**
+ * One-time post-capture side effects: render + store the 80G receipt PDF, then
+ * email it to the donor best-effort. Called ONLY on the winning capture. Never
+ * throws — receipt delivery must not roll back a successful payment capture.
+ * The receipt email is gated on a real (non-mock) email provider so dev/test
+ * stay silent and the 7 donations tests are unaffected.
+ */
+async function deliverReceipt(donationId: string): Promise<void> {
+  try {
+    const donation = await fetchDonationForReceipt(donationId);
+    if (!donation) return;
+    const { pdf } = await generateAndStoreReceipt(donation);
+
+    // Email is best-effort and only attempted with a real provider configured,
+    // so the dev/test mock never sends and stays silent.
+    if (donation.donor_email && hasRealEmailProvider()) {
+      const amountRupees = (donation.amount_paise / 100).toLocaleString("en-IN", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+      await getEmailProvider().send({
+        to: donation.donor_email,
+        subject: `Your 80G donation receipt ${donation.receipt_number ?? ""}`.trim(),
+        text:
+          `Dear ${donation.donor_name},\n\n` +
+          `Thank you for your donation of INR ${amountRupees} to Jain Pathshala.\n` +
+          `Your 80G receipt (${donation.receipt_number ?? "—"}) is attached.\n\n` +
+          `You can also download it any time from your account.\n\n` +
+          `With gratitude,\nJain Pathshala`,
+        attachments: [
+          {
+            filename: `80G-receipt-${(donation.receipt_number ?? donationId).replace(/[^a-z0-9-]/gi, "_")}.pdf`,
+            content: pdf,
+            content_type: "application/pdf",
+          },
+        ],
+      });
+    }
+  } catch (err) {
+    // Best-effort: a failed receipt render/email must never fail the capture.
+    logger.warn({ err, donationId }, "donation receipt delivery failed (best-effort)");
+  }
 }
 
 /* ---- POST /v1/donations/verify — confirm checkout signature, capture ---- */
@@ -270,11 +403,29 @@ router.post("/verify", async (req: Request, res: Response) => {
     }
   }
 
-  const receiptNumber = await captureDonation(
+  const result = await captureDonation(
     donation.id,
     body.razorpay_payment_id,
     body.razorpay_signature,
   );
+  const receiptNumber = result?.receiptNumber ?? null;
+
+  // One-time side effects (receipt PDF + email) only on the winning capture.
+  if (result?.won) await deliverReceipt(donation.id);
+
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "donation",
+    entityId: donation.id,
+    summary: `Donation captured via verify (${receiptNumber ?? "no receipt"}).`,
+    metadata: {
+      source: "verify",
+      amount_paise: donation.amount_paise,
+      receipt_number: receiptNumber,
+      razorpay_payment_id: body.razorpay_payment_id,
+    },
+  });
+
   ok(res, { status: "captured", receipt_number: receiptNumber });
 });
 
@@ -328,8 +479,25 @@ router.post("/webhook", async (req: Request, res: Response) => {
         entity?.status === "captured" &&
         Number(entity?.amount) === donation.amount_paise
       ) {
-        // Idempotent inside captureDonation (guards on payment_status).
-        await captureDonation(donation.id, paymentId, null);
+        // Idempotent inside captureDonation (guards on payment_status). Only the
+        // winning transition fires the one-time receipt PDF + email; a duplicate
+        // webhook delivery returns won=false and skips re-generating/re-sending.
+        const result = await captureDonation(donation.id, paymentId, null);
+        const receiptNumber = result?.receiptNumber ?? null;
+        if (result?.won) await deliverReceipt(donation.id);
+
+        await auditFromReq(req, {
+          action: "update",
+          entityKind: "donation",
+          entityId: donation.id,
+          summary: `Donation captured via webhook (${receiptNumber ?? "no receipt"}).`,
+          metadata: {
+            source: "webhook",
+            amount_paise: donation.amount_paise,
+            receipt_number: receiptNumber,
+            razorpay_payment_id: paymentId,
+          },
+        });
       }
     }
   }
@@ -359,8 +527,92 @@ router.post("/:id/dev-capture", async (req: Request, res: Response) => {
     fail(res, 404, "ERR_NOT_FOUND", "Donation not found.");
     return;
   }
-  const receiptNumber = await captureDonation(donation.id, `pay_dev_${id.slice(0, 8)}`, null);
-  ok(res, { status: "captured", receipt_number: receiptNumber });
+  const result = await captureDonation(donation.id, `pay_dev_${id.slice(0, 8)}`, null);
+  if (result?.won) await deliverReceipt(donation.id);
+  ok(res, { status: "captured", receipt_number: result?.receiptNumber ?? null });
 });
+
+/* ---- GET /v1/donations/:id/receipt — owner/admin-scoped 80G receipt ---- */
+/**
+ * Returns a short-lived signed URL to the donation's 80G receipt PDF. Authed:
+ * the donor (donor_user_id === caller) OR an admin-panel user (city-scoped to
+ * the donation's campaign city, or unscoped at super/state level). The PDF is
+ * generated at capture; if it is somehow missing (older donation, transient
+ * storage failure) it is regenerated on demand here. Only captured donations
+ * with a receipt number are eligible.
+ */
+router.get("/:id/receipt", requireAuth, async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  if (!UUID_RE.test(id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Donation not found.");
+    return;
+  }
+
+  const donation = await fetchDonationForReceipt(id);
+  if (!donation) {
+    fail(res, 404, "ERR_NOT_FOUND", "Donation not found.");
+    return;
+  }
+
+  // A receipt only exists for a captured, 80G-numbered donation.
+  if (donation.payment_status !== "captured" || !donation.receipt_number) {
+    fail(res, 404, "ERR_NOT_FOUND", "Receipt not available for this donation.");
+    return;
+  }
+
+  // Authorization. The owning donor always sees their own receipt. For admins,
+  // donations have no centre (the AdminScope primitive is centre-based and does
+  // not map), so we scope on the donation's CAMPAIGN city instead:
+  //  - super_admin / state_admin: org/state-wide finance & 80G compliance — allow.
+  //  - city_admin: only when the campaign's city matches the admin's city.
+  //  - sanchalak / shikshak: no donation visibility (not a finance role).
+  // A 404 (not 403) keeps the existence of others' donations opaque.
+  const user = req.authUser!;
+  const isOwner = donation.donor_user_id !== null && donation.donor_user_id === user.id;
+  let isAdmin = false;
+  if (user.role === "super_admin" || user.role === "state_admin") {
+    isAdmin = true;
+  } else if (user.role === "city_admin") {
+    isAdmin =
+      donation.campaign_city_id !== null && donation.campaign_city_id === user.city_id;
+  }
+  if (!isOwner && !isAdmin) {
+    fail(res, 404, "ERR_NOT_FOUND", "Donation not found.");
+    return;
+  }
+
+  // Ensure the PDF exists; regenerate on demand if the stored object is gone.
+  const key = receiptKey(donation.id);
+  let url = storage.url(key);
+  try {
+    await streamExists(key);
+  } catch {
+    ({ url } = await generateAndStoreReceipt(donation));
+  }
+
+  ok(res, {
+    donation_id: donation.id,
+    receipt_number: donation.receipt_number,
+    financial_year: donation.financial_year,
+    receipt_url: signUploadUrl(url),
+  });
+});
+
+/** Resolve when the stored object can be read; reject if missing/unreadable. */
+function streamExists(key: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const stream = storage.getStream(key);
+    let settled = false;
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      stream.destroy();
+      fn();
+    };
+    stream.on("data", () => done(resolve));
+    stream.on("end", () => done(resolve));
+    stream.on("error", (err: Error) => done(() => reject(err)));
+  });
+}
 
 export default router;

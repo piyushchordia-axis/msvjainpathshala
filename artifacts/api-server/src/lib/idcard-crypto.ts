@@ -5,7 +5,16 @@
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-const SECRET = process.env["JP_AUTH_SECRET"] ?? "jp-dev-secret-do-not-use-in-production";
+const SECRET = (() => {
+  const fromEnv = process.env.JP_AUTH_SECRET;
+  if (fromEnv && fromEnv.length > 0) return fromEnv;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("JP_AUTH_SECRET is required in production.");
+  }
+  return "jp-dev-secret-do-not-use-in-production";
+})();
+// Domain-separate the QR key from the raw auth secret so a leak of one context
+// can't forge the other.
 const QR_SECRET = createHmac("sha256", SECRET).update("id-card-qr-v1").digest();
 
 export interface CardQrPayload {

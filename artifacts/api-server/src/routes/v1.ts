@@ -26,6 +26,9 @@ import msvRouter from "./v1/msv";
 import notificationsRouter from "./v1/notifications";
 import shivirScannerRouter from "./v1/shivir-scanner";
 import enquiriesRouter from "./v1/enquiries";
+import curriculumRouter from "./v1/curriculum";
+import libraryRouter from "./v1/library";
+import enrolmentsRouter from "./v1/enrolments";
 
 const router: IRouter = Router();
 
@@ -51,5 +54,8 @@ router.use("/msv", msvRouter);
 router.use("/notifications", notificationsRouter);
 router.use("/shivir-scanner", shivirScannerRouter);
 router.use("/enquiries", enquiriesRouter);
+router.use("/curriculum", curriculumRouter);
+router.use("/library", libraryRouter);
+router.use("/enrolments", enrolmentsRouter);
 
 export default router;

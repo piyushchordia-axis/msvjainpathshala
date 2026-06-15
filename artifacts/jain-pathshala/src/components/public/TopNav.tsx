@@ -9,6 +9,7 @@ const NAV_ITEMS = [
   { href: '/notices', label: 'Notices', label_hi: 'सूचनाएँ' },
   { href: '/library', label: 'Library', label_hi: 'पुस्तकालय' },
   { href: '/gallery', label: 'Gallery', label_hi: 'गैलरी' },
+  { href: '/exams', label: 'My exams', label_hi: 'मेरी परीक्षाएँ' },
   { href: '/about', label: 'About', label_hi: 'परिचय' },
 ];
 

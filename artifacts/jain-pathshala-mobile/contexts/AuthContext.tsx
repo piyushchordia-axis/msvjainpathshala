@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import { apiPost, setAuthToken, setRefreshToken, setTokenPersistor } from "@/lib/api";
+import { registerPushTokenWithApi } from "@/lib/push";
 import { secureStorage } from "@/lib/secure-storage";
 import type { AuthTokens, SessionUser } from "@/lib/auth";
 
@@ -73,6 +74,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       secureStorage.setItem(REFRESH_KEY, tokens.refresh_token),
       AsyncStorage.setItem(USER_KEY, JSON.stringify(nextUser)),
     ]);
+    // Register this device for push, best-effort — must never block sign-in.
+    void registerPushTokenWithApi();
   }
 
   async function logout() {

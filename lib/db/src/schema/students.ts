@@ -1,4 +1,5 @@
-import { boolean, date, integer, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import { boolean, date, index, integer, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 import { softDelete, timestamps } from "./_helpers";
 import {
@@ -11,52 +12,82 @@ import {
 import { batches, centres } from "./centres";
 import { users } from "./identity";
 
-export const students = pgTable("students", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  user_id: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
-  parent_id: uuid("parent_id").references(() => users.id, { onDelete: "set null" }),
-  student_code: varchar("student_code", { length: 20 }).notNull(),
-  full_name: text("full_name").notNull(),
-  gender: genderEnum("gender"),
-  dob: date("dob"),
-  age_group: ageGroupEnum("age_group").notNull(),
-  centre_id: uuid("centre_id").references(() => centres.id, { onDelete: "set null" }),
-  batch_id: uuid("batch_id").references(() => batches.id, { onDelete: "set null" }),
-  msv_status: msvStatusEnum("msv_status").notNull().default("none"),
-  status: studentStatusEnum("status").notNull().default("active"),
-  ...softDelete(),
-  ...timestamps(),
-});
+export const students = pgTable(
+  "students",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    user_id: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    parent_id: uuid("parent_id").references(() => users.id, { onDelete: "set null" }),
+    student_code: varchar("student_code", { length: 20 }).notNull(),
+    full_name: text("full_name").notNull(),
+    gender: genderEnum("gender"),
+    dob: date("dob"),
+    age_group: ageGroupEnum("age_group").notNull(),
+    centre_id: uuid("centre_id").references(() => centres.id, { onDelete: "set null" }),
+    batch_id: uuid("batch_id").references(() => batches.id, { onDelete: "set null" }),
+    msv_status: msvStatusEnum("msv_status").notNull().default("none"),
+    status: studentStatusEnum("status").notNull().default("active"),
+    ...softDelete(),
+    ...timestamps(),
+  },
+  (t) => ({
+    centre_idx: index("idx_students_centre").on(t.centre_id),
+    user_idx: index("idx_students_user").on(t.user_id),
+    parent_idx: index("idx_students_parent").on(t.parent_id),
+    batch_idx: index("idx_students_batch").on(t.batch_id),
+  }),
+);
 
-export const enrolments = pgTable("enrolments", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  student_id: uuid("student_id")
-    .notNull()
-    .references(() => students.id, { onDelete: "cascade" }),
-  requested_centre_id: uuid("requested_centre_id")
-    .notNull()
-    .references(() => centres.id, { onDelete: "cascade" }),
-  requested_batch_id: uuid("requested_batch_id")
-    .notNull()
-    .references(() => batches.id, { onDelete: "cascade" }),
-  status: enrolmentStatusEnum("status").notNull().default("pending"),
-  reason: text("reason"),
-  decided_by: uuid("decided_by").references(() => users.id, { onDelete: "set null" }),
-  decided_at: timestamp("decided_at", { withTimezone: true }),
-  ...timestamps(),
-});
+export const enrolments = pgTable(
+  "enrolments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    student_id: uuid("student_id")
+      .notNull()
+      .references(() => students.id, { onDelete: "cascade" }),
+    requested_centre_id: uuid("requested_centre_id")
+      .notNull()
+      .references(() => centres.id, { onDelete: "cascade" }),
+    requested_batch_id: uuid("requested_batch_id")
+      .notNull()
+      .references(() => batches.id, { onDelete: "cascade" }),
+    status: enrolmentStatusEnum("status").notNull().default("pending"),
+    reason: text("reason"),
+    decided_by: uuid("decided_by").references(() => users.id, { onDelete: "set null" }),
+    decided_at: timestamp("decided_at", { withTimezone: true }),
+    ...timestamps(),
+  },
+  (t) => ({
+    student_idx: index("idx_enrolments_student").on(t.student_id),
+    batch_idx: index("idx_enrolments_batch").on(t.requested_batch_id),
+    centre_idx: index("idx_enrolments_centre").on(t.requested_centre_id),
+    // One live enrolment per (student, batch): blocks duplicate requests while a
+    // prior one is still pending/waitlisted/approved. Rejected enrolments are
+    // terminal "no" decisions and are excluded so a student may re-apply later.
+    // Defense-in-depth for the create race — the create path also re-checks.
+    active_student_batch_uq: uniqueIndex("enrolments_student_batch_active_uq")
+      .on(t.student_id, t.requested_batch_id)
+      .where(sql`status <> 'rejected'`),
+  }),
+);
 
-export const msv_enrolments = pgTable("msv_enrolments", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  student_id: uuid("student_id")
-    .notNull()
-    .references(() => students.id, { onDelete: "cascade" }),
-  status: msvStatusEnum("status").notNull().default("applied"),
-  reason: text("reason"),
-  decided_by: uuid("decided_by").references(() => users.id, { onDelete: "set null" }),
-  decided_at: timestamp("decided_at", { withTimezone: true }),
-  ...timestamps(),
-});
+export const msv_enrolments = pgTable(
+  "msv_enrolments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    student_id: uuid("student_id")
+      .notNull()
+      .references(() => students.id, { onDelete: "cascade" }),
+    status: msvStatusEnum("status").notNull().default("applied"),
+    reason: text("reason"),
+    decided_by: uuid("decided_by").references(() => users.id, { onDelete: "set null" }),
+    decided_at: timestamp("decided_at", { withTimezone: true }),
+    ...timestamps(),
+  },
+  (t) => ({
+    student_idx: index("idx_msv_enrolments_student").on(t.student_id),
+  }),
+);
 
 export const digital_id_cards = pgTable(
   "digital_id_cards",

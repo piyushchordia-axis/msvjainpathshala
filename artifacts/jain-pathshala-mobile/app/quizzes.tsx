@@ -1,5 +1,18 @@
+/**
+ * Student quizzes screen — two surfaces in one tab:
+ *
+ *  • Scheduled events: open quiz events for the active student (start → answer
+ *    → submit), auto-graded server-side with participation + win punya.
+ *  • Live push quiz: a shikshak-initiated quiz for the student's batch. Polled
+ *    via useActivePushQuiz so it appears without a reload; a notification tap
+ *    deep-links here too.
+ *
+ * Grading + idempotent point awards are entirely server-side; the take-flow UI
+ * (QuizRunner) only collects answers. Re-submitting a completed quiz is blocked
+ * by the API (409) and surfaced as a friendly "already submitted" state.
+ */
 import { useState } from "react";
-import { Pressable, View } from "react-native";
+import { View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
@@ -8,24 +21,83 @@ import {
   useAvailableQuizzes,
   useStartQuiz,
   useSubmitQuiz,
+  useActivePushQuiz,
+  useSubmitPushQuiz,
   type QuizEventRow,
   type QuizQuestion,
   type QuizStartResponse,
   type QuizSubmitResponse,
+  type PushQuizActive,
+  type PushQuizSubmitResponse,
 } from "@/lib/queries";
 import { formatDateRange } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
+import { QuizRunner } from "@/components/QuizRunner";
 import { Body, Button, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
-/** Local in-progress attempt: questions returned by start + the answers map. */
+/** In-progress attempt: questions from start/active + the source it came from. */
 interface ActiveAttempt {
-  eventId: string;
+  kind: "event" | "push";
+  id: string;
   titleEn: string;
   titleHi: string;
-  attemptId: string;
+  attemptId: string | null; // event attempts carry an id; push quizzes don't
   questions: QuizQuestion[];
-  /** questionId -> selected option indices (multi-select supported). */
-  answers: Record<string, number[]>;
+}
+
+/** Normalised result for the shared result card. */
+interface ResultView {
+  titleEn: string;
+  titleHi: string;
+  score: number;
+  correctCount: number;
+  totalCount: number;
+  allCorrect: boolean;
+  pointsAwarded: number;
+}
+
+function ResultCard({ result, hi, onDone, doneLabel }: { result: ResultView; hi: boolean; onDone: () => void; doneLabel: string }) {
+  const c = useColors();
+  return (
+    <>
+      <Card>
+        <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+          <View style={{ flex: 1, paddingRight: 10 }}>
+            <Title style={{ fontSize: 18 }}>{hi ? result.titleHi : result.titleEn}</Title>
+            <Body muted style={{ fontSize: 13, marginTop: 4 }}>{hi ? "आपका परिणाम" : "Your result"}</Body>
+          </View>
+          <Ionicons
+            name={result.allCorrect ? "trophy" : "checkmark-circle"}
+            size={30}
+            color={result.allCorrect ? c.gold : c.successText}
+          />
+        </Row>
+        <Row style={{ justifyContent: "space-between", marginTop: 18, alignItems: "flex-end" }}>
+          <View>
+            <Body muted style={{ fontSize: 12 }}>{hi ? "अंक" : "Score"}</Body>
+            <Numeric style={{ fontSize: 40, marginTop: 2 }}>{result.score}</Numeric>
+          </View>
+          <View style={{ alignItems: "flex-end" }}>
+            <Body muted style={{ fontSize: 12 }}>{hi ? "सही उत्तर" : "Correct"}</Body>
+            <Numeric style={{ fontSize: 22, marginTop: 2 }}>
+              {result.correctCount} / {result.totalCount}
+            </Numeric>
+          </View>
+        </Row>
+        <Row style={{ marginTop: 16, gap: 8, flexWrap: "wrap" }}>
+          {result.pointsAwarded > 0 ? (
+            <Pill label={`+${result.pointsAwarded} ${hi ? "पुण्य" : "punya"}`} tone="success" />
+          ) : (
+            <Pill label={hi ? "कोई पुण्य अर्जित नहीं" : "No punya awarded"} tone="neutral" />
+          )}
+          {result.allCorrect ? (
+            <Pill label={hi ? "सभी सही!" : "All correct!"} tone="success" />
+          ) : null}
+        </Row>
+      </Card>
+      <Button label={doneLabel} icon="arrow-back" variant="outline" onPress={onDone} />
+    </>
+  );
 }
 
 export default function Quizzes() {
@@ -33,16 +105,22 @@ export default function Quizzes() {
   const { hi } = useLocale();
   const { activeStudentId, activeChild, loading, refetch } = useSessionView();
 
-  const quizzes = useAvailableQuizzes(!!activeStudentId);
+  const quizzes = useAvailableQuizzes(activeStudentId ?? undefined);
   const rows = quizzes.data?.items ?? [];
+
+  // Pause push polling while an attempt or result is on screen (avoids the live
+  // quiz vanishing mid-attempt when it expires, and needless re-renders).
+  const [active, setActive] = useState<ActiveAttempt | null>(null);
+  const [result, setResult] = useState<ResultView | null>(null);
+
+  const pushQuery = useActivePushQuiz(activeStudentId ?? undefined, !active && !result);
+  const push = pushQuery.data?.active ?? null;
 
   const startQuiz = useStartQuiz();
   const submitQuiz = useSubmitQuiz();
+  const submitPush = useSubmitPushQuiz();
 
-  const [active, setActive] = useState<ActiveAttempt | null>(null);
-  const [result, setResult] = useState<(QuizSubmitResponse & { titleEn: string; titleHi: string }) | null>(null);
-
-  function beginQuiz(quiz: QuizEventRow) {
+  function beginEvent(quiz: QuizEventRow) {
     if (!activeStudentId || quiz.already_attempted) return;
     setResult(null);
     startQuiz.mutate(
@@ -50,46 +128,71 @@ export default function Quizzes() {
       {
         onSuccess: (data: QuizStartResponse) => {
           setActive({
-            eventId: quiz.id,
+            kind: "event",
+            id: quiz.id,
             titleEn: quiz.title_en,
             titleHi: quiz.title_hi,
             attemptId: data.attempt_id,
             questions: data.questions ?? [],
-            answers: {},
           });
         },
       },
     );
   }
 
-  function toggleOption(questionId: string, optionIndex: number) {
-    setActive((prev) => {
-      if (!prev) return prev;
-      const current = prev.answers[questionId] ?? [];
-      const next = current.includes(optionIndex)
-        ? current.filter((i) => i !== optionIndex)
-        : [...current, optionIndex];
-      return { ...prev, answers: { ...prev.answers, [questionId]: next } };
+  function beginPush(pq: PushQuizActive) {
+    if (!activeStudentId || pq.already_submitted) return;
+    setResult(null);
+    setActive({
+      kind: "push",
+      id: pq.id,
+      titleEn: "Live quiz",
+      titleHi: "लाइव प्रश्नोत्तरी",
+      attemptId: null,
+      questions: pq.questions ?? [],
     });
   }
 
-  function submit() {
+  function submitAnswers(answers: Record<string, number[]>) {
     if (!active || !activeStudentId) return;
-    submitQuiz.mutate(
-      { id: active.eventId, student_id: activeStudentId, answers: active.answers },
-      {
-        onSuccess: (data: QuizSubmitResponse) => {
-          setResult({ ...data, titleEn: active.titleEn, titleHi: active.titleHi });
-          setActive(null);
+    if (active.kind === "event") {
+      submitQuiz.mutate(
+        { id: active.id, student_id: activeStudentId, answers },
+        {
+          onSuccess: (data: QuizSubmitResponse) => {
+            setResult({
+              titleEn: active.titleEn,
+              titleHi: active.titleHi,
+              score: data.score,
+              correctCount: data.correct_count,
+              totalCount: data.total_count,
+              allCorrect: data.all_correct,
+              pointsAwarded: data.points_awarded,
+            });
+            setActive(null);
+          },
         },
-      },
-    );
+      );
+    } else {
+      submitPush.mutate(
+        { id: active.id, student_id: activeStudentId, answers },
+        {
+          onSuccess: (data: PushQuizSubmitResponse) => {
+            setResult({
+              titleEn: active.titleEn,
+              titleHi: active.titleHi,
+              score: data.score,
+              correctCount: data.correct_count,
+              totalCount: data.total_count,
+              allCorrect: data.total_count > 0 && data.correct_count === data.total_count,
+              pointsAwarded: data.points_awarded,
+            });
+            setActive(null);
+          },
+        },
+      );
+    }
   }
-
-  const answeredCount = active
-    ? active.questions.filter((q) => (active.answers[q.id] ?? []).length > 0).length
-    : 0;
-  const allAnswered = active ? answeredCount === active.questions.length : false;
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
@@ -99,120 +202,26 @@ export default function Quizzes() {
       />
       <Screen
         refreshing={quizzes.isRefetching}
-        onRefresh={() => { refetch(); quizzes.refetch(); }}
+        onRefresh={() => { refetch(); quizzes.refetch(); pushQuery.refetch(); }}
       >
         {/* ---- Result view ------------------------------------------------ */}
         {result ? (
-          <>
-            <Card>
-              <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-                <View style={{ flex: 1, paddingRight: 10 }}>
-                  <Title style={{ fontSize: 18 }}>{hi ? result.titleHi : result.titleEn}</Title>
-                  <Body muted style={{ fontSize: 13, marginTop: 4 }}>
-                    {hi ? "आपका परिणाम" : "Your result"}
-                  </Body>
-                </View>
-                <Ionicons name="checkmark-circle" size={30} color={c.successText} />
-              </Row>
-              <Row style={{ justifyContent: "space-between", marginTop: 18, alignItems: "flex-end" }}>
-                <View>
-                  <Body muted style={{ fontSize: 12 }}>{hi ? "अंक" : "Score"}</Body>
-                  <Numeric style={{ fontSize: 40, marginTop: 2 }}>{result.score}</Numeric>
-                </View>
-                <View style={{ alignItems: "flex-end" }}>
-                  <Body muted style={{ fontSize: 12 }}>{hi ? "सही उत्तर" : "Correct"}</Body>
-                  <Numeric style={{ fontSize: 22, marginTop: 2 }}>
-                    {result.correct_count} / {result.total_count}
-                  </Numeric>
-                </View>
-              </Row>
-            </Card>
-            <Button
-              label={hi ? "प्रश्नोत्तरी पर वापस जाएँ" : "Back to quizzes"}
-              icon="arrow-back"
-              variant="outline"
-              onPress={() => { setResult(null); quizzes.refetch(); }}
-            />
-          </>
+          <ResultCard
+            result={result}
+            hi={hi}
+            doneLabel={hi ? "प्रश्नोत्तरी पर वापस जाएँ" : "Back to quizzes"}
+            onDone={() => { setResult(null); quizzes.refetch(); pushQuery.refetch(); }}
+          />
         ) : active ? (
-          /* ---- In-progress attempt ------------------------------------- */
-          <>
-            <Card>
-              <Title style={{ fontSize: 18 }}>{hi ? active.titleHi : active.titleEn}</Title>
-              <Row style={{ marginTop: 10, gap: 8, flexWrap: "wrap" }}>
-                <Pill
-                  label={`${answeredCount} / ${active.questions.length} ${hi ? "उत्तर दिए" : "answered"}`}
-                  tone={allAnswered ? "success" : "neutral"}
-                />
-                <Pill
-                  label={hi ? "एक से अधिक विकल्प चुन सकते हैं" : "Select one or more options"}
-                  tone="info"
-                />
-              </Row>
-            </Card>
-
-            {active.questions.length === 0 ? (
-              <StateView
-                status="empty"
-                emptyText={hi ? "इस प्रश्नोत्तरी में कोई प्रश्न नहीं है।" : "This quiz has no questions."}
-              />
-            ) : (
-              active.questions.map((q, qi) => {
-                const selected = active.answers[q.id] ?? [];
-                return (
-                  <Card key={q.id}>
-                    <Body style={{ fontSize: 15, fontWeight: "600" }}>
-                      {qi + 1}. {hi ? q.question_hi : q.question_en}
-                    </Body>
-                    <View style={{ marginTop: 12, gap: 8 }}>
-                      {q.options.map((opt, oi) => {
-                        const isOn = selected.includes(oi);
-                        return (
-                          <Pressable
-                            key={oi}
-                            onPress={() => toggleOption(q.id, oi)}
-                            style={{
-                              flexDirection: "row",
-                              alignItems: "center",
-                              gap: 10,
-                              borderWidth: 1,
-                              borderColor: isOn ? c.primary : c.border,
-                              backgroundColor: isOn ? c.accent : c.card,
-                              borderRadius: c.radius,
-                              paddingVertical: 12,
-                              paddingHorizontal: 14,
-                            }}
-                          >
-                            <Ionicons
-                              name={isOn ? "checkbox" : "square-outline"}
-                              size={20}
-                              color={isOn ? c.primary : c.inkDim}
-                            />
-                            <Body style={{ flex: 1, color: isOn ? c.accentForeground : c.foreground }}>
-                              {hi ? opt.text_hi : opt.text_en}
-                            </Body>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  </Card>
-                );
-              })
-            )}
-
-            <Button
-              label={hi ? "उत्तर जमा करें" : "Submit answers"}
-              icon="paper-plane"
-              loading={submitQuiz.isPending}
-              disabled={active.questions.length === 0 || answeredCount === 0}
-              onPress={submit}
-            />
-            <Button
-              label={hi ? "रद्द करें" : "Cancel"}
-              variant="ghost"
-              onPress={() => setActive(null)}
-            />
-          </>
+          /* ---- In-progress attempt (event or push) --------------------- */
+          <QuizRunner
+            titleEn={active.titleEn}
+            titleHi={active.titleHi}
+            questions={active.questions}
+            submitting={submitQuiz.isPending || submitPush.isPending}
+            onSubmit={submitAnswers}
+            onCancel={() => setActive(null)}
+          />
         ) : loading ? (
           <StateView status="loading" emptyText="" />
         ) : !activeStudentId || !activeChild ? (
@@ -220,63 +229,104 @@ export default function Quizzes() {
             status="empty"
             emptyText={hi ? "आपकी विद्यार्थी प्रोफ़ाइल अभी तैयार नहीं है।" : "Your student profile isn't ready yet."}
           />
-        ) : quizzes.isLoading ? (
-          <StateView status="loading" emptyText="" />
-        ) : quizzes.isError ? (
-          <StateView
-            status="error"
-            emptyText=""
-            errorText={hi ? "प्रश्नोत्तरी लोड नहीं हुई।" : "Could not load quizzes."}
-            onRetry={quizzes.refetch}
-            retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
-          />
-        ) : rows.length === 0 ? (
-          <StateView
-            status="empty"
-            emptyText={hi ? "अभी कोई प्रश्नोत्तरी उपलब्ध नहीं है।" : "No quizzes available right now."}
-          />
         ) : (
-          /* ---- Available quiz list ------------------------------------- */
-          rows.map((quiz) => {
-            const done = quiz.already_attempted;
-            const isStarting = startQuiz.isPending && startQuiz.variables?.id === quiz.id;
-            return (
-              <Card key={quiz.id} style={done ? { opacity: 0.65 } : undefined}>
+          <>
+            {/* ---- Live push quiz (if one is active for the batch) ------- */}
+            {push && !push.already_submitted ? (
+              <Card style={{ borderColor: c.primary }}>
                 <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
                   <View style={{ flex: 1, paddingRight: 10 }}>
-                    <Title style={{ fontSize: 16 }}>{hi ? quiz.title_hi : quiz.title_en}</Title>
+                    <Pill label={hi ? "लाइव अभी" : "Live now"} tone="primary" />
+                    <Title style={{ fontSize: 16, marginTop: 8 }}>
+                      {hi ? "कक्षा प्रश्नोत्तरी" : "Class quiz"}
+                    </Title>
                     <Body muted style={{ fontSize: 12, marginTop: 3 }}>
-                      {formatDateRange(quiz.start_at, quiz.end_at)}
+                      {push.questions.length} {hi ? "प्रश्न" : "questions"}
+                      {push.completion_points > 0
+                        ? ` · +${push.completion_points} ${hi ? "पुण्य" : "punya"}`
+                        : ""}
                     </Body>
                   </View>
-                  {done ? (
-                    <Ionicons name="checkmark-circle" size={26} color={c.successText} />
-                  ) : null}
+                  <Ionicons name="flash" size={26} color={c.primary} />
                 </Row>
-                <Row style={{ marginTop: 10, gap: 8, flexWrap: "wrap" }}>
-                  {typeof quiz.total_questions === "number" ? (
-                    <Pill
-                      label={`${quiz.total_questions} ${hi ? "प्रश्न" : "questions"}`}
-                      tone="neutral"
-                    />
-                  ) : null}
-                  {done ? (
-                    <Pill label={hi ? "पूर्ण" : "Completed"} tone="success" />
-                  ) : null}
-                </Row>
-                {done ? null : (
-                  <View style={{ marginTop: 14 }}>
-                    <Button
-                      label={hi ? "प्रश्नोत्तरी शुरू करें" : "Start quiz"}
-                      icon="play"
-                      loading={isStarting}
-                      onPress={() => beginQuiz(quiz)}
-                    />
-                  </View>
-                )}
+                <View style={{ marginTop: 14 }}>
+                  <Button
+                    label={hi ? "अभी भाग लें" : "Join now"}
+                    icon="play"
+                    onPress={() => beginPush(push)}
+                  />
+                </View>
               </Card>
-            );
-          })
+            ) : push?.already_submitted ? (
+              <Card style={{ opacity: 0.7 }}>
+                <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
+                  <Title style={{ fontSize: 16 }}>{hi ? "कक्षा प्रश्नोत्तरी" : "Class quiz"}</Title>
+                  <Pill label={hi ? "पूर्ण" : "Completed"} tone="success" />
+                </Row>
+              </Card>
+            ) : null}
+
+            {/* ---- Scheduled events ------------------------------------- */}
+            {quizzes.isLoading ? (
+              <StateView status="loading" emptyText="" />
+            ) : quizzes.isError ? (
+              <StateView
+                status="error"
+                emptyText=""
+                errorText={hi ? "प्रश्नोत्तरी लोड नहीं हुई।" : "Could not load quizzes."}
+                onRetry={quizzes.refetch}
+                retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
+              />
+            ) : rows.length === 0 && !push ? (
+              <StateView
+                status="empty"
+                emptyText={hi ? "अभी कोई प्रश्नोत्तरी उपलब्ध नहीं है।" : "No quizzes available right now."}
+              />
+            ) : (
+              rows.map((quiz) => {
+                const done = quiz.already_attempted;
+                const isStarting = startQuiz.isPending && startQuiz.variables?.id === quiz.id;
+                const points = quiz.participation_points + quiz.win_points;
+                return (
+                  <Card key={quiz.id} style={done ? { opacity: 0.65 } : undefined}>
+                    <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                      <View style={{ flex: 1, paddingRight: 10 }}>
+                        <Title style={{ fontSize: 16 }}>{hi ? quiz.title_hi : quiz.title_en}</Title>
+                        <Body muted style={{ fontSize: 12, marginTop: 3 }}>
+                          {formatDateRange(quiz.start_at, quiz.end_at)}
+                        </Body>
+                      </View>
+                      {done ? (
+                        <Ionicons name="checkmark-circle" size={26} color={c.successText} />
+                      ) : null}
+                    </Row>
+                    <Row style={{ marginTop: 10, gap: 8, flexWrap: "wrap" }}>
+                      {quiz.win_points > 0 ? (
+                        <Pill label={`${hi ? "जीत" : "Win"} +${quiz.win_points}`} tone="warning" />
+                      ) : null}
+                      {quiz.participation_points > 0 ? (
+                        <Pill label={`${hi ? "भाग" : "Take"} +${quiz.participation_points}`} tone="info" />
+                      ) : null}
+                      {points === 0 ? (
+                        <Pill label={hi ? "अभ्यास" : "Practice"} tone="neutral" />
+                      ) : null}
+                      {done ? <Pill label={hi ? "पूर्ण" : "Completed"} tone="success" /> : null}
+                    </Row>
+                    {done ? null : (
+                      <View style={{ marginTop: 14 }}>
+                        <Button
+                          label={hi ? "प्रश्नोत्तरी शुरू करें" : "Start quiz"}
+                          icon="play"
+                          loading={isStarting}
+                          onPress={() => beginEvent(quiz)}
+                        />
+                      </View>
+                    )}
+                  </Card>
+                );
+              })
+            )}
+          </>
         )}
       </Screen>
     </View>

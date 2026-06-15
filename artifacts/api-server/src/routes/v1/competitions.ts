@@ -227,6 +227,64 @@ router.get("/", requireAdminPanel, async (req: Request, res: Response) => {
   ok(res, { items }, { count: items.length });
 });
 
+/* GET /v1/competitions/:id/registrations?limit=&offset= — scoped roster.
+   Read-only (no audit). The competition's city must be in the caller's scope
+   (404 otherwise, mirroring the other admin routes). Ordered by registration
+   time; `status` is derived (ranked once a result_rank is recorded). */
+router.get("/:id/registrations", requireAdminPanel, async (req: Request, res: Response) => {
+  const cityIds = await cityScopeForUser(req.authUser!);
+  const id = String(req.params.id);
+  const [comp] = await db
+    .select({ id: competitions.id, city_id: competitions.city_id })
+    .from(competitions)
+    .where(eq(competitions.id, id))
+    .limit(1);
+  if (!comp || !cityInScope(cityIds, comp.city_id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Competition not found.");
+    return;
+  }
+
+  const limit = clampLimit(req.query.limit, 50, 200);
+  const offsetRaw = Number(req.query.offset);
+  const offset = Number.isFinite(offsetRaw) && offsetRaw > 0 ? Math.floor(offsetRaw) : 0;
+
+  const [{ total }] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(competition_registrations)
+    .where(eq(competition_registrations.competition_id, comp.id));
+
+  const rows = await db
+    .select({
+      id: competition_registrations.id,
+      student_id: competition_registrations.student_id,
+      student_name: students.full_name,
+      centre_name: centres.name,
+      registered_at: competition_registrations.registered_at,
+      result_rank: competition_registrations.result_rank,
+      result_note: competition_registrations.result_note,
+    })
+    .from(competition_registrations)
+    .innerJoin(students, eq(students.id, competition_registrations.student_id))
+    .leftJoin(centres, eq(centres.id, students.centre_id))
+    .where(eq(competition_registrations.competition_id, comp.id))
+    .orderBy(asc(competition_registrations.registered_at))
+    .limit(limit)
+    .offset(offset);
+
+  const items = rows.map((r) => ({
+    id: r.id,
+    student_id: r.student_id,
+    student_name: r.student_name,
+    centre_name: r.centre_name,
+    registered_at: r.registered_at.toISOString(),
+    result_rank: r.result_rank,
+    result_note: r.result_note,
+    status: r.result_rank != null ? "ranked" : "registered",
+  }));
+
+  ok(res, { items }, { count: items.length, total: total ?? 0, limit, offset });
+});
+
 const statusSchema = z.object({
   status: z.enum(COMPETITION_STATUSES),
 });
@@ -475,6 +533,8 @@ router.get("/open", async (req: Request, res: Response) => {
       registration_window_start: competitions.registration_window_start,
       registration_window_end: competitions.registration_window_end,
       event_date: competitions.event_date,
+      winner_points: competitions.winner_points,
+      participant_points: competitions.participant_points,
       max_participants: competitions.max_participants,
     })
     .from(competitions)
@@ -503,6 +563,8 @@ router.get("/open", async (req: Request, res: Response) => {
         registration_window_start: c.registration_window_start.toISOString(),
         registration_window_end: c.registration_window_end.toISOString(),
         event_date: c.event_date,
+        winner_points: c.winner_points,
+        participant_points: c.participant_points,
         max_participants: c.max_participants,
         eligible_student_ids: eligibleChildren.map((k) => k.id),
       };

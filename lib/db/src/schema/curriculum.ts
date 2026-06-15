@@ -1,43 +1,61 @@
-import { boolean, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { timestamps } from "./_helpers";
 import { curriculumLevelEnum } from "./enums";
 import { cities } from "./geography";
 import { students } from "./students";
 import { users } from "./identity";
 
-export const curricula = pgTable("curricula", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  city_id: uuid("city_id").references(() => cities.id, { onDelete: "restrict" }),
-  name: text("name").notNull(),
-  kind: text("kind").notNull().default("standard"),
-  academic_year: text("academic_year"),
-  status: text("status").notNull().default("active"),
-  ...timestamps(),
-});
+export const curricula = pgTable(
+  "curricula",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    city_id: uuid("city_id").references(() => cities.id, { onDelete: "restrict" }),
+    name: text("name").notNull(),
+    kind: text("kind").notNull().default("standard"),
+    academic_year: text("academic_year"),
+    status: text("status").notNull().default("active"),
+    ...timestamps(),
+  },
+  (t) => ({
+    city_idx: index("idx_curricula_city").on(t.city_id),
+  }),
+);
 
-export const curriculum_sections = pgTable("curriculum_sections", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  curriculum_id: uuid("curriculum_id")
-    .notNull()
-    .references(() => curricula.id, { onDelete: "cascade" }),
-  title_en: text("title_en").notNull(),
-  title_hi: text("title_hi").notNull(),
-  order_index: integer("order_index").notNull().default(0),
-  ...timestamps(),
-});
+export const curriculum_sections = pgTable(
+  "curriculum_sections",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    curriculum_id: uuid("curriculum_id")
+      .notNull()
+      .references(() => curricula.id, { onDelete: "cascade" }),
+    title_en: text("title_en").notNull(),
+    title_hi: text("title_hi").notNull(),
+    order_index: integer("order_index").notNull().default(0),
+    ...timestamps(),
+  },
+  (t) => ({
+    curriculum_idx: index("idx_curriculum_sections_curriculum").on(t.curriculum_id),
+  }),
+);
 
-export const curriculum_items = pgTable("curriculum_items", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  section_id: uuid("section_id")
-    .notNull()
-    .references(() => curriculum_sections.id, { onDelete: "cascade" }),
-  title_en: text("title_en").notNull(),
-  title_hi: text("title_hi").notNull(),
-  description_en: text("description_en"),
-  description_hi: text("description_hi"),
-  order_index: integer("order_index").notNull().default(0),
-  ...timestamps(),
-});
+export const curriculum_items = pgTable(
+  "curriculum_items",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    section_id: uuid("section_id")
+      .notNull()
+      .references(() => curriculum_sections.id, { onDelete: "cascade" }),
+    title_en: text("title_en").notNull(),
+    title_hi: text("title_hi").notNull(),
+    description_en: text("description_en"),
+    description_hi: text("description_hi"),
+    order_index: integer("order_index").notNull().default(0),
+    ...timestamps(),
+  },
+  (t) => ({
+    section_idx: index("idx_curriculum_items_section").on(t.section_id),
+  }),
+);
 
 // Per-student mastery of a curriculum item (set by shikshak).
 export const student_curriculum_progress = pgTable(
@@ -60,6 +78,8 @@ export const student_curriculum_progress = pgTable(
       t.student_id,
       t.curriculum_item_id,
     ),
+    student_idx: index("idx_student_curriculum_progress_student").on(t.student_id),
+    item_idx: index("idx_student_curriculum_progress_item").on(t.curriculum_item_id),
   }),
 );
 
@@ -87,5 +107,6 @@ export const progress_reports = pgTable(
       t.period_kind,
       t.period_label,
     ),
+    student_idx: index("idx_progress_reports_student").on(t.student_id),
   }),
 );

@@ -12,6 +12,7 @@
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, service_requests, service_request_messages, students, centres, users } from "@workspace/db";
+import { SERVICE_REQUEST_STATUSES } from "@workspace/db/enums";
 import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
 import { alias, type PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
@@ -179,9 +180,17 @@ router.get("/", requireAdminPanel, async (req: Request, res: Response) => {
   ok(res, { items }, { count: items.length });
 });
 
+type AccessibleRow = {
+  id: string;
+  parent_user_id: string;
+  centre_id: string | null;
+  status: (typeof SERVICE_REQUEST_STATUSES)[number];
+  assigned_to: string | null;
+};
+
 /** Load a request and decide whether the caller may view/act on it. */
 async function loadAccessible(req: Request): Promise<
-  | { ok: true; row: { id: string; parent_user_id: string; centre_id: string | null; status: string } }
+  | { ok: true; row: AccessibleRow; isOwner: boolean }
   | { ok: false }
 > {
   const id = String(req.params.id);
@@ -192,13 +201,14 @@ async function loadAccessible(req: Request): Promise<
       parent_user_id: service_requests.parent_user_id,
       centre_id: service_requests.centre_id,
       status: service_requests.status,
+      assigned_to: service_requests.assigned_to,
     })
     .from(service_requests)
     .where(eq(service_requests.id, id))
     .limit(1);
   if (!row) return { ok: false };
 
-  if (row.parent_user_id === req.authUser!.id) return { ok: true, row };
+  if (row.parent_user_id === req.authUser!.id) return { ok: true, row, isOwner: true };
 
   // Not the owner — only an in-scope admin-panel user may see it.
   const role = req.authUser!.role;
@@ -211,7 +221,7 @@ async function loadAccessible(req: Request): Promise<
   if (!isAdminPanel) return { ok: false };
   const scope = await resolveAdminScope(req.authUser!);
   if (!inScope(scope, row.centre_id)) return { ok: false };
-  return { ok: true, row };
+  return { ok: true, row, isOwner: false };
 }
 
 /* GET /v1/service-requests/:id — the request plus its ordered message thread */
@@ -269,6 +279,28 @@ const postMessageSchema = z.object({
   message: z.string().min(1).max(5000),
 });
 
+/**
+ * Decide the request's status after a new message is posted, preserving the
+ * invariant `resolved_at IS NOT NULL ⇔ status === "resolved"`.
+ *
+ *  - Replying to a *resolved* request reopens it: back to `in_review` if an
+ *    admin is already assigned, otherwise back to `submitted`. `resolved_at`
+ *    is cleared so it never lingers on a non-resolved request.
+ *  - Replying to a `submitted` / `in_review` request leaves the status (and the
+ *    already-null `resolved_at`) untouched — only `last_response_at` advances.
+ *
+ * `reopened` tells the caller whether to clear `resolved_at`; `last_response_at`
+ * is bumped by the caller in every case.
+ */
+function reopenTransition(
+  row: AccessibleRow,
+): { status: (typeof SERVICE_REQUEST_STATUSES)[number]; reopened: boolean } {
+  if (row.status === "resolved") {
+    return { status: row.assigned_to ? "in_review" : "submitted", reopened: true };
+  }
+  return { status: row.status, reopened: false };
+}
+
 /* POST /v1/service-requests/:id/messages — owner or in-scope admin replies */
 router.post("/:id/messages", async (req: Request, res: Response) => {
   let body: z.infer<typeof postMessageSchema>;
@@ -289,11 +321,29 @@ router.post("/:id/messages", async (req: Request, res: Response) => {
       message: body.message,
     })
     .returning({ id: service_request_messages.id });
+
+  // Keep status / resolved_at consistent with the new reply (see reopenTransition).
+  const { status, reopened } = reopenTransition(access.row);
   await db
     .update(service_requests)
-    .set({ last_response_at: now })
+    .set(
+      reopened
+        ? { last_response_at: now, status, resolved_at: null }
+        : { last_response_at: now },
+    )
     .where(eq(service_requests.id, access.row.id));
-  ok(res, { id: msg.id });
+
+  await auditFromReq(req, {
+    action: reopened ? "update" : "create",
+    entityKind: "service_request",
+    entityId: access.row.id,
+    summary: reopened
+      ? `Replied on a resolved request — reopened (status → ${status}).`
+      : `Posted a message on service request (by ${access.isOwner ? "requester" : "admin"}).`,
+    metadata: { reopened, status, by: access.isOwner ? "requester" : "admin" },
+  });
+
+  ok(res, { id: msg.id, status, reopened });
 });
 
 /* ─────────────────────────── admin actions ─────────────────────────── */
@@ -321,9 +371,12 @@ router.post("/:id/assign", requireAdminPanel, async (req: Request, res: Response
   const row = await loadInAdminScope(req, res);
   if (!row) return;
 
+  // Assigning moves the request into review; clear resolved_at so the
+  // `resolved_at ⇔ status === "resolved"` invariant holds even if a resolved
+  // request is re-claimed.
   await db
     .update(service_requests)
-    .set({ assigned_to: req.authUser!.id, status: "in_review" })
+    .set({ assigned_to: req.authUser!.id, status: "in_review", resolved_at: null })
     .where(eq(service_requests.id, row.id));
   await auditFromReq(req, {
     action: "assign",

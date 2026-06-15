@@ -19,7 +19,9 @@ import {
 import { TiroDevanagariSanskrit_400Regular } from "@expo-google-fonts/tiro-devanagari-sanskrit";
 import { useFonts } from "expo-font";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Stack } from "expo-router";
+import * as Notifications from "expo-notifications";
+import { router, Stack } from "expo-router";
+import type { Href } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -36,6 +38,29 @@ import { fonts } from "@/constants/typography";
 import colors from "@/constants/colors";
 
 SplashScreen.preventAutoHideAsync();
+
+// Show banners/sounds even while the app is foregrounded.
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
+/**
+ * Best-effort deep link for a tapped notification. The server puts a `route`
+ * (an explicit path) and/or a `kind` on the notification's data payload (see
+ * the API's sendPush callers). Fall back to the in-app notifications inbox.
+ */
+function routeForNotificationData(data: unknown): Href {
+  const d = (data ?? {}) as { route?: unknown; kind?: unknown };
+  if (typeof d.route === "string" && d.route.startsWith("/")) {
+    return d.route as Href;
+  }
+  return "/notifications";
+}
 
 const queryClient = new QueryClient();
 
@@ -64,6 +89,8 @@ function RootLayoutNav() {
       {/* Shared detail screens (pushed from any persona) */}
       <Stack.Screen name="centre/[id]" options={{ title: "Centre" }} />
       <Stack.Screen name="shivir/[id]" options={{ title: "Shivir" }} />
+      <Stack.Screen name="shivir-scan/[id]" options={{ title: "Scan attendance" }} />
+      <Stack.Screen name="attendance/[id]" options={{ title: "Mark attendance" }} />
       <Stack.Screen name="info/[slug]" options={{ title: "" }} />
       <Stack.Screen name="gallery" options={{ title: "Punya Wall" }} />
       {/* Wave 4 — new student/parent flows */}
@@ -73,6 +100,10 @@ function RootLayoutNav() {
       <Stack.Screen name="quizzes" options={{ title: "Quizzes" }} />
       <Stack.Screen name="competitions" options={{ title: "Competitions" }} />
       <Stack.Screen name="idcard" options={{ title: "ID Card" }} />
+      {/* Phase 2 — new flows */}
+      <Stack.Screen name="exams" options={{ title: "Exams" }} />
+      <Stack.Screen name="service-requests" options={{ title: "My requests" }} />
+      <Stack.Screen name="service-request/[id]" options={{ title: "Request" }} />
     </Stack>
   );
 }
@@ -104,6 +135,37 @@ export default function RootLayout() {
     if (__DEV__) {
       console.log("[Jain Pathshala] API_BASE =", API_BASE);
     }
+  }, []);
+
+  // Deep-link into the relevant screen when a push notification is tapped,
+  // including the cold-start case where the tap launched the app.
+  useEffect(() => {
+    let mounted = true;
+
+    Notifications.getLastNotificationResponseAsync()
+      .then((response) => {
+        if (mounted && response) {
+          router.push(
+            routeForNotificationData(
+              response.notification.request.content.data,
+            ),
+          );
+        }
+      })
+      .catch(() => {});
+
+    const sub = Notifications.addNotificationResponseReceivedListener(
+      (response) => {
+        router.push(
+          routeForNotificationData(response.notification.request.content.data),
+        );
+      },
+    );
+
+    return () => {
+      mounted = false;
+      sub.remove();
+    };
   }, []);
 
   if (!fontsLoaded && !fontError) return null;

@@ -1,5 +1,6 @@
 import {
   boolean,
+  index,
   integer,
   pgTable,
   text,
@@ -35,22 +36,31 @@ export const users = pgTable(
   },
   (t) => ({
     uniquePhone: uniqueIndex("users_phone_unique").on(t.phone),
+    city_idx: index("idx_users_city").on(t.city_id),
+    state_idx: index("idx_users_state").on(t.state_id),
+    role_idx: index("idx_users_role").on(t.role),
   }),
 );
 
-export const device_sessions = pgTable("device_sessions", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  user_id: uuid("user_id")
-    .notNull()
-    .references(() => users.id, { onDelete: "cascade" }),
-  device_id: text("device_id").notNull(),
-  platform: text("platform").notNull(),
-  refresh_token_hash: text("refresh_token_hash").notNull(),
-  expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
-  last_used_at: timestamp("last_used_at", { withTimezone: true }),
-  revoked_at: timestamp("revoked_at", { withTimezone: true }),
-  ...timestamps(),
-});
+export const device_sessions = pgTable(
+  "device_sessions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    user_id: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    device_id: text("device_id").notNull(),
+    platform: text("platform").notNull(),
+    refresh_token_hash: text("refresh_token_hash").notNull(),
+    expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
+    last_used_at: timestamp("last_used_at", { withTimezone: true }),
+    revoked_at: timestamp("revoked_at", { withTimezone: true }),
+    ...timestamps(),
+  },
+  (t) => ({
+    user_idx: index("idx_device_sessions_user").on(t.user_id),
+  }),
+);
 
 export const otp_codes = pgTable(
   "otp_codes",
@@ -66,6 +76,7 @@ export const otp_codes = pgTable(
   },
   (t) => ({
     uniqueToken: uniqueIndex("otp_codes_token_unique").on(t.otp_token),
+    phone_idx: index("idx_otp_codes_phone").on(t.phone),
   }),
 );
 

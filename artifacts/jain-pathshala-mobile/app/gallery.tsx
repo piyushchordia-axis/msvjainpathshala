@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { View } from "react-native";
+import { Image, View } from "react-native";
 import { fonts } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
@@ -8,7 +8,18 @@ import type { GalleryItem, ListResponse } from "@/lib/types";
 import { Body, Card, Pill, Screen, StateView, Title } from "@/components/ui";
 import { Text } from "react-native";
 
-const SWATCHES = ["#D4621A", "#761919", "#C8941F", "#A8470F", "#6B1212"];
+/**
+ * The API now returns real media (image_url / thumbnail_url + bilingual
+ * caption). Until the shared api-zod contract is regenerated, extend the
+ * existing GalleryItem locally so the screen can render the new fields.
+ * Consent (only opted-in families' student photos) is enforced server-side.
+ */
+type MediaGalleryItem = GalleryItem & {
+  image_url?: string | null;
+  thumbnail_url?: string | null;
+  caption?: string | null;
+  caption_hi?: string | null;
+};
 
 export default function GalleryScreen() {
   const c = useColors();
@@ -16,7 +27,7 @@ export default function GalleryScreen() {
 
   const { data, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ["public-gallery"],
-    queryFn: () => apiGet<ListResponse<GalleryItem>>("/v1/gallery?limit=60"),
+    queryFn: () => apiGet<ListResponse<MediaGalleryItem>>("/v1/gallery?limit=60"),
   });
 
   const items = data?.items ?? [];
@@ -32,19 +43,29 @@ export default function GalleryScreen() {
         <StateView status="empty" emptyText={hi ? "अभी कुछ साझा नहीं किया गया है।" : "Nothing shared yet."} />
       ) : (
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
-          {items.map((item, i) => {
+          {items.map((item) => {
             const niyam = hi && item.niyam_title_hi ? item.niyam_title_hi : item.niyam_title_en;
-            const bg = SWATCHES[i % SWATCHES.length];
+            const caption = (hi ? item.caption_hi : item.caption) || item.caption || niyam;
+            const uri = item.thumbnail_url ?? item.image_url ?? null;
             return (
               <Card key={item.id} style={{ width: "47%", padding: 0, overflow: "hidden" }}>
-                <View style={{ backgroundColor: bg, height: 92, alignItems: "center", justifyContent: "center", paddingHorizontal: 8 }}>
-                  <Text style={{ fontFamily: fonts.display, fontSize: 22, color: "#FFFFFF", textAlign: "center" }} numberOfLines={1}>
-                    {item.first_name}
-                  </Text>
-                </View>
+                {uri ? (
+                  <Image
+                    source={{ uri }}
+                    style={{ width: "100%", height: 110, backgroundColor: c.muted }}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <View style={{ backgroundColor: c.muted, height: 110, alignItems: "center", justifyContent: "center", paddingHorizontal: 8 }}>
+                    <Text style={{ fontFamily: fonts.display, fontSize: 20, color: c.foreground, textAlign: "center" }} numberOfLines={1}>
+                      {item.first_name || (hi ? "गैलरी" : "Gallery")}
+                    </Text>
+                  </View>
+                )}
                 <View style={{ padding: 12, gap: 6 }}>
                   {item.is_featured ? <Pill tone="warning" label={hi ? "विशेष" : "Featured"} /> : null}
-                  {niyam ? <Body style={{ fontSize: 13 }} numberOfLines={2}>{niyam}</Body> : null}
+                  {item.first_name ? <Body style={{ fontSize: 13, fontFamily: fonts.display }}>{item.first_name}</Body> : null}
+                  {caption ? <Body style={{ fontSize: 13 }} numberOfLines={2}>{caption}</Body> : null}
                   {item.age_group ? <Body muted style={{ fontSize: 12 }}>{item.age_group}</Body> : null}
                 </View>
               </Card>

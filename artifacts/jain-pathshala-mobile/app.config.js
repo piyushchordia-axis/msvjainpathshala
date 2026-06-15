@@ -85,6 +85,23 @@ module.exports = ({ config }) => {
 
     ...config,
 
+    // TODO(eas): replace with the org/account that owns the EAS project.
+    // Set after running `eas init` (or to your Expo account/organization slug).
+    owner: config.owner ?? "jainpathshala",
+
+    // Use the app version as the runtime version so OTA updates only apply to
+    // compatible native builds. Keep in sync with `version` in app.json.
+    runtimeVersion: config.runtimeVersion ?? { policy: "appVersion" },
+
+    updates: {
+
+      ...config.updates,
+
+      // TODO(eas): `eas init` fills the real URL
+      // (https://u.expo.dev/<projectId>). Safe to leave until you enable OTA.
+
+    },
+
     android: {
 
       ...config.android,
@@ -98,6 +115,19 @@ module.exports = ({ config }) => {
       ...config.extra,
 
       apiBaseUrl,
+
+      eas: {
+
+        ...config.extra?.eas,
+
+        // TODO(eas): placeholder — run `eas init` to generate the real
+        // projectId and write it back here (or into app.json's extra.eas).
+        projectId:
+          process.env.EAS_PROJECT_ID ||
+          config.extra?.eas?.projectId ||
+          "00000000-0000-0000-0000-000000000000",
+
+      },
 
     },
 

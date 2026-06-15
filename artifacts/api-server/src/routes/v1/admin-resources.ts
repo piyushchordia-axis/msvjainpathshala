@@ -14,7 +14,6 @@ import {
   sessions,
   attendance,
   punya_transactions,
-  punya_balances,
   punya_configs,
   msv_enrolments,
   notices,
@@ -27,13 +26,14 @@ import {
   settings,
   shikshak_batch_assignments,
 } from "@workspace/db";
-import { tierForPoints } from "@workspace/db/enums";
 import { and, asc, count, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
-import { resolveAdminScope, type AdminScope } from "../../lib/scope";
+import { resolveAdminScope, cityIdsForState, type AdminScope } from "../../lib/scope";
+import { auditFromReq } from "../../lib/audit";
+import { awardPunya } from "../../lib/punya";
 
 const router: IRouter = Router();
 router.use(requireAuth, requireAdminPanel);
@@ -85,7 +85,7 @@ router.get("/centres", async (req: Request, res: Response) => {
     .innerJoin(cities, eq(cities.id, centres.city_id))
     .innerJoin(states, eq(states.id, centres.state_id))
     .leftJoin(batches, and(eq(batches.centre_id, centres.id), eq(batches.status, "active")))
-    .where(centreFilter)
+    .where(and(isNull(centres.deleted_at), centreFilter))
     .groupBy(centres.id, cities.name, states.name)
     .orderBy(asc(states.name), asc(cities.name), asc(centres.name));
   ok(res, { items: rows }, { count: rows.length });
@@ -136,7 +136,7 @@ router.get("/gallery", async (req: Request, res: Response) => {
     .from(gallery_items)
     .innerJoin(students, eq(students.id, gallery_items.student_id))
     .innerJoin(niyams, eq(niyams.id, gallery_items.niyam_id))
-    .where(centreFilter)
+    .where(and(isNull(students.deleted_at), centreFilter))
     .orderBy(desc(gallery_items.is_featured), desc(gallery_items.created_at))
     .limit(limit);
   const items = rows.map((r) => ({ ...r, created_at: r.created_at.toISOString() }));
@@ -150,13 +150,20 @@ router.post("/gallery/:id/feature", async (req: Request, res: Response) => {
     .select({ id: gallery_items.id, centre_id: students.centre_id })
     .from(gallery_items)
     .innerJoin(students, eq(students.id, gallery_items.student_id))
-    .where(eq(gallery_items.id, String(req.params.id)))
+    .where(and(eq(gallery_items.id, String(req.params.id)), isNull(students.deleted_at)))
     .limit(1);
   if (!item || !inScope(scope, item.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Gallery item not found.");
     return;
   }
   await db.update(gallery_items).set({ is_featured: true }).where(eq(gallery_items.id, item.id));
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "gallery_item",
+    entityId: item.id,
+    summary: "Gallery item featured.",
+    metadata: { is_featured: true },
+  });
   ok(res, { id: item.id, is_featured: true });
 });
 
@@ -167,13 +174,20 @@ router.post("/gallery/:id/unfeature", async (req: Request, res: Response) => {
     .select({ id: gallery_items.id, centre_id: students.centre_id })
     .from(gallery_items)
     .innerJoin(students, eq(students.id, gallery_items.student_id))
-    .where(eq(gallery_items.id, String(req.params.id)))
+    .where(and(eq(gallery_items.id, String(req.params.id)), isNull(students.deleted_at)))
     .limit(1);
   if (!item || !inScope(scope, item.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Gallery item not found.");
     return;
   }
   await db.update(gallery_items).set({ is_featured: false }).where(eq(gallery_items.id, item.id));
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "gallery_item",
+    entityId: item.id,
+    summary: "Gallery item unfeatured.",
+    metadata: { is_featured: false },
+  });
   ok(res, { id: item.id, is_featured: false });
 });
 
@@ -252,7 +266,7 @@ router.get("/niyam-submissions", async (req: Request, res: Response) => {
     .from(niyam_submissions)
     .innerJoin(students, eq(students.id, niyam_submissions.student_id))
     .innerJoin(niyams, eq(niyams.id, niyam_submissions.niyam_id))
-    .where(centreFilter)
+    .where(and(isNull(students.deleted_at), centreFilter))
     .orderBy(desc(niyam_submissions.submission_date))
     .limit(limit);
   ok(res, { items: rows }, { count: rows.length });
@@ -291,7 +305,7 @@ router.get("/punya/transactions", async (req: Request, res: Response) => {
     .from(punya_transactions)
     .innerJoin(students, eq(students.id, punya_transactions.student_id))
     .leftJoin(users, eq(users.id, punya_transactions.awarded_by))
-    .where(centreFilter)
+    .where(and(isNull(students.deleted_at), centreFilter))
     .orderBy(desc(punya_transactions.created_at))
     .limit(limit);
   const items = rows.map((r) => ({ ...r, created_at: r.created_at.toISOString() }));
@@ -302,6 +316,11 @@ const punyaAwardSchema = z.object({
   student_id: z.string().uuid(),
   points: z.coerce.number().int().positive().max(500),
   note: z.string().max(500).optional(),
+  // Optional client-supplied de-dupe token. When the same key is replayed (a
+  // double-clicked submit, a retried request), the award is NOT credited twice
+  // — awardPunya returns the original result. Backward compatible: callers that
+  // omit it get the previous always-credit behaviour.
+  idempotency_key: z.string().min(1).max(200).optional(),
 });
 
 /* POST /v1/admin/punya/award */
@@ -317,42 +336,49 @@ router.post("/punya/award", async (req: Request, res: Response) => {
   const [student] = await db
     .select({ id: students.id, centre_id: students.centre_id })
     .from(students)
-    .where(eq(students.id, body.student_id))
+    .where(and(eq(students.id, body.student_id), isNull(students.deleted_at)))
     .limit(1);
   if (!student || !inScope(scope, student.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Student not found in your scope.");
     return;
   }
 
-  await db.insert(punya_transactions).values({
-    student_id: student.id,
-    feature_key: "manual_award",
+  // Atomic + idempotent: the ledger insert, balance upsert, and tier recompute
+  // all commit together inside awardPunya's transaction. Passing an idempotency
+  // key makes a double-submit a no-op instead of double-crediting (the previous
+  // select-then-insert here was both non-atomic AND non-idempotent).
+  const result = await awardPunya({
+    studentId: student.id,
+    featureKey: "manual_award",
     points: body.points,
     note: body.note ?? null,
-    awarded_by: req.authUser!.id,
+    awardedBy: req.authUser!.id,
+    idempotencyKey: body.idempotency_key ?? null,
   });
 
-  const [bal] = await db
-    .select()
-    .from(punya_balances)
-    .where(eq(punya_balances.student_id, student.id))
-    .limit(1);
-  const newTotal = (bal?.total_points ?? 0) + body.points;
-  const tier = tierForPoints(newTotal);
-  if (bal) {
-    await db
-      .update(punya_balances)
-      .set({ total_points: newTotal, tier })
-      .where(eq(punya_balances.student_id, student.id));
-  } else {
-    await db.insert(punya_balances).values({
-      student_id: student.id,
-      total_points: newTotal,
-      tier,
+  // Only audit a real credit; an idempotent replay didn't change anything.
+  if (result.awarded) {
+    await auditFromReq(req, {
+      action: "award",
+      entityKind: "student",
+      entityId: student.id,
+      summary: `Manual punya award (+${body.points}).`,
+      metadata: {
+        points: body.points,
+        note: body.note ?? null,
+        total_points: result.total_points,
+        tier: result.tier,
+        idempotency_key: body.idempotency_key ?? null,
+      },
     });
   }
 
-  ok(res, { student_id: student.id, points_awarded: body.points, total_points: newTotal, tier });
+  ok(res, {
+    student_id: result.student_id,
+    points_awarded: result.points_awarded,
+    total_points: result.total_points,
+    tier: result.tier,
+  });
 });
 
 /* GET /v1/admin/shikshaks */
@@ -371,7 +397,7 @@ router.get("/shikshaks", async (req: Request, res: Response) => {
     .from(users)
     .innerJoin(shikshak_batch_assignments, eq(shikshak_batch_assignments.user_id, users.id))
     .innerJoin(batches, eq(batches.id, shikshak_batch_assignments.batch_id))
-    .where(and(eq(users.role, "shikshak"), eq(shikshak_batch_assignments.is_active, true), centreFilter))
+    .where(and(eq(users.role, "shikshak"), isNull(users.deleted_at), eq(shikshak_batch_assignments.is_active, true), centreFilter))
     .groupBy(users.id)
     .orderBy(asc(users.full_name))
     .limit(limit);
@@ -396,7 +422,7 @@ router.get("/msv-enrolments", async (req: Request, res: Response) => {
     })
     .from(msv_enrolments)
     .innerJoin(students, eq(students.id, msv_enrolments.student_id))
-    .where(centreFilter)
+    .where(and(isNull(students.deleted_at), centreFilter))
     .orderBy(desc(msv_enrolments.created_at))
     .limit(limit);
   const items = rows.map((r) => ({
@@ -421,7 +447,7 @@ router.get("/holidays", async (req: Request, res: Response) => {
     })
     .from(centre_holidays)
     .innerJoin(centres, eq(centres.id, centre_holidays.centre_id))
-    .where(centreFilter)
+    .where(and(isNull(centres.deleted_at), centreFilter))
     .orderBy(desc(centre_holidays.holiday_date))
     .limit(limit);
   ok(res, { items: rows }, { count: rows.length });
@@ -447,7 +473,7 @@ router.get("/sessions", async (req: Request, res: Response) => {
     .innerJoin(batches, eq(batches.id, sessions.batch_id))
     .innerJoin(centres, eq(centres.id, batches.centre_id))
     .leftJoin(attendance, eq(attendance.session_id, sessions.id))
-    .where(centreFilter)
+    .where(and(isNull(batches.deleted_at), isNull(centres.deleted_at), centreFilter))
     .groupBy(sessions.id, batches.name, centres.name)
     .orderBy(desc(sessions.session_date))
     .limit(limit);
@@ -614,6 +640,13 @@ router.post("/notices", async (req: Request, res: Response) => {
     created_by: req.authUser!.id,
     published_at: body.publish_now ? new Date() : null,
   }).returning({ id: notices.id, title_en: notices.title_en });
+  await auditFromReq(req, {
+    action: "create",
+    entityKind: "notice",
+    entityId: row.id,
+    summary: `Created notice "${row.title_en}".`,
+    metadata: { audience: body.audience, centre_id: body.centre_id ?? null },
+  });
   ok(res, row);
 });
 
@@ -634,11 +667,19 @@ router.post("/shivirs", async (req: Request, res: Response) => {
   let body: z.infer<typeof createShivirSchema>;
   try { body = createShivirSchema.parse(req.body); }
   catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid shivir data."); return; }
-  const scope = await resolveAdminScope(req.authUser!);
-  if (scope.centreIds !== null && scope.centreIds.length > 0) {
+  const role = req.authUser!.role;
+  if (role !== "super_admin" && role !== "state_admin" && role !== "city_admin") {
     fail(res, 403, "ERR_FORBIDDEN", "Only national/state/city admins can create shivirs."); return;
   }
+  // The target city must be in the caller's scope. Resolve the caller's allowed
+  // city ids (null = unrestricted for super_admin) and 403 on an out-of-scope city.
+  let allowedCityIds: string[] | null = null;
+  if (role === "city_admin") allowedCityIds = req.authUser!.city_id ? [req.authUser!.city_id] : [];
+  else if (role === "state_admin") allowedCityIds = req.authUser!.state_id ? (await cityIdsForState(req.authUser!.state_id)) : [];
   const [cityRow] = await db.select({ state_id: cities.state_id }).from(cities).where(eq(cities.id, body.city_id)).limit(1);
+  if (!cityRow || (allowedCityIds !== null && !allowedCityIds.includes(body.city_id))) {
+    fail(res, 403, "ERR_FORBIDDEN", "That city is outside your scope."); return;
+  }
   const [row] = await db.insert(shivir_events).values({
     name: body.name,
     description: body.description ?? null,
@@ -651,6 +692,13 @@ router.post("/shivirs", async (req: Request, res: Response) => {
     is_published: body.is_published,
     msv_only: body.msv_only,
   }).returning({ id: shivir_events.id, name: shivir_events.name });
+  await auditFromReq(req, {
+    action: "create",
+    entityKind: "shivir_event",
+    entityId: row.id,
+    summary: `Created shivir "${row.name}".`,
+    metadata: { city_id: body.city_id, start_date: body.start_date, end_date: body.end_date },
+  });
   ok(res, row);
 });
 

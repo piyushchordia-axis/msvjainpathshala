@@ -1,19 +1,25 @@
-import { boolean, integer, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
+import { boolean, index, integer, pgTable, text, timestamp, uuid, varchar } from "drizzle-orm/pg-core";
 import { timestamps } from "./_helpers";
 import { donationPaymentStatusEnum } from "./enums";
 import { cities } from "./geography";
 import { users } from "./identity";
 
-export const donation_campaigns = pgTable("donation_campaigns", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  city_id: uuid("city_id").references(() => cities.id, { onDelete: "restrict" }),
-  name: text("name").notNull(),
-  description: text("description"),
-  target_amount_paise: integer("target_amount_paise"),
-  raised_amount_paise: integer("raised_amount_paise").notNull().default(0),
-  is_public: boolean("is_public").notNull().default(false),
-  ...timestamps(),
-});
+export const donation_campaigns = pgTable(
+  "donation_campaigns",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    city_id: uuid("city_id").references(() => cities.id, { onDelete: "restrict" }),
+    name: text("name").notNull(),
+    description: text("description"),
+    target_amount_paise: integer("target_amount_paise"),
+    raised_amount_paise: integer("raised_amount_paise").notNull().default(0),
+    is_public: boolean("is_public").notNull().default(false),
+    ...timestamps(),
+  },
+  (t) => ({
+    city_idx: index("idx_donation_campaigns_city").on(t.city_id),
+  }),
+);
 
 export const donations = pgTable("donations", {
   id: uuid("id").primaryKey().defaultRandom(),
@@ -39,7 +45,11 @@ export const donations = pgTable("donations", {
   receipt_number: text("receipt_number").unique(),
   financial_year: text("financial_year"),
   ...timestamps(),
-});
+}, (t) => ({
+  donor_idx: index("idx_donations_donor").on(t.donor_user_id),
+  campaign_idx: index("idx_donations_campaign").on(t.campaign_id),
+  razorpay_order_idx: index("idx_donations_razorpay_order").on(t.razorpay_order_id),
+}));
 
 /**
  * Per-financial-year gapless counter for 80G receipt numbers (JP/<fy>/<no>).

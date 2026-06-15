@@ -187,8 +187,8 @@ export async function runBirthdayWishes(today?: Date): Promise<{ students: numbe
 
   const recipientUserIds = recipients.map((r) => r.userId);
 
-  // Idempotency guard: users who already received a 'birthday' notification
-  // today (IST). Compare the row's created_at, converted to IST, to today's date.
+  // The calendar date (IST) this run is for — also the advisory-lock key, so all
+  // instances/firings for the same day serialize on the same lock.
   const todayIst = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
     year: "numeric",
@@ -196,37 +196,55 @@ export async function runBirthdayWishes(today?: Date): Promise<{ students: numbe
     day: "2-digit",
   }).format(when);
 
-  const existing = await db
-    .select({ user_id: notifications.user_id })
-    .from(notifications)
-    .where(
-      and(
-        inArray(notifications.user_id, recipientUserIds),
-        eq(notifications.kind, "birthday"),
-        // Dedup on the REAL creation date (rows are stamped now()), so a second
-        // run on the same calendar day is idempotent regardless of the dob date.
-        sql`(${notifications.created_at} at time zone 'Asia/Kolkata')::date = (now() at time zone 'Asia/Kolkata')::date`,
-      ),
-    );
-  const alreadyNotified = new Set(existing.map((e) => e.user_id));
+  // Idempotency that holds ACROSS instances (autoscale runs the in-process cron
+  // on every node, so two firings can hit 06:00 IST together). The read-then-
+  // insert below is a check-then-act race on its own; we make it at-most-once-
+  // per-(user,day) by serializing all birthday runs for a given IST date under a
+  // transaction-scoped advisory lock — the same pattern used for niyam/exam
+  // idempotency in this codebase. The existing per-day SELECT then acts as the
+  // de-dup guard, now race-free because only one tx holds the lock at a time.
+  const lockKey = `birthday-wishes:${todayIst}`;
+  const toInsert = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
 
-  const toInsert = recipients.filter((r) => !alreadyNotified.has(r.userId));
+    const existing = await tx
+      .select({ user_id: notifications.user_id })
+      .from(notifications)
+      .where(
+        and(
+          inArray(notifications.user_id, recipientUserIds),
+          eq(notifications.kind, "birthday"),
+          // Dedup on the REAL creation date (rows are stamped now()), so a second
+          // run on the same calendar day is idempotent regardless of the dob date.
+          sql`(${notifications.created_at} at time zone 'Asia/Kolkata')::date = (now() at time zone 'Asia/Kolkata')::date`,
+        ),
+      );
+    const alreadyNotified = new Set(existing.map((e) => e.user_id));
+
+    const pending = recipients.filter((r) => !alreadyNotified.has(r.userId));
+    if (pending.length === 0) return pending;
+
+    await tx.insert(notifications).values(
+      pending.map((r) => ({
+        user_id: r.userId,
+        kind: "birthday" as const,
+        title_en: "Happy Birthday!",
+        title_hi: "जन्मदिन की शुभकामनाएँ!",
+        body_en: `Wishing ${r.studentName} a joyful and blessed birthday from all of us at Jain Pathshala.`,
+        body_hi: `जैन पाठशाला परिवार की ओर से ${r.studentName} को जन्मदिन की हार्दिक शुभकामनाएँ।`,
+      })),
+    );
+    return pending;
+  });
+
   if (toInsert.length === 0) {
     return { students: birthdayStudents.length, notifications: 0 };
   }
 
-  await db.insert(notifications).values(
-    toInsert.map((r) => ({
-      user_id: r.userId,
-      kind: "birthday" as const,
-      title_en: "Happy Birthday!",
-      title_hi: "जन्मदिन की शुभकामनाएँ!",
-      body_en: `Wishing ${r.studentName} a joyful and blessed birthday from all of us at Jain Pathshala.`,
-      body_hi: `जैन पाठशाला परिवार की ओर से ${r.studentName} को जन्मदिन की हार्दिक शुभकामनाएँ।`,
-    })),
-  );
-
-  // Best-effort push to the newly-notified users' active devices.
+  // Best-effort push to the newly-notified users' active devices. Done OUTSIDE
+  // the transaction (and only for the users THIS run actually inserted) so the
+  // external Expo call never holds the advisory lock and never double-sends:
+  // the at-most-once insert above gates the at-most-once push.
   const newlyNotifiedIds = toInsert.map((r) => r.userId);
   const tokens = await db
     .select({ user_id: device_push_tokens.user_id, expo_token: device_push_tokens.expo_token })

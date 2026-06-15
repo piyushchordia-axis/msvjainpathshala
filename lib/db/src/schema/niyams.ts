@@ -1,4 +1,4 @@
-import { boolean, date, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, date, index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 import { timestamps } from "./_helpers";
@@ -44,21 +44,30 @@ export const niyam_submissions = pgTable("niyam_submissions", {
   oncePerDay: uniqueIndex("niyam_submissions_niyam_student_date_uq")
     .on(t.niyam_id, t.student_id, t.submission_date)
     .where(sql`status <> 'rejected'`),
+  student_idx: index("idx_niyam_submissions_student").on(t.student_id),
+  niyam_idx: index("idx_niyam_submissions_niyam").on(t.niyam_id),
 }));
 
-export const niyam_streaks = pgTable("niyam_streaks", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  student_id: uuid("student_id")
-    .notNull()
-    .references(() => students.id, { onDelete: "cascade" }),
-  niyam_id: uuid("niyam_id")
-    .notNull()
-    .references(() => niyams.id, { onDelete: "cascade" }),
-  current_streak: integer("current_streak").notNull().default(0),
-  longest_streak: integer("longest_streak").notNull().default(0),
-  last_submission_date: date("last_submission_date"),
-  ...timestamps(),
-});
+export const niyam_streaks = pgTable(
+  "niyam_streaks",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    student_id: uuid("student_id")
+      .notNull()
+      .references(() => students.id, { onDelete: "cascade" }),
+    niyam_id: uuid("niyam_id")
+      .notNull()
+      .references(() => niyams.id, { onDelete: "cascade" }),
+    current_streak: integer("current_streak").notNull().default(0),
+    longest_streak: integer("longest_streak").notNull().default(0),
+    last_submission_date: date("last_submission_date"),
+    ...timestamps(),
+  },
+  (t) => ({
+    student_idx: index("idx_niyam_streaks_student").on(t.student_id),
+    niyam_idx: index("idx_niyam_streaks_niyam").on(t.niyam_id),
+  }),
+);
 
 export type Niyam = typeof niyams.$inferSelect;
 export type NewNiyam = typeof niyams.$inferInsert;

@@ -17,32 +17,17 @@ import {
   verifyAccessToken,
 } from "../lib/tokens";
 import { setAuthCookies, clearAuthCookies } from "../lib/cookies";
+import { getSmsProvider } from "../lib/sms";
+import { logger } from "../lib/logger";
+import { rateLimit } from "../lib/ratelimit";
+import { auditFromReq } from "../lib/audit";
 
 const router: IRouter = Router();
 
 const OTP_TTL_SECONDS = 5 * 60;
 const MAX_OTP_ATTEMPTS = 5;
+const RL_WINDOW_SECONDS = 15 * 60;
 const isProd = process.env.NODE_ENV === "production";
-
-/**
- * Lightweight in-memory fixed-window rate limiter for the unauthenticated auth
- * surface (OTP send/verify). Prevents OTP brute-force (unbounded fresh-token
- * issuance) and SMS/DB amplification. For multi-instance deployments replace
- * with the shared Redis the platform already runs.
- */
-const rlBuckets = new Map<string, { count: number; resetAt: number }>();
-function rateLimited(key: string, max: number, windowMs: number): boolean {
-  // The integration suite logs in repeatedly for the same seeded phones.
-  if (process.env.NODE_ENV === "test") return false;
-  const now = Date.now();
-  const b = rlBuckets.get(key);
-  if (!b || b.resetAt < now) {
-    rlBuckets.set(key, { count: 1, resetAt: now + windowMs });
-    return false;
-  }
-  b.count += 1;
-  return b.count > max;
-}
 
 function toSessionUser(u: typeof users.$inferSelect): SessionUser {
   return {
@@ -68,13 +53,13 @@ router.post("/login", async (req: Request, res: Response) => {
   if (parsed.phase === "send") {
     // 5 sends per phone / 15 min, plus a per-IP cap to stop SMS/DB amplification.
     if (
-      rateLimited(`otp:send:phone:${parsed.phone}`, 5, 15 * 60_000) ||
-      rateLimited(`otp:send:ip:${ip}`, 30, 15 * 60_000)
+      (await rateLimit(`otp:send:phone:${parsed.phone}`, 5, RL_WINDOW_SECONDS)) ||
+      (await rateLimit(`otp:send:ip:${ip}`, 30, RL_WINDOW_SECONDS))
     ) {
       fail(res, 429, "ERR_RATE_LIMITED", "Too many requests. Please try again later.");
       return;
     }
-  } else if (rateLimited(`otp:verify:ip:${ip}`, 30, 15 * 60_000)) {
+  } else if (await rateLimit(`otp:verify:ip:${ip}`, 30, RL_WINDOW_SECONDS)) {
     // Cap verify attempts per IP so fresh-token issuance can't brute the code.
     fail(res, 429, "ERR_RATE_LIMITED", "Too many attempts. Please try again later.");
     return;
@@ -115,6 +100,19 @@ router.post("/login", async (req: Request, res: Response) => {
       expires_at: expiresAt,
     });
 
+    // Deliver the code via SMS for registered phones only (mirrors dev_code
+    // gating). Best-effort: a delivery failure must not leak the code or fail
+    // the request, and must not reveal whether the phone is registered via
+    // timing/error differences. In dev/test the mock resolves without network,
+    // so existing tests and the dev_code path are unaffected.
+    if (user) {
+      try {
+        await getSmsProvider().sendOtp(parsed.phone, code);
+      } catch (err) {
+        logger.error({ err, phone: parsed.phone }, "OTP SMS delivery failed");
+      }
+    }
+
     const payload: { otp_token: string; expires_in_seconds: number; dev_code?: string } = {
       otp_token: otpToken,
       expires_in_seconds: OTP_TTL_SECONDS,
@@ -136,6 +134,13 @@ router.post("/login", async (req: Request, res: Response) => {
 
   if (!otp || otp.consumed_at || otp.expires_at.getTime() < Date.now()) {
     fail(res, 401, "ERR_OTP_INVALID", "This code has expired. Please request a new one.");
+    return;
+  }
+  // Per-PHONE verify cap (in addition to the per-IP cap above): a rotating-IP
+  // attacker can sidestep the IP cap, so also bound verify attempts against the
+  // targeted account to close the code-grinding gap. Resolved from the otp row.
+  if (await rateLimit(`otp:verify:phone:${otp.phone}`, 30, RL_WINDOW_SECONDS)) {
+    fail(res, 429, "ERR_RATE_LIMITED", "Too many attempts. Please try again later.");
     return;
   }
   if (otp.attempts_count >= MAX_OTP_ATTEMPTS) {
@@ -180,6 +185,18 @@ router.post("/login", async (req: Request, res: Response) => {
 
   const sessionUser = toSessionUser(user);
   setAuthCookies(res, sessionUser, access.token, access.expiresAt, refresh.token, refresh.expiresAt);
+
+  // Record the successful login. auditFromReq pulls actor/role/ip off the
+  // request; this is an unauthenticated endpoint so seed authUser with the
+  // just-resolved user. Best-effort — auditFromReq never throws.
+  req.authUser = user;
+  await auditFromReq(req, {
+    action: "login",
+    entityKind: "auth_session",
+    entityId: user.id,
+    summary: "User signed in via OTP",
+    metadata: { device_id: parsed.device_id },
+  });
 
   res.status(200).json({
     data: {
@@ -267,11 +284,36 @@ async function handleLogout(req: Request, res: Response): Promise<void> {
   const refresh = (req.cookies as Record<string, string> | undefined)?.jp_refresh
     ?? (typeof req.body?.refresh_token === "string" ? req.body.refresh_token : undefined);
   if (refresh) {
+    // Resolve the session's owner before revoking so the audit entry records
+    // who logged out (auditFromReq reads actor/role from req.authUser).
+    const [session] = await db
+      .select({ id: device_sessions.id, user_id: device_sessions.user_id })
+      .from(device_sessions)
+      .where(eq(device_sessions.refresh_token_hash, hashSecret(refresh)))
+      .limit(1)
+      .catch(() => [] as { id: string; user_id: string }[]);
+
     await db
       .update(device_sessions)
       .set({ revoked_at: new Date() })
       .where(eq(device_sessions.refresh_token_hash, hashSecret(refresh)))
       .catch(() => undefined);
+
+    if (session) {
+      const [user] = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, session.user_id))
+        .limit(1)
+        .catch(() => [] as (typeof users.$inferSelect)[]);
+      if (user) req.authUser = user;
+      await auditFromReq(req, {
+        action: "logout",
+        entityKind: "auth_session",
+        entityId: session.id,
+        summary: "User signed out",
+      });
+    }
   }
   clearAuthCookies(res);
   res.status(204).end();

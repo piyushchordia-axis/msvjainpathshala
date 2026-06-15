@@ -410,12 +410,23 @@ async function main(): Promise<void> {
     },
   ]);
 
+  // MSV enrolments MUST stay consistent with students.msv_status: every student
+  // whose msv_status is "applied"/"approved" needs a matching latest msv_enrolments
+  // row (the student record mirrors the latest decision — see routes/v1/msv.ts).
+  // Aarav (idx 0) and Anaya (idx 3) are both seeded approved; Kabir (idx 2) applied.
+  // Omitting Anaya's row previously desynced id-cards/competitions/admin lists.
   await db.insert(msv_enrolments).values([
     {
       student_id: insertedStudents[0].id,
       status: "approved",
       decided_by: superAdmin.id,
       decided_at: daysAgo(40),
+    },
+    {
+      student_id: insertedStudents[3].id,
+      status: "approved",
+      decided_by: superAdmin.id,
+      decided_at: daysAgo(35),
     },
     { student_id: insertedStudents[2].id, status: "applied" },
   ]);

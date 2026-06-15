@@ -102,9 +102,17 @@ describe("audit-logs", () => {
     const allRes = await request(app).get("/v1/audit-logs?limit=300").set(auth(token));
     expect(allRes.status).toBe(200);
     const allItems = allRes.body.data.items as Array<{ entity_kind: string }>;
-    // The seed contains rows of more than one entity_kind, so the superset is
-    // strictly larger than the settings-only subset — that's the bug surface.
-    const settingsInAll = allItems.filter((r) => r.entity_kind === "settings");
+    // Confirm settings rows exist via the SERVER-SIDE filter rather than scanning the
+    // newest-N window: the suite shares one DB without per-file resets, so accumulated
+    // 'login' audit rows can push the lone seeded settings row outside an unfiltered
+    // limit=300 page. The filtered query is deterministic regardless of that volume.
+    const settingsRes = await request(app)
+      .get("/v1/audit-logs?entity_kind=settings&limit=300")
+      .set(auth(token));
+    expect(settingsRes.status).toBe(200);
+    const settingsInAll = settingsRes.body.data.items as Array<{ entity_kind: string }>;
+    // Accumulated login rows guarantee non-settings rows in the superset, so the
+    // settings-only subset is strictly smaller — that's the bug surface.
     const nonSettingsInAll = allItems.filter((r) => r.entity_kind !== "settings");
     expect(settingsInAll.length).toBeGreaterThanOrEqual(1);
     expect(nonSettingsInAll.length).toBeGreaterThanOrEqual(1);

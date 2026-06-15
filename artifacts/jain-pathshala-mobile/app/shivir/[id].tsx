@@ -1,12 +1,12 @@
 import { Ionicons } from "@expo/vector-icons";
 import { useQuery } from "@tanstack/react-query";
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams, type Href } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { apiGet } from "@/lib/api";
 import type { ShivirDetail } from "@/lib/types";
 import { formatDateRange } from "@/lib/format";
-import { Body, Card, Screen, StateView, Title, Row as URow } from "@/components/ui";
+import { Body, Button, Card, Screen, StateView, Title, Row as URow } from "@/components/ui";
 
 export default function ShivirDetailScreen() {
   const c = useColors();
@@ -48,6 +48,24 @@ export default function ShivirDetailScreen() {
             <Body muted>{hi ? "क्षमता" : "Capacity"}: {data.capacity}</Body>
           </URow>
         ) : null}
+      </Card>
+
+      {/* Volunteer / admin attendance scanner. Visible to everyone; the scanner
+          screen itself is server-authorized and shows a friendly "not available"
+          state to anyone who isn't a volunteer or in-scope admin for this shivir. */}
+      <Card>
+        <Title style={{ fontSize: 17 }}>{hi ? "उपस्थिति स्कैनर" : "Attendance scanner"}</Title>
+        <Body muted style={{ marginTop: 8, lineHeight: 23 }}>
+          {hi
+            ? "स्वयंसेवक यहाँ विद्यार्थियों के पहचान पत्र QR स्कैन करके उपस्थिति दर्ज कर सकते हैं।"
+            : "Volunteers can record attendance here by scanning students' ID-card QR codes."}
+        </Body>
+        <Button
+          label={hi ? "QR स्कैन करें" : "Scan QR"}
+          icon="scan-outline"
+          onPress={() => router.push(`/shivir-scan/${data.id}` as Href)}
+          style={{ marginTop: 14 }}
+        />
       </Card>
 
       {data.description ? (

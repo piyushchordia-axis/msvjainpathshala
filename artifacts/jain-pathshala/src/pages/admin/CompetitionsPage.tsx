@@ -22,7 +22,7 @@ import {
   DialogTrigger,
   DialogClose,
 } from '@/components/ui/dialog';
-import { Plus } from 'lucide-react';
+import { Plus, Users } from 'lucide-react';
 
 // Mirrors GET /v1/competitions row shape exactly.
 interface CompetitionRow {
@@ -43,6 +43,18 @@ interface CompetitionRow {
   status: 'draft' | 'open' | 'closed' | 'results_published';
   results_published_at: string | null;
   registration_count: number;
+}
+
+// Mirrors GET /v1/competitions/:id/registrations row shape exactly.
+interface RosterRow {
+  id: string;
+  student_id: string;
+  student_name: string;
+  centre_name: string | null;
+  registered_at: string;
+  result_rank: number | null;
+  result_note: string | null;
+  status: 'registered' | 'ranked';
 }
 
 const AGE_GROUPS = ['bal', 'kishor', 'tarun', 'yuva'] as const;
@@ -227,6 +239,93 @@ function AddCompetitionDialog({ onAdded }: { onAdded: () => void }) {
   );
 }
 
+function RosterDialog({ row }: { row: CompetitionRow }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [roster, setRoster] = useState<RosterRow[]>([]);
+
+  // Lazily fetch the roster each time the dialog is opened (data may have
+  // changed since the table was loaded).
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setBusy(true);
+    setError(null);
+    apiGet<{ items: RosterRow[] }>(`/v1/competitions/${row.id}/registrations?limit=200`)
+      .then((r) => {
+        if (!cancelled) setRoster(r?.items ?? []);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof ApiError ? err.message : 'Could not load registrations.');
+      })
+      .finally(() => {
+        if (!cancelled) setBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, row.id]);
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="ghost" className="h-auto px-1 py-0 text-sm font-normal" aria-label="View roster">
+          <Users className="mr-1 h-3.5 w-3.5" />
+          {row.registration_count}
+          {row.max_participants != null ? (
+            <span className="text-xs text-muted-foreground"> / {row.max_participants}</span>
+          ) : null}
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{row.name_en} — registrations</DialogTitle>
+        </DialogHeader>
+        <div className="pt-2">
+          {error ? <p className="text-sm text-destructive">{error}</p> : null}
+          {busy ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : !error && roster.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No registrations yet.</p>
+          ) : !error ? (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs text-muted-foreground">
+                  <th className="py-2 pr-3 font-medium">Student</th>
+                  <th className="py-2 pr-3 font-medium">Centre</th>
+                  <th className="py-2 pr-3 font-medium">Registered</th>
+                  <th className="py-2 font-medium">Result</th>
+                </tr>
+              </thead>
+              <tbody>
+                {roster.map((r) => (
+                  <tr key={r.id} className="border-b last:border-0">
+                    <td className="py-2 pr-3 font-medium">{r.student_name}</td>
+                    <td className="py-2 pr-3 text-muted-foreground">{r.centre_name ?? '—'}</td>
+                    <td className="py-2 pr-3 text-muted-foreground">
+                      {new Date(r.registered_at).toLocaleDateString('en-GB')}
+                    </td>
+                    <td className="py-2">
+                      {r.result_rank != null ? (
+                        <Badge variant={r.result_rank === 1 ? 'default' : 'secondary'}>
+                          {r.result_rank === 1 ? 'Winner' : `Rank ${r.result_rank}`}
+                        </Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : null}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function StatusActions({ row, onChanged }: { row: CompetitionRow; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const next = NEXT_STATUS[row.status];
@@ -309,8 +408,7 @@ export default function CompetitionsPage() {
               {new Date(c.event_date).toLocaleDateString('en-GB')}
             </td>
             <td className="px-4 py-3">
-              {c.registration_count}
-              {c.max_participants != null ? <span className="text-xs text-muted-foreground"> / {c.max_participants}</span> : null}
+              <RosterDialog row={c} />
             </td>
             <td className="px-4 py-3 text-xs">
               <span className="text-muted-foreground">W</span> {c.winner_points} ·{' '}

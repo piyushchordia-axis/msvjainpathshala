@@ -55,3 +55,25 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Build caches & generated artifacts — never commit (regenerable)
+/.pnpm-store/
+/.turbo/
+.turbo/
+/.agent-runner/
+
+# Stale duplicate build tree — real source lives in artifacts/* and lib/*
+/apps/
+
+# Python virtualenvs & bytecode
+.venv/
+__pycache__/
+*.pyc
+
+# Terraform local cache & state (provider binaries are huge; state is sensitive)
+.terraform/
+*.tfstate
+*.tfstate.*
+
+# Local scratch / debug artifacts
+infra/scratch/

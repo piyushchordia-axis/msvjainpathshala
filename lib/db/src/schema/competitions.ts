@@ -1,4 +1,4 @@
-import { boolean, date, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, date, index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 import { timestamps } from "./_helpers";
 import { ageGroupEnum, competitionStatusEnum } from "./enums";
@@ -28,7 +28,9 @@ export const competitions = pgTable("competitions", {
   results_published_at: timestamp("results_published_at", { withTimezone: true }),
   created_by: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
   ...timestamps(),
-});
+}, (t) => ({
+  city_idx: index("idx_competitions_city").on(t.city_id),
+}));
 
 export const competition_registrations = pgTable(
   "competition_registrations",
@@ -50,6 +52,8 @@ export const competition_registrations = pgTable(
       t.competition_id,
       t.student_id,
     ),
+    competition_idx: index("idx_competition_registrations_competition").on(t.competition_id),
+    student_idx: index("idx_competition_registrations_student").on(t.student_id),
   }),
 );
 

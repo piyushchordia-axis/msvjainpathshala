@@ -44,6 +44,7 @@ export const qk = {
   niyams: (id: string) => ["me", "niyams", id] as const,
   niyamCatalog: ["me", "niyam-catalog"] as const,
   today: ["me", "today"] as const,
+  attendanceSession: (id: string) => ["shikshak", "attendance-session", id] as const,
   overview: ["admin", "overview"] as const,
   adminStudents: (s?: string) => ["admin", "students", s ?? "all"] as const,
   adminEnrolments: (s?: string) => ["admin", "enrolments", s ?? "all"] as const,
@@ -51,7 +52,8 @@ export const qk = {
   // Wave 4 (new student/parent flows)
   notifications: ["me", "notifications"] as const,
   homework: (id: string) => ["me", "homework", id] as const,
-  quizzesAvailable: ["me", "quizzes", "available"] as const,
+  quizzesAvailable: (id: string) => ["me", "quizzes", "available", id] as const,
+  pushQuizActive: (id: string) => ["me", "quizzes", "push-active", id] as const,
   openCompetitions: ["me", "competitions", "open"] as const,
   idCard: (id: string) => ["me", "id-card", id] as const,
 };
@@ -161,6 +163,83 @@ export function useToday(enabled = true) {
     queryKey: qk.today,
     queryFn: () => apiGet<List<ShikshakSessionRow>>("/v1/me/today"),
     enabled,
+  });
+}
+
+/* ----------------------------------------- attendance marking (shikshak) --- */
+
+/** One student's row in a session roster. status is null until marked. */
+export interface AttendanceRosterRow {
+  student_id: string;
+  full_name: string | null;
+  student_code: string;
+  status: "present" | "absent" | "late" | "excused" | null;
+  marked_method: string | null;
+}
+export interface AttendanceSessionDetail {
+  session: {
+    id: string;
+    batch_id: string;
+    session_date: string;
+    status: string;
+    topic: string | null;
+    gps_required: boolean;
+    batch_name: string | null;
+    centre_name: string | null;
+    /** centre has configured lat/lng — geofence can actually be enforced. */
+    has_gps: boolean;
+  };
+  roster: AttendanceRosterRow[];
+}
+
+/**
+ * Session detail + roster for the attendance-marking screen. Scoped + 404'd
+ * server-side, so an out-of-scope session surfaces as a not-found state.
+ */
+export function useAttendanceSession(sessionId?: string) {
+  return useQuery({
+    queryKey: qk.attendanceSession(sessionId ?? ""),
+    queryFn: () =>
+      apiGet<AttendanceSessionDetail>(`/v1/attendance/sessions/${sessionId}`),
+    enabled: !!sessionId,
+  });
+}
+
+export type AttendanceMark = "present" | "absent" | "late" | "excused";
+export interface MarkAttendanceResult {
+  session_id: string;
+  marked: number;
+  /** "gps" when a geofence was enforced, else "manual". */
+  method: "gps" | "manual";
+}
+/**
+ * Upsert attendance rows for a session. For a gps_required session the caller
+ * must pass lat/lng (captured via expo-location); the server haversine-checks
+ * them against the centre geofence and 403s when outside. Invalidates both the
+ * session detail and the shikshak "today" counts on success.
+ */
+export function useMarkAttendance() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      sessionId: _sessionId,
+      records,
+      lat,
+      lng,
+    }: {
+      sessionId: string;
+      records: { student_id: string; status: AttendanceMark }[];
+      lat?: number;
+      lng?: number;
+    }) =>
+      apiPost<MarkAttendanceResult>(`/v1/attendance/sessions/${_sessionId}/mark`, {
+        records,
+        ...(lat !== undefined && lng !== undefined ? { lat, lng } : {}),
+      }),
+    onSuccess: (_res, vars) => {
+      qc.invalidateQueries({ queryKey: qk.attendanceSession(vars.sessionId) });
+      qc.invalidateQueries({ queryKey: qk.today });
+    },
   });
 }
 
@@ -324,25 +403,42 @@ export function useSubmitHomework() {
   });
 }
 
-// --- Quizzes ---
+// --- Quizzes (scheduled events) ---
+// Field shapes mirror /v1/quizzes responses exactly. Option text_hi is nullable
+// in the bank; questions are returned WITHOUT correct_indices (student-safe).
 export interface QuizEventRow {
   id: string;
+  scope: string;
   title_en: string;
   title_hi: string;
   start_at: string;
   end_at: string;
+  participation_points: number;
+  win_points: number;
   already_attempted: boolean;
-  total_questions?: number;
 }
-export interface QuizOption { text_en: string; text_hi: string }
-export interface QuizQuestion { id: string; question_en: string; question_hi: string; options: QuizOption[] }
+export interface QuizOption { text_en: string; text_hi: string | null }
+export interface QuizQuestion { id: string; question_en: string; question_hi: string | null; options: QuizOption[] }
 export interface QuizStartResponse { attempt_id: string; questions: QuizQuestion[] }
-export interface QuizSubmitResponse { score: number; correct_count: number; total_count: number }
-export function useAvailableQuizzes(enabled = true) {
+export interface QuizSubmitResponse {
+  attempt_id: string;
+  score: number;
+  correct_count: number;
+  total_count: number;
+  all_correct: boolean;
+  points_awarded: number;
+}
+
+/** Open scheduled quiz events for the active student. student_id is required by
+ * the API (each event is age-group + scope filtered for that student). */
+export function useAvailableQuizzes(studentId?: string) {
   return useQuery({
-    queryKey: qk.quizzesAvailable,
-    queryFn: () => apiGet<List<QuizEventRow>>("/v1/quizzes/events/available"),
-    enabled,
+    queryKey: qk.quizzesAvailable(studentId ?? ""),
+    queryFn: () =>
+      apiGet<List<QuizEventRow>>(
+        `/v1/quizzes/events/available?student_id=${studentId}`,
+      ),
+    enabled: !!studentId,
   });
 }
 export function useStartQuiz() {
@@ -357,7 +453,48 @@ export function useSubmitQuiz() {
   return useMutation({
     mutationFn: ({ id, student_id, answers }: { id: string; student_id: string; answers: Record<string, number[]> }) =>
       apiPost<QuizSubmitResponse>(`/v1/quizzes/events/${id}/submit`, { student_id, answers }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.quizzesAvailable }),
+    onSuccess: (_res, vars) => qc.invalidateQueries({ queryKey: qk.quizzesAvailable(vars.student_id) }),
+    onError: (err) => Alert.alert("Could not submit quiz", err instanceof Error ? err.message : "Please try again."),
+  });
+}
+
+// --- Push quizzes (live, batch-scoped; shikshak-initiated) ---
+export interface PushQuizActive {
+  id: string;
+  started_at: string;
+  expires_at: string;
+  completion_points: number;
+  already_submitted: boolean;
+  questions: QuizQuestion[];
+}
+export interface PushQuizSubmitResponse {
+  push_quiz_id: string;
+  score: number;
+  correct_count: number;
+  total_count: number;
+  points_awarded: number;
+}
+
+/** The single active push quiz for the student's batch, or null. Polled while a
+ * student sits on the quizzes screen so a live push appears without a reload. */
+export function useActivePushQuiz(studentId?: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.pushQuizActive(studentId ?? ""),
+    queryFn: () =>
+      apiGet<{ active: PushQuizActive | null }>(
+        `/v1/quizzes/push/active?student_id=${studentId}`,
+      ),
+    enabled: enabled && !!studentId,
+    // Cheap, polling-based liveness (the API is explicitly polling, no sockets).
+    refetchInterval: 20_000,
+  });
+}
+export function useSubmitPushQuiz() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, student_id, answers }: { id: string; student_id: string; answers: Record<string, number[]> }) =>
+      apiPost<PushQuizSubmitResponse>(`/v1/quizzes/push/${id}/submit`, { student_id, answers }),
+    onSuccess: (_res, vars) => qc.invalidateQueries({ queryKey: qk.pushQuizActive(vars.student_id) }),
     onError: (err) => Alert.alert("Could not submit quiz", err instanceof Error ? err.message : "Please try again."),
   });
 }

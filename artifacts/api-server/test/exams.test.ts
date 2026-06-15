@@ -310,6 +310,96 @@ describe("online exams", () => {
     expect(result.body.data.per_question).toBeUndefined();
   });
 
+  it("backfills skipped text answers so grading cannot finalize prematurely", async () => {
+    // Regression: previously the submit loop only wrote exam_answers rows for
+    // questions in the body, so a SKIPPED text question had no row at all. The
+    // grade route counts rows with NULL marks_awarded to decide when grading is
+    // complete, so a missing row let it finalize 'graded' with an understated
+    // score before the text answer was ever graded. The submit now backfills a
+    // NULL-marks row for every gradable question.
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+    const examId = await createMumbaiExam(admin.token, cityId);
+
+    // One choice question (auto-graded) + one text question (manual).
+    const q1 = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({
+        question_en: "Which is a Jain principle?",
+        question_type: "single_choice",
+        marks: 10,
+        options: [
+          { option_en: "Ahimsa", is_correct: true },
+          { option_en: "Himsa", is_correct: false },
+        ],
+      });
+    expect(q1.status).toBe(200);
+    const q1Id: string = q1.body.data.id;
+
+    const q2 = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({ question_en: "Explain aparigraha.", question_type: "text", marks: 10 });
+    expect(q2.status).toBe(200);
+    const q2Id: string = q2.body.data.id;
+
+    // Student starts and submits ONLY the choice answer — the text question is
+    // skipped (omitted from the answers array entirely).
+    const student = await loginAs("student");
+    const startRes = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({});
+    expect(startRes.status).toBe(200);
+    const attemptId: string = startRes.body.data.attempt_id;
+    const startQuestions: Array<{ id: string; options: Array<{ id: string }> }> =
+      startRes.body.data.questions;
+    const choiceQ = startQuestions.find((q) => q.id === q1Id)!;
+
+    const submit = await request(app)
+      .post(`/v1/exams/attempts/${attemptId}/submit`)
+      .set(auth(student.token))
+      .send({ answers: [{ question_id: q1Id, selected_option_ids: [choiceQ.options[0].id] }] });
+    expect(submit.status).toBe(200);
+    // Exam has a text question, so it stays submitted and needs grading even
+    // though the student skipped it.
+    expect(submit.body.data.status).toBe("submitted");
+    expect(submit.body.data.needs_grading).toBe(true);
+
+    // The skipped text question must now have a backfilled answer row (visible
+    // in the admin attempt detail) awaiting a grade.
+    const detail = await request(app)
+      .get(`/v1/exams/${examId}/attempts/${attemptId}`)
+      .set(auth(admin.token));
+    expect(detail.status).toBe(200);
+    const answers: Array<{ question_id: string; marks_awarded: number | null }> =
+      detail.body.data.answers;
+    const textRow = answers.find((a) => a.question_id === q2Id)!;
+    expect(textRow).toBeDefined();
+    expect(textRow.marks_awarded).toBeNull();
+
+    // A grade call that omits the skipped text question must NOT finalize the
+    // attempt to 'graded' — it stays submitted because the text answer is
+    // still ungraded.
+    const partial = await request(app)
+      .post(`/v1/exams/${examId}/attempts/${attemptId}/grade`)
+      .set(auth(admin.token))
+      .send({ grades: [{ question_id: q1Id, marks_awarded: 10 }] });
+    expect(partial.status).toBe(200);
+    expect(partial.body.data.status).toBe("submitted");
+    expect(partial.body.data.needs_grading).toBe(true);
+
+    // Grading the text question completes it -> auto 10 + manual 0 = 10.
+    const finalize = await request(app)
+      .post(`/v1/exams/${examId}/attempts/${attemptId}/grade`)
+      .set(auth(admin.token))
+      .send({ grades: [{ question_id: q2Id, marks_awarded: 0 }] });
+    expect(finalize.status).toBe(200);
+    expect(finalize.body.data.status).toBe("graded");
+    expect(finalize.body.data.score).toBe(10);
+  });
+
   it("rejects grading an in-progress (never-submitted) attempt with 422", async () => {
     const admin = await loginAs("super_admin");
     const cityId = await mumbaiCityId(admin.token);
@@ -337,5 +427,311 @@ describe("online exams", () => {
       .send({ grades: [{ question_id: qtId, marks_awarded: 5 }] });
     expect(grade.status).toBe(422);
     expect(grade.body.error.code).toBe("ERR_VALIDATION_FAILED");
+  });
+
+  /** Author a fresh, open Mumbai exam that REQUIRES an OTP gate; return id+otp. */
+  async function createOtpGatedExam(
+    token: string,
+    cityId: string,
+  ): Promise<{ examId: string; otp: string }> {
+    const otp = `OTP${Date.now().toString().slice(-6)}`;
+    const start = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const end = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const createExam = await request(app)
+      .post("/v1/admin/exams")
+      .set(auth(token))
+      .send({
+        title_en: `Vitest OTP Exam ${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        city_id: cityId,
+        window_start: start,
+        window_end: end,
+        total_marks: 20,
+        pass_mark: 5,
+        max_attempts: 99,
+        exam_otp: otp,
+      });
+    expect(createExam.status).toBe(200);
+    const examId: string = createExam.body.data.id;
+    expect(examId).toBeTruthy();
+    return { examId, otp };
+  }
+
+  it("OTP-gated take flow: blocks start without/with wrong OTP, allows with correct OTP", async () => {
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+    const { examId, otp } = await createOtpGatedExam(admin.token, cityId);
+
+    // A single objective question so the take flow has something to grade.
+    const q1 = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({
+        question_en: "Which is a Jain principle?",
+        question_type: "single_choice",
+        marks: 10,
+        options: [
+          { option_en: "Ahimsa", is_correct: true },
+          { option_en: "Himsa", is_correct: false },
+        ],
+      });
+    expect(q1.status).toBe(200);
+    const q1Id: string = q1.body.data.id;
+
+    const student = await loginAs("student");
+
+    // The available listing should flag this exam as requiring an OTP.
+    const available = await request(app)
+      .get("/v1/exams/available")
+      .set(auth(student.token));
+    expect(available.status).toBe(200);
+    const listed: Array<{ id: string; requires_otp: boolean }> = available.body.data.items;
+    const me = listed.find((e) => e.id === examId);
+    expect(me).toBeDefined();
+    expect(me!.requires_otp).toBe(true);
+
+    // Start with NO OTP -> 401 OTP invalid (the gate the route enforces).
+    const noOtp = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({});
+    expect(noOtp.status).toBe(401);
+    expect(noOtp.body.error.code).toBe("ERR_OTP_INVALID");
+
+    // Start with a WRONG OTP -> 401 OTP invalid.
+    const wrongOtp = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({ otp: "not-the-code" });
+    expect(wrongOtp.status).toBe(401);
+    expect(wrongOtp.body.error.code).toBe("ERR_OTP_INVALID");
+
+    // Start with the CORRECT OTP -> attempt opens and questions come back.
+    const startRes = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({ otp });
+    expect(startRes.status).toBe(200);
+    const attemptId: string = startRes.body.data.attempt_id;
+    expect(attemptId).toBeTruthy();
+    const startQuestions: Array<{ id: string; options: Array<{ id: string }> }> =
+      startRes.body.data.questions;
+    const choiceQ = startQuestions.find((q) => q.id === q1Id)!;
+    expect(choiceQ).toBeDefined();
+
+    // Submit the correct option -> objective-only exam auto-grades to 10.
+    const submit = await request(app)
+      .post(`/v1/exams/attempts/${attemptId}/submit`)
+      .set(auth(student.token))
+      .send({ answers: [{ question_id: q1Id, selected_option_ids: [choiceQ.options[0].id] }] });
+    expect(submit.status).toBe(200);
+    expect(submit.body.data.status).toBe("graded");
+    expect(submit.body.data.needs_grading).toBe(false);
+    expect(submit.body.data.auto_score).toBe(10);
+    expect(submit.body.data.score).toBe(10);
+  });
+
+  it("auto-grades objective answers: full marks for correct, zero for wrong", async () => {
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+
+    // Two objective questions worth 10 + 5 = 15 marks; no text question so the
+    // submission auto-grades immediately to a known score.
+    const examId = await createMumbaiExam(admin.token, cityId);
+    const qCorrect = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({
+        question_en: "Which is a Jain principle?",
+        question_type: "single_choice",
+        marks: 10,
+        options: [
+          { option_en: "Ahimsa", is_correct: true },
+          { option_en: "Himsa", is_correct: false },
+        ],
+      });
+    expect(qCorrect.status).toBe(200);
+    const qCorrectId: string = qCorrect.body.data.id;
+
+    const qWrong = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({
+        question_en: "How many tattvas?",
+        question_type: "single_choice",
+        marks: 5,
+        options: [
+          { option_en: "Seven", is_correct: true },
+          { option_en: "Three", is_correct: false },
+        ],
+      });
+    expect(qWrong.status).toBe(200);
+    const qWrongId: string = qWrong.body.data.id;
+
+    const student = await loginAs("student");
+    const startRes = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({});
+    expect(startRes.status).toBe(200);
+    const attemptId: string = startRes.body.data.attempt_id;
+    const startQuestions: Array<{
+      id: string;
+      options: Array<{ id: string; option_en: string }>;
+    }> = startRes.body.data.questions;
+
+    // Answer Q1 correctly (Ahimsa) and Q2 incorrectly (Three) -> 10 + 0 = 10.
+    const sq1 = startQuestions.find((q) => q.id === qCorrectId)!;
+    const sq2 = startQuestions.find((q) => q.id === qWrongId)!;
+    const correctOpt = sq1.options.find((o) => o.option_en === "Ahimsa")!;
+    const wrongOpt = sq2.options.find((o) => o.option_en === "Three")!;
+
+    const submit = await request(app)
+      .post(`/v1/exams/attempts/${attemptId}/submit`)
+      .set(auth(student.token))
+      .send({
+        answers: [
+          { question_id: qCorrectId, selected_option_ids: [correctOpt.id] },
+          { question_id: qWrongId, selected_option_ids: [wrongOpt.id] },
+        ],
+      });
+    expect(submit.status).toBe(200);
+    expect(submit.body.data.status).toBe("graded");
+    expect(submit.body.data.needs_grading).toBe(false);
+    expect(submit.body.data.auto_score).toBe(10);
+    expect(submit.body.data.score).toBe(10);
+  });
+
+  it("skipped TEXT question keeps the attempt pending manual grade (not finalized)", async () => {
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+    const examId = await createMumbaiExam(admin.token, cityId);
+
+    // One objective (auto, 10) + one text (manual, 10).
+    const q1 = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({
+        question_en: "Which is a Jain principle?",
+        question_type: "single_choice",
+        marks: 10,
+        options: [
+          { option_en: "Ahimsa", is_correct: true },
+          { option_en: "Himsa", is_correct: false },
+        ],
+      });
+    expect(q1.status).toBe(200);
+    const q1Id: string = q1.body.data.id;
+
+    const q2 = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({ question_en: "Explain anekantavada.", question_type: "text", marks: 10 });
+    expect(q2.status).toBe(200);
+    const q2Id: string = q2.body.data.id;
+
+    // Student answers ONLY the objective question; the text question is skipped.
+    const student = await loginAs("student");
+    const startRes = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({});
+    expect(startRes.status).toBe(200);
+    const attemptId: string = startRes.body.data.attempt_id;
+    const startQuestions: Array<{ id: string; options: Array<{ id: string }> }> =
+      startRes.body.data.questions;
+    const choiceQ = startQuestions.find((q) => q.id === q1Id)!;
+
+    const submit = await request(app)
+      .post(`/v1/exams/attempts/${attemptId}/submit`)
+      .set(auth(student.token))
+      .send({ answers: [{ question_id: q1Id, selected_option_ids: [choiceQ.options[0].id] }] });
+    expect(submit.status).toBe(200);
+    // Must NOT auto-finalize: the unanswered text question keeps it pending the
+    // manual grade. The route models "pending manual grade" as status=submitted
+    // with needs_grading=true and a withheld (null) overall score.
+    expect(submit.body.data.status).toBe("submitted");
+    expect(submit.body.data.needs_grading).toBe(true);
+    expect(submit.body.data.score).toBeNull();
+    // The objective half still scored.
+    expect(submit.body.data.auto_score).toBe(10);
+
+    // The admin attempt detail confirms it is not finalized and the skipped text
+    // answer has a NULL marks row awaiting grading.
+    const detail = await request(app)
+      .get(`/v1/exams/${examId}/attempts/${attemptId}`)
+      .set(auth(admin.token));
+    expect(detail.status).toBe(200);
+    expect(detail.body.data.status).toBe("submitted");
+    expect(detail.body.data.needs_grading).toBe(true);
+    expect(detail.body.data.score).toBeNull();
+    const answers: Array<{ question_id: string; marks_awarded: number | null }> =
+      detail.body.data.answers;
+    const textRow = answers.find((a) => a.question_id === q2Id)!;
+    expect(textRow.marks_awarded).toBeNull();
+
+    // Manual grading the text answer NOW finalizes: auto 10 + manual 7 = 17.
+    const grade = await request(app)
+      .post(`/v1/exams/${examId}/attempts/${attemptId}/grade`)
+      .set(auth(admin.token))
+      .send({ grades: [{ question_id: q2Id, marks_awarded: 7 }] });
+    expect(grade.status).toBe(200);
+    expect(grade.body.data.status).toBe("graded");
+    expect(grade.body.data.score).toBe(17);
+  });
+
+  it("authorization: students cannot grade, and unauthorized roles are rejected", async () => {
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+    const examId = await createMumbaiExam(admin.token, cityId);
+
+    const qt = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({ question_en: "Explain ahimsa.", question_type: "text", marks: 10 });
+    expect(qt.status).toBe(200);
+    const qtId: string = qt.body.data.id;
+
+    const student = await loginAs("student");
+    const startRes = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({});
+    expect(startRes.status).toBe(200);
+    const attemptId: string = startRes.body.data.attempt_id;
+    const submit = await request(app)
+      .post(`/v1/exams/attempts/${attemptId}/submit`)
+      .set(auth(student.token))
+      .send({ answers: [{ question_id: qtId, text_answer: "Non-violence in thought and deed." }] });
+    expect(submit.status).toBe(200);
+    expect(submit.body.data.needs_grading).toBe(true);
+
+    // A student cannot grade their own (or any) attempt -> 403 admin-panel gate.
+    const studentGrade = await request(app)
+      .post(`/v1/exams/${examId}/attempts/${attemptId}/grade`)
+      .set(auth(student.token))
+      .send({ grades: [{ question_id: qtId, marks_awarded: 10 }] });
+    expect(studentGrade.status).toBe(403);
+    expect(studentGrade.body.error.code).toBe("ERR_FORBIDDEN");
+
+    // A student also cannot read the admin attempt detail.
+    const studentDetail = await request(app)
+      .get(`/v1/exams/${examId}/attempts/${attemptId}`)
+      .set(auth(student.token));
+    expect(studentDetail.status).toBe(403);
+
+    // No auth at all on the grade route -> 401 unauthorized.
+    const anonGrade = await request(app)
+      .post(`/v1/exams/${examId}/attempts/${attemptId}/grade`)
+      .send({ grades: [{ question_id: qtId, marks_awarded: 10 }] });
+    expect(anonGrade.status).toBe(401);
+
+    // A non-admin-panel role (parent) cannot grade either -> 403.
+    const parent = await loginAs("parent");
+    const parentGrade = await request(app)
+      .post(`/v1/exams/${examId}/attempts/${attemptId}/grade`)
+      .set(auth(parent.token))
+      .send({ grades: [{ question_id: qtId, marks_awarded: 10 }] });
+    expect(parentGrade.status).toBe(403);
+    expect(parentGrade.body.error.code).toBe("ERR_FORBIDDEN");
   });
 });

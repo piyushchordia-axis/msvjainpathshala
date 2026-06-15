@@ -26,6 +26,7 @@ import { canAccessAdminPanel } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope } from "../../lib/scope";
+import { auditFromReq } from "../../lib/audit";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -237,6 +238,14 @@ router.post("/:id/questions", async (req: Request, res: Response) => {
     );
   }
 
+  await auditFromReq(req, {
+    action: "create",
+    entityKind: "exam_question",
+    entityId: question.id,
+    summary: `Added ${body.question_type} question to exam.`,
+    metadata: { exam_id: examId, question_type: body.question_type, marks: body.marks },
+  });
+
   ok(res, { id: question.id });
 });
 
@@ -268,6 +277,15 @@ router.delete("/:id/questions/:qid", async (req: Request, res: Response) => {
     return;
   }
   await db.delete(exam_questions).where(eq(exam_questions.id, qid));
+
+  await auditFromReq(req, {
+    action: "delete",
+    entityKind: "exam_question",
+    entityId: qid,
+    summary: "Deleted exam question.",
+    metadata: { exam_id: examId },
+  });
+
   ok(res, { id: qid, deleted: true });
 });
 
@@ -476,6 +494,14 @@ router.post("/:id/attempts/:attemptId/grade", async (req: Request, res: Response
       })
       .where(eq(exam_attempts.id, attemptId));
 
+    await auditFromReq(req, {
+      action: "grade",
+      entityKind: "exam_attempt",
+      entityId: attemptId,
+      summary: `Finalized exam grading (score ${score}).`,
+      metadata: { exam_id: examId, score, manual_score: manualScore, status: "graded" },
+    });
+
     ok(res, { attempt_id: attemptId, score, status: "graded" });
     return;
   }
@@ -491,6 +517,14 @@ router.post("/:id/attempts/:attemptId/grade", async (req: Request, res: Response
       graded_at: new Date(),
     })
     .where(eq(exam_attempts.id, attemptId));
+
+  await auditFromReq(req, {
+    action: "grade",
+    entityKind: "exam_attempt",
+    entityId: attemptId,
+    summary: "Partially graded exam attempt (awaiting more grades).",
+    metadata: { exam_id: examId, manual_score: manualScore, ungraded, status: "submitted" },
+  });
 
   ok(res, { attempt_id: attemptId, status: "submitted", needs_grading: true });
 });
@@ -757,66 +791,99 @@ router.post("/attempts/:attemptId/submit", async (req: Request, res: Response) =
     correctByQuestion.set(r.question_id, arr);
   }
 
+  // Index the submitted answers by question so we can backfill a row for EVERY
+  // question in the exam — including ones the student skipped. Without a row for
+  // each gradable question the manual-grade route (which counts rows with NULL
+  // marks_awarded) would never see a skipped text question and could finalize
+  // 'graded' with an understated score before it was ever graded.
+  const answerByQuestion = new Map(body.answers.map((a) => [a.question_id, a]));
+
   let autoScore = 0;
   let hasText = false;
   for (const q of questions) if (q.question_type === "text") hasText = true;
 
-  for (const ans of body.answers) {
-    const q = qById.get(ans.question_id);
-    if (!q) continue; // ignore answers for unrelated questions
+  const now = new Date();
 
-    let isCorrect: boolean | null = null;
-    let marksAwarded: number | null = null;
-    const selected = ans.selected_option_ids ?? [];
+  // Persist one exam_answers row per question, whether answered or skipped, in a
+  // single transaction so submission is atomic.
+  await db.transaction(async (tx) => {
+    for (const q of questions) {
+      const ans = answerByQuestion.get(q.id);
+      const selected = ans?.selected_option_ids ?? [];
+      const textAnswer = ans?.text_answer ?? null;
 
-    if (q.question_type === "text") {
-      isCorrect = null;
-      marksAwarded = null;
-    } else {
-      const correct = correctByQuestion.get(q.id) ?? [];
-      const ok2 = sameIdSet(selected, correct);
-      isCorrect = ok2;
-      marksAwarded = ok2 ? q.marks : 0;
-      autoScore += marksAwarded;
-    }
+      let isCorrect: boolean | null = null;
+      let marksAwarded: number | null = null;
 
-    // Upsert by (attempt_id, question_id) unique index.
-    await db
-      .insert(exam_answers)
-      .values({
-        attempt_id: attemptId,
-        question_id: q.id,
-        selected_option_ids: selected,
-        text_answer: ans.text_answer ?? null,
-        is_correct: isCorrect,
-        marks_awarded: marksAwarded,
-      })
-      .onConflictDoUpdate({
-        target: [exam_answers.attempt_id, exam_answers.question_id],
-        set: {
+      if (q.question_type === "text") {
+        // Subjective: leave is_correct + marks_awarded NULL so the grade route
+        // counts this as awaiting a grade — even if the student skipped it.
+        isCorrect = null;
+        marksAwarded = null;
+      } else {
+        const correct = correctByQuestion.get(q.id) ?? [];
+        const ok2 = sameIdSet(selected, correct);
+        isCorrect = ok2;
+        marksAwarded = ok2 ? q.marks : 0;
+        autoScore += marksAwarded;
+      }
+
+      // Upsert by (attempt_id, question_id) unique index.
+      await tx
+        .insert(exam_answers)
+        .values({
+          attempt_id: attemptId,
+          question_id: q.id,
           selected_option_ids: selected,
-          text_answer: ans.text_answer ?? null,
+          text_answer: textAnswer,
           is_correct: isCorrect,
           marks_awarded: marksAwarded,
-        },
-      });
-  }
+        })
+        .onConflictDoUpdate({
+          target: [exam_answers.attempt_id, exam_answers.question_id],
+          set: {
+            selected_option_ids: selected,
+            text_answer: textAnswer,
+            is_correct: isCorrect,
+            marks_awarded: marksAwarded,
+          },
+        });
+    }
 
-  const now = new Date();
+    const needsGrading = hasText;
+    const finalScore = needsGrading ? null : autoScore;
+    const finalStatus = needsGrading ? "submitted" : "graded";
+
+    await tx
+      .update(exam_attempts)
+      .set({
+        submitted_at: now,
+        auto_score: autoScore,
+        score: finalScore,
+        needs_grading: needsGrading,
+        status: finalStatus,
+      })
+      .where(eq(exam_attempts.id, attemptId));
+  });
+
   const needsGrading = hasText;
   const finalScore = needsGrading ? null : autoScore;
   const finalStatus = needsGrading ? "submitted" : "graded";
 
-  await db
-    .update(exam_attempts)
-    .set({
-      submitted_at: now,
+  await auditFromReq(req, {
+    action: "create",
+    entityKind: "exam_attempt",
+    entityId: attemptId,
+    summary: needsGrading
+      ? "Submitted exam attempt (awaiting manual grading)."
+      : `Submitted exam attempt (auto-graded ${autoScore}).`,
+    metadata: {
+      exam_id: attempt.exam_id,
       auto_score: autoScore,
-      score: finalScore,
       needs_grading: needsGrading,
       status: finalStatus,
-    })
-    .where(eq(exam_attempts.id, attemptId));
+    },
+  });
 
   ok(res, {
     attempt_id: attemptId,

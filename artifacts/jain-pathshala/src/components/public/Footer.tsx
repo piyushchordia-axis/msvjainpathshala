@@ -21,6 +21,7 @@ export function Footer() {
           <Link className="text-muted-foreground hover:text-foreground" href="/donate">{hi ? 'दान करें' : 'Donate'}</Link>
           <Link className="text-muted-foreground hover:text-foreground" href="/msv">MSV</Link>
           <Link className="text-muted-foreground hover:text-foreground" href="/enquire">{hi ? 'पूछताछ' : 'Enquire'}</Link>
+          <Link className="text-muted-foreground hover:text-foreground" href="/my-requests">{hi ? 'मेरे अनुरोध' : 'My requests'}</Link>
           <Link className="text-muted-foreground hover:text-foreground" href="/admin/login">{hi ? 'एडमिन' : 'Admin'}</Link>
         </nav>
       </div>

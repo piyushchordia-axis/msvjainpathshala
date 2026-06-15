@@ -26,13 +26,27 @@ export default function NoticesPage() {
   const hi = locale === 'hi';
   const [items, setItems] = useState<NoticeItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
+    let active = true;
     fetch('/v1/notices/public?limit=50', { headers: { Accept: 'application/json' } })
-      .then((r) => (r.ok ? r.json() : { data: { items: [] } }))
-      .then((json: { data?: { items?: NoticeItem[] } }) => setItems(json.data?.items ?? []))
-      .catch(() => {})
-      .finally(() => setLoading(false));
+      .then((r) => {
+        if (!r.ok) throw new Error('http');
+        return r.json();
+      })
+      .then((json: { data?: { items?: NoticeItem[] } }) => {
+        if (active) setItems(json.data?.items ?? []);
+      })
+      .catch(() => {
+        if (active) setError(true);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   return (
@@ -51,6 +65,10 @@ export default function NoticesPage() {
 
       {loading ? (
         <div className="mt-10 text-muted-foreground">Loading…</div>
+      ) : error ? (
+        <Card className="mt-10 border-destructive/40 bg-destructive/5 p-6 text-sm text-destructive">
+          {hi ? 'सूचनाएँ लोड नहीं हो सकीं।' : 'Could not load notices. Please try again later.'}
+        </Card>
       ) : (
         <div className="mt-10 grid gap-4">
           {items.length === 0 ? (

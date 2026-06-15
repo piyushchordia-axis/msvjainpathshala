@@ -23,7 +23,7 @@ import {
   niyam_submissions,
   shikshak_batch_assignments,
 } from "@workspace/db";
-import { and, desc, eq, or, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
 
@@ -45,7 +45,7 @@ async function ownedStudentId(req: Request, id: string): Promise<string | null> 
   const [row] = await db
     .select({ id: students.id })
     .from(students)
-    .where(and(eq(students.id, id), or(eq(students.parent_id, uid), eq(students.user_id, uid))))
+    .where(and(eq(students.id, id), isNull(students.deleted_at), or(eq(students.parent_id, uid), eq(students.user_id, uid))))
     .limit(1);
   return row?.id ?? null;
 }
@@ -70,7 +70,7 @@ router.get("/children", async (req: Request, res: Response) => {
     .leftJoin(centres, eq(centres.id, students.centre_id))
     .leftJoin(batches, eq(batches.id, students.batch_id))
     .leftJoin(punya_balances, eq(punya_balances.student_id, students.id))
-    .where(or(eq(students.parent_id, uid), eq(students.user_id, uid)))
+    .where(and(isNull(students.deleted_at), or(eq(students.parent_id, uid), eq(students.user_id, uid))))
     .orderBy(students.full_name);
 
   ok(res, { items: rows }, { count: rows.length });

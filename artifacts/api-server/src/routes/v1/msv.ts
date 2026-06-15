@@ -11,7 +11,7 @@
  * student record stays the single source of truth for badges/cards.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, msv_enrolments, students, centres } from "@workspace/db";
+import { db, msv_enrolments, students, centres, curricula } from "@workspace/db";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
@@ -44,11 +44,67 @@ function clampLimit(raw: unknown, fallback: number, max: number): number {
 async function ownedStudent(req: Request, id: string) {
   const uid = req.authUser!.id;
   const [row] = await db
-    .select({ id: students.id, centre_id: students.centre_id })
+    .select({ id: students.id, centre_id: students.centre_id, msv_status: students.msv_status })
     .from(students)
     .where(and(eq(students.id, id), or(eq(students.parent_id, uid), eq(students.user_id, uid))))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * An approved MSV student maps to the MSV-track curriculum (curricula.kind='msv').
+ * The curriculum is city-scoped: pick the active MSV curriculum for the student's
+ * city, falling back to a city-agnostic (city_id is null) active MSV curriculum.
+ * Returns a map student_id -> {id,name,academic_year} for the supplied students;
+ * students that aren't approved (or have no matching curriculum) are omitted.
+ */
+async function msvCurriculumByStudent(
+  rows: Array<{ id: string; centre_id: string | null; msv_status: string }>,
+): Promise<Map<string, { id: string; name: string; academic_year: string | null }>> {
+  const approved = rows.filter((r) => r.msv_status === "approved");
+  const out = new Map<string, { id: string; name: string; academic_year: string | null }>();
+  if (approved.length === 0) return out;
+
+  // City per student (centre -> city). Students without a centre fall back to the
+  // city-agnostic MSV curriculum below.
+  const centreIds = [...new Set(approved.map((r) => r.centre_id).filter((c): c is string => !!c))];
+  const centreCity = new Map<string, string>();
+  if (centreIds.length) {
+    const cRows = await db
+      .select({ id: centres.id, city_id: centres.city_id })
+      .from(centres)
+      .where(inArray(centres.id, centreIds));
+    for (const c of cRows) if (c.city_id) centreCity.set(c.id, c.city_id);
+  }
+
+  // Active MSV-track curricula, indexed by city (null city = city-agnostic fallback).
+  const msvCurricula = await db
+    .select({
+      id: curricula.id,
+      name: curricula.name,
+      city_id: curricula.city_id,
+      academic_year: curricula.academic_year,
+    })
+    .from(curricula)
+    .where(and(eq(curricula.kind, "msv"), eq(curricula.status, "active")));
+
+  const byCity = new Map<string, { id: string; name: string; academic_year: string | null }>();
+  let fallback: { id: string; name: string; academic_year: string | null } | null = null;
+  for (const c of msvCurricula) {
+    const entry = { id: c.id, name: c.name, academic_year: c.academic_year };
+    if (c.city_id) {
+      if (!byCity.has(c.city_id)) byCity.set(c.city_id, entry);
+    } else if (!fallback) {
+      fallback = entry;
+    }
+  }
+
+  for (const r of approved) {
+    const cityId = r.centre_id ? centreCity.get(r.centre_id) : undefined;
+    const curriculum = (cityId && byCity.get(cityId)) || fallback;
+    if (curriculum) out.set(r.id, curriculum);
+  }
+  return out;
 }
 
 /* ═══════════════════════════ PERSONA — apply / view ═══════════════════════════ */
@@ -95,6 +151,19 @@ router.post("/apply", async (req: Request, res: Response) => {
       .limit(1);
     if (active) return { duplicate: true as const };
 
+    // Invariant self-heal: students.msv_status mirrors the latest enrolment, so a
+    // student already marked applied/approved MUST have a matching enrolment row.
+    // If a legacy desync left the student row "ahead" of msv_enrolments (e.g. a
+    // historical seed marked msv_status='approved' with no row), backfill the row
+    // instead of inserting a fresh "applied" row — that would silently downgrade an
+    // approved student. We backfill and report 409 (an application is already active).
+    if (student.msv_status === "applied" || student.msv_status === "approved") {
+      await tx
+        .insert(msv_enrolments)
+        .values({ student_id: student.id, status: student.msv_status });
+      return { duplicate: true as const };
+    }
+
     const [row] = await tx
       .insert(msv_enrolments)
       .values({ student_id: student.id, status: "applied" })
@@ -121,6 +190,7 @@ router.get("/mine", async (req: Request, res: Response) => {
       id: students.id,
       full_name: students.full_name,
       student_code: students.student_code,
+      centre_id: students.centre_id,
       msv_status: students.msv_status,
     })
     .from(students)
@@ -149,8 +219,12 @@ router.get("/mine", async (req: Request, res: Response) => {
     if (!latestByStudent.has(e.student_id)) latestByStudent.set(e.student_id, e);
   }
 
+  // Approved students map to the MSV-track curriculum (curricula.kind='msv').
+  const curriculumByStudent = await msvCurriculumByStudent(kids);
+
   const items = kids.map((k) => {
     const latest = latestByStudent.get(k.id);
+    const curriculum = curriculumByStudent.get(k.id) ?? null;
     return {
       id: k.id,
       full_name: k.full_name,
@@ -165,6 +239,8 @@ router.get("/mine", async (req: Request, res: Response) => {
             decided_at: latest.decided_at ? latest.decided_at.toISOString() : null,
           }
         : null,
+      // The MSV curriculum an approved student is enrolled into (null otherwise).
+      msv_curriculum: curriculum,
     };
   });
 

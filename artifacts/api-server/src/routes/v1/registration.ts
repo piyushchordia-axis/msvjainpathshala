@@ -14,6 +14,7 @@ import {
   db,
   registration_form_configs,
   registration_form_responses,
+  centres,
   cities,
   type RegistrationFieldDef,
 } from "@workspace/db";
@@ -22,7 +23,7 @@ import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { auditFromReq } from "../../lib/audit";
-import { cityIdsForState } from "../../lib/scope";
+import { resolveAdminScope, cityIdsForState } from "../../lib/scope";
 
 const router: IRouter = Router();
 
@@ -78,29 +79,47 @@ async function resolveActiveConfig(kind: FormKind, cityId: string | null) {
 
 /**
  * Build the SQL filter restricting configs to an admin's scope: super_admin sees
- * everything; state_admin sees global + configs for cities in their state;
- * city_admin/sanchalak/shikshak see global + their own city. Returns undefined
- * for unrestricted, or a WHERE expression otherwise.
+ * everything; everyone else sees the global (central) configs plus configs for
+ * the cities resolved by publishableCityIds (their state's cities for a
+ * state_admin, their own city for a city_admin, their assigned centres' cities
+ * for sanchalak/shikshak). Returns undefined for unrestricted, else a WHERE expr.
  */
 async function configScopeFilter(req: Request) {
+  // Reuse the publish-scope resolver so list/review scoping stays consistent
+  // with what an admin may actually act on. null = unrestricted (super_admin).
+  const cityIds = await publishableCityIds(req);
+  if (cityIds === null) return undefined;
+  if (cityIds.length === 0) return isNull(registration_form_configs.city_id);
+  return or(
+    isNull(registration_form_configs.city_id),
+    inArray(registration_form_configs.city_id, cityIds),
+  );
+}
+
+/**
+ * Resolve the set of city ids an admin may publish/review configs for, derived
+ * from their admin scope (resolveAdminScope). Returns null for unrestricted
+ * (super_admin), or the concrete set of city ids otherwise (possibly empty).
+ *
+ * - super_admin: null (every city + the global/central default).
+ * - state_admin: all cities in their state.
+ * - city_admin: their own city.
+ * - sanchalak/shikshak: the cities of the centres/batches they're assigned to.
+ */
+async function publishableCityIds(req: Request): Promise<string[] | null> {
   const u = req.authUser!;
-  if (u.role === "super_admin") return undefined;
-  if (u.role === "state_admin") {
-    const cityIds = u.state_id ? await cityIdsForState(u.state_id) : [];
-    if (cityIds.length === 0) return isNull(registration_form_configs.city_id);
-    return or(
-      isNull(registration_form_configs.city_id),
-      inArray(registration_form_configs.city_id, cityIds),
-    );
-  }
-  // city_admin / sanchalak / shikshak: global + own city
-  if (u.city_id) {
-    return or(
-      isNull(registration_form_configs.city_id),
-      eq(registration_form_configs.city_id, u.city_id),
-    );
-  }
-  return isNull(registration_form_configs.city_id);
+  if (u.role === "super_admin") return null;
+  if (u.role === "state_admin") return u.state_id ? cityIdsForState(u.state_id) : [];
+  if (u.role === "city_admin") return u.city_id ? [u.city_id] : [];
+  // sanchalak / shikshak: derive cities from their scoped centres.
+  const scope = await resolveAdminScope(u);
+  if (scope.centreIds === null) return null;
+  if (scope.centreIds.length === 0) return [];
+  const rows = await db
+    .select({ city_id: centres.city_id })
+    .from(centres)
+    .where(inArray(centres.id, scope.centreIds));
+  return Array.from(new Set(rows.map((r) => r.city_id)));
 }
 
 /** True if the admin may publish/review a config bound to the given city_id. */
@@ -108,16 +127,32 @@ async function canActOnCity(req: Request, cityId: string | null): Promise<boolea
   const u = req.authUser!;
   if (u.role === "super_admin") return true;
   if (cityId === null) {
-    // Only super_admin may create/own global default configs.
+    // Only super_admin may create/own global (central) default configs.
     return false;
   }
-  if (u.role === "state_admin") {
-    if (!u.state_id) return false;
-    const cityIds = await cityIdsForState(u.state_id);
-    return cityIds.includes(cityId);
-  }
-  // city_admin / sanchalak / shikshak: only their own city
-  return !!u.city_id && u.city_id === cityId;
+  const cityIds = await publishableCityIds(req);
+  if (cityIds === null) return true;
+  return cityIds.includes(cityId);
+}
+
+/**
+ * Resolve the city a publish should target when the request omits city_id.
+ *
+ * The admin UI does not force scoped admins to pick a city, so for an admin who
+ * governs exactly one city we default to that city (the real fix: previously an
+ * omitted city_id became NULL, mis-scoping a city/state admin's publish to the
+ * global/central config they cannot own — a 403). super_admin keeps the
+ * legacy behaviour (omitted => global default). A state/multi-city admin who
+ * omits city_id is ambiguous, so we leave it null and let canActOnCity reject
+ * it with a clear 403 prompting an explicit city choice.
+ */
+async function resolveTargetCity(req: Request, requested: string | null): Promise<string | null> {
+  if (requested !== null) return requested;
+  const u = req.authUser!;
+  if (u.role === "super_admin") return null; // central/global default
+  const cityIds = await publishableCityIds(req);
+  if (cityIds && cityIds.length === 1) return cityIds[0];
+  return null;
 }
 
 /* ═══════════════════════════ PUBLIC routes ═══════════════════════════ */
@@ -297,7 +332,6 @@ router.post(
       fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid form config data.");
       return;
     }
-    const cityId = body.city_id ?? null;
 
     // Reject duplicate field keys early.
     const keys = body.fields.map((f) => f.key.toLowerCase());
@@ -305,6 +339,13 @@ router.post(
       fail(res, 422, "ERR_VALIDATION_FAILED", "Duplicate field keys.");
       return;
     }
+
+    // Derive the target city from the publisher's scope when the request omits
+    // it: a single-city admin (city_admin/sanchalak/shikshak governing one
+    // city) publishes within their own city; super_admin still defaults to the
+    // global/central config. A state/multi-city admin who sends no city_id is
+    // ambiguous and is rejected below as "out of scope".
+    const cityId = await resolveTargetCity(req, body.city_id ?? null);
 
     if (!(await canActOnCity(req, cityId))) {
       fail(res, 403, "ERR_FORBIDDEN", "City not in your scope.");

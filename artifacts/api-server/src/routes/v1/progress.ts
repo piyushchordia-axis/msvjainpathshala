@@ -11,13 +11,14 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import {
   db,
   students,
+  centres,
   curricula,
   curriculum_sections,
   curriculum_items,
   student_curriculum_progress,
   progress_reports,
 } from "@workspace/db";
-import { and, asc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
@@ -62,6 +63,17 @@ async function fetchStudent(id: string) {
   return row ?? null;
 }
 
+/** The city of a student via their centre, or null (no centre / unassigned). */
+async function cityForStudent(centreId: string | null): Promise<string | null> {
+  if (!centreId) return null;
+  const [row] = await db
+    .select({ city_id: centres.city_id })
+    .from(centres)
+    .where(eq(centres.id, centreId))
+    .limit(1);
+  return row?.city_id ?? null;
+}
+
 /* ════════════════ shikshak/admin: read a student's progress ════════════════ */
 
 /* GET /v1/progress/students/:id?curriculum_id= — curriculum items left-joined to this student's progress */
@@ -86,9 +98,35 @@ router.get(
         ? req.query.curriculum_id
         : null;
 
-    const itemFilter = curriculumId
-      ? eq(curricula.id, curriculumId)
-      : undefined;
+    let itemFilter;
+    if (curriculumId) {
+      // Explicit curriculum: confirm it is relevant to this student's city
+      // (or city-agnostic / central) before returning its items — a curriculum
+      // from another city must not be readable through this student.
+      const [curriculum] = await db
+        .select({ id: curricula.id, city_id: curricula.city_id })
+        .from(curricula)
+        .where(eq(curricula.id, curriculumId))
+        .limit(1);
+      const studentCity = await cityForStudent(student.centre_id);
+      const relevant =
+        curriculum &&
+        (curriculum.city_id === null || curriculum.city_id === studentCity);
+      if (!relevant) {
+        ok(res, { items: [] }, { count: 0 });
+        return;
+      }
+      itemFilter = eq(curricula.id, curriculumId);
+    } else {
+      // No curriculum_id: default to curricula relevant to THIS student — their
+      // city's curricula plus city-agnostic / central ones. This closes the
+      // cross-curriculum leak where a missing filter returned items from EVERY
+      // curriculum across all cities & tracks.
+      const studentCity = await cityForStudent(student.centre_id);
+      itemFilter = studentCity
+        ? or(isNull(curricula.city_id), eq(curricula.city_id, studentCity))
+        : isNull(curricula.city_id);
+    }
 
     const rows = await db
       .select({

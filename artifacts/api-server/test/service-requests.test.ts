@@ -121,6 +121,272 @@ describe("service-requests", () => {
     expect(detail.body.data.messages.some((m: { message: string }) => m.message === replyText)).toBe(true);
   });
 
+  // 1. Consumer create flow — a non-admin user creates a request (no student_id).
+  it("lets a non-admin consumer (student) create a request without a student_id", async () => {
+    const student = await loginAs("student");
+    const marker = `SR-consumer-${Date.now()}`;
+    const create = await request(app)
+      .post("/v1/service-requests")
+      .set(auth(student.token))
+      .send({
+        category: "general",
+        subject: marker,
+        description: "I need help accessing my learning materials.",
+      });
+    expect(create.status).toBe(200);
+    expect(create.body.data.status).toBe("submitted");
+    const requestId: string = create.body.data.id;
+
+    // The creator (owner) sees it in /mine and can read its detail.
+    const mine = await request(app).get("/v1/service-requests/mine?limit=300").set(auth(student.token));
+    expect(mine.status).toBe(200);
+    expect(mine.body.data.items.find((r: { id: string }) => r.id === requestId)).toBeTruthy();
+
+    const detail = await request(app).get(`/v1/service-requests/${requestId}`).set(auth(student.token));
+    expect(detail.status).toBe(200);
+    expect(detail.body.data.subject).toBe(marker);
+    expect(detail.body.data.status).toBe("submitted");
+    expect(detail.body.data.resolved_at).toBeNull();
+    expect(detail.body.data.messages).toEqual([]);
+  });
+
+  // 2. Reply thread — both the requester and an admin post replies, ordered.
+  it("threads replies from both requester and admin in chronological order", async () => {
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const marker = `SR-thread-${Date.now()}`;
+    const create = await request(app)
+      .post("/v1/service-requests")
+      .set(auth(parent.token))
+      .send({
+        category: "general",
+        subject: marker,
+        description: "Opening a conversation.",
+        student_id: studentId,
+      });
+    expect(create.status).toBe(200);
+    const requestId: string = create.body.data.id;
+
+    // Requester posts the first reply.
+    const ownerMsg = `owner-msg-${Date.now()}`;
+    const ownerReply = await request(app)
+      .post(`/v1/service-requests/${requestId}/messages`)
+      .set(auth(parent.token))
+      .send({ message: ownerMsg });
+    expect(ownerReply.status).toBe(200);
+    expect(ownerReply.body.data.id).toBeTruthy();
+    // Replying to a submitted request leaves it submitted (no reopen).
+    expect(ownerReply.body.data.status).toBe("submitted");
+    expect(ownerReply.body.data.reopened).toBe(false);
+
+    // Admin (Mumbai city_admin, in scope of the parent's child) posts a reply.
+    const cityAdmin = await loginAs("city_admin");
+    const adminMsg = `admin-msg-${Date.now()}`;
+    const adminReply = await request(app)
+      .post(`/v1/service-requests/${requestId}/messages`)
+      .set(auth(cityAdmin.token))
+      .send({ message: adminMsg });
+    expect(adminReply.status).toBe(200);
+
+    // Detail returns both messages in chronological (insertion) order.
+    const detail = await request(app).get(`/v1/service-requests/${requestId}`).set(auth(parent.token));
+    expect(detail.status).toBe(200);
+    const msgs: Array<{ message: string }> = detail.body.data.messages;
+    const ownerIdx = msgs.findIndex((m) => m.message === ownerMsg);
+    const adminIdx = msgs.findIndex((m) => m.message === adminMsg);
+    expect(ownerIdx).toBeGreaterThanOrEqual(0);
+    expect(adminIdx).toBeGreaterThanOrEqual(0);
+    expect(ownerIdx).toBeLessThan(adminIdx);
+  });
+
+  // 3. Status lifecycle + resolved_at consistency (the Phase 2 invariant).
+  it("keeps resolved_at consistent across resolve / reopen / re-assign", async () => {
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const cityAdmin = await loginAs("city_admin");
+    const create = await request(app)
+      .post("/v1/service-requests")
+      .set(auth(parent.token))
+      .send({
+        category: "general",
+        subject: `SR-lifecycle-${Date.now()}`,
+        description: "Lifecycle invariant check.",
+        student_id: studentId,
+      });
+    expect(create.status).toBe(200);
+    const requestId: string = create.body.data.id;
+
+    const readDetail = async () => {
+      const d = await request(app).get(`/v1/service-requests/${requestId}`).set(auth(parent.token));
+      expect(d.status).toBe(200);
+      return d.body.data as { status: string; resolved_at: string | null };
+    };
+
+    // Fresh request: submitted, resolved_at null.
+    let detail = await readDetail();
+    expect(detail.status).toBe("submitted");
+    expect(detail.resolved_at).toBeNull();
+
+    // Assign -> in_review, resolved_at stays null.
+    const assign = await request(app)
+      .post(`/v1/service-requests/${requestId}/assign`)
+      .set(auth(cityAdmin.token))
+      .send({});
+    expect(assign.status).toBe(200);
+    expect(assign.body.data.status).toBe("in_review");
+    detail = await readDetail();
+    expect(detail.status).toBe("in_review");
+    expect(detail.resolved_at).toBeNull();
+
+    // Resolve -> resolved, resolved_at set.
+    const resolve = await request(app)
+      .post(`/v1/service-requests/${requestId}/resolve`)
+      .set(auth(cityAdmin.token))
+      .send({});
+    expect(resolve.status).toBe(200);
+    expect(resolve.body.data.status).toBe("resolved");
+    detail = await readDetail();
+    expect(detail.status).toBe("resolved");
+    expect(detail.resolved_at).toBeTruthy();
+
+    // Reply to a resolved request reopens it. Since an admin is assigned, it
+    // returns to in_review and resolved_at is cleared (invariant: resolved_at
+    // is non-null iff status === "resolved").
+    const reopenReply = await request(app)
+      .post(`/v1/service-requests/${requestId}/messages`)
+      .set(auth(parent.token))
+      .send({ message: `reopen-${Date.now()}` });
+    expect(reopenReply.status).toBe(200);
+    expect(reopenReply.body.data.reopened).toBe(true);
+    expect(reopenReply.body.data.status).toBe("in_review");
+    detail = await readDetail();
+    expect(detail.status).toBe("in_review");
+    expect(detail.resolved_at).toBeNull();
+
+    // Resolve again, then re-assign: assigning a resolved request also clears
+    // resolved_at and moves it to in_review.
+    const resolve2 = await request(app)
+      .post(`/v1/service-requests/${requestId}/resolve`)
+      .set(auth(cityAdmin.token))
+      .send({});
+    expect(resolve2.status).toBe(200);
+    detail = await readDetail();
+    expect(detail.resolved_at).toBeTruthy();
+
+    const reassign = await request(app)
+      .post(`/v1/service-requests/${requestId}/assign`)
+      .set(auth(cityAdmin.token))
+      .send({});
+    expect(reassign.status).toBe(200);
+    expect(reassign.body.data.status).toBe("in_review");
+    detail = await readDetail();
+    expect(detail.status).toBe("in_review");
+    expect(detail.resolved_at).toBeNull();
+  });
+
+  // 3b. Reopen with no assignee falls back to "submitted".
+  it("reopens an unassigned resolved request back to submitted on reply", async () => {
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const cityAdmin = await loginAs("city_admin");
+    const create = await request(app)
+      .post("/v1/service-requests")
+      .set(auth(parent.token))
+      .send({
+        category: "general",
+        subject: `SR-reopen-unassigned-${Date.now()}`,
+        description: "Reopen-to-submitted check.",
+        student_id: studentId,
+      });
+    expect(create.status).toBe(200);
+    const requestId: string = create.body.data.id;
+
+    // Resolve without ever assigning (resolve does not set assigned_to).
+    const resolve = await request(app)
+      .post(`/v1/service-requests/${requestId}/resolve`)
+      .set(auth(cityAdmin.token))
+      .send({});
+    expect(resolve.status).toBe(200);
+
+    // Owner replies -> reopened to submitted (no assignee), resolved_at cleared.
+    const reply = await request(app)
+      .post(`/v1/service-requests/${requestId}/messages`)
+      .set(auth(parent.token))
+      .send({ message: `reopen-unassigned-${Date.now()}` });
+    expect(reply.status).toBe(200);
+    expect(reply.body.data.reopened).toBe(true);
+    expect(reply.body.data.status).toBe("submitted");
+
+    const detail = await request(app).get(`/v1/service-requests/${requestId}`).set(auth(parent.token));
+    expect(detail.status).toBe(200);
+    expect(detail.body.data.status).toBe("submitted");
+    expect(detail.body.data.resolved_at).toBeNull();
+  });
+
+  // 4. Authorization / scoping on replies and admin actions.
+  it("forbids a non-owner non-admin from reading or replying to another user's request", async () => {
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const create = await request(app)
+      .post("/v1/service-requests")
+      .set(auth(parent.token))
+      .send({
+        category: "general",
+        subject: `SR-authz-${Date.now()}`,
+        description: "Authz isolation check.",
+        student_id: studentId,
+      });
+    expect(create.status).toBe(200);
+    const requestId: string = create.body.data.id;
+
+    // A student persona is neither owner nor admin -> 404 on read and on reply.
+    const stranger = await loginAs("student");
+    const read = await request(app).get(`/v1/service-requests/${requestId}`).set(auth(stranger.token));
+    expect(read.status).toBe(404);
+    expect(read.body.error.code).toBe("ERR_NOT_FOUND");
+
+    const reply = await request(app)
+      .post(`/v1/service-requests/${requestId}/messages`)
+      .set(auth(stranger.token))
+      .send({ message: "I should not be able to post here." });
+    expect(reply.status).toBe(404);
+    expect(reply.body.error.code).toBe("ERR_NOT_FOUND");
+  });
+
+  it("rejects assign/resolve from unauthenticated and non-admin callers", async () => {
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const create = await request(app)
+      .post("/v1/service-requests")
+      .set(auth(parent.token))
+      .send({
+        category: "general",
+        subject: `SR-admin-guard-${Date.now()}`,
+        description: "Admin action guard check.",
+        student_id: studentId,
+      });
+    expect(create.status).toBe(200);
+    const requestId: string = create.body.data.id;
+
+    // Unauthenticated -> 401.
+    const anonAssign = await request(app).post(`/v1/service-requests/${requestId}/assign`).send({});
+    expect(anonAssign.status).toBe(401);
+    const anonResolve = await request(app).post(`/v1/service-requests/${requestId}/resolve`).send({});
+    expect(anonResolve.status).toBe(401);
+
+    // The owner is a parent (no admin panel) -> 403 on admin actions.
+    const ownerAssign = await request(app)
+      .post(`/v1/service-requests/${requestId}/assign`)
+      .set(auth(parent.token))
+      .send({});
+    expect(ownerAssign.status).toBe(403);
+    const ownerResolve = await request(app)
+      .post(`/v1/service-requests/${requestId}/resolve`)
+      .set(auth(parent.token))
+      .send({});
+    expect(ownerResolve.status).toBe(403);
+  });
+
   it("hides a request from a parent who is not the owner (404 on detail)", async () => {
     const parent = await loginAs("parent");
     const studentId = await firstChildId(parent.token);

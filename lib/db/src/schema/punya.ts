@@ -1,4 +1,4 @@
-import { boolean, integer, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, integer, pgTable, text, uuid } from "drizzle-orm/pg-core";
 
 import { timestamps } from "./_helpers";
 import { tierEnum } from "./enums";
@@ -21,17 +21,24 @@ export const punya_configs = pgTable("punya_configs", {
   ...timestamps(),
 });
 
-export const punya_transactions = pgTable("punya_transactions", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  student_id: uuid("student_id")
-    .notNull()
-    .references(() => students.id, { onDelete: "cascade" }),
-  feature_key: text("feature_key").notNull(),
-  points: integer("points").notNull(),
-  note: text("note"),
-  awarded_by: uuid("awarded_by").references(() => users.id, { onDelete: "set null" }),
-  ...timestamps(),
-});
+export const punya_transactions = pgTable(
+  "punya_transactions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    student_id: uuid("student_id")
+      .notNull()
+      .references(() => students.id, { onDelete: "cascade" }),
+    feature_key: text("feature_key").notNull(),
+    points: integer("points").notNull(),
+    note: text("note"),
+    awarded_by: uuid("awarded_by").references(() => users.id, { onDelete: "set null" }),
+    ...timestamps(),
+  },
+  (t) => ({
+    student_idx: index("idx_punya_transactions_student").on(t.student_id),
+    student_created_idx: index("idx_punya_transactions_student_created").on(t.student_id, t.created_at),
+  }),
+);
 
 export const punya_balances = pgTable("punya_balances", {
   id: uuid("id").primaryKey().defaultRandom(),

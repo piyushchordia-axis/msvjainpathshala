@@ -20,6 +20,8 @@ import { AboutPage, MsvPage } from '@/pages/public/PublicStubs';
 import ContactPage from '@/pages/public/ContactPage';
 import EnquirePage from '@/pages/public/EnquirePage';
 import DonatePage from '@/pages/public/DonatePage';
+import PublicExamsPage from '@/pages/public/ExamsPage';
+import MyServiceRequestsPage from '@/pages/public/MyServiceRequestsPage';
 
 import LoginPage from '@/pages/admin/LoginPage';
 import DashboardPage from '@/pages/admin/DashboardPage';
@@ -32,9 +34,6 @@ import NiyamReviewPage from '@/pages/admin/NiyamReviewPage';
 import ExamBuilderPage from '@/pages/admin/ExamBuilderPage';
 import {
   CentresPage as AdminCentresPage,
-  NoticesPage as AdminNoticesPage,
-  GalleryPage as AdminGalleryPage,
-  LibraryPage as AdminLibraryPage,
   ShivirsPage as AdminShivirsPage,
   NiyamsPage,
   PunyaAwardPage,
@@ -46,6 +45,9 @@ import {
   GeographyPage,
   SettingsPage,
 } from '@/pages/admin/AdminListPages';
+import GalleryAdminPage from '@/pages/admin/GalleryAdminPage';
+import NoticesAdminPage from '@/pages/admin/NoticesAdminPage';
+import AdminLibraryPage from '@/pages/admin/LibraryAdminPage';
 import {
   CurriculumPage,
   ExamsPage,
@@ -96,6 +98,8 @@ function PublicRoutes() {
         <Route path="/enquire" component={EnquirePage} />
         <Route path="/msv" component={MsvPage} />
         <Route path="/register" component={RegisterPage} />
+        <Route path="/exams" component={PublicExamsPage} />
+        <Route path="/my-requests" component={MyServiceRequestsPage} />
         <Route component={NotFound} />
       </Switch>
     </PublicLayout>
@@ -130,8 +134,8 @@ function AdminRoutes() {
         <Route path="/admin/id-cards" component={IdCardsAdminPage} />
         <Route path="/admin/holidays" component={HolidaysPage} />
         <Route path="/admin/attendance" component={AttendancePage} />
-        <Route path="/admin/notices" component={AdminNoticesPage} />
-        <Route path="/admin/gallery" component={AdminGalleryPage} />
+        <Route path="/admin/notices" component={NoticesAdminPage} />
+        <Route path="/admin/gallery" component={GalleryAdminPage} />
         <Route path="/admin/library" component={AdminLibraryPage} />
         <Route path="/admin/donations" component={DonationsPage} />
         <Route path="/admin/service-requests" component={ServiceRequestsAdminPage} />
