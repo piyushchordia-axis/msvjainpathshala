@@ -122,6 +122,13 @@ The web admin panel doesn't expose these (they're mobile/student-side); tested a
 - Remaining consume flows (quiz take, homework submit, shivir QR scan, ID-card verify/revoke, attendance) are covered by the **105 passing API integration tests**.
 - **Not done**: driving these through the **mobile app UI** (Expo) — needs the mobile harness on :8081; flagged as a separate pass.
 
+## Mobile app (Expo web) — verified OK
+Driven via a 2nd preview on :8081 (mobile viewport), session injected by writing `jp_access_token` + `jp_user` to localStorage (API CORS reflects the origin, so cross-origin calls work):
+- **Guest/public**: Centres tab loads real grouped data; **centre detail batch renders "Sun · 09:00–10:30"** → F1 mobile fix #1 confirmed.
+- **Parent** (Student Parent): home shows child switcher (Aarav/Diya), Aarav card **STU000001** (F4) · bal · Bal Batch - Sunday Morning · 100 pts / jigyasu / MSV approved · 100% attendance; Activities grid (Submit Niyam/Homework/Quizzes/Competitions/ID Card); **Niyams** tab = real submission history (Chauvihar pending, Navkar auto_approved/Featured/10pts); **Library** = real video/audio items; ID Card shows correct "not ready yet" empty state.
+- **Shikshak**: `/shikshak/batches` renders "Bal/Kishor Batch - Sunday Morning … **Sun · …**" → F1 mobile fix #2 confirmed.
+- RN-web navigation works (Pressables); expo-router tab swaps need a hard load, not a synthetic `<a>` click (test artifact, not a bug).
+
 ## Summary
 - **9 findings, all fixed & browser-verified.** Severities: 1×🔴 (F9 service-request thread unreachable), 3×🟠 UX blockers (F6/F7/F8 raw-UUID inputs → dropdowns), 5×🟡/data (F1 day convention, F2 i18n, F3 yuva, F4 student-code, F5 waitlist-approve).
 - **Every screen driven**: 13 public + ~37 admin pages. Every form filled+submitted with **DB-verified persistence**; validation (required/empty) exercised; filters, tabs, status actions, pagination-equivalents, and read-only renders all checked.
