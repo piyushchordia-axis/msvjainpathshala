@@ -21,6 +21,7 @@ import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
+import { signUploadUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { awardPunya } from "../../lib/punya";
@@ -231,7 +232,7 @@ router.get("/assignments/:id/submissions", requireAdminPanel, async (req: Reques
     .where(eq(homework_submissions.assignment_id, assignment.id))
     .orderBy(asc(students.full_name));
 
-  const items = rows.map((r) => ({ ...r, marked_at: r.marked_at ? r.marked_at.toISOString() : null }));
+  const items = rows.map((r) => ({ ...r, submission_url: signUploadUrl(r.submission_url), marked_at: r.marked_at ? r.marked_at.toISOString() : null }));
   ok(res, { items }, { count: items.length });
 });
 
@@ -359,7 +360,12 @@ router.get("/mine", async (req: Request, res: Response) => {
     .orderBy(desc(homework_assignments.due_date))
     .limit(limit);
 
-  ok(res, { items: rows }, { count: rows.length });
+  const items = rows.map((r) => ({
+    ...r,
+    attachment_url: signUploadUrl(r.attachment_url),
+    submission_url: signUploadUrl(r.submission_url),
+  }));
+  ok(res, { items }, { count: items.length });
 });
 
 const submitSchema = z.object({

@@ -25,6 +25,7 @@ import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { storage, makeKey } from "../../lib/storage";
+import { signUploadUrl } from "../../lib/file-tokens";
 import { PdfBuilder } from "../../lib/pdf";
 
 const router: IRouter = Router();
@@ -321,7 +322,7 @@ router.post(
       summary: `Generated progress report for ${student.student_code} (${body.period_kind} ${body.period_label}).`,
     });
 
-    ok(res, { id: row.id, pdf_url: row.pdf_url });
+    ok(res, { id: row.id, pdf_url: signUploadUrl(row.pdf_url) });
   },
 );
 
@@ -424,6 +425,7 @@ router.get("/students/:id/reports", async (req: Request, res: Response) => {
 
   const items = rows.map((r) => ({
     ...r,
+    pdf_url: signUploadUrl(r.pdf_url),
     generated_at: r.generated_at.toISOString(),
   }));
   ok(res, { items }, { count: items.length });

@@ -216,6 +216,7 @@ router.post("/verify", async (req: Request, res: Response) => {
     .select({
       id: donations.id,
       razorpay_order_id: donations.razorpay_order_id,
+      amount_paise: donations.amount_paise,
       payment_status: donations.payment_status,
       receipt_number: donations.receipt_number,
     })
@@ -247,6 +248,28 @@ router.post("/verify", async (req: Request, res: Response) => {
   if (!valid) {
     fail(res, 401, "ERR_SIGNATURE_INVALID", "Payment signature is invalid.");
     return;
+  }
+
+  // Reconcile with the gateway before issuing a receipt: a valid signature only
+  // proves the order/payment-id pair is authentic, NOT that the money was
+  // captured at the recorded amount (it could be authorized-only/partial/
+  // refunded). The real adapter implements fetchPayment; the mock omits it.
+  if (payments.fetchPayment) {
+    let gw;
+    try {
+      gw = await payments.fetchPayment(body.razorpay_payment_id);
+    } catch {
+      fail(res, 502, "ERR_GATEWAY", "Could not reach the payment gateway.");
+      return;
+    }
+    if (
+      gw.status !== "captured" ||
+      gw.order_id !== donation.razorpay_order_id ||
+      gw.amount_paise !== donation.amount_paise
+    ) {
+      fail(res, 402, "ERR_PAYMENT_NOT_CAPTURED", "Payment could not be reconciled with the gateway.");
+      return;
+    }
   }
 
   const receiptNumber = await captureDonation(
@@ -285,21 +308,28 @@ router.post("/webhook", async (req: Request, res: Response) => {
     event?: string;
     payload?: {
       payment?: {
-        entity?: { order_id?: string; id?: string };
+        entity?: { order_id?: string; id?: string; amount?: number; status?: string };
       };
     };
   };
 
   if (event.event === "payment.captured") {
-    const orderId = event.payload?.payment?.entity?.order_id;
-    const paymentId = event.payload?.payment?.entity?.id ?? null;
+    const entity = event.payload?.payment?.entity;
+    const orderId = entity?.order_id;
+    const paymentId = entity?.id ?? null;
     if (orderId) {
       const [donation] = await db
-        .select({ id: donations.id })
+        .select({ id: donations.id, amount_paise: donations.amount_paise })
         .from(donations)
         .where(eq(donations.razorpay_order_id, orderId))
         .limit(1);
-      if (donation) {
+      // The webhook body is HMAC-verified, so the entity is authentic — but
+      // still assert the captured amount/status before crediting a receipt.
+      if (
+        donation &&
+        entity?.status === "captured" &&
+        Number(entity?.amount) === donation.amount_paise
+      ) {
         // Idempotent inside captureDonation (guards on payment_status).
         await captureDonation(donation.id, paymentId, null);
       }

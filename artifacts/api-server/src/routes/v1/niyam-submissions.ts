@@ -17,6 +17,7 @@ import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
+import { signUploadUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { awardPunya } from "../../lib/punya";
@@ -215,7 +216,7 @@ router.post("/", async (req: Request, res: Response) => {
     status: row.status,
     points_awarded: row.points_awarded,
     is_featured: row.is_featured,
-    proof_url: row.proof_url,
+    proof_url: signUploadUrl(row.proof_url),
     notes: row.notes,
     reviewed_at: row.reviewed_at ? row.reviewed_at.toISOString() : null,
     created_at: row.created_at.toISOString(),
@@ -246,7 +247,8 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
     .where(and(eq(niyam_submissions.status, "pending"), centreFilter))
     .orderBy(desc(niyam_submissions.submission_date))
     .limit(limit);
-  ok(res, { items: rows }, { count: rows.length });
+  const items = rows.map((r) => ({ ...r, proof_url: signUploadUrl(r.proof_url) }));
+  ok(res, { items }, { count: items.length });
 });
 
 const rejectSchema = z.object({

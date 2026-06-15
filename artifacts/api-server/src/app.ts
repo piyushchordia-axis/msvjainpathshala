@@ -5,7 +5,8 @@ import pinoHttp from "pino-http";
 import router from "./routes";
 import v1Router from "./routes/v1";
 import { logger } from "./lib/logger";
-import { UPLOADS_DIR } from "./lib/storage";
+import { storage } from "./lib/storage";
+import { verifyUploadAccess } from "./lib/file-tokens";
 import { fail } from "./lib/envelope";
 
 const isProd = process.env.NODE_ENV === "production";
@@ -78,8 +79,51 @@ app.use(
 );
 app.use(express.urlencoded({ extended: true }));
 
-// Serve uploaded files (local-disk storage provider).
-app.use("/uploads", express.static(UPLOADS_DIR, { fallthrough: true, maxAge: "1h" }));
+// Serve uploaded files ONLY with a valid short-lived signature (see
+// lib/file-tokens.ts). Sensitive artifacts (progress PDFs, ID cards, proofs)
+// are no longer world-readable by URL. API responses mint signed URLs.
+const UPLOAD_MIME: Record<string, string> = {
+  ".pdf": "application/pdf",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".mp4": "video/mp4",
+  ".mp3": "audio/mpeg",
+  ".txt": "text/plain; charset=utf-8",
+};
+app.get(/^\/uploads\/.+/, (req: Request, res) => {
+  let key: string;
+  try {
+    key = req.path.replace(/^\/uploads\//, "").split("/").map(decodeURIComponent).join("/");
+  } catch {
+    res.status(400).end();
+    return;
+  }
+  const se = typeof req.query.se === "string" ? req.query.se : "";
+  const sig = typeof req.query.sig === "string" ? req.query.sig : "";
+  if (!verifyUploadAccess(key, se, sig)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Invalid or expired file link.");
+    return;
+  }
+  const ext = key.slice(key.lastIndexOf(".")).toLowerCase();
+  res.setHeader("Content-Type", UPLOAD_MIME[ext] ?? "application/octet-stream");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Cache-Control", "private, max-age=3600");
+  let stream;
+  try {
+    stream = storage.getStream(key);
+  } catch {
+    res.status(404).end();
+    return;
+  }
+  stream.on("error", () => {
+    if (!res.headersSent) res.status(404).end();
+    else res.destroy();
+  });
+  stream.pipe(res);
+});
 
 app.use("/api", router);
 app.use("/v1", v1Router);

@@ -18,8 +18,8 @@ Severity: 🔴 Critical · 🟠 High · 🟡 Medium · ⚪ Low. Status: **FIXED*
 | C2 | 🟠 | Webhook signature verified against `JSON.stringify` fallback (not raw bytes) | payments | **FIXED** |
 | C3 | 🟠 | Silent fallback to mock payment provider in prod (public HMAC secrets) | payments | **FIXED** |
 | C4 | 🟠 | `dev-capture` (fabricate captured donation) gated only on provider name, not env | payments | **FIXED** |
-| D1 | 🔴 | `/uploads` served with **no auth** — progress PDFs, ID cards, proofs world-readable by URL | uploads | **REC** (mitigated) |
-| C1 | 🔴 | Captured donation amount/status never reconciled with Razorpay → forged/refunded 80G receipts | payments | **REC** |
+| D1 | 🔴 | `/uploads` served with **no auth** — progress PDFs, ID cards, proofs world-readable by URL | uploads | **FIXED** |
+| C1 | 🔴 | Captured donation amount/status never reconciled with Razorpay → forged/refunded 80G receipts | payments | **FIXED** |
 | F1 | 🟠 | Punya balance lost-update + duplicate rows (no unique on `student_id`) | logic | **FIXED** |
 | F2 | 🟠 | Niyam auto-approve duplicate-per-day point farming (no lock) | logic | **FIXED** |
 | F3 | 🟠 | Exam max-attempts TOCTOU (count+insert without lock) | logic | **FIXED** |
@@ -83,13 +83,15 @@ Public `responses` record capped (≤80 keys, key ≤80 chars, scalar values ≤
 
 ---
 
+## FIXED — the two Criticals (follow-up round)
+
+### D1 🔴 — Signed access to `/uploads` — **FIXED** — `lib/file-tokens.ts`, `app.ts` + 4 routes
+Replaced the anonymous `express.static` mount with a route that serves a file **only with a valid short-lived HMAC signature** (`verifyUploadAccess`, `se`+`sig` query params, 24h TTL, domain-separated secret, `nosniff`). Every API response that returns an `/uploads` URL now mints a signed URL via `signUploadUrl()` (id-card `png_url`, progress `pdf_url`, niyam `proof_url`, homework `submission_url`/`attachment_url`); external URLs (admin-pasted library links) pass through unchanged. Files are stored with **unsigned** keys and signed on read, so links can't be persisted-then-expired. Signed URLs keep `<img>`/`<a>` working cross-origin (the S3-presigned model — a blanket `requireAuth` would have broken subresource loads). **Verified live:** signed→200, unsigned→403, tampered→403; the admin ID Cards page renders the signed image (600px).
+
+### C1 🔴 — Gateway amount/status reconciliation — **FIXED** — `lib/payments.ts`, `routes/v1/donations.ts`
+Added `fetchPayment()` to the provider interface (real Razorpay adapter → `payments.fetch`; mock omits it). The verify path now, after the signature check, calls `fetchPayment` and asserts `status==="captured"` + `order_id` match + `amount===donation.amount_paise` before issuing the receipt (502 on gateway error, 402 on mismatch). The webhook now asserts the verified entity's `amount`/`status` before crediting. An authorized-but-uncaptured / partial / refunded payment can no longer mint a full 80G receipt. (Mock provider skips reconciliation, so the dev/preview flow is unchanged — verified live.)
+
 ## RECOMMENDED (not yet changed — need design/infra decisions)
-
-### D1 🔴 — Authenticated/signed access to `/uploads`  *(partially mitigated)*
-`app.ts` serves `/uploads` via anonymous `express.static`, so progress-report **PDFs (a child's data)**, ID-card PNGs, and proof images are world-readable by anyone with the URL (verified: `curl` a file → 200). UUIDv4 filenames are the only thing preventing enumeration. The `released_to_parent` gate is bypassed at the file layer. **Mitigation applied:** `nosniff` (blocks the MIME-sniff XSS). **Proper fix:** route file reads through an authenticated handler that re-checks ownership/scope and streams from storage, and issue short-lived **signed URLs** instead of permanent public links. (A blanket `requireAuth` on `/uploads` would break `<img>`/`<a>` because the cross-origin cookie isn't sent on subresource loads — signed URLs are the right tool.)
-
-### C1 🔴 — Reconcile captured amount/status with the gateway — `routes/v1/donations.ts`
-Signature validity proves the order/payment-id pair is authentic; it does **not** prove the money settled at the recorded amount. After verifying the signature, call `razorpay.payments.fetch(payment_id)` and assert `status==="captured"`, `order_id` matches, and `amount===donation.amount_paise` before flipping `payment_status`/issuing the 80G receipt; same check in the webhook. Without this, an authorized-but-uncaptured/partially-captured/refunded payment can still mint a full 80G receipt. (Lower impact while on the mock provider, but the logic is wrong for real Razorpay.)
 
 ### C5 🟡 — 80G receipt numbering — `routes/v1/donations.ts` + schema
 Receipt = `JP-{FY}-{first 8 hex of UUID}` → predictable and 32-bit (collisions ~77k donations/FY), with no UNIQUE constraint. Use a per-FY monotonic sequence + `UNIQUE(receipt_number)`.
@@ -112,9 +114,9 @@ G2: store the token in `expo-secure-store` on native (not AsyncStorage→localSt
 ## Production-readiness checklist (gating the dev conveniences)
 - [ ] `NODE_ENV=production` set in real deployments (gates A1/A2/A3/C3/C4 + error handler).
 - [ ] Remove the `default_otp_code` settings row from any prod DB; wire a real SMS OTP provider.
-- [ ] Set `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` (else the API refuses to start — C3) and add the C1 amount reconciliation.
+- [ ] Set `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` (else the API refuses to start — C3). Amount reconciliation (C1) is now implemented and active on the real adapter.
 - [ ] Set `CORS_ORIGINS` to the real web origin(s).
-- [ ] Move `/uploads` to authenticated/signed access (D1).
+- [x] `/uploads` now requires a signed URL (D1) — optionally tune `UPLOAD_URL_TTL_SECONDS` (default 24h).
 - [ ] `JP_AUTH_SECRET` set to a strong value (already required-in-prod by `tokens.ts`).
 
 ## Verification performed

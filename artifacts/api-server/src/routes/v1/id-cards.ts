@@ -16,6 +16,7 @@ import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { storage, makeKey } from "../../lib/storage";
+import { signUploadUrl } from "../../lib/file-tokens";
 import { qrDataUrl, svgToPng } from "../../lib/qr";
 
 const router: IRouter = Router();
@@ -211,7 +212,7 @@ router.post(
       metadata: { card_number: cardNumber, version_no: versionNo },
     });
 
-    ok(res, row);
+    ok(res, { ...row, png_url: signUploadUrl(row.png_url) });
   },
 );
 
@@ -257,6 +258,7 @@ router.get("/mine", async (req: Request, res: Response) => {
   }
   ok(res, {
     ...card,
+    png_url: signUploadUrl(card.png_url),
     generated_at: card.generated_at ? card.generated_at.toISOString() : null,
     last_regenerated_at: card.last_regenerated_at ? card.last_regenerated_at.toISOString() : null,
   });
@@ -375,6 +377,7 @@ router.get("/:studentId", requireAdminPanel, async (req: Request, res: Response)
   }
   ok(res, {
     ...card,
+    png_url: signUploadUrl(card.png_url),
     generated_at: card.generated_at ? card.generated_at.toISOString() : null,
     last_regenerated_at: card.last_regenerated_at ? card.last_regenerated_at.toISOString() : null,
   });

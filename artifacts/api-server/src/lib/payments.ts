@@ -33,6 +33,21 @@ export interface PaymentProvider {
    * so dev + tests can complete the flow. Undefined on the real adapter.
    */
   mockSignature?(orderId: string, paymentId: string): string;
+  /**
+   * Fetch the authoritative payment record from the gateway, so the caller can
+   * reconcile the captured amount/status before issuing an 80G receipt. A valid
+   * signature only proves the order/payment-id pair is authentic — NOT that the
+   * money settled at the recorded amount. Only the real adapter implements this;
+   * the mock omits it (the dev signature check is sufficient in non-prod).
+   */
+  fetchPayment?(paymentId: string): Promise<GatewayPayment>;
+}
+
+export interface GatewayPayment {
+  status: string;
+  order_id: string | null;
+  amount_paise: number;
+  currency: string;
 }
 
 function safeEqual(a: string, b: string): boolean {
@@ -93,13 +108,13 @@ class RazorpayPaymentProvider implements PaymentProvider {
     this.webhookSecret = webhookSecret;
   }
 
-  private async getClient(): Promise<{ orders: { create(opts: Record<string, unknown>): Promise<{ id: string; amount: number; currency: string }> } }> {
+  private async getClient(): Promise<{ orders: { create(opts: Record<string, unknown>): Promise<{ id: string; amount: number; currency: string }> }; payments: { fetch(id: string): Promise<{ status: string; order_id: string | null; amount: number; currency: string }> } }> {
     if (!this.client) {
       const mod = (await import("razorpay")) as unknown as { default: new (opts: { key_id: string; key_secret: string }) => unknown };
       const Ctor = mod.default;
       this.client = new Ctor({ key_id: this.keyId, key_secret: this.keySecret });
     }
-    return this.client as { orders: { create(opts: Record<string, unknown>): Promise<{ id: string; amount: number; currency: string }> } };
+    return this.client as { orders: { create(opts: Record<string, unknown>): Promise<{ id: string; amount: number; currency: string }> }; payments: { fetch(id: string): Promise<{ status: string; order_id: string | null; amount: number; currency: string }> } };
   }
 
   async createOrder(input: CreateOrderInput): Promise<CreatedOrder> {
@@ -127,6 +142,17 @@ class RazorpayPaymentProvider implements PaymentProvider {
     if (!this.webhookSecret) return false;
     const expected = createHmac("sha256", this.webhookSecret).update(rawBody).digest("hex");
     return safeEqual(expected, signature);
+  }
+
+  async fetchPayment(paymentId: string): Promise<GatewayPayment> {
+    const client = await this.getClient();
+    const p = await client.payments.fetch(paymentId);
+    return {
+      status: String(p.status),
+      order_id: p.order_id ?? null,
+      amount_paise: Number(p.amount),
+      currency: String(p.currency),
+    };
   }
 }
 
