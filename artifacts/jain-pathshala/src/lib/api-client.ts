@@ -16,7 +16,27 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+// Single-flight access-token refresh. With short-lived access tokens, an
+// expired token yields 401; we transparently refresh (HttpOnly cookie) once and
+// retry the original request. Concurrent 401s share one refresh.
+let refreshInFlight: Promise<boolean> | null = null;
+function refreshSession(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = fetch(`${API_BASE}/api/auth/refresh`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    })
+      .then((r) => r.ok)
+      .catch(() => false)
+      .finally(() => {
+        refreshInFlight = null;
+      });
+  }
+  return refreshInFlight;
+}
+
+async function request<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     credentials: 'include',
@@ -26,6 +46,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       ...(init.headers ?? {}),
     },
   });
+  // Expired access token → refresh once and retry (skip the auth endpoints).
+  if (res.status === 401 && retry && !path.startsWith('/api/auth/')) {
+    if (await refreshSession()) return request<T>(path, init, false);
+  }
   if (!res.ok) {
     let data: Partial<ApiErrorEnvelope> = {};
     try {

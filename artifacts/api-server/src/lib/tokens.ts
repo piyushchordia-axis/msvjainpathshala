@@ -11,7 +11,9 @@ const SECRET = (() => {
   return "jp-dev-secret-do-not-use-in-production";
 })();
 
-const ACCESS_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
+// Short-lived access token (default 1h) — clients silently refresh. Tunable via
+// env for different deployments. Refresh token is long-lived (30 days).
+const ACCESS_TTL_SECONDS = Number(process.env.ACCESS_TOKEN_TTL_SECONDS ?? 60 * 60);
 const REFRESH_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 
 export const TOKEN_TTL = {

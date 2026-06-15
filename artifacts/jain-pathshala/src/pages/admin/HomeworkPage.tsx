@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { safeHref } from '@/lib/safe-url';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
 } from '@/components/ui/dialog';
@@ -238,8 +239,8 @@ function SubmissionsDialog({ assignment }: { assignment: AssignmentRow }) {
                     </td>
                     <td className="px-3 py-3"><StatusPill status={s.status} /></td>
                     <td className="px-3 py-3 text-xs">
-                      {s.submission_url ? (
-                        <a href={s.submission_url} target="_blank" rel="noreferrer" className="text-primary underline">View</a>
+                      {safeHref(s.submission_url) ? (
+                        <a href={safeHref(s.submission_url)} target="_blank" rel="noreferrer" className="text-primary underline">View</a>
                       ) : '—'}
                     </td>
                     <td className="px-3 py-3">

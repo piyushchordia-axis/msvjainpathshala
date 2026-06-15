@@ -81,10 +81,59 @@ function rewriteLocalhostForDevice(base: string): string {
 export const API_BASE = resolveApiBase();
 
 let authToken: string | null = null;
+let refreshToken: string | null = null;
+let persistTokens: ((access: string, refresh: string) => void) | null = null;
 
 /** Called by AuthContext whenever the session token changes. */
 export function setAuthToken(token: string | null): void {
   authToken = token;
+}
+
+/** Called by AuthContext with the persisted refresh token (for silent refresh). */
+export function setRefreshToken(token: string | null): void {
+  refreshToken = token;
+}
+
+/** AuthContext registers this so a silent refresh can persist the rotated pair. */
+export function setTokenPersistor(fn: ((access: string, refresh: string) => void) | null): void {
+  persistTokens = fn;
+}
+
+// Single-flight refresh: with short-lived access tokens, a 401 triggers one
+// refresh (shared across concurrent requests), then the original call retries.
+let refreshInFlight: Promise<boolean> | null = null;
+function runRefresh(): Promise<boolean> {
+  if (!refreshInFlight) {
+    refreshInFlight = (async () => {
+      if (!refreshToken) return false;
+      try {
+        const r = await fetchWithTimeout(
+          `${API_BASE}/api/auth/refresh`,
+          {
+            method: "POST",
+            headers: { Accept: "application/json", "Content-Type": "application/json" },
+            body: JSON.stringify({ refresh_token: refreshToken }),
+          },
+          REQUEST_TIMEOUT_MS,
+        );
+        if (!r.ok) return false;
+        const json = (await r.json()) as {
+          data?: { tokens?: { access_token: string; refresh_token: string } };
+        };
+        const t = json.data?.tokens;
+        if (!t) return false;
+        authToken = t.access_token;
+        refreshToken = t.refresh_token;
+        persistTokens?.(t.access_token, t.refresh_token);
+        return true;
+      } catch {
+        return false;
+      }
+    })().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
 }
 
 export interface ApiErrorEnvelope {
@@ -103,7 +152,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function request<T>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
   if (!API_BASE) {
     throw new ApiError(
       "ERR_CONFIG",
@@ -137,6 +186,10 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       );
     }
     throw err;
+  }
+  // Expired access token → refresh once and retry (skip the auth endpoints).
+  if (res.status === 401 && retry && !path.startsWith("/api/auth/")) {
+    if (await runRefresh()) return request<T>(path, init, false);
   }
   if (!res.ok) {
     let data: Partial<ApiErrorEnvelope> = {};

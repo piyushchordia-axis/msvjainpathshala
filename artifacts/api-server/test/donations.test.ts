@@ -62,7 +62,7 @@ describe("donations — public payment flow", () => {
     expect(verify.status).toBe(200);
     expect(verify.body.data.status).toBe("captured");
     expect(typeof verify.body.data.receipt_number).toBe("string");
-    expect(verify.body.data.receipt_number).toMatch(/^JP-/);
+    expect(verify.body.data.receipt_number).toMatch(/^JP\/\d{4}-\d{2}\/\d+$/);
 
     // Re-verifying is idempotent: same receipt, still 200.
     const reverify = await request(app)

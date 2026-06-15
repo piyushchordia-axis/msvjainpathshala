@@ -10,6 +10,7 @@ import { requireAuth } from "../../middlewares/auth";
 import { canAccessAdminPanel } from "@workspace/api-zod";
 import { uploadMemory, ALLOWED_MIME_TYPES } from "../../lib/upload";
 import { storage, makeKey } from "../../lib/storage";
+import { fileTypeFromBuffer } from "file-type";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -49,8 +50,17 @@ router.post("/", uploadMemory.single("file"), async (req: Request, res: Response
     return;
   }
 
-  const key = makeKey(folder, file.originalname);
-  const stored = await storage.put(key, file.buffer, file.mimetype);
+  // Validate the ACTUAL bytes (magic number), not the client-declared mimetype,
+  // so a script file mislabeled as image/png can't be stored. Derive the stored
+  // extension from the detected type too (ignore the client filename).
+  const detected = await fileTypeFromBuffer(file.buffer);
+  if (!detected || !ALLOWED_MIME_TYPES.has(detected.mime)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "File content does not match an allowed type.");
+    return;
+  }
+
+  const key = makeKey(folder, `upload.${detected.ext}`);
+  const stored = await storage.put(key, file.buffer, detected.mime);
   ok(res, stored);
 });
 

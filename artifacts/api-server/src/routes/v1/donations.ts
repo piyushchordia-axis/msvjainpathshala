@@ -10,7 +10,7 @@
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, donations, donation_campaigns } from "@workspace/db";
-import { and, desc, eq, ne, sql } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { payments } from "../../lib/payments";
@@ -25,11 +25,6 @@ function financialYearFor(d: Date): string {
   const startYear = d.getMonth() >= 3 ? y : y - 1;
   const endShort = String((startYear + 1) % 100).padStart(2, "0");
   return `${startYear}-${endShort}`;
-}
-
-/** Receipt number from the captured donation id + FY, e.g. "JP-2025-26-AB12CD34". */
-function receiptNumberFor(donationId: string, fy: string): string {
-  return `JP-${fy}-${donationId.replace(/-/g, "").slice(0, 8).toUpperCase()}`;
 }
 
 /* GET /v1/donations/campaigns — public campaigns only */
@@ -144,19 +139,33 @@ async function captureDonation(
         id: donations.id,
         amount_paise: donations.amount_paise,
         campaign_id: donations.campaign_id,
+        payment_status: donations.payment_status,
+        receipt_number: donations.receipt_number,
       })
       .from(donations)
       .where(eq(donations.id, donationId))
       .limit(1);
     if (!donation) return null;
+    // Already captured (e.g. /verify raced /webhook): idempotent success — keep
+    // the existing receipt and do NOT consume a counter number.
+    if (donation.payment_status === "captured") return donation.receipt_number ?? null;
 
     const now = new Date();
     const fy = financialYearFor(now);
-    const receiptNumber = receiptNumberFor(donation.id, fy);
+    // Gapless per-FY receipt number. We hold the per-donation advisory lock and
+    // verified status != captured above, so exactly one number is consumed and
+    // no two captures collide.
+    const seqRes = await tx.execute(
+      sql`insert into donation_receipt_counters (financial_year, last_no)
+          values (${fy}, 1)
+          on conflict (financial_year) do update
+            set last_no = donation_receipt_counters.last_no + 1
+          returning last_no`,
+    );
+    const seqRows = (seqRes as unknown as { rows?: Array<{ last_no: number }> }).rows ?? [];
+    const receiptNumber = `JP/${fy}/${String(Number(seqRows[0]?.last_no ?? 1)).padStart(5, "0")}`;
 
-    // Conditional claim: only the caller that flips payment_status away from
-    // "captured" gets a returned row and is responsible for the campaign credit.
-    const claimed = await tx
+    await tx
       .update(donations)
       .set({
         payment_status: "captured",
@@ -168,20 +177,9 @@ async function captureDonation(
         financial_year: fy,
         eighty_g_eligible: true,
       })
-      .where(and(eq(donations.id, donation.id), ne(donations.payment_status, "captured")))
-      .returning({ receipt_number: donations.receipt_number });
+      .where(eq(donations.id, donation.id));
 
-    // Lost the race / already captured: idempotent success, return existing receipt.
-    if (claimed.length === 0) {
-      const [existing] = await tx
-        .select({ receipt_number: donations.receipt_number })
-        .from(donations)
-        .where(eq(donations.id, donation.id))
-        .limit(1);
-      return existing?.receipt_number ?? null;
-    }
-
-    // We won the transition: credit the campaign exactly once.
+    // Winning transition: credit the campaign exactly once.
     if (donation.campaign_id) {
       await tx
         .update(donation_campaigns)
@@ -191,7 +189,7 @@ async function captureDonation(
         .where(eq(donation_campaigns.id, donation.campaign_id));
     }
 
-    return claimed[0].receipt_number;
+    return receiptNumber;
   });
 }
 

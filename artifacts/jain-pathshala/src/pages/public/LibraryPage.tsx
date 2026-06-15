@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { useLocale } from '@/lib/locale-context';
+import { safeHref } from '@/lib/safe-url';
 
 interface LibraryItem {
   id: string;
@@ -69,9 +70,9 @@ export default function LibraryPage() {
                   {desc ? (
                     <p className="mt-1 flex-1 text-sm text-muted-foreground">{desc}</p>
                   ) : null}
-                  {it.content_type === 'video' && it.embed_url ? (
+                  {it.content_type === 'video' && safeHref(it.embed_url) ? (
                     <a
-                      href={it.embed_url}
+                      href={safeHref(it.embed_url)}
                       target="_blank"
                       rel="noreferrer"
                       className="mt-4 inline-flex w-fit rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"

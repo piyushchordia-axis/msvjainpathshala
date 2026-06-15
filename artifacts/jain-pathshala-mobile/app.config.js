@@ -77,9 +77,21 @@ module.exports = ({ config }) => {
 
   const apiBaseUrl = resolveApiBaseUrl();
 
+  // Allow cleartext HTTP only outside production builds (dev/preview need it for
+  // the LAN/Metro API). Production EAS builds force HTTPS.
+  const allowCleartext = process.env.EAS_BUILD_PROFILE !== "production";
+
   return {
 
     ...config,
+
+    android: {
+
+      ...config.android,
+
+      usesCleartextTraffic: allowCleartext,
+
+    },
 
     extra: {
 

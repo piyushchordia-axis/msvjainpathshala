@@ -20,6 +20,7 @@
     "drizzle-orm": "catalog:",
     "expo-server-sdk": "^6.1.0",
     "express": "^5.2.1",
+    "file-type": "^22.0.1",
     "multer": "^2.0.2",
     "node-cron": "^3.0.3",
     "pdf-lib": "^1.17.1",

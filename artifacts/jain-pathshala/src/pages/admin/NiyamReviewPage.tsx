@@ -6,6 +6,7 @@ import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow } from '@/compone
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { safeHref } from '@/lib/safe-url';
 import {
   Dialog,
   DialogContent,
@@ -130,9 +131,9 @@ export default function NiyamReviewPage() {
               {new Date(s.submission_date).toLocaleDateString('en-GB')}
             </td>
             <td className="px-4 py-3 text-xs">
-              {s.proof_url ? (
+              {safeHref(s.proof_url) ? (
                 <a
-                  href={s.proof_url}
+                  href={safeHref(s.proof_url)}
                   target="_blank"
                   rel="noreferrer"
                   className="text-primary underline underline-offset-2"

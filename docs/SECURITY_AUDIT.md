@@ -28,22 +28,22 @@ Severity: 🔴 Critical · 🟠 High · 🟡 Medium · ⚪ Low. Status: **FIXED*
 | E1 | 🟠 | CORS reflects any origin with credentials | config | **FIXED** (prod allow-list) |
 | E2 | 🟠 | Stack traces leaked to clients on unhandled errors (no error middleware) | config | **FIXED** |
 | B2 | 🟡 | Unbounded `responses` record on public registration intake (storage abuse) | injection | **FIXED** |
-| C5 | 🟡 | 80G receipt numbers deterministic + 32-bit collision, no UNIQUE | payments | **REC** |
+| C5 | 🟡 | 80G receipt numbers deterministic + 32-bit collision, no UNIQUE | payments | **FIXED** |
 | E5 | 🟡 | Missing security headers (helmet/CSP/nosniff/frame) | config | **FIXED** (nosniff/frame/referrer) |
-| A5 | 🟡 | 7-day stateless access token, no revocation on logout | auth | **REC** |
-| G2 | 🟡 | Mobile token in AsyncStorage→localStorage (XSS on Expo web) | mobile | **REC** |
-| G3 | 🟡 | Android `usesCleartextTraffic:true` in production build | mobile | **REC** |
+| A5 | 🟡 | 7-day stateless access token, no revocation on logout | auth | **FIXED** |
+| G2 | 🟡 | Mobile token in AsyncStorage→localStorage (XSS on Expo web) | mobile | **FIXED** |
+| G3 | 🟡 | Android `usesCleartextTraffic:true` in production build | mobile | **FIXED** |
 | G4 | 🟡 | OTP `dev_code` rendered client-side with no `__DEV__` guard | mobile | **FIXED** |
-| E6 | ⚪ | `jp_user` cookie (PII) non-HttpOnly | config | **REC** |
-| D4 | ⚪ | Stale ID-card/report files never deleted on regenerate | uploads | **REC** |
-| F4 | ⚪ | `awardPunya` not atomic with its claim transaction (under-award on crash) | logic | **REC** |
+| E6 | ⚪ | `jp_user` cookie (PII) non-HttpOnly | config | **ACCEPTED** (UI-only, not server-trusted) |
+| D4 | ⚪ | Stale ID-card/report files never deleted on regenerate | uploads | **FIXED** |
+| F4 | ⚪ | `awardPunya` not atomic with its claim transaction (under-award on crash) | logic | **FIXED** |
 | — | ⚪ | `pnpm audit`: 12 advisories, **none in client/runtime bundle** (all dev/build tooling) | deps | **REC** |
 
 **Verified SOUND (no action):** SQL injection (Drizzle params throughout) · path traversal (UUID keys + base-dir guard) · SSRF/ReDoS (none) · ID-card/QR HMAC crypto (domain-separated secret, timing-safe, version/revocation re-checked) · donation capture idempotency (advisory-lock + conditional update) · multi-tenant scoping (correct per-role, resolved from trusted user row, never client fields) · pino redaction of auth headers/cookies · the queues sub-router role guard.
 
 ---
 
-## FIXED this session (verified live + 105 tests green)
+## FIXED — round 1 (verified live + 106 tests green)
 
 ### A1/A2 — OTP backdoors gated to non-prod — `routes/auth.ts`
 `default_otp_code` override and the `dev_code` field in the login response are now wrapped in `if (!isProd)`. In production an attacker can no longer read/guess any account's OTP. *Verified: dev still returns dev_code; the gates are env-only.*
@@ -93,21 +93,29 @@ Added `fetchPayment()` to the provider interface (real Razorpay adapter → `pay
 
 ## RECOMMENDED (not yet changed — need design/infra decisions)
 
-### C5 🟡 — 80G receipt numbering — `routes/v1/donations.ts` + schema
-Receipt = `JP-{FY}-{first 8 hex of UUID}` → predictable and 32-bit (collisions ~77k donations/FY), with no UNIQUE constraint. Use a per-FY monotonic sequence + `UNIQUE(receipt_number)`.
+## FIXED — round 2 (remaining hardening; user-approved)
 
-### A5 🟡 — Access-token lifecycle — `lib/tokens.ts`
-7-day stateless access token with no revocation; logout only revokes the refresh session. Shorten to minutes–hours and rely on refresh, or add a token-version/`jti` checked in `requireAuth`. (Note: mobile currently persists only the access token — shortening needs the mobile refresh path wired first.)
+### C5 🟢 — Per-FY sequential 80G receipts — `donations.ts` + schema
+Replaced the id-derived receipt with a gapless monotonic series per financial year (`JP/2026-27/00001`) from a `donation_receipt_counters` table (atomic `INSERT … ON CONFLICT … last_no+1` inside the capture txn; no number consumed on idempotent re-capture) + `UNIQUE(receipt_number)`. Verified live: `JP/2026-27/00010 → 00011`.
 
-### G2/G3 🟡 — Mobile hardening
-G2: store the token in `expo-secure-store` on native (not AsyncStorage→localStorage); honor `access_expires_at`. G3: set Android `usesCleartextTraffic:false` for production builds (dev LAN needs a network-security-config exception). — `app.json`, `contexts/AuthContext.tsx`
+### A5 🟢 — Short access TTL + silent refresh + logout revoke — `tokens.ts`, `auth.ts`, web + mobile clients
+Access TTL is now 1h (env `ACCESS_TOKEN_TTL_SECONDS`). The web api-client and mobile api both do single-flight refresh-on-401 + retry; mobile now persists the refresh token and revokes it on logout (logout accepts a body `refresh_token` for the cookieless mobile). Verified live: access exp = 3600s, `/api/auth/refresh` rotates the pair; web build + mobile bundle green.
 
-### Others
-- **D2** (upload content-sniffing): trust magic bytes, not the client `mimetype`; restrict served extensions. `nosniff` already mitigates execution. — `lib/upload.ts`/`storage.ts`
-- **E6** (jp_user PII non-HttpOnly): keep it minimal / drop `phone`; it's never trusted server-side so not an escalation risk. — `lib/cookies.ts`
-- **D4** (stale files): `storage.remove` the old key on ID-card/report regenerate.
-- **F4** (award atomicity): thread the caller's `tx` into `awardPunya` so the claim + ledger + balance commit together.
-- **Deps**: `pnpm audit` → 12 advisories, **all in dev/build tooling** (esbuild, postcss, qs, uuid) — none in the shipped web/mobile bundle. Supply-chain posture is good (`minimumReleaseAge: 1440`, postinstall allowlist). Bump tooling at convenience.
+### G2 🟢 — Mobile token in the OS keystore — `lib/secure-storage.ts`, `AuthContext.tsx`
+Tokens now stored via `expo-secure-store` (iOS Keychain / Android Keystore) on native, with an AsyncStorage/localStorage fallback on Expo-web. The (non-secret) user profile stays in AsyncStorage.
+
+### G3 🟢 — Android cleartext gated to non-prod — `app.config.js`
+`usesCleartextTraffic` is `true` only when `EAS_BUILD_PROFILE !== "production"` (dev/preview LAN); production EAS builds force HTTPS.
+
+### D2 🟢 — Upload content sniffing — `routes/v1/uploads.ts`
+Validate the actual bytes with `file-type` (magic number) against the allowlist and derive the stored extension from the detected type — a script mislabeled `image/png` is rejected (422). With the D1 serving route (unknown extensions → `application/octet-stream` + `nosniff`), execution is doubly prevented. Covered by a new test.
+
+### D4 / F4 / F2 🟢 — `id-cards.ts` · `lib/punya.ts` · niyam schema
+D4: regenerating an ID card deletes the superseded PNG. F4: `awardPunya` runs ledger-insert + balance-upsert + tier in one transaction. F2: partial `UNIQUE(niyam_id, student_id, submission_date) WHERE status<>'rejected'` (defense-in-depth atop the advisory lock). B1 also hardened at the web render boundary via `safeHref`.
+
+## Remaining (accepted / deferred)
+- **E6** ⚪ — the `jp_user` cookie keeps `phone` (the web uses it for the sidebar avatar/name fallback). It is non-HttpOnly by necessity (UI-only) and **never trusted server-side**; XSS is hardened (URL-scheme validation + `nosniff` + frame-deny). Accepted by design.
+- **Dev/build dependency advisories** — 12 from `pnpm audit`, all in dev/build tooling (esbuild/postcss/qs/uuid), **none in the shipped bundle**. Bump via `pnpm update` at convenience (deferred to avoid churn).
 
 ---
 
@@ -120,4 +128,4 @@ G2: store the token in `expo-secure-store` on native (not AsyncStorage→localSt
 - [ ] `JP_AUTH_SECRET` set to a strong value (already required-in-prod by `tokens.ts`).
 
 ## Verification performed
-Per-role API tokens (super_admin→student) + curl + psql against the live stack. Confirmed exploitable-then-fixed: D1 (200→needs auth), A4 (200→403), B1 (accept→422), rate-limit (→429), headers present. **API typecheck green · 105/105 integration tests green** after all fixes.
+Per-role API tokens (super_admin→student) + curl + psql against the live stack. Confirmed exploitable-then-fixed: D1 (200→needs signed URL; signed 200 / unsigned 403 / tampered 403, ID-card image renders), A4 (200→403), B1 (accept→422), rate-limit (→429), headers present, C5 receipts sequential (`…/00010→00011`), A5 access exp=3600s + `/refresh` rotates, D2 mislabeled upload→422. **typecheck green (api/web/mobile) · web build green · mobile web bundle green · 106/106 integration tests green** after all fixes (both rounds).

@@ -7,10 +7,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { apiPost, setAuthToken } from "@/lib/api";
+import { apiPost, setAuthToken, setRefreshToken, setTokenPersistor } from "@/lib/api";
+import { secureStorage } from "@/lib/secure-storage";
 import type { AuthTokens, SessionUser } from "@/lib/auth";
 
 const TOKEN_KEY = "jp_access_token";
+const REFRESH_KEY = "jp_refresh_token";
 const USER_KEY = "jp_user";
 
 interface AuthContextValue {
@@ -32,14 +34,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Persist the rotated pair whenever the api layer does a silent refresh.
+  useEffect(() => {
+    setTokenPersistor((access, refresh) => {
+      void secureStorage.setItem(TOKEN_KEY, access);
+      void secureStorage.setItem(REFRESH_KEY, refresh);
+    });
+    return () => setTokenPersistor(null);
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
-        const [token, rawUser] = await Promise.all([
-          AsyncStorage.getItem(TOKEN_KEY),
+        const [token, refresh, rawUser] = await Promise.all([
+          secureStorage.getItem(TOKEN_KEY),
+          secureStorage.getItem(REFRESH_KEY),
           AsyncStorage.getItem(USER_KEY),
         ]);
         if (token) setAuthToken(token);
+        if (refresh) setRefreshToken(refresh);
         if (rawUser) setUser(JSON.parse(rawUser) as SessionUser);
       } catch {
       } finally {
@@ -53,22 +66,29 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // device before the new user's queries run.
     queryClient.clear();
     setAuthToken(tokens.access_token);
+    setRefreshToken(tokens.refresh_token);
     setUser(nextUser);
     await Promise.all([
-      AsyncStorage.setItem(TOKEN_KEY, tokens.access_token),
+      secureStorage.setItem(TOKEN_KEY, tokens.access_token),
+      secureStorage.setItem(REFRESH_KEY, tokens.refresh_token),
       AsyncStorage.setItem(USER_KEY, JSON.stringify(nextUser)),
     ]);
   }
 
   async function logout() {
+    // Send the refresh token so the server revokes the session (mobile has no
+    // cookie); short access TTL means the access token also lapses quickly.
+    const refresh = await secureStorage.getItem(REFRESH_KEY).catch(() => null);
     try {
-      await apiPost("/api/auth/logout", {});
+      await apiPost("/api/auth/logout", refresh ? { refresh_token: refresh } : {});
     } catch {}
     setAuthToken(null);
+    setRefreshToken(null);
     setUser(null);
     queryClient.clear();
     await Promise.all([
-      AsyncStorage.removeItem(TOKEN_KEY),
+      secureStorage.removeItem(TOKEN_KEY),
+      secureStorage.removeItem(REFRESH_KEY),
       AsyncStorage.removeItem(USER_KEY),
     ]);
   }

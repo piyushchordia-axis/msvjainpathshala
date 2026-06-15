@@ -35,7 +35,20 @@ export const donations = pgTable("donations", {
   razorpay_signature: text("razorpay_signature"),
   payment_captured_at: timestamp("payment_captured_at", { withTimezone: true }),
   eighty_g_eligible: boolean("eighty_g_eligible").notNull().default(false),
-  receipt_number: text("receipt_number"),
+  // 80G receipt number, unique across all donations (gapless per-FY series).
+  receipt_number: text("receipt_number").unique(),
   financial_year: text("financial_year"),
+  ...timestamps(),
+});
+
+/**
+ * Per-financial-year gapless counter for 80G receipt numbers (JP/<fy>/<no>).
+ * Incremented atomically inside the capture transaction so receipts are
+ * sequential, unguessable-by-id, and unique. 80G compliance favours a
+ * monotonic registered series over the old id-derived value.
+ */
+export const donation_receipt_counters = pgTable("donation_receipt_counters", {
+  financial_year: text("financial_year").primaryKey(),
+  last_no: integer("last_no").notNull().default(0),
   ...timestamps(),
 });

@@ -1,4 +1,5 @@
-import { boolean, date, integer, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { boolean, date, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 import { timestamps } from "./_helpers";
 import { niyamSubmissionStatusEnum, niyamTypeEnum, proofTypeEnum } from "./enums";
@@ -37,7 +38,13 @@ export const niyam_submissions = pgTable("niyam_submissions", {
   reviewed_by: uuid("reviewed_by").references(() => users.id, { onDelete: "set null" }),
   reviewed_at: timestamp("reviewed_at", { withTimezone: true }),
   ...timestamps(),
-});
+}, (t) => ({
+  // One non-rejected submission per (niyam, student, day) — defense-in-depth for
+  // the auto-approve race (the submit path also takes an advisory lock).
+  oncePerDay: uniqueIndex("niyam_submissions_niyam_student_date_uq")
+    .on(t.niyam_id, t.student_id, t.submission_date)
+    .where(sql`status <> 'rejected'`),
+}));
 
 export const niyam_streaks = pgTable("niyam_streaks", {
   id: uuid("id").primaryKey().defaultRandom(),

@@ -28,7 +28,7 @@ function sign(key: string, exp: number): string {
 }
 
 /** Extract the storage key from one of OUR /uploads URLs, or null if external. */
-function keyFromUrl(url: string): string | null {
+export function uploadKeyFromUrl(url: string): string | null {
   const marker = "/uploads/";
   const i = url.indexOf(marker);
   if (i < 0) return null;
@@ -48,7 +48,7 @@ function keyFromUrl(url: string): string | null {
  */
 export function signUploadUrl<T extends string | null | undefined>(url: T): T {
   if (!url) return url;
-  const key = keyFromUrl(url);
+  const key = uploadKeyFromUrl(url);
   if (key === null) return url;
   const exp = Math.floor(Date.now() / 1000) + TTL_SECONDS;
   const sig = sign(key, exp);

@@ -16,7 +16,7 @@ import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { storage, makeKey } from "../../lib/storage";
-import { signUploadUrl } from "../../lib/file-tokens";
+import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
 import { qrDataUrl, svgToPng } from "../../lib/qr";
 
 const router: IRouter = Router();
@@ -143,7 +143,7 @@ router.post(
     }
 
     const [existing] = await db
-      .select({ version_no: digital_id_cards.version_no })
+      .select({ version_no: digital_id_cards.version_no, png_url: digital_id_cards.png_url })
       .from(digital_id_cards)
       .where(eq(digital_id_cards.student_id, studentId))
       .limit(1);
@@ -164,6 +164,11 @@ router.post(
     });
     const png = await svgToPng(svg);
     const { url } = await storage.put(makeKey("id-cards", `${cardNumber}.png`), png, "image/png");
+    // Delete the superseded PNG so stale card images don't linger on disk.
+    if (existing?.png_url) {
+      const oldKey = uploadKeyFromUrl(existing.png_url);
+      if (oldKey) await storage.remove(oldKey);
+    }
 
     const now = new Date();
     const [row] = await db

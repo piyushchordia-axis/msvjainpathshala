@@ -262,7 +262,10 @@ router.get("/me", async (req: Request, res: Response) => {
 });
 
 async function handleLogout(req: Request, res: Response): Promise<void> {
-  const refresh = (req.cookies as Record<string, string> | undefined)?.jp_refresh;
+  // Web sends the refresh token via HttpOnly cookie; mobile (no cookie) sends it
+  // in the body so the session is revoked server-side on logout.
+  const refresh = (req.cookies as Record<string, string> | undefined)?.jp_refresh
+    ?? (typeof req.body?.refresh_token === "string" ? req.body.refresh_token : undefined);
   if (refresh) {
     await db
       .update(device_sessions)
