@@ -10,6 +10,7 @@ import {
   attendance,
   punya_transactions,
   msv_enrolments,
+  donations,
 } from "@workspace/db";
 import { and, asc, count, desc, eq, gte, inArray, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
@@ -103,6 +104,16 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
     .innerJoin(students, eq(students.id, punya_transactions.student_id))
     .where(and(gte(punya_transactions.created_at, since), punyaCentreFilter));
 
+  // Captured donations in the current financial year (India: Apr 1 – Mar 31).
+  // Donations are donor-based (no centre), so this is an org-wide aggregate.
+  const now = new Date();
+  const fyStartYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
+  const fyStart = new Date(Date.UTC(fyStartYear, 3, 1)); // April 1, 00:00 UTC
+  const [donationRow] = await db
+    .select({ sum: sql<number>`coalesce(sum(${donations.amount_paise}),0)::bigint` })
+    .from(donations)
+    .where(and(eq(donations.payment_status, "captured"), gte(donations.payment_captured_at, fyStart)));
+
   ok(res, {
     active_students: activeStudents?.n ?? 0,
     centres: centreCount?.n ?? 0,
@@ -110,7 +121,7 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
     attendance_rate_30d: attendanceRate,
     punya_awarded_30d: Number(punyaRow?.sum ?? 0),
     msv_active: msvActive?.n ?? 0,
-    donations_total_paise_ytd: 0,
+    donations_total_paise_ytd: Number(donationRow?.sum ?? 0),
   });
   void msv_enrolments;
 });

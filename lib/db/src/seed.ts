@@ -796,6 +796,7 @@ async function main(): Promise<void> {
       campaign_id: campaign.id,
       frequency: "one_time",
       status: "captured",
+      payment_status: "captured" as const,
       payment_captured_at: daysAgo(10),
       eighty_g_eligible: true,
       receipt_number: "RCP-2025-001",
@@ -808,6 +809,7 @@ async function main(): Promise<void> {
       purpose: "general",
       frequency: "one_time",
       status: "captured",
+      payment_status: "captured" as const,
       payment_captured_at: daysAgo(3),
       eighty_g_eligible: false,
       receipt_number: "RCP-2025-002",
@@ -820,6 +822,7 @@ async function main(): Promise<void> {
       campaign_id: campaign.id,
       frequency: "one_time",
       status: "captured",
+      payment_status: "captured" as const,
       payment_captured_at: daysAgo(1),
       eighty_g_eligible: true,
     },
@@ -916,7 +919,6 @@ async function main(): Promise<void> {
       is_active: true,
       version_no: 1,
       fields: [
-        { key: "full_name", label_en: "Full Name", label_hi: "पूरा नाम", type: "text", required: true },
         {
           key: "age_group",
           label_en: "Age Group",
