@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { apiPost, ApiError } from '@/lib/api-client';
+import { useEffect, useState } from 'react';
+import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow } from '@/components/admin/AdminPageShell';
@@ -7,6 +7,13 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import {
   Dialog,
   DialogContent,
@@ -64,10 +71,18 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
+interface CityOption { id: string; name: string; state_name: string; }
+
 function AddCompetitionDialog({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [cities, setCities] = useState<CityOption[]>([]);
   const [cityId, setCityId] = useState('');
+
+  useEffect(() => {
+    if (!open) return;
+    void apiGet<{ cities: CityOption[] }>('/v1/admin/geography').then((r) => setCities(r?.cities ?? []));
+  }, [open]);
   const [nameEn, setNameEn] = useState('');
   const [nameHi, setNameHi] = useState('');
   const [category, setCategory] = useState('general');
@@ -143,8 +158,15 @@ function AddCompetitionDialog({ onAdded }: { onAdded: () => void }) {
           <DialogTitle>Create competition</DialogTitle>
         </DialogHeader>
         <form className="space-y-4 pt-2" onSubmit={submit}>
-          <FormRow label="City ID *">
-            <Input value={cityId} onChange={(e) => setCityId(e.target.value)} placeholder="UUID of the city" required />
+          <FormRow label="City *">
+            <Select value={cityId} onValueChange={setCityId}>
+              <SelectTrigger><SelectValue placeholder="Select city" /></SelectTrigger>
+              <SelectContent>
+                {cities.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>{c.name} ({c.state_name})</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </FormRow>
           <div className="grid grid-cols-2 gap-3">
             <FormRow label="Name (English) *">

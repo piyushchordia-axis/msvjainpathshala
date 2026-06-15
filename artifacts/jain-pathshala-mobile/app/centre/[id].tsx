@@ -14,6 +14,13 @@ interface CentreDetailResponse {
   batches: BatchItem[];
 }
 
+// ISO weekday: 1=Mon … 7=Sun (index 0 unused) — matches the API/web convention.
+const DAYS_EN = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const DAYS_HI = ["", "सोम", "मंगल", "बुध", "गुरु", "शुक्र", "शनि", "रवि"];
+function formatDays(days: number[] | null | undefined, hi: boolean): string {
+  return (days ?? []).map((d) => (hi ? DAYS_HI[d] : DAYS_EN[d]) ?? "").filter(Boolean).join(", ");
+}
+
 export default function CentreDetailScreen() {
   const c = useColors();
   const router = useRouter();
@@ -76,7 +83,7 @@ export default function CentreDetailScreen() {
             <Row style={{ gap: 8, marginTop: 10 }}>
               <Ionicons name="time-outline" size={15} color={c.mutedForeground} />
               <Body muted style={{ fontSize: 13 }}>
-                {[b.day_of_week, formatTimeRange(b.start_time, b.end_time)].filter(Boolean).join(" · ")}
+                {[formatDays(b.day_of_week, hi), formatTimeRange(b.start_time, b.end_time)].filter(Boolean).join(" · ")}
               </Body>
             </Row>
             {b.capacity != null ? (

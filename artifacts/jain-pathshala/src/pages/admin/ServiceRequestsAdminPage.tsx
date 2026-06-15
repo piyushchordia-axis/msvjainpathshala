@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
@@ -91,14 +91,16 @@ function ThreadDialog({
     }
   }
 
-  function handleOpenChange(v: boolean) {
-    onOpenChange(v);
-    if (v && request) {
+  // The dialog is opened programmatically (parent sets `open`), so Radix's
+  // onOpenChange does NOT fire on open — load the thread via an effect instead.
+  useEffect(() => {
+    if (open && request) {
       setReply('');
       setDetail(null);
       void loadDetail(request.id);
     }
-  }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, request?.id]);
 
   async function sendReply() {
     if (!request || !reply.trim()) return;
@@ -134,7 +136,7 @@ function ThreadDialog({
   const status = detail?.status ?? request?.status;
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>{request?.subject ?? 'Service request'}</DialogTitle>

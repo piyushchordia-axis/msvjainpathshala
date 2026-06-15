@@ -46,8 +46,6 @@ interface EventRow {
   created_at: string;
 }
 
-interface CentreRow { id: string; name: string; }
-
 const QUIZ_SCOPES = ['national', 'state', 'city', 'centre', 'batch'] as const;
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -316,13 +314,21 @@ function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; o
 }
 
 // ─── Create push quiz (inline questions) ────────────────────────────────────
-function CreatePushDialog({ centres, onAdded }: { centres: CentreRow[]; onAdded: () => void }) {
+interface BatchOption { id: string; name: string | null; centre_name: string; }
+
+function CreatePushDialog({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [batches, setBatches] = useState<BatchOption[]>([]);
   const [batchId, setBatchId] = useState('');
   const [minutes, setMinutes] = useState('15');
   const [points, setPoints] = useState('5');
   const [drafts, setDrafts] = useState<DraftQ[]>([emptyDraftQ()]);
+
+  useEffect(() => {
+    if (!open) return;
+    void apiGet<{ items: BatchOption[] }>('/v1/admin/batches').then((r) => setBatches(r?.items ?? []));
+  }, [open]);
 
   function reset() { setBatchId(''); setMinutes('15'); setPoints('5'); setDrafts([emptyDraftQ()]); }
 
@@ -370,8 +376,15 @@ function CreatePushDialog({ centres, onAdded }: { centres: CentreRow[]; onAdded:
         <DialogHeader><DialogTitle>Start a live push quiz</DialogTitle></DialogHeader>
         <form className="space-y-4 pt-2" onSubmit={submit}>
           <div className="grid grid-cols-3 gap-3">
-            <FormRow label="Batch id *">
-              <Input value={batchId} onChange={(e) => setBatchId(e.target.value)} placeholder="UUID" />
+            <FormRow label="Batch *">
+              <Select value={batchId} onValueChange={setBatchId}>
+                <SelectTrigger><SelectValue placeholder="Select batch" /></SelectTrigger>
+                <SelectContent>
+                  {batches.map((b) => (
+                    <SelectItem key={b.id} value={b.id}>{b.name ?? 'Batch'} · {b.centre_name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </FormRow>
             <FormRow label="Expires in (min)">
               <Input type="number" min={1} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
@@ -380,11 +393,6 @@ function CreatePushDialog({ centres, onAdded }: { centres: CentreRow[]; onAdded:
               <Input type="number" min={0} value={points} onChange={(e) => setPoints(e.target.value)} />
             </FormRow>
           </div>
-          {centres.length > 0 ? (
-            <p className="text-xs text-muted-foreground">
-              Paste a batch UUID from one of your centres ({centres.map((c) => c.name).join(', ')}).
-            </p>
-          ) : null}
           <div className="space-y-3">
             {drafts.map((d, i) => (
               <div key={i} className="space-y-2">
@@ -418,7 +426,6 @@ export default function QuizzesPage() {
   const [tab, setTab] = useState<Tab>('bank');
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
-  const [centres, setCentres] = useState<CentreRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -426,14 +433,12 @@ export default function QuizzesPage() {
     setLoading(true);
     setError(null);
     try {
-      const [q, ev, ce] = await Promise.all([
+      const [q, ev] = await Promise.all([
         apiGet<{ items: QuestionRow[] }>('/v1/quizzes/questions?limit=200'),
         apiGet<{ items: EventRow[] }>('/v1/quizzes/events?limit=200'),
-        apiGet<{ items: CentreRow[] }>('/v1/admin/centres').catch(() => ({ items: [] as CentreRow[] })),
       ]);
       setQuestions(q?.items ?? []);
       setEvents(ev?.items ?? []);
-      setCentres(ce?.items ?? []);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not load quizzes.');
     } finally {
@@ -447,7 +452,7 @@ export default function QuizzesPage() {
     <div className="flex items-center gap-2">
       <AddQuestionDialog onAdded={loadAll} />
       <CreateEventDialog questions={questions} onAdded={loadAll} />
-      <CreatePushDialog centres={centres} onAdded={loadAll} />
+      <CreatePushDialog onAdded={loadAll} />
     </div>
   );
 

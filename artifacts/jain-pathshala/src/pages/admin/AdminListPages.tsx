@@ -801,11 +801,18 @@ export function PunyaAuditPage() {
   );
 }
 
+interface AwardStudentOption { id: string; full_name: string | null; student_code: string; }
+
 export function PunyaAwardPage() {
+  const [students, setStudents] = useState<AwardStudentOption[]>([]);
   const [studentId, setStudentId] = useState('');
   const [points, setPoints] = useState('10');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void apiGet<{ items: AwardStudentOption[] }>('/v1/admin/students?limit=500').then((r) => setStudents(r?.items ?? []));
+  }, []);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -831,14 +838,19 @@ export function PunyaAwardPage() {
       <Card className="max-w-md p-6">
         <form className="space-y-4" onSubmit={submit}>
           <div>
-            <Label htmlFor="student_id">Student ID (UUID)</Label>
-            <Input
-              id="student_id"
-              value={studentId}
-              onChange={(e) => setStudentId(e.target.value)}
-              placeholder="From Students list"
-              className="mt-1 font-mono text-xs"
-            />
+            <Label htmlFor="student_id">Student</Label>
+            <Select value={studentId} onValueChange={setStudentId}>
+              <SelectTrigger id="student_id" className="mt-1">
+                <SelectValue placeholder="Select a student" />
+              </SelectTrigger>
+              <SelectContent>
+                {students.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>
+                    {(s.full_name ?? 'Unnamed')} — {s.student_code}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div>
             <Label htmlFor="points">Points</Label>

@@ -78,11 +78,10 @@ function DecideActions({ id, status, onChanged }: DecideActionsProps) {
 
   return (
     <div className="flex gap-1">
-      {status === 'pending' ? (
-        <Button size="sm" onClick={() => act('approve')} disabled={!!busy}>
-          {busy === 'approve' ? '…' : 'Approve'}
-        </Button>
-      ) : null}
+      {/* Approve is valid from both pending and waitlisted. */}
+      <Button size="sm" onClick={() => act('approve')} disabled={!!busy}>
+        {busy === 'approve' ? '…' : 'Approve'}
+      </Button>
       {status === 'pending' ? (
         <Button size="sm" variant="outline" onClick={() => act('waitlist')} disabled={!!busy}>
           {busy === 'waitlist' ? '…' : 'Waitlist'}

@@ -4,12 +4,12 @@ import { Globe } from 'lucide-react';
 import { useState } from 'react';
 
 const NAV_ITEMS = [
-  { href: '/centres', label: 'Centres' },
-  { href: '/shivirs', label: 'Shivirs' },
-  { href: '/notices', label: 'Notices' },
-  { href: '/library', label: 'Library' },
-  { href: '/gallery', label: 'Gallery' },
-  { href: '/about', label: 'About' },
+  { href: '/centres', label: 'Centres', label_hi: 'केंद्र' },
+  { href: '/shivirs', label: 'Shivirs', label_hi: 'शिविर' },
+  { href: '/notices', label: 'Notices', label_hi: 'सूचनाएँ' },
+  { href: '/library', label: 'Library', label_hi: 'पुस्तकालय' },
+  { href: '/gallery', label: 'Gallery', label_hi: 'गैलरी' },
+  { href: '/about', label: 'About', label_hi: 'परिचय' },
 ];
 
 function LanguageSwitcher() {
@@ -45,6 +45,7 @@ function LanguageSwitcher() {
 }
 
 export function TopNav() {
+  const hi = useLocale() === 'hi';
   return (
     <header className="sticky top-0 z-40 border-b border-border bg-background/90 backdrop-blur">
       <div className="container flex h-16 items-center justify-between gap-6">
@@ -60,7 +61,7 @@ export function TopNav() {
               href={item.href}
               className="rounded-md px-3 py-2 text-sm text-foreground hover:bg-accent hover:text-accent-foreground"
             >
-              {item.label}
+              {hi ? item.label_hi : item.label}
             </Link>
           ))}
         </nav>
@@ -71,7 +72,7 @@ export function TopNav() {
             href="/admin/login"
             className="hidden sm:inline-flex items-center rounded-md border border-secondary px-3 py-2 text-sm text-secondary hover:bg-maroon-50"
           >
-            Sign in
+            {hi ? 'लॉगिन' : 'Sign in'}
           </Link>
         </div>
       </div>

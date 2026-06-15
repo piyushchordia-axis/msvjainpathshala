@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { Locale } from '@/i18n/locales';
 
 interface LocaleContextValue {
@@ -13,6 +13,10 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
     const stored = localStorage.getItem('jp_locale') as Locale | null;
     return stored === 'hi' ? 'hi' : 'en';
   });
+
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
 
   function handleSet(l: Locale) {
     setLocale(l);

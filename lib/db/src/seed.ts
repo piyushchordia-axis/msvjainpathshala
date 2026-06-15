@@ -264,7 +264,7 @@ async function main(): Promise<void> {
       name: "Bal Batch - Sunday Morning",
       age_group: "bal",
       shikshak_id: shikshak.id,
-      day_of_week: [0],
+      day_of_week: [7],
       start_time: "09:00:00",
       end_time: "10:30:00",
       capacity: 25,
@@ -280,7 +280,7 @@ async function main(): Promise<void> {
       name: "Kishor Batch - Sunday Morning",
       age_group: "kishor",
       shikshak_id: shikshak.id,
-      day_of_week: [0],
+      day_of_week: [7],
       start_time: "10:30:00",
       end_time: "12:00:00",
       capacity: 30,
@@ -318,7 +318,7 @@ async function main(): Promise<void> {
   const studentSeeds = [
     {
       full_name: "Aarav Shah",
-      code: "JP0001",
+      code: "STU000001",
       age_group: "bal" as const,
       centre_id: centreA.id,
       batch_id: batchA1.id,
@@ -329,7 +329,7 @@ async function main(): Promise<void> {
     },
     {
       full_name: "Diya Mehta",
-      code: "JP0002",
+      code: "STU000002",
       age_group: "bal" as const,
       centre_id: centreA.id,
       batch_id: batchA1.id,
@@ -339,7 +339,7 @@ async function main(): Promise<void> {
     },
     {
       full_name: "Kabir Jain",
-      code: "JP0003",
+      code: "STU000003",
       age_group: "kishor" as const,
       centre_id: centreA.id,
       batch_id: batchA2.id,
@@ -348,7 +348,7 @@ async function main(): Promise<void> {
     },
     {
       full_name: "Anaya Doshi",
-      code: "JP0004",
+      code: "STU000004",
       age_group: "tarun" as const,
       centre_id: centreB.id,
       batch_id: batchB1.id,
@@ -357,7 +357,7 @@ async function main(): Promise<void> {
     },
     {
       full_name: "Vivaan Sanghvi",
-      code: "JP0005",
+      code: "STU000005",
       age_group: "kishor" as const,
       centre_id: centreA.id,
       batch_id: batchA2.id,
@@ -929,6 +929,7 @@ async function main(): Promise<void> {
             { value: "bal", label_en: "Bal", label_hi: "बाल" },
             { value: "kishor", label_en: "Kishor", label_hi: "किशोर" },
             { value: "tarun", label_en: "Tarun", label_hi: "तरुण" },
+            { value: "yuva", label_en: "Yuva", label_hi: "युवा" },
           ],
         },
         { key: "parent_phone", label_en: "Parent Phone", label_hi: "अभिभावक फ़ोन", type: "tel", required: false },

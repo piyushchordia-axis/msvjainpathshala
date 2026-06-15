@@ -6,8 +6,9 @@ import { formatTimeRange } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
 import { Body, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
-const DAYS_EN = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-const DAYS_HI = ["रवि", "सोम", "मंगल", "बुध", "गुरु", "शुक्र", "शनि"];
+// ISO weekday: 1=Mon … 7=Sun (index 0 unused) — matches the API/web convention.
+const DAYS_EN = ["", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const DAYS_HI = ["", "सोम", "मंगल", "बुध", "गुरु", "शुक्र", "शनि", "रवि"];
 
 export default function BatchesScreen() {
   const c = useColors();
