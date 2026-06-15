@@ -24,6 +24,26 @@ const OTP_TTL_SECONDS = 5 * 60;
 const MAX_OTP_ATTEMPTS = 5;
 const isProd = process.env.NODE_ENV === "production";
 
+/**
+ * Lightweight in-memory fixed-window rate limiter for the unauthenticated auth
+ * surface (OTP send/verify). Prevents OTP brute-force (unbounded fresh-token
+ * issuance) and SMS/DB amplification. For multi-instance deployments replace
+ * with the shared Redis the platform already runs.
+ */
+const rlBuckets = new Map<string, { count: number; resetAt: number }>();
+function rateLimited(key: string, max: number, windowMs: number): boolean {
+  // The integration suite logs in repeatedly for the same seeded phones.
+  if (process.env.NODE_ENV === "test") return false;
+  const now = Date.now();
+  const b = rlBuckets.get(key);
+  if (!b || b.resetAt < now) {
+    rlBuckets.set(key, { count: 1, resetAt: now + windowMs });
+    return false;
+  }
+  b.count += 1;
+  return b.count > max;
+}
+
 function toSessionUser(u: typeof users.$inferSelect): SessionUser {
   return {
     id: u.id,
@@ -44,6 +64,22 @@ router.post("/login", async (req: Request, res: Response) => {
     return;
   }
 
+  const ip = req.ip ?? "unknown";
+  if (parsed.phase === "send") {
+    // 5 sends per phone / 15 min, plus a per-IP cap to stop SMS/DB amplification.
+    if (
+      rateLimited(`otp:send:phone:${parsed.phone}`, 5, 15 * 60_000) ||
+      rateLimited(`otp:send:ip:${ip}`, 30, 15 * 60_000)
+    ) {
+      fail(res, 429, "ERR_RATE_LIMITED", "Too many requests. Please try again later.");
+      return;
+    }
+  } else if (rateLimited(`otp:verify:ip:${ip}`, 30, 15 * 60_000)) {
+    // Cap verify attempts per IP so fresh-token issuance can't brute the code.
+    fail(res, 429, "ERR_RATE_LIMITED", "Too many attempts. Please try again later.");
+    return;
+  }
+
   if (parsed.phase === "send") {
     // Only registered (seeded) phones can receive a code.
     const [user] = await db
@@ -56,13 +92,17 @@ router.post("/login", async (req: Request, res: Response) => {
     let code = generateOtpCode();
 
     // Check settings table for a default OTP override (e.g. "123456").
-    const [otpSetting] = await db
-      .select()
-      .from(settings)
-      .where(eq(settings.key, "default_otp_code"))
-      .limit(1);
-    if (otpSetting?.value) {
-      code = otpSetting.value;
+    // DEV-ONLY: never honour a fixed/default OTP in production, even if the
+    // settings row leaks into a prod DB via a seed.
+    if (!isProd) {
+      const [otpSetting] = await db
+        .select()
+        .from(settings)
+        .where(eq(settings.key, "default_otp_code"))
+        .limit(1);
+      if (otpSetting?.value) {
+        code = otpSetting.value;
+      }
     }
 
     const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
@@ -80,7 +120,9 @@ router.post("/login", async (req: Request, res: Response) => {
       expires_in_seconds: OTP_TTL_SECONDS,
     };
     // Surface the code in the response for registered users (no real SMS).
-    if (user) payload.dev_code = code;
+    // DEV-ONLY: returning the OTP in the response is an account-takeover
+    // backdoor in production — gate it behind a non-prod environment.
+    if (user && !isProd) payload.dev_code = code;
     res.status(200).json({ data: payload });
     return;
   }

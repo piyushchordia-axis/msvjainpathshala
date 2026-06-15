@@ -16,6 +16,7 @@ import { and, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
+import { httpUrl } from "../../lib/validation";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { awardPunya } from "../../lib/punya";
@@ -108,7 +109,7 @@ const createSubmissionSchema = z.object({
   niyam_id: z.string().uuid(),
   student_id: z.string().uuid(),
   submission_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
-  proof_url: z.string().url().max(2000).optional(),
+  proof_url: httpUrl(2000).optional(),
   notes: z.string().max(500).optional(),
 });
 
@@ -149,43 +150,51 @@ router.post("/", async (req: Request, res: Response) => {
     fail(res, 422, "ERR_VALIDATION_FAILED", "Proof required."); return;
   }
 
-  const [dup] = await db
-    .select({ id: niyam_submissions.id })
-    .from(niyam_submissions)
-    .where(
-      and(
-        eq(niyam_submissions.niyam_id, niyam.id),
-        eq(niyam_submissions.student_id, body.student_id),
-        eq(niyam_submissions.submission_date, submissionDate),
-        // Ignore rejected rows so a rejected submission can be re-submitted for
-        // this date; still blocks pending/approved/auto_approved duplicates.
-        ne(niyam_submissions.status, "rejected"),
-      ),
-    )
-    .limit(1);
-  if (dup) {
-    fail(res, 409, "ERR_DUPLICATE", "Already submitted for this date."); return;
-  }
-
   // With proof -> awaits shikshak review. Without proof (proof_type "either")
   // -> auto-approved, points granted now and streak updated.
   const autoApprove = !proofUrl;
   const status = autoApprove ? "auto_approved" : "pending";
   const pointsAwarded = autoApprove ? niyam.points : 0;
 
-  const [row] = await db
-    .insert(niyam_submissions)
-    .values({
-      niyam_id: niyam.id,
-      student_id: body.student_id,
-      submission_date: submissionDate,
-      status,
-      points_awarded: pointsAwarded,
-      proof_url: proofUrl,
-      notes: body.notes ?? null,
-      submitted_by: req.authUser!.id,
-    })
-    .returning();
+  // Serialize concurrent submits for the same (niyam, student, date) so the
+  // duplicate check + insert is atomic. Without this, parallel auto-approve
+  // submits each pass the check and farm points/streak repeatedly.
+  const lockKey = `niyam:${niyam.id}:${body.student_id}:${submissionDate}`;
+  const row = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+    const [dup] = await tx
+      .select({ id: niyam_submissions.id })
+      .from(niyam_submissions)
+      .where(
+        and(
+          eq(niyam_submissions.niyam_id, niyam.id),
+          eq(niyam_submissions.student_id, body.student_id),
+          eq(niyam_submissions.submission_date, submissionDate),
+          // Ignore rejected rows so a rejected submission can be re-submitted for
+          // this date; still blocks pending/approved/auto_approved duplicates.
+          ne(niyam_submissions.status, "rejected"),
+        ),
+      )
+      .limit(1);
+    if (dup) return null;
+    const [created] = await tx
+      .insert(niyam_submissions)
+      .values({
+        niyam_id: niyam.id,
+        student_id: body.student_id,
+        submission_date: submissionDate,
+        status,
+        points_awarded: pointsAwarded,
+        proof_url: proofUrl,
+        notes: body.notes ?? null,
+        submitted_by: req.authUser!.id,
+      })
+      .returning();
+    return created;
+  });
+  if (!row) {
+    fail(res, 409, "ERR_DUPLICATE", "Already submitted for this date."); return;
+  }
 
   if (autoApprove) {
     await awardPunya({

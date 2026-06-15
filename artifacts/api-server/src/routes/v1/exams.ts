@@ -610,8 +610,11 @@ router.post("/:id/start", async (req: Request, res: Response) => {
   }
 
   // Atomically count existing attempts and insert the new one so two parallel
-  // starts cannot both pass the cap check (count-then-insert TOCTOU).
+  // starts cannot both pass the cap check (count-then-insert TOCTOU). Under
+  // READ COMMITTED a plain count+insert is racy, so serialize per (exam,student)
+  // with a transaction-scoped advisory lock.
   const startResult = await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${`${examId}:${student.id}`}, 0))`);
     const [{ n }] = await tx
       .select({ n: sql<number>`count(*)::int` })
       .from(exam_attempts)

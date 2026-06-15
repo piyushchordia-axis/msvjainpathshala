@@ -26,6 +26,7 @@ import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
+import { httpUrl } from "../../lib/validation";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState } from "../../lib/scope";
 
@@ -298,7 +299,7 @@ const createCurriculumSchema = z.object({
 });
 
 /* POST /v1/admin/curricula */
-router.post("/curricula", async (req: Request, res: Response) => {
+router.post("/curricula", requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   let body: z.infer<typeof createCurriculumSchema>;
   try { body = createCurriculumSchema.parse(req.body); }
   catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid curriculum data."); return; }
@@ -324,7 +325,7 @@ const createExamSchema = z.object({
 });
 
 /* POST /v1/admin/exams */
-router.post("/exams", async (req: Request, res: Response) => {
+router.post("/exams", requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   let body: z.infer<typeof createExamSchema>;
   try { body = createExamSchema.parse(req.body); }
   catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid exam data."); return; }
@@ -358,7 +359,7 @@ const createNiyamSchema = z.object({
 });
 
 /* POST /v1/admin/niyams */
-router.post("/niyams", async (req: Request, res: Response) => {
+router.post("/niyams", requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   let body: z.infer<typeof createNiyamSchema>;
   try { body = createNiyamSchema.parse(req.body); }
   catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid niyam data."); return; }
@@ -381,7 +382,7 @@ const createPunyaConfigSchema = z.object({
 });
 
 /* POST /v1/admin/punya/configs */
-router.post("/punya/configs", async (req: Request, res: Response) => {
+router.post("/punya/configs", requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   let body: z.infer<typeof createPunyaConfigSchema>;
   try { body = createPunyaConfigSchema.parse(req.body); }
   catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid punya config data."); return; }
@@ -422,14 +423,14 @@ const createLibrarySchema = z.object({
   title_hi: z.string().max(500).optional(),
   content_type: z.enum(["pdf", "video", "audio", "image"]),
   access_tier: z.enum(["public", "student", "msv", "shikshak"]).default("public"),
-  embed_url: z.string().url().max(2000).optional(),
-  file_url: z.string().url().max(2000).optional(),
+  embed_url: httpUrl(2000).optional(),
+  file_url: httpUrl(2000).optional(),
   description_en: z.string().max(2000).optional(),
   is_published: z.boolean().default(true),
 });
 
 /* POST /v1/admin/library */
-router.post("/library", async (req: Request, res: Response) => {
+router.post("/library", requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   let body: z.infer<typeof createLibrarySchema>;
   try { body = createLibrarySchema.parse(req.body); }
   catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid library item data."); return; }

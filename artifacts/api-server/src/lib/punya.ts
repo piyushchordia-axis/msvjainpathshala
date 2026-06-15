@@ -6,7 +6,7 @@
  */
 import { db, punya_transactions, punya_balances } from "@workspace/db";
 import { tierForPoints } from "@workspace/db/enums";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 export interface AwardPunyaInput {
   studentId: string;
@@ -32,21 +32,23 @@ export async function awardPunya(input: AwardPunyaInput): Promise<AwardPunyaResu
     awarded_by: input.awardedBy ?? null,
   });
 
-  const [bal] = await db
-    .select()
-    .from(punya_balances)
-    .where(eq(punya_balances.student_id, input.studentId))
-    .limit(1);
-  const newTotal = (bal?.total_points ?? 0) + input.points;
+  // Atomic upsert with an in-DB increment: concurrent awards can no longer lose
+  // updates or insert duplicate balance rows (student_id is UNIQUE). The new
+  // total is returned so we can recompute the tier from a correct value.
+  const result = await db.execute(
+    sql`insert into punya_balances (student_id, total_points)
+        values (${input.studentId}, ${input.points})
+        on conflict (student_id) do update
+          set total_points = punya_balances.total_points + ${input.points}
+        returning total_points`,
+  );
+  const rows = (result as unknown as { rows?: Array<{ total_points: number }> }).rows ?? [];
+  const newTotal = Number(rows[0]?.total_points ?? input.points);
   const tier = tierForPoints(newTotal);
-  if (bal) {
-    await db
-      .update(punya_balances)
-      .set({ total_points: newTotal, tier })
-      .where(eq(punya_balances.student_id, input.studentId));
-  } else {
-    await db.insert(punya_balances).values({ student_id: input.studentId, total_points: newTotal, tier });
-  }
+  await db
+    .update(punya_balances)
+    .set({ tier })
+    .where(eq(punya_balances.student_id, input.studentId));
 
   return { student_id: input.studentId, points_awarded: input.points, total_points: newTotal, tier };
 }

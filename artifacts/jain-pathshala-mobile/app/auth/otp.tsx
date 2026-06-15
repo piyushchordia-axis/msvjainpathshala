@@ -93,7 +93,7 @@ export default function OtpScreen() {
       <Card>
         <Title style={{ fontSize: 22 }}>{hi ? "सत्यापन" : "Verify"}</Title>
 
-        {dev_code ? (
+        {dev_code && __DEV__ ? (
           <View
             style={{
               marginTop: 12,

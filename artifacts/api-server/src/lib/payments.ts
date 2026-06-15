@@ -140,6 +140,14 @@ function build(): PaymentProvider {
   if (keyId && keySecret) {
     return new RazorpayPaymentProvider(keyId, keySecret, webhookSecret);
   }
+  // The mock provider's signing secrets are public constants in this file —
+  // it must never serve a production deployment. Fail fast instead of silently
+  // running an insecure, forgeable payment surface.
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "RAZORPAY_KEY_ID/RAZORPAY_KEY_SECRET are required in production; refusing to start with the mock payment provider.",
+    );
+  }
   return new MockPaymentProvider();
 }
 

@@ -35,8 +35,11 @@ export const punya_transactions = pgTable("punya_transactions", {
 
 export const punya_balances = pgTable("punya_balances", {
   id: uuid("id").primaryKey().defaultRandom(),
+  // UNIQUE: exactly one balance row per student — required for the atomic
+  // upsert in awardPunya() and to prevent duplicate balance rows under races.
   student_id: uuid("student_id")
     .notNull()
+    .unique()
     .references(() => students.id, { onDelete: "cascade" }),
   total_points: integer("total_points").notNull().default(0),
   tier: tierEnum("tier").notNull().default("jigyasu"),

@@ -157,7 +157,15 @@ const submitResponseSchema = z.object({
   full_name: z.string().min(1).max(200),
   phone: z.string().max(20).optional(),
   city_id: z.string().uuid().optional(),
-  responses: z.record(z.string(), z.unknown()).default({}),
+  // Bound this public, unauthenticated intake: cap key count/length and value
+  // size/type so it can't be used for storage abuse (it's persisted verbatim).
+  responses: z
+    .record(
+      z.string().max(80),
+      z.union([z.string().max(2000), z.number(), z.boolean(), z.null()]),
+    )
+    .refine((o) => Object.keys(o).length <= 80, "Too many fields.")
+    .default({}),
 });
 
 /* POST /v1/registration/forms/:kind/responses — submit a response (PUBLIC) */

@@ -20,6 +20,7 @@ import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
+import { httpUrl } from "../../lib/validation";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { awardPunya } from "../../lib/punya";
@@ -68,7 +69,7 @@ const createAssignmentSchema = z.object({
   title: z.string().min(1).max(300),
   description: z.string().max(5000).optional(),
   due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  attachment_url: z.string().url().max(1000).optional(),
+  attachment_url: httpUrl(1000).optional(),
   is_msv: z.boolean().optional(),
   target_student_ids: z.array(z.string().uuid()).max(500).optional(),
 });
@@ -362,7 +363,7 @@ router.get("/mine", async (req: Request, res: Response) => {
 });
 
 const submitSchema = z.object({
-  submission_url: z.string().url().max(1000),
+  submission_url: httpUrl(1000),
 });
 
 /* POST /v1/homework/submissions/:id/submit — student/parent uploads their work */

@@ -266,7 +266,14 @@ router.post("/verify", async (req: Request, res: Response) => {
  */
 router.post("/webhook", async (req: Request, res: Response) => {
   const signature = req.header("x-razorpay-signature") ?? "";
-  const rawBody = req.rawBody ?? Buffer.from(JSON.stringify(req.body ?? {}));
+  // Verify the EXACT bytes that were signed. Reconstructing the body via
+  // JSON.stringify would defeat the signature (key ordering/whitespace) and is
+  // a forgeable surface, so fail closed if the raw bytes weren't captured.
+  const rawBody = req.rawBody;
+  if (!rawBody) {
+    fail(res, 400, "ERR_SIGNATURE_INVALID", "Invalid webhook payload.");
+    return;
+  }
 
   if (!signature || !payments.verifyWebhookSignature(rawBody, signature)) {
     fail(res, 400, "ERR_SIGNATURE_INVALID", "Invalid webhook signature.");
@@ -308,7 +315,9 @@ router.post("/webhook", async (req: Request, res: Response) => {
  * real Razorpay adapter so it can never be used in production.
  */
 router.post("/:id/dev-capture", async (req: Request, res: Response) => {
-  if (payments.name !== "mock") {
+  // Defense in depth: this fabricates a captured donation with no payment, so
+  // it must be impossible to reach in production regardless of provider state.
+  if (process.env.NODE_ENV === "production" || payments.name !== "mock") {
     fail(res, 404, "ERR_NOT_FOUND", "Not found.");
     return;
   }
