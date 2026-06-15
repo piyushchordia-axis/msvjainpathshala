@@ -6,7 +6,7 @@ description: Runtime/port, web↔api proxy wiring, response envelope, and auth l
 # API server runtime, proxy, envelope & auth shape
 
 - **Port**: the api-server binds to the `PORT` env (8080 in dev), NOT 5000 as older docs claimed. Smoke-test against `http://localhost:8080`.
-- **Web↔API proxy**: `artifacts/jain-pathshala/vite.config.ts` proxies `/api` and `/v1` to `VITE_API_BASE_URL || http://localhost:8080`. Public pages use root-relative `fetch('/v1/...')` and rely on this proxy. `VITE_API_BASE_URL` empty = same-origin.
+- **Web↔API proxy**: `apps/jain-pathshala/vite.config.ts` proxies `/api` and `/v1` to `VITE_API_BASE_URL || http://localhost:8080`. Public pages use root-relative `fetch('/v1/...')` and rely on this proxy. `VITE_API_BASE_URL` empty = same-origin.
 - **Web build env**: `vite.config.ts` throws unless both `PORT` and `BASE_PATH` are set. To build locally: `PORT=3000 BASE_PATH=/ pnpm --filter @workspace/jain-pathshala run build`.
 
 ## Response envelope (single wrap)

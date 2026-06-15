@@ -79,7 +79,7 @@ importers:
         specifier: ~5.9.3
         version: 5.9.3
 
-  artifacts/api-server:
+  apps/api-server:
     dependencies:
       '@aws-sdk/client-s3':
         specifier: ^3.700.0
@@ -188,7 +188,7 @@ importers:
         specifier: ^3.2.4
         version: 3.2.6(@types/node@25.6.2)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(tsx@4.21.0)(yaml@2.8.4)
 
-  artifacts/jain-pathshala:
+  apps/jain-pathshala:
     dependencies:
       ulid:
         specifier: ^3.0.2
@@ -384,7 +384,7 @@ importers:
         specifier: 'catalog:'
         version: 3.25.76
 
-  artifacts/jain-pathshala-mobile:
+  apps/jain-pathshala-mobile:
     dependencies:
       '@expo-google-fonts/dm-mono':
         specifier: ^0.4.1
@@ -547,7 +547,7 @@ importers:
         specifier: ^3.4.0
         version: 3.5.4(zod@3.25.76)
 
-  artifacts/mockup-sandbox:
+  apps/mockup-sandbox:
     devDependencies:
       '@hookform/resolvers':
         specifier: ^3.10.0

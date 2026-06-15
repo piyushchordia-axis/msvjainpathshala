@@ -5,7 +5,7 @@ const { getDefaultConfig } = require("expo/metro-config");
 const API_TARGET =
   process.env.API_PROXY_TARGET?.replace(/\/$/, "") ?? "http://127.0.0.1:8080";
 
-/** Paths served by api-server (see artifacts/api-server/src/app.ts). */
+/** Paths served by api-server (see apps/api-server/src/app.ts). */
 const API_PREFIXES = ["/api", "/v1"];
 
 function isApiPath(url) {

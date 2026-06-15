@@ -2,7 +2,7 @@ kind = "web"
 previewPath = "/"
 title = "Jain Pathshala"
 version = "1.0.0"
-id = "artifacts/jain-pathshala"
+id = "apps/jain-pathshala"
 router = "path"
 
 [[integratedSkills]]
@@ -19,7 +19,7 @@ run = "pnpm --filter @workspace/jain-pathshala run dev"
 
 [services.production]
 build = [ "pnpm", "--filter", "@workspace/jain-pathshala", "run", "build" ]
-publicDir = "artifacts/jain-pathshala/dist/public"
+publicDir = "apps/jain-pathshala/dist/public"
 serve = "static"
 
 [[services.production.rewrites]]

@@ -33,7 +33,7 @@ node_modules
 
 # uploaded files (local-disk storage provider)
 uploads/
-artifacts/api-server/uploads/
+apps/api-server/uploads/
 
 # misc
 /.sass-cache
@@ -61,9 +61,6 @@ Thumbs.db
 /.turbo/
 .turbo/
 /.agent-runner/
-
-# Stale duplicate build tree — real source lives in artifacts/* and lib/*
-/apps/
 
 # Python virtualenvs & bytecode
 .venv/

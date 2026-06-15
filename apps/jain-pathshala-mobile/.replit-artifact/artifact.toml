@@ -2,7 +2,7 @@ kind = "mobile"
 previewPath = "/mobile/"
 title = "Jain Pathshala Mobile"
 version = "1.0.0"
-id = "artifacts/jain-pathshala-mobile"
+id = "apps/jain-pathshala-mobile"
 router = "expo-domain"
 
 [[integratedSkills]]

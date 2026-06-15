@@ -3,6 +3,6 @@ outputs = []
 
 [[generated]]
 id = "nDxkB6lSFJ_2VIThKwzz1"
-uri = "file://artifacts/jain-pathshala-mobile/assets/images/icon.png"
+uri = "file://apps/jain-pathshala-mobile/assets/images/icon.png"
 type = "image"
 title = "jain pathshala icon"

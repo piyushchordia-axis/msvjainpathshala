@@ -1,6 +1,6 @@
 # Jain Pathshala — Module Audit (Developed / Stub / Missing)
 
-_Last updated: 2026-06-14. Audited against the live workspace: API `artifacts/api-server`, web `artifacts/jain-pathshala`, mobile `artifacts/jain-pathshala-mobile`, DB schema `lib/db/src/schema`._
+_Last updated: 2026-06-14. Audited against the live workspace: API `apps/api-server`, web `apps/jain-pathshala`, mobile `apps/jain-pathshala-mobile`, DB schema `lib/db/src/schema`._
 
 ## TL;DR
 

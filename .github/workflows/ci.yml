@@ -83,5 +83,5 @@ jobs:
         run: pnpm --filter @workspace/db run seed
 
       - name: Run API tests
-        working-directory: artifacts/api-server
+        working-directory: apps/api-server
         run: pnpm run test

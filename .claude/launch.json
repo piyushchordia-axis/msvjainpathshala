@@ -16,7 +16,7 @@
       "runtimeExecutable": "bash",
       "runtimeArgs": [
         "-lc",
-        "cd /Users/sumit/Projects/Pathshala/artifacts/jain-pathshala-mobile && EXPO_PUBLIC_API_BASE_URL=http://localhost:8080 CI=1 EXPO_NO_TELEMETRY=1 exec pnpm run dev"
+        "cd /Users/sumit/Projects/Pathshala/apps/jain-pathshala-mobile && EXPO_PUBLIC_API_BASE_URL=http://localhost:8080 CI=1 EXPO_NO_TELEMETRY=1 exec pnpm run dev"
       ],
       "port": 8081,
       "autoPort": false

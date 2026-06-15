@@ -38,7 +38,7 @@ _Updated after the full-module build. All 22 client modules implemented across D
 
 Legend: ✅ done · ⚠️ done on web/API, mobile follow-up · — not applicable / not required for that surface.
 
-## Shared foundation (`artifacts/api-server/src/lib/`)
+## Shared foundation (`apps/api-server/src/lib/`)
 
 - `storage.ts` — pluggable file storage (local disk now → S3 later) + `/v1/uploads`
 - `payments.ts` — `PaymentProvider`: Razorpay adapter + deterministic mock (auto-selected by env)
@@ -56,7 +56,7 @@ PORT=8080 pnpm --filter @workspace/api-server run dev        # API
 PORT=5173 BASE_PATH=/ VITE_API_BASE_URL=http://localhost:8080 pnpm --filter @workspace/jain-pathshala run dev  # web
 pnpm --filter @workspace/jain-pathshala-mobile run dev       # mobile (Expo)
 ```
-Tests: `cd artifacts/api-server && pnpm run test` (reseed first for determinism). Login OTP `123456`; phones `+91980000000{1..7}` (super_admin…student).
+Tests: `cd apps/api-server && pnpm run test` (reseed first for determinism). Login OTP `123456`; phones `+91980000000{1..7}` (super_admin…student).
 
 ## Known follow-ups (deliberately deferred)
 

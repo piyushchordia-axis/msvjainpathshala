@@ -8,11 +8,11 @@ _How the monorepo is built, configured, and run in production. Wired into `.repl
 Two independently-deployable processes plus a Postgres database:
 
 - **API server** (`@workspace/api-server`) — Express 5 + Drizzle. esbuild bundles
-  `src/index.ts` to a single ESM file at `artifacts/api-server/dist/index.mjs`; prod
+  `src/index.ts` to a single ESM file at `apps/api-server/dist/index.mjs`; prod
   runs it with `node --enable-source-maps`. Serves `/api`, `/v1`, and signed
   `/uploads/*` downloads. **It does not serve the web app.**
 - **Web app** (`@workspace/jain-pathshala`) — Vite + React. `vite build` emits a
-  static bundle to `artifacts/jain-pathshala/dist/public`. The `[deployment]` here
+  static bundle to `apps/jain-pathshala/dist/public`. The `[deployment]` here
   runs the API; the web SPA is served separately (see _Serving the web app_).
 - **Mobile** (`@workspace/jain-pathshala-mobile`) — Expo; shipped via EAS/Expo, not
   part of this autoscale deployment.
@@ -122,7 +122,7 @@ per-instance and ephemeral — see the autoscale caveat).
 
 ## Serving the web app
 
-The web SPA is a static bundle at `artifacts/jain-pathshala/dist/public`. Serve it via
+The web SPA is a static bundle at `apps/jain-pathshala/dist/public`. Serve it via
 a CDN/static host (or a separate deployment running `pnpm run start:web`, which is
 `vite preview`), and point `VITE_API_BASE_URL` / `PUBLIC_API_URL` at the API origin.
 The API process here intentionally serves API routes only.

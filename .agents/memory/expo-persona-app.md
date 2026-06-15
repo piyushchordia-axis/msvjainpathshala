@@ -30,7 +30,7 @@ Normalize with a `first()` helper, and on screens that require a handoff token (
 instead of leaving a dead-end button.
 
 ## Workflow / backend notes
-- Restart the app via the `artifacts/jain-pathshala-mobile: expo` workflow tool — never `npx expo`.
+- Restart the app via the `apps/jain-pathshala-mobile: expo` workflow tool — never `npx expo`.
 - Backend persona data is read via `/v1/me/*` (requireAuth); admin/shikshak list endpoints
   under `/v1/admin/*` are auto-scoped by the caller's role, so one admin group serves all
   four admin roles and shikshak reuses admin endpoints read-only.

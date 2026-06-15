@@ -22,7 +22,7 @@ Multi-tenant Jain religious education platform (Megh Sanskar Vatika network) —
 
 ## Where things live
 
-- `artifacts/jain-pathshala/` — React + Vite frontend
+- `apps/jain-pathshala/` — React + Vite frontend
   - `src/lib/auth.ts` — Role types, session cookie helpers, `canAccessAdminPanel`
   - `src/lib/auth-context.tsx` — React auth context (reads jp_user cookie on mount)
   - `src/lib/locale-context.tsx` — Simple en/hi locale switcher via React context
@@ -33,7 +33,7 @@ Multi-tenant Jain religious education platform (Megh Sanskar Vatika network) —
   - `src/pages/public/` — HomePage, CentresPage, PublicStubs (stub pages)
   - `src/pages/admin/` — LoginPage (OTP flow), DashboardPage, AdminStubs, AdminLayout
   - `src/index.css` — Full JP design system (HSL tokens, Mukta + Tiro Devanagari fonts)
-- `artifacts/api-server/` — Express 5 API server
+- `apps/api-server/` — Express 5 API server
 - `.migration-backup/apps/web/` — Original Next.js 15 source (reference only)
 
 ## Architecture decisions

@@ -1,7 +1,7 @@
 /**
  * Design tokens for Jain Pathshala Mobile.
  *
- * Mirrors the web artifact's HSL token system (artifacts/jain-pathshala/src/index.css)
+ * Mirrors the web artifact's HSL token system (apps/jain-pathshala/src/index.css)
  * converted to hex so both share the same saffron / maroon / cream identity.
  */
 

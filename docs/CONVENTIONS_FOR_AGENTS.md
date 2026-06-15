@@ -22,7 +22,7 @@ A "module" is one feature implemented across layers: a DB schema file, an API ro
 
 ## 1. Repo layout & where each layer lives
 
-pnpm workspaces monorepo. `pnpm-workspace.yaml` globs: `artifacts/*`, `lib/*`, `lib/integrations/*`, `scripts`. Shared dependency **catalog** (`catalog:` protocol) + `workspace:*` internal deps + TypeScript project references.
+pnpm workspaces monorepo. `pnpm-workspace.yaml` globs: `apps/*`, `lib/*`, `lib/integrations/*`, `scripts`. Shared dependency **catalog** (`catalog:` protocol) + `workspace:*` internal deps + TypeScript project references.
 
 ```
 /Users/sumit/Projects/Pathshala/
@@ -35,7 +35,7 @@ pnpm workspaces monorepo. `pnpm-workspace.yaml` globs: `artifacts/*`, `lib/*`, `
 │   │   └── drizzle.config.ts
 │   └── api-zod/                  @workspace/api-zod — shared Zod contracts + types (TS source, no build)
 │       └── src/contracts.ts      re-exported from src/index.ts
-├── artifacts/
+├── apps/
 │   ├── api-server/              @workspace/api-server — Express 5 + Drizzle, ESM ("type":"module")
 │   │   ├── src/app.ts            Express app (default export, NO listen) — SHARED, do not edit
 │   │   ├── src/index.ts          listen entry (reads PORT)
@@ -325,7 +325,7 @@ Subpaths: `@workspace/db/enums`, `@workspace/db/schema` exist; prefer root `@wor
 
 ### 3.6 Full route-file template — create `src/routes/v1/<module>.ts`
 
-Models `admin-resources.ts` + `me.ts`. Save as `/Users/sumit/Projects/Pathshala/artifacts/api-server/src/routes/v1/widgets.ts`:
+Models `admin-resources.ts` + `me.ts`. Save as `/Users/sumit/Projects/Pathshala/apps/api-server/src/routes/v1/widgets.ts`:
 
 ```ts
 /**
@@ -457,7 +457,7 @@ State clearly in your RETURN block which target file (`v1.ts` vs `admin.ts`) the
 
 ## 4. Web layer
 
-Root: `/Users/sumit/Projects/Pathshala/artifacts/jain-pathshala/src`. **Always use `@/...` imports, never relative.** Router: `wouter`. Data layer: hand-rolled `fetch` wrapper in `@/lib/api-client` (**NOT axios** for web; the axios memory note is for mobile/future clients). `@tanstack/react-query` is installed but **not used by any page** — do not introduce it. Admin pages use `useAdminList`; public pages use raw `fetch`.
+Root: `/Users/sumit/Projects/Pathshala/apps/jain-pathshala/src`. **Always use `@/...` imports, never relative.** Router: `wouter`. Data layer: hand-rolled `fetch` wrapper in `@/lib/api-client` (**NOT axios** for web; the axios memory note is for mobile/future clients). `@tanstack/react-query` is installed but **not used by any page** — do not introduce it. Admin pages use `useAdminList`; public pages use raw `fetch`.
 
 You create NEW files (a grouped page can be a named export added to `AdminListPages.tsx` ONLY if you treat that file as yours — but it is shared by other agents; therefore **create a standalone file** to avoid contention; see §8). You RETURN snippets for `App.tsx` and `sidebar-nav.ts`.
 
@@ -503,7 +503,7 @@ Admin pages are **English-only** (no `useLocale`).
 
 ### 4.4 Full admin page template — create a NEW standalone file
 
-To avoid contention with other agents editing `AdminListPages.tsx`, create your own file `/Users/sumit/Projects/Pathshala/artifacts/jain-pathshala/src/pages/admin/AwardsPage.tsx` with a **default export**. (Standalone admin pages like Students/Batches already follow this.)
+To avoid contention with other agents editing `AdminListPages.tsx`, create your own file `/Users/sumit/Projects/Pathshala/apps/jain-pathshala/src/pages/admin/AwardsPage.tsx` with a **default export**. (Standalone admin pages like Students/Batches already follow this.)
 
 ```tsx
 import { useState } from 'react';
@@ -608,7 +608,7 @@ For per-row mutations: a small component with its own `busy` state calling `apiP
 
 ### 4.5 Full public page template — create `pages/public/<Module>Page.tsx`
 
-Public pages use **raw `fetch`** (not `apiGet`), are **bilingual** via `useLocale`, are `export default`, and wrap content in `<section className="container py-12 md:py-16">`. The public envelope `{ data: { items } }` is read directly. Save as `/Users/sumit/Projects/Pathshala/artifacts/jain-pathshala/src/pages/public/AwardsPage.tsx`:
+Public pages use **raw `fetch`** (not `apiGet`), are **bilingual** via `useLocale`, are `export default`, and wrap content in `<section className="container py-12 md:py-16">`. The public envelope `{ data: { items } }` is read directly. Save as `/Users/sumit/Projects/Pathshala/apps/jain-pathshala/src/pages/public/AwardsPage.tsx`:
 
 ```tsx
 import { useEffect, useState } from 'react';
@@ -682,7 +682,7 @@ The `path` MUST exactly match the sidebar `href`. Alias an admin import if a pub
 
 ### 4.7 SHARED snippet — sidebar nav entry in `sidebar-nav.ts`
 
-`/Users/sumit/Projects/Pathshala/artifacts/jain-pathshala/src/components/admin/sidebar-nav.ts`. `ADMIN_NAV: NavGroup[]` of `{ heading, items }`; each item `{ href, label, icon, min }` where `icon` is a lucide-react icon and `min` is the minimum `Role` to see it. Groups: `Overview`, `People`, `Programme`, `Operations`, `Insights`, `System`. **Do NOT edit the file** — RETURN snippets (icon import + the item, naming the target group):
+`/Users/sumit/Projects/Pathshala/apps/jain-pathshala/src/components/admin/sidebar-nav.ts`. `ADMIN_NAV: NavGroup[]` of `{ heading, items }`; each item `{ href, label, icon, min }` where `icon` is a lucide-react icon and `min` is the minimum `Role` to see it. Groups: `Overview`, `People`, `Programme`, `Operations`, `Insights`, `System`. **Do NOT edit the file** — RETURN snippets (icon import + the item, naming the target group):
 ```ts
 // add to the lucide-react import block (alphabetized):
 import { Award } from 'lucide-react';
@@ -697,7 +697,7 @@ To surface a public page in the public nav, add a link in `@/components/public/T
 
 ## 5. Mobile layer
 
-App root: `/Users/sumit/Projects/Pathshala/artifacts/jain-pathshala-mobile`. Path alias `@/*` → repo root (`@/lib/api` = `lib/api.ts`). **Uses `fetch`, NOT axios.** You create a NEW screen file. You RETURN snippets for `lib/queries.ts`, the persona `_layout.tsx`, and (only for detail screens) `app/_layout.tsx`.
+App root: `/Users/sumit/Projects/Pathshala/apps/jain-pathshala-mobile`. Path alias `@/*` → repo root (`@/lib/api` = `lib/api.ts`). **Uses `fetch`, NOT axios.** You create a NEW screen file. You RETURN snippets for `lib/queries.ts`, the persona `_layout.tsx`, and (only for detail screens) `app/_layout.tsx`.
 
 ### 5.1 API client — `lib/api.ts` (already exists)
 
@@ -763,7 +763,7 @@ File at `app/<group>/<name>.tsx` → route `/<group>/<name>`; default export is 
 
 ### 5.6 Full screen template — create `app/<group>/<name>.tsx`
 
-Student "Achievements" tab, backed by `GET /v1/me/students/:id/achievements` → `{ items }`. Save as `/Users/sumit/Projects/Pathshala/artifacts/jain-pathshala-mobile/app/student/achievements.tsx`:
+Student "Achievements" tab, backed by `GET /v1/me/students/:id/achievements` → `{ items }`. Save as `/Users/sumit/Projects/Pathshala/apps/jain-pathshala-mobile/app/student/achievements.tsx`:
 
 ```tsx
 import { View } from "react-native";
@@ -830,7 +830,7 @@ export default function StudentAchievements() {
 
 ### 5.7 SHARED snippet — register the route
 
-**A new tab inside an existing persona group:** the file alone is not enough — RETURN a `tabs` entry for that group's `_layout.tsx` (e.g. `/Users/sumit/Projects/Pathshala/artifacts/jain-pathshala-mobile/app/student/_layout.tsx`). The `name` MUST equal the file name:
+**A new tab inside an existing persona group:** the file alone is not enough — RETURN a `tabs` entry for that group's `_layout.tsx` (e.g. `/Users/sumit/Projects/Pathshala/apps/jain-pathshala-mobile/app/student/_layout.tsx`). The `name` MUST equal the file name:
 ```tsx
 { name: "achievements", title: hi ? "पदक" : "Badges", icon: "trophy" },  // icon: keyof typeof Ionicons.glyphMap
 ```
@@ -847,21 +847,21 @@ No root `_layout.tsx` edit is needed for a tab inside an existing group.
 
 ## 6. Tooling
 
-Monorepo: pnpm workspaces + shared catalog + TS project references. **`tsconfig.base.json` is NOT full `strict`** — it sets strict flags individually; `strictFunctionTypes` is deliberately OFF and `strict: true` is NOT set. `moduleResolution: "bundler"`, `target: es2022`. **`customConditions: ["workspace"]`** makes `@workspace/*` resolve to raw `./src/*.ts` — critical for any test runner. Only `artifacts/jain-pathshala` defines a `@/*` path alias; api-server uses relative + workspace package names.
+Monorepo: pnpm workspaces + shared catalog + TS project references. **`tsconfig.base.json` is NOT full `strict`** — it sets strict flags individually; `strictFunctionTypes` is deliberately OFF and `strict: true` is NOT set. `moduleResolution: "bundler"`, `target: es2022`. **`customConditions: ["workspace"]`** makes `@workspace/*` resolve to raw `./src/*.ts` — critical for any test runner. Only `apps/jain-pathshala` defines a `@/*` path alias; api-server uses relative + workspace package names.
 
 ### 6.1 Per-package scripts (verbatim)
 
-**`artifacts/api-server`** (`"type":"module"`): `dev` (`node ./scripts/dev.mjs` — build-then-run once, no watch), `build` (`node ./build.mjs`), `start` (`node --enable-source-maps ./dist/index.mjs`), `typecheck` (`tsc -p tsconfig.json --noEmit`). Runtime requires BOTH `PORT` and `DATABASE_URL` (the latter throws at `@workspace/db` import time).
+**`apps/api-server`** (`"type":"module"`): `dev` (`node ./scripts/dev.mjs` — build-then-run once, no watch), `build` (`node ./build.mjs`), `start` (`node --enable-source-maps ./dist/index.mjs`), `typecheck` (`tsc -p tsconfig.json --noEmit`). Runtime requires BOTH `PORT` and `DATABASE_URL` (the latter throws at `@workspace/db` import time).
 
-**`artifacts/jain-pathshala`** (Vite): `dev`, `build` (`vite build --config vite.config.ts`), `serve`, `typecheck` (`tsc -p tsconfig.json --noEmit`).
+**`apps/jain-pathshala`** (Vite): `dev`, `build` (`vite build --config vite.config.ts`), `serve`, `typecheck` (`tsc -p tsconfig.json --noEmit`).
 
 **`lib/db`**: `push`, `push-force`, `seed` (see §2.7). No `build`/`typecheck` script — validated via root `tsc --build` (it's `composite: true`).
 
 **`lib/api-zod`**: **no scripts block** — pure TS source, only dep `zod`, typechecked via root `tsc --build`.
 
-**`artifacts/jain-pathshala-mobile`** (Expo): `dev`, `qr`, `build` (`node scripts/build.js`), `serve`, `typecheck` (`tsc -p tsconfig.json --noEmit`).
+**`apps/jain-pathshala-mobile`** (Expo): `dev`, `qr`, `build` (`node scripts/build.js`), `serve`, `typecheck` (`tsc -p tsconfig.json --noEmit`).
 
-**Root**: `typecheck:libs` (`tsc --build` — builds composite graph, emits `.d.ts`), `typecheck` (`typecheck:libs` then `pnpm -r --filter "./artifacts/**" --filter "./scripts" --if-present run typecheck`), `build` (`typecheck` then `pnpm -r --if-present run build`).
+**Root**: `typecheck:libs` (`tsc --build` — builds composite graph, emits `.d.ts`), `typecheck` (`typecheck:libs` then `pnpm -r --filter "./apps/**" --filter "./scripts" --if-present run typecheck`), `build` (`typecheck` then `pnpm -r --if-present run build`).
 
 ### 6.2 Typecheck/build a single package
 
@@ -884,14 +884,14 @@ Single esbuild call: entry `src/index.ts`; output `dist/` wiped first, `outExten
 
 **Neither vitest nor supertest is installed** anywhere — both must be added (see §7). Because `app.ts` exports the Express app separately from `listen()`, test via supertest against the imported `app` (no port boot). Tests import `app.ts` (never `index.ts`), but importing `app` transitively imports `@workspace/db` which **throws at import time if `DATABASE_URL` is unset** — so set it before any import.
 
-**devDeps to add to `artifacts/api-server/package.json`:**
+**devDeps to add to `apps/api-server/package.json`:**
 ```json
 "vitest": "^3.2.4",
 "supertest": "^7.1.4",
 "@types/supertest": "^6.0.3"
 ```
 
-**`artifacts/api-server/vitest.config.ts`** (NEW file — yours to create):
+**`apps/api-server/vitest.config.ts`** (NEW file — yours to create):
 ```ts
 import { defineConfig } from "vitest/config";
 
@@ -910,7 +910,7 @@ export default defineConfig({
 });
 ```
 
-**`artifacts/api-server/test/setup.ts`** (NEW):
+**`apps/api-server/test/setup.ts`** (NEW):
 ```ts
 // Ensure DB env exists before @workspace/db / app are imported by tests.
 process.env.DATABASE_URL ??= "postgres://sumit@localhost:5432/jainpathshala";
@@ -918,13 +918,13 @@ process.env.NODE_ENV ??= "test";
 // PORT not needed (app is never listened on in tests).
 ```
 
-**Add scripts to `artifacts/api-server/package.json`** (env inline also guarantees the var for config evaluation):
+**Add scripts to `apps/api-server/package.json`** (env inline also guarantees the var for config evaluation):
 ```json
 "test": "DATABASE_URL=postgres://sumit@localhost:5432/jainpathshala vitest run",
 "test:watch": "DATABASE_URL=postgres://sumit@localhost:5432/jainpathshala vitest"
 ```
 
-**Sample integration test** — `artifacts/api-server/test/<module>.test.ts` (each agent creates its own, named for its module to avoid collision):
+**Sample integration test** — `apps/api-server/test/<module>.test.ts` (each agent creates its own, named for its module to avoid collision):
 ```ts
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
@@ -945,7 +945,7 @@ describe("health", () => {
 
 **DB hygiene:** tests hit real local Postgres (`postgres://sumit@localhost:5432/jainpathshala`, native Homebrew PG). `lib/db` exports a single module-level `pool` → keep `fileParallelism: false` and ALWAYS `await pool.end()` in a top-level `afterAll` (avoids open-handle hangs). Seed/reset via `push-force` + `seed` **before** a run, not inside tests.
 
-> The `vitest.config.ts`, `test/setup.ts`, and a `test/<module>.test.ts` are NEW files (create freely). The devDeps and `test` scripts go in the SHARED `artifacts/api-server/package.json` → RETURN them as snippets (§8).
+> The `vitest.config.ts`, `test/setup.ts`, and a `test/<module>.test.ts` are NEW files (create freely). The devDeps and `test` scripts go in the SHARED `apps/api-server/package.json` → RETURN them as snippets (§8).
 
 ---
 
@@ -953,7 +953,7 @@ describe("health", () => {
 
 These are **absent** from `pnpm-lock.yaml` / package.json and must be added (orchestrator applies — RETURN them in your dependency snippet for the relevant `package.json`). Add only the ones your module actually needs.
 
-**`artifacts/api-server/package.json` → `dependencies`** (pure-JS, bundle fine through esbuild; add `@types/*` to devDeps where the package doesn't ship its own types):
+**`apps/api-server/package.json` → `dependencies`** (pure-JS, bundle fine through esbuild; add `@types/*` to devDeps where the package doesn't ship its own types):
 
 | Package | Why | Types |
 |---|---|---|
@@ -965,7 +965,7 @@ These are **absent** from `pnpm-lock.yaml` / package.json and must be added (orc
 | `expo-server-sdk` | server-side push (distinct from mobile expo-* client pkgs) | ships own types |
 | `node-cron` | scheduling (no scheduler/queue lib present; `node-schedule`/`croner`/`bullmq` also absent) | ships own types |
 
-**`artifacts/api-server/package.json` → `devDependencies`** (testing — none exist in the repo today):
+**`apps/api-server/package.json` → `devDependencies`** (testing — none exist in the repo today):
 
 | Package | Version |
 |---|---|
@@ -983,11 +983,11 @@ Notes: api-server has **no** generic HTTP client (axios/ky/got) and **no** `dote
 
 ### You MAY create these NEW files (yours alone, namespaced by module)
 - `lib/db/src/schema/<module>.ts`
-- `artifacts/api-server/src/routes/v1/<module>.ts`
-- `artifacts/api-server/test/<module>.test.ts` (plus `vitest.config.ts` + `test/setup.ts` if not yet present — but if another agent may also create them, RETURN them as snippets instead and let the orchestrator create once)
-- `artifacts/jain-pathshala/src/pages/admin/<Module>Page.tsx` (standalone, `export default`)
-- `artifacts/jain-pathshala/src/pages/public/<Module>Page.tsx` (`export default`)
-- `artifacts/jain-pathshala-mobile/app/<group>/<name>.tsx` (or `app/<x>/[id].tsx`)
+- `apps/api-server/src/routes/v1/<module>.ts`
+- `apps/api-server/test/<module>.test.ts` (plus `vitest.config.ts` + `test/setup.ts` if not yet present — but if another agent may also create them, RETURN them as snippets instead and let the orchestrator create once)
+- `apps/jain-pathshala/src/pages/admin/<Module>Page.tsx` (standalone, `export default`)
+- `apps/jain-pathshala/src/pages/public/<Module>Page.tsx` (`export default`)
+- `apps/jain-pathshala-mobile/app/<group>/<name>.tsx` (or `app/<x>/[id].tsx`)
 
 ### You MUST NEVER edit these SHARED files
 Instead, RETURN the exact snippet to add; the orchestrator applies all snippets serially.
@@ -997,19 +997,19 @@ Instead, RETURN the exact snippet to add; the orchestrator applies all snippets 
 | `lib/db/src/schema/index.ts` | the `export * from "./<module>";` line |
 | `lib/db/src/schema/enums.ts` | any new enum (const tuple + pgEnum) |
 | `lib/db/src/seed.ts` | import additions + truncate-list additions + the insert section |
-| `artifacts/api-server/src/routes/v1.ts` **or** `src/routes/v1/admin.ts` | the import line + the `router.use(...)` mount line (name which file) |
-| `artifacts/api-server/src/app.ts` | nothing — never changes |
+| `apps/api-server/src/routes/v1.ts` **or** `src/routes/v1/admin.ts` | the import line + the `router.use(...)` mount line (name which file) |
+| `apps/api-server/src/app.ts` | nothing — never changes |
 | `lib/api-zod/src/contracts.ts` | any shared schema/type/DTO (only if shared across clients) |
-| `artifacts/api-server/package.json` | new `dependencies` / `devDependencies` + `test` scripts |
-| `artifacts/api-server/build.mjs` | only a new **native** dep added to the `external` array |
-| `artifacts/jain-pathshala/src/App.tsx` | the import line + the `<Route .../>` line (admin and/or public) |
-| `artifacts/jain-pathshala/src/components/admin/sidebar-nav.ts` | the lucide icon import + the nav item (name the group) |
-| `artifacts/jain-pathshala/src/components/public/TopNav.tsx` | the public nav link (if surfacing a public page) |
-| `artifacts/jain-pathshala/src/pages/admin/AdminListPages.tsx` / `AdminExtendedPages.tsx` | do NOT touch — create a standalone page file instead |
-| `artifacts/jain-pathshala-mobile/lib/queries.ts` | DTO import + `qk` entry + the hook(s) |
-| `artifacts/jain-pathshala-mobile/lib/types.ts` | re-export line for a new DTO (if added to api-zod) |
-| `artifacts/jain-pathshala-mobile/app/_layout.tsx` | `<Stack.Screen>` line (only for a new detail/pushed screen) |
-| `artifacts/jain-pathshala-mobile/app/<group>/_layout.tsx` | the `tabs` entry (for a new tab in an existing persona) |
+| `apps/api-server/package.json` | new `dependencies` / `devDependencies` + `test` scripts |
+| `apps/api-server/build.mjs` | only a new **native** dep added to the `external` array |
+| `apps/jain-pathshala/src/App.tsx` | the import line + the `<Route .../>` line (admin and/or public) |
+| `apps/jain-pathshala/src/components/admin/sidebar-nav.ts` | the lucide icon import + the nav item (name the group) |
+| `apps/jain-pathshala/src/components/public/TopNav.tsx` | the public nav link (if surfacing a public page) |
+| `apps/jain-pathshala/src/pages/admin/AdminListPages.tsx` / `AdminExtendedPages.tsx` | do NOT touch — create a standalone page file instead |
+| `apps/jain-pathshala-mobile/lib/queries.ts` | DTO import + `qk` entry + the hook(s) |
+| `apps/jain-pathshala-mobile/lib/types.ts` | re-export line for a new DTO (if added to api-zod) |
+| `apps/jain-pathshala-mobile/app/_layout.tsx` | `<Stack.Screen>` line (only for a new detail/pushed screen) |
+| `apps/jain-pathshala-mobile/app/<group>/_layout.tsx` | the `tabs` entry (for a new tab in an existing persona) |
 | root `package.json`, `tsconfig.*`, `pnpm-workspace.yaml` | nothing — never change |
 
 ### How to RETURN snippets
@@ -1019,11 +1019,11 @@ At the end of your work, output a clearly labeled block per shared file, e.g.:
 === SNIPPET: lib/db/src/schema/index.ts (append) ===
 export * from "./awards";
 
-=== SNIPPET: artifacts/api-server/src/routes/v1.ts (add import + mount) ===
+=== SNIPPET: apps/api-server/src/routes/v1.ts (add import + mount) ===
 import awardsRouter from "./v1/awards";
 router.use("/awards", awardsRouter);
 
-=== SNIPPET: artifacts/jain-pathshala/src/App.tsx (AdminRoutes, above NotFound) ===
+=== SNIPPET: apps/jain-pathshala/src/App.tsx (AdminRoutes, above NotFound) ===
 import AwardsAdminPage from '@/pages/admin/AwardsPage';
 <Route path="/admin/awards" component={AwardsAdminPage} />
 ...

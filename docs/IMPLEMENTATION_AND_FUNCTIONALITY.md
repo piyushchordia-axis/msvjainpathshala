@@ -66,10 +66,10 @@ flowchart LR
 | `@workspace/api-zod` | `lib/api-zod` | Zod contracts, roles, API DTOs |
 | `@workspace/api-client-react` | `lib/api-client-react` | Generated React Query hooks (Orval) |
 | `@workspace/api-spec` | `lib/api-spec` | OpenAPI source for codegen |
-| `@workspace/api-server` | `artifacts/api-server` | REST API |
-| `@workspace/jain-pathshala` | `artifacts/jain-pathshala` | Public + admin web |
-| `@workspace/jain-pathshala-mobile` | `artifacts/jain-pathshala-mobile` | Expo mobile app |
-| `@workspace/mockup-sandbox` | `artifacts/mockup-sandbox` | UI component preview sandbox |
+| `@workspace/api-server` | `apps/api-server` | REST API |
+| `@workspace/jain-pathshala` | `apps/jain-pathshala` | Public + admin web |
+| `@workspace/jain-pathshala-mobile` | `apps/jain-pathshala-mobile` | Expo mobile app |
+| `@workspace/mockup-sandbox` | `apps/mockup-sandbox` | UI component preview sandbox |
 
 ---
 
@@ -102,7 +102,7 @@ EXPO_PUBLIC_API_BASE_URL=http://localhost:8080
 | Web app | 3000 | `pnpm --filter @workspace/jain-pathshala run dev` |
 | Expo Metro | 8081 | `pnpm --filter @workspace/jain-pathshala-mobile run dev` |
 
-Expo QR (both runs) — pnpm run qr wrote artifacts/jain-pathshala-mobile/dev-qr.html and tried to open it in the browser. Connection URL: exp://192.168.1.6:8081 (Metro must be running on port 8081 for Expo Go to connect).
+Expo QR (both runs) — pnpm run qr wrote apps/jain-pathshala-mobile/dev-qr.html and tried to open it in the browser. Connection URL: exp://192.168.1.6:8081 (Metro must be running on port 8081 for Expo Go to connect).
 
 Postgres credential check — None of the tested user/password pairs worked against localhost:5432 (local PostgreSQL 17). That’s expected if you’re using Docker jp-postgres on port 5434 with postgres://jp:jp_dev_pwd@localhost:5434/jainpathshala instead.
 
@@ -254,7 +254,7 @@ Schema entry point: `lib/db/src/schema.ts` (re-exports modular files under `lib/
 | `student` | No | Own punya/niyams (mobile) |
 | `guest` | No | Public browse |
 
-### Middleware (`artifacts/api-server/src/middlewares/auth.ts`)
+### Middleware (`apps/api-server/src/middlewares/auth.ts`)
 
 | Middleware | Effect |
 |------------|--------|
@@ -616,12 +616,12 @@ corepack pnpm --filter @workspace/jain-pathshala-mobile run dev
 | Drizzle schema entry | `lib/db/src/schema.ts` |
 | Drizzle config | `lib/db/drizzle.config.ts` |
 | Seed | `lib/db/src/seed.ts` |
-| API app | `artifacts/api-server/src/app.ts` |
-| Admin routes | `artifacts/api-server/src/routes/v1/admin*.ts` |
+| API app | `apps/api-server/src/app.ts` |
+| Admin routes | `apps/api-server/src/routes/v1/admin*.ts` |
 | API contracts | `lib/api-zod/src/contracts.ts` |
-| Web routes | `artifacts/jain-pathshala/src/App.tsx` |
-| Admin pages | `artifacts/jain-pathshala/src/pages/admin/` |
-| Mobile routes | `artifacts/jain-pathshala-mobile/app/` |
+| Web routes | `apps/jain-pathshala/src/App.tsx` |
+| Admin pages | `apps/jain-pathshala/src/pages/admin/` |
+| Mobile routes | `apps/jain-pathshala-mobile/app/` |
 
 ---
 
@@ -631,8 +631,8 @@ When adding features:
 
 1. Add/update Drizzle tables under `lib/db/src/schema/`, export from `schema/index.ts`.
 2. Run `pnpm --filter @workspace/db run push` and update seed if needed.
-3. Add Zod contracts in `lib/api-zod` and API routes under `artifacts/api-server`.
-4. Wire web (`artifacts/jain-pathshala`) and/or mobile (`artifacts/jain-pathshala-mobile`).
+3. Add Zod contracts in `lib/api-zod` and API routes under `apps/api-server`.
+4. Wire web (`apps/jain-pathshala`) and/or mobile (`apps/jain-pathshala-mobile`).
 5. Update this document’s [Feature matrix](#11-feature-implementation-matrix) and [Known gaps](#12-known-gaps--roadmap).
 
 ---
