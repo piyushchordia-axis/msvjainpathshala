@@ -1,5 +1,21 @@
-TODO: write the Play Store full description (max 4000 characters).
+Jain Pathshala is the official companion app for students, parents, and teachers (sanchalaks) of Jain Pathshala centres. It brings everyday Pathshala life into one simple, secure place.
 
-Jain Pathshala is the companion app for students, parents, and teachers of
-Jain Pathshala — attendance, homework, exams, progress reports, digital ID
-cards, and community announcements in one place.
+For students and parents:
+• Mark class attendance with on-site GPS verification
+• View and submit homework
+• Take online exams and quizzes
+• Track progress reports and results
+• Carry a digital ID card with a scannable QR code
+• Submit and follow daily niyam (vows)
+• Register for shivirs, competitions, and events
+• Receive announcements, birthday wishes, and updates
+
+For teachers and sanchalaks:
+• Take and review attendance
+• Assign homework and schedule exams
+• Approve niyam submissions and registrations
+• Scan ID-card QR codes for shivir attendance
+• Generate progress reports and digital ID cards
+• Manage forms, service requests, and announcements
+
+Sign-in is required and is available to members of participating Jain Pathshala centres.
