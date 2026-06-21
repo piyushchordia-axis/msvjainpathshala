@@ -15,6 +15,9 @@
 # Auth uses the shared Enaa Creations keys already in ./credentials/ — the very
 # same ones eas.json uses for `eas submit`.
 
+# Don't auto-regenerate fastlane/README.md (keep our hand-written runbook).
+skip_docs
+
 # App Store Connect API key (same .p8 EAS submit uses).
 ASC_KEY = {
   key_id: "75JR6GG22Q",
@@ -26,12 +29,14 @@ platform :ios do
   desc "Upload the App Store listing (metadata + screenshots only — no binary)."
   lane :metadata do
     api_key = app_store_connect_api_key(**ASC_KEY)
+    has_screenshots = !Dir.glob("fastlane/screenshots/**/*.png").empty?
     deliver(
       api_key: api_key,
-      skip_binary_upload: true,     # EAS uploads the .ipa
-      overwrite_screenshots: true,  # replace existing screenshots with ours
-      submit_for_review: false,     # flip to true once the listing is final
-      force: true,                  # skip the interactive HTML preview
+      skip_binary_upload: true,            # EAS uploads the .ipa
+      skip_screenshots: !has_screenshots,  # only manage screenshots once we have them
+      overwrite_screenshots: has_screenshots,
+      submit_for_review: false,            # flip to true once the listing is final
+      force: true,                         # skip the interactive HTML preview
       run_precheck_before_submit: false,
     )
   end
@@ -43,9 +48,9 @@ platform :android do
   # hand in the Play Console once. supply only works after that exists.
   lane :metadata do
     supply(
-      skip_upload_apk: true,        # EAS uploads the .aab
+      skip_upload_apk: true,         # EAS uploads the .aab
       skip_upload_aab: true,
-      skip_upload_changelogs: false,
+      skip_upload_changelogs: true,  # "what's new" is per-release (eas submit owns it), not the listing
       track: "internal",
     )
   end
