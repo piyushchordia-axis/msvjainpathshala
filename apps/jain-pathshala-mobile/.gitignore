@@ -29,6 +29,12 @@ fastlane/Preview.html
 fastlane/test_output/
 fastlane/*.log
 
+# EAS local build outputs (large binaries — never commit)
+*.aab
+*.apk
+build-*.aab
+build-*.apk
+
 # Metro
 .metro-health-check*
 

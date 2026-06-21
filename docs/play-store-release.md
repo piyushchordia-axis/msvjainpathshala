@@ -43,14 +43,17 @@ You **do not** recreate these per project. Just copy the key file into each new 
    - `track` values: `internal` = Internal testing, `alpha` = Closed testing, `beta` = Open testing, `production` = Production. (If you made a **custom-named** closed track, use that exact track name instead of `alpha`.)
    - Make sure `credentials/` is in `.gitignore`.
 
-4. **Build the first AAB**
+4. **Build + submit the first AAB**
    ```bash
-   eas build --platform android --profile production
+   eas build  --platform android --profile production --local   # or cloud (drop --local)
+   eas submit --platform android --profile production --path build-*.aab
    ```
-
-5. **Upload that first build manually (Google requires this once)**
-   - Play Console → your app → **Testing → Internal testing** → **Create release** → upload the `.aab` from the build page → roll out.
-   - After this first manual upload, all future uploads are automated.
+   - For **Jain Pathshala (Jun 2026)** the very first `eas submit` uploaded straight to
+     the **internal** track — no manual console upload was needed. (Google's API used to
+     require the first AAB by hand; that no longer applied here.)
+   - If `eas submit` ever errors that the first release must be manual: Play Console →
+     your app → **Test and release → Testing → Internal testing → Create release** →
+     upload the `.aab` → roll out. After that, all future `eas submit`s work.
 
 ✅ Setup done.
 
@@ -97,7 +100,7 @@ Under **App access**, give Google a **test account** (username + password). With
 
 ## Gotchas (so you don't get stuck)
 
-- The **first** AAB of a brand-new app must be uploaded **by hand** in the console (step A5). API uploads only work after that.
+- The "first AAB must be uploaded by hand" rule no longer bit us — `eas submit` pushed the first build to the **internal** track directly (Jun 2026). Keep the manual fallback in mind only if a fresh app's first `eas submit` ever errors.
 - Permissions for a newly-invited service account can take a few minutes to activate — if a submit fails with a `403`, wait ~5 min and retry.
 - Never commit the key — it lives only in the gitignored `credentials/` folder.
 
