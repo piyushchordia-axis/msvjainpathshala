@@ -64,7 +64,8 @@
           "locationWhenInUsePermission": "Jain Pathshala uses your location to verify you are at the centre when marking class attendance.",
           "isAndroidForegroundServiceEnabled": false
         }
-      ]
+      ],
+      "./plugins/withGradleMemory"
     ],
     "experiments": {
       "typedRoutes": true,
