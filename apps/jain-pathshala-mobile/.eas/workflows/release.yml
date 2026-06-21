@@ -1,0 +1,40 @@
+# EAS Workflow: build + submit both platforms on a version tag.
+# Trigger:  git tag v1.2.0 && git push --tags
+# Requires: the GitHub repo connected to this Expo project (Expo GitHub App),
+#           and submit credentials configured (iOS ASC key via eas.json /
+#           EAS-stored; Android service account in eas.json).
+name: Production release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build_android:
+    name: Build Android (production)
+    type: build
+    params:
+      platform: android
+      profile: production
+
+  build_ios:
+    name: Build iOS (production)
+    type: build
+    params:
+      platform: ios
+      profile: production
+
+  submit_android:
+    name: Submit to Google Play
+    needs: [build_android]
+    type: submit
+    params:
+      build_id: ${{ needs.build_android.outputs.build_id }}
+
+  submit_ios:
+    name: Submit to App Store / TestFlight
+    needs: [build_ios]
+    type: submit
+    params:
+      build_id: ${{ needs.build_ios.outputs.build_id }}

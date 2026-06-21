@@ -1,0 +1,10 @@
+# Shared identifiers for the fastlane lanes (see fastlane/Fastfile).
+# Paths are resolved from the app root (apps/jain-pathshala-mobile).
+
+app_identifier("org.jainpathshala.app") # iOS bundle id
+team_id("UL2P2A75SV")                   # Apple Developer Portal team (Enaa Creations / Surbhi Chordia)
+
+for_platform :android do
+  package_name("org.jainpathshala.app")
+  json_key_file("credentials/play-service-account.json") # shared Play service account
+end

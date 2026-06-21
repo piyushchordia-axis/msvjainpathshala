@@ -1,0 +1,5 @@
+source "https://rubygems.org"
+
+# Pin fastlane so listing uploads are reproducible (also works with the globally
+# installed fastlane — `bundle exec` just guarantees the version).
+gem "fastlane"

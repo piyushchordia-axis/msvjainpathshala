@@ -9,15 +9,25 @@ dist/
 web-build/
 expo-env.d.ts
 
-# Native
-ios/
-android/
+# Native prebuild output (anchored to app root so it doesn't match
+# fastlane/metadata/android/ etc.)
+/ios/
+/android/
 *.orig.*
 *.jks
 *.p8
 *.p12
 *.key
 *.mobileprovision
+
+# Signing / submit credentials (ASC API key, Play service account, etc.)
+credentials/
+
+# fastlane generated artifacts (keep metadata/ + screenshots/ committed)
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/test_output/
+fastlane/*.log
 
 # Metro
 .metro-health-check*

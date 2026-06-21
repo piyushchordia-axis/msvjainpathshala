@@ -85,9 +85,8 @@ module.exports = ({ config }) => {
 
     ...config,
 
-    // TODO(eas): replace with the org/account that owns the EAS project.
-    // Set after running `eas init` (or to your Expo account/organization slug).
-    owner: config.owner ?? "jainpathshala",
+    // Expo account/organization that owns the EAS project.
+    owner: config.owner ?? "astropsumit",
 
     // Use the app version as the runtime version so OTA updates only apply to
     // compatible native builds. Keep in sync with `version` in app.json.
@@ -120,12 +119,10 @@ module.exports = ({ config }) => {
 
         ...config.extra?.eas,
 
-        // TODO(eas): placeholder — run `eas init` to generate the real
-        // projectId and write it back here (or into app.json's extra.eas).
+        // projectId is written into app.json's extra.eas by `eas init`.
+        // EAS_PROJECT_ID env var overrides it (e.g. in CI).
         projectId:
-          process.env.EAS_PROJECT_ID ||
-          config.extra?.eas?.projectId ||
-          "00000000-0000-0000-0000-000000000000",
+          process.env.EAS_PROJECT_ID || config.extra?.eas?.projectId,
 
       },
 

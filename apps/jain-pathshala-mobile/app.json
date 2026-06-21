@@ -17,17 +17,26 @@
       "supportsTablet": false,
       "bundleIdentifier": "org.jainpathshala.app",
       "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true,
           "NSAllowsArbitraryLoads": false
         },
         "NSLocalNetworkUsageDescription": "Jain Pathshala connects to your development server on the same Wi‑Fi network to sign in and load your data.",
-        "NSBonjourServices": ["_expo._tcp"]
+        "NSBonjourServices": [
+          "_expo._tcp"
+        ]
       }
     },
     "android": {
       "usesCleartextTraffic": true,
-      "package": "org.jainpathshala.app"
+      "package": "org.jainpathshala.app",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ]
     },
     "web": {
       "favicon": "./assets/images/icon.png"
@@ -60,6 +69,17 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "e1e72c3f-ce03-4ccd-b2f6-346af8ee0409"
+      }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/e1e72c3f-ce03-4ccd-b2f6-346af8ee0409"
     }
   }
 }

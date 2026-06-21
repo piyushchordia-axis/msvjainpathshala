@@ -1,0 +1,5 @@
+TODO: write the Play Store full description (max 4000 characters).
+
+Jain Pathshala is the companion app for students, parents, and teachers of
+Jain Pathshala — attendance, homework, exams, progress reports, digital ID
+cards, and community announcements in one place.

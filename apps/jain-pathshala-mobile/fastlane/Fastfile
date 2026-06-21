@@ -1,0 +1,52 @@
+# Jain Pathshala — fastlane release automation.
+#
+# SCOPE: these lanes upload STORE LISTINGS ONLY (metadata + screenshots) to the
+# App Store and Google Play. They never build or upload the app binary — that is
+# handled by EAS:
+#     eas build  --platform ios     --profile production --local
+#     eas submit --platform ios     --profile production
+#     eas build  --platform android --profile production --local
+#     eas submit --platform android --profile production
+# fastlane here exists purely to kill the manual "edit the listing + drag
+# screenshots into the web console" loop. Edit the text files under
+# fastlane/metadata/, drop images under fastlane/screenshots/ (iOS) and
+# fastlane/metadata/android/.../images/ (Android), then run one command.
+#
+# Auth uses the shared Enaa Creations keys already in ./credentials/ — the very
+# same ones eas.json uses for `eas submit`.
+
+# App Store Connect API key (same .p8 EAS submit uses).
+ASC_KEY = {
+  key_id: "75JR6GG22Q",
+  issuer_id: "20f04c20-2b8f-4482-a782-f201f84c8ca5",
+  key_filepath: "credentials/AuthKey_75JR6GG22Q.p8",
+}.freeze
+
+platform :ios do
+  desc "Upload the App Store listing (metadata + screenshots only — no binary)."
+  lane :metadata do
+    api_key = app_store_connect_api_key(**ASC_KEY)
+    deliver(
+      api_key: api_key,
+      skip_binary_upload: true,     # EAS uploads the .ipa
+      overwrite_screenshots: true,  # replace existing screenshots with ours
+      submit_for_review: false,     # flip to true once the listing is final
+      force: true,                  # skip the interactive HTML preview
+      run_precheck_before_submit: false,
+    )
+  end
+end
+
+platform :android do
+  desc "Upload the Play Store listing (metadata + screenshots only — no binary)."
+  # NOTE: Google requires the FIRST .aab of a brand-new app to be uploaded by
+  # hand in the Play Console once. supply only works after that exists.
+  lane :metadata do
+    supply(
+      skip_upload_apk: true,        # EAS uploads the .aab
+      skip_upload_aab: true,
+      skip_upload_changelogs: false,
+      track: "internal",
+    )
+  end
+end
