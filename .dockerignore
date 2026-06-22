@@ -1,0 +1,23 @@
+# Keep the build context small — pnpm install runs inside the builder.
+**/node_modules
+**/dist
+**/.git
+.git
+**/.expo
+**/.turbo
+**/*.log
+**/.DS_Store
+# the mobile app's heavy/native subdirs (its manifest must stay for the
+# pnpm frozen-lockfile check, so don't exclude the whole package)
+apps/jain-pathshala-mobile/ios
+apps/jain-pathshala-mobile/android
+apps/jain-pathshala-mobile/.expo
+apps/jain-pathshala-mobile/fastlane/screenshots
+apps/jain-pathshala-mobile/fastlane/metadata
+# never ship secrets / local data
+**/.env
+**/.env.*
+!**/.env.example
+**/credentials
+**/uploads
+docs

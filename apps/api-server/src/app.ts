@@ -32,6 +32,12 @@ declare global {
 
 const app: Express = express();
 
+// Behind a single reverse proxy (nginx) in production, trust the first hop so
+// req.ip / req.protocol reflect the real client (the auth rate-limiter keys on
+// req.ip and signed-upload links honour X-Forwarded-Proto). One hop only — do
+// not trust an arbitrary chain.
+if (isProd) app.set("trust proxy", 1);
+
 app.use(
   pinoHttp({
     logger,

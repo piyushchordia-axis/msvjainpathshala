@@ -29,8 +29,11 @@ process.on("uncaughtException", (err) => {
   process.exit(1);
 });
 
-const server = app.listen(port, "0.0.0.0", () => {
-  logger.info({ port, host: "0.0.0.0" }, "Server listening");
+// Bind address: defaults to 0.0.0.0, but behind a reverse proxy (nginx in the
+// Docker/host setup) set HOST=127.0.0.1 so the port isn't exposed publicly.
+const host = process.env["HOST"] || "0.0.0.0";
+const server = app.listen(port, host, () => {
+  logger.info({ port, host }, "Server listening");
   // Start cron jobs (birthday wishes, etc.) only in the running server process.
   startScheduler();
 });

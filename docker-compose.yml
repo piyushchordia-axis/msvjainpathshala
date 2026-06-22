@@ -1,0 +1,42 @@
+# Jain Pathshala API — connects to the HOST's existing Postgres + Redis.
+#
+# Uses host networking so the container reaches Postgres/Redis on 127.0.0.1
+# (no need to expose them to Docker), and the host's nginx reverse-proxies to
+# 127.0.0.1:8080. The app binds 127.0.0.1 (HOST below), so :8080 is NOT exposed
+# publicly — nginx terminates TLS and forwards in.
+#
+# Usage:
+#   cp apps/api-server/.env.example apps/api-server/.env   # then fill it in
+#   docker compose up -d --build
+#   docker compose logs -f
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api-server/Dockerfile
+    image: jain-pathshala-api:latest
+    container_name: jain-pathshala-api
+    restart: unless-stopped
+    # Linux: shares the host net namespace -> Postgres/Redis on localhost work
+    # as-is, and nginx hits 127.0.0.1:8080. (On macOS/Windows Docker Desktop this
+    # maps to the VM, not the real host — fine, the target is a Linux server.)
+    network_mode: host
+    env_file:
+      - apps/api-server/.env
+    environment:
+      NODE_ENV: production
+      HOST: 127.0.0.1
+      PORT: "8080"
+      UPLOADS_DIR: /data/uploads
+    volumes:
+      - jp_uploads:/data/uploads
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  jp_uploads:
