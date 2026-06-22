@@ -40,6 +40,20 @@ platform :ios do
       run_precheck_before_submit: false,
     )
   end
+
+  desc "Upload only the App Store screenshots (skips metadata — avoids the new-app review-detail crash)."
+  lane :screenshots do
+    api_key = app_store_connect_api_key(**ASC_KEY)
+    deliver(
+      api_key: api_key,
+      skip_binary_upload: true,
+      skip_metadata: true,          # metadata already pushed; skip to dodge fetch_app_store_review_detail
+      overwrite_screenshots: true,
+      submit_for_review: false,
+      force: true,
+      run_precheck_before_submit: false,
+    )
+  end
 end
 
 platform :android do
