@@ -4,6 +4,7 @@ import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import v1Router from "./routes/v1";
+import legalRouter from "./routes/legal";
 import { logger } from "./lib/logger";
 import { storage } from "./lib/storage";
 import { verifyUploadAccess } from "./lib/file-tokens";
@@ -127,6 +128,8 @@ app.get(/^\/uploads\/.+/, (req: Request, res) => {
 
 app.use("/api", router);
 app.use("/v1", v1Router);
+// Public legal pages (privacy policy / terms) — required live URLs for the app stores.
+app.use(legalRouter);
 
 // Terminal error handler: never leak stack traces / internal errors to clients.
 // Express 5 forwards rejected async handlers here. Logs the full error, returns
