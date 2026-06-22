@@ -90,6 +90,16 @@ router.post("/login", async (req: Request, res: Response) => {
       }
     }
 
+    // Guarded review login: a single allow-listed demo phone may use a fixed
+    // code even in production, so app-store reviewers can sign in without live
+    // SMS. ONLY this exact number is affected — every other phone keeps the
+    // normal random-code + SMS flow. Unset both env vars to disable.
+    const reviewPhone = process.env["REVIEW_OTP_PHONE"];
+    const reviewCode = process.env["REVIEW_OTP_CODE"];
+    if (reviewPhone && reviewCode && parsed.phone === reviewPhone) {
+      code = reviewCode;
+    }
+
     const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
 
     // Always create a token row so timing does not leak whether the phone exists.
