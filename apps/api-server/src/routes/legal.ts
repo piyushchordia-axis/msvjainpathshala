@@ -123,7 +123,36 @@ students, parents, and teachers of participating centres.</p>
 <ul>
   <li><strong>Can't sign in?</strong> Only the mobile number registered with your centre can receive a one-time code. Ask your centre to confirm your registered number.</li>
   <li><strong>Wrong details?</strong> Your centre administrator can update your profile, batch, or centre.</li>
+  <li><strong>Want to delete your account?</strong> See <a href="/delete-account">Delete your account &amp; data</a>.</li>
 </ul>
+`;
+
+// Dedicated account-/data-deletion instructions. Google Play requires apps that
+// allow account creation to publish a public URL where users can request
+// account + data deletion; this is that page.
+const DELETE_ACCOUNT_BODY = `
+<p>You can ask us to delete your <strong>Jain Pathshala</strong> account and the
+personal data associated with it at any time. The app signs you in with your
+mobile number, so there is no self-serve delete button inside the app — instead,
+send us a short request and we will remove your account for you.</p>
+
+<h2>How to request deletion</h2>
+<ul>
+  <li>Email <a href="mailto:${CONTACT_EMAIL}?subject=Delete%20my%20account">${CONTACT_EMAIL}</a> from, or mentioning, the mobile number registered with your centre.</li>
+  <li>Include your full name and the name of your Pathshala centre so we can locate your account.</li>
+  <li>For a student account managed by a parent/guardian or centre, the parent/guardian or the centre administrator may make the request on the student's behalf.</li>
+</ul>
+
+<h2>What gets deleted</h2>
+<p>On verifying the request we permanently delete your account and personal data, including your profile (name, mobile number, email, centre/batch), your digital ID card, uploaded photos, and your activity records (attendance, homework, exam/quiz results, niyam submissions, and punya points).</p>
+
+<h2>What we may retain</h2>
+<p>We may keep a limited set of records where the law requires it or to resolve disputes and prevent abuse — for example, donation/transaction records needed for financial and tax compliance. Such records are retained only as long as required and are otherwise deleted or anonymised.</p>
+
+<h2>Timeline</h2>
+<p>We action verified deletion requests within <strong>30 days</strong> and email you to confirm once it is done. Deleting your account removes your access to the app.</p>
+
+<p>Questions? Contact us at <a href="mailto:${CONTACT_EMAIL}">${CONTACT_EMAIL}</a>.</p>
 `;
 
 router.get(["/privacy", "/privacy-policy"], (_req: Request, res: Response) =>
@@ -134,6 +163,9 @@ router.get(["/terms", "/terms-of-service"], (_req: Request, res: Response) =>
 );
 router.get("/support", (_req: Request, res: Response) =>
   send(res, page("Support", SUPPORT_BODY)),
+);
+router.get(["/delete-account", "/data-deletion", "/account-deletion"], (_req: Request, res: Response) =>
+  send(res, page("Delete Your Account & Data", DELETE_ACCOUNT_BODY)),
 );
 
 export default router;
