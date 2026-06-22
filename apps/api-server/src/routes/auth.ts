@@ -21,6 +21,7 @@ import { getSmsProvider } from "../lib/sms";
 import { logger } from "../lib/logger";
 import { rateLimit } from "../lib/ratelimit";
 import { auditFromReq } from "../lib/audit";
+import { requireAuth } from "../middlewares/auth";
 
 const router: IRouter = Router();
 
@@ -331,6 +332,43 @@ async function handleLogout(req: Request, res: Response): Promise<void> {
 
 router.post("/logout", handleLogout);
 router.delete("/logout", handleLogout);
+
+// Self-service account deletion (required by App Store guideline 5.1.1(v) and
+// Google Play for apps with account creation). The signed-in user initiates
+// deletion from inside the app: we immediately soft-delete the account (which
+// the auth middleware treats as gone) and revoke every device session, so
+// access ends at once. Residual records are purged/anonymised within 30 days
+// per the public /delete-account policy, subject to legal retention.
+async function handleDeleteAccount(req: Request, res: Response): Promise<void> {
+  const uid = req.authUser!.id;
+
+  const [deleted] = await db
+    .update(users)
+    .set({ deleted_at: new Date(), is_active: false, updated_at: new Date() })
+    .where(and(eq(users.id, uid), isNull(users.deleted_at)))
+    .returning({ id: users.id });
+
+  // Already deleted (idempotent) — still revoke sessions + clear cookies below.
+  await db
+    .update(device_sessions)
+    .set({ revoked_at: new Date() })
+    .where(and(eq(device_sessions.user_id, uid), isNull(device_sessions.revoked_at)))
+    .catch(() => undefined);
+
+  await auditFromReq(req, {
+    action: "delete",
+    entityKind: "user_account",
+    entityId: uid,
+    summary: "User deleted their own account",
+  });
+  void deleted;
+
+  clearAuthCookies(res);
+  res.status(204).end();
+}
+
+router.post("/delete-account", requireAuth, handleDeleteAccount);
+router.delete("/delete-account", requireAuth, handleDeleteAccount);
 
 void TOKEN_TTL;
 

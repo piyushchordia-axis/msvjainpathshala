@@ -5,6 +5,7 @@ import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { AppHeader } from "@/components/AppHeader";
+import { DeleteAccountButton } from "@/components/DeleteAccountButton";
 import { Body, Button, Card, Row, Screen, Title } from "@/components/ui";
 
 const ROLE_LABELS: Record<string, { en: string; hi: string }> = {
@@ -66,6 +67,7 @@ export default function ProfileScreen() {
             router.replace("/");
           }}
         />
+        <DeleteAccountButton />
       </Screen>
     </View>
   );
