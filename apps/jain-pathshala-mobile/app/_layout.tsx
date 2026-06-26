@@ -34,20 +34,25 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { LocaleProvider } from "@/contexts/LocaleContext";
 import { SessionViewProvider } from "@/contexts/SessionViewContext";
 import { API_BASE } from "@/lib/api";
+import { isExpoGo } from "@/lib/expo-go";
 import { fonts } from "@/constants/typography";
 import colors from "@/constants/colors";
 
 SplashScreen.preventAutoHideAsync();
 
-// Show banners/sounds even while the app is foregrounded.
-Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: true,
-    shouldSetBadge: false,
-  }),
-});
+// Show banners/sounds even while the app is foregrounded. Skipped in Expo Go:
+// Expo removed remote push from Expo Go in SDK 53, so touching the notifications
+// API there logs an error. Real builds (isExpoGo === false) configure it normally.
+if (!isExpoGo) {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({
+      shouldShowBanner: true,
+      shouldShowList: true,
+      shouldPlaySound: true,
+      shouldSetBadge: false,
+    }),
+  });
+}
 
 /**
  * Best-effort deep link for a tapped notification. The server puts a `route`
@@ -133,13 +138,15 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (__DEV__) {
-      console.log("[Jain Pathshala] API_BASE =", API_BASE);
+      console.log("[Jain Pathshala] API_BASE =", API_BASE, "isExpoGo =", isExpoGo);
     }
   }, []);
 
   // Deep-link into the relevant screen when a push notification is tapped,
-  // including the cold-start case where the tap launched the app.
+  // including the cold-start case where the tap launched the app. Skipped in
+  // Expo Go, where remote notifications are unavailable (SDK 53+).
   useEffect(() => {
+    if (isExpoGo) return;
     let mounted = true;
 
     Notifications.getLastNotificationResponseAsync()

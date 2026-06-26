@@ -6,23 +6,14 @@
  * or a missing EAS projectId all return null/no-op rather than throwing, so a
  * failure never blocks sign-in.
  */
-import Constants, { ExecutionEnvironment } from "expo-constants";
+import Constants from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { apiPost } from "@/lib/api";
+import { isExpoGo } from "@/lib/expo-go";
 
 const PLACEHOLDER_PROJECT_ID = "00000000-0000-0000-0000-000000000000";
-
-/**
- * True when running inside the Expo Go sandbox app. Expo removed remote push
- * notifications from Expo Go in SDK 53, so calling the remote-push API there
- * logs a (harmless-but-noisy) error. We skip push registration in Expo Go;
- * it works normally in development/preview/production builds, where this is
- * false. See https://docs.expo.dev/develop/development-builds/introduction/.
- */
-const isExpoGo =
-  Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
 /** EAS projectId is required to mint a push token; read it from app config. */
 function getProjectId(): string | null {
