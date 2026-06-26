@@ -19,7 +19,6 @@ import {
 import { TiroDevanagariSanskrit_400Regular } from "@expo-google-fonts/tiro-devanagari-sanskrit";
 import { useFonts } from "expo-font";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import * as Notifications from "expo-notifications";
 import { router, Stack } from "expo-router";
 import type { Href } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
@@ -39,20 +38,6 @@ import { fonts } from "@/constants/typography";
 import colors from "@/constants/colors";
 
 SplashScreen.preventAutoHideAsync();
-
-// Show banners/sounds even while the app is foregrounded. Skipped in Expo Go:
-// Expo removed remote push from Expo Go in SDK 53, so touching the notifications
-// API there logs an error. Real builds (isExpoGo === false) configure it normally.
-if (!isExpoGo) {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({
-      shouldShowBanner: true,
-      shouldShowList: true,
-      shouldPlaySound: true,
-      shouldSetBadge: false,
-    }),
-  });
-}
 
 /**
  * Best-effort deep link for a tapped notification. The server puts a `route`
@@ -142,36 +127,45 @@ export default function RootLayout() {
     }
   }, []);
 
-  // Deep-link into the relevant screen when a push notification is tapped,
-  // including the cold-start case where the tap launched the app. Skipped in
-  // Expo Go, where remote notifications are unavailable (SDK 53+).
+  // Configure the foreground handler and deep-link into the relevant screen
+  // when a push notification is tapped (including the cold-start case where the
+  // tap launched the app). expo-notifications is imported lazily and only
+  // outside Expo Go, where it is unavailable and would log an error (SDK 53+).
   useEffect(() => {
     if (isExpoGo) return;
     let mounted = true;
+    let sub: { remove: () => void } | undefined;
 
-    Notifications.getLastNotificationResponseAsync()
-      .then((response) => {
-        if (mounted && response) {
-          router.push(
-            routeForNotificationData(
-              response.notification.request.content.data,
-            ),
-          );
-        }
-      })
-      .catch(() => {});
+    void (async () => {
+      const Notifications = await import("expo-notifications");
 
-    const sub = Notifications.addNotificationResponseReceivedListener(
-      (response) => {
+      // Show banners/sounds even while the app is foregrounded.
+      Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowBanner: true,
+          shouldShowList: true,
+          shouldPlaySound: true,
+          shouldSetBadge: false,
+        }),
+      });
+
+      const response = await Notifications.getLastNotificationResponseAsync();
+      if (mounted && response) {
         router.push(
           routeForNotificationData(response.notification.request.content.data),
         );
-      },
-    );
+      }
+
+      sub = Notifications.addNotificationResponseReceivedListener((res) => {
+        router.push(
+          routeForNotificationData(res.notification.request.content.data),
+        );
+      });
+    })();
 
     return () => {
       mounted = false;
-      sub.remove();
+      sub?.remove();
     };
   }, []);
 

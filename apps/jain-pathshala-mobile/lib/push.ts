@@ -8,10 +8,13 @@
  */
 import Constants from "expo-constants";
 import * as Device from "expo-device";
-import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { apiPost } from "@/lib/api";
 import { isExpoGo } from "@/lib/expo-go";
+
+// expo-notifications is imported lazily (below) so it is never loaded in Expo
+// Go, where the module logs an error at import time (remote push removed in
+// SDK 53). In real builds it loads normally and push works.
 
 const PLACEHOLDER_PROJECT_ID = "00000000-0000-0000-0000-000000000000";
 
@@ -45,6 +48,7 @@ export async function registerForPushNotificationsAsync(): Promise<string | null
   }
 
   try {
+    const Notifications = await import("expo-notifications");
     const { status: existing } = await Notifications.getPermissionsAsync();
     let status = existing;
     if (status !== "granted") {
