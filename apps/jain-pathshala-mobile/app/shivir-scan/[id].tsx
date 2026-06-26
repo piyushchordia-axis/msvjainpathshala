@@ -214,7 +214,26 @@ export default function ShivirScanScreen() {
     );
   }
   if (ctx.isError || !ctx.data) {
-    const notAllowed = ctx.error instanceof ApiError && ctx.error.statusCode === 404;
+    const status = ctx.error instanceof ApiError ? ctx.error.statusCode : 0;
+    // 401 = not signed in; 404 = signed in but not a volunteer / in-scope admin
+    // for this shivir; anything else is an unexpected load failure.
+    if (status === 401) {
+      return (
+        <Screen scroll={false}>
+          <View style={{ flex: 1, alignItems: "center", justifyContent: "center", gap: 16, paddingHorizontal: 8 }}>
+            <Ionicons name="log-in-outline" size={44} color={c.inkDim} />
+            <Body muted style={{ textAlign: "center", maxWidth: 300 }}>
+              {hi
+                ? "स्कैनर का उपयोग करने के लिए कृपया स्वयंसेवक या व्यवस्थापक के रूप में साइन इन करें।"
+                : "Please sign in as a volunteer or admin to use the scanner."}
+            </Body>
+            <Button label={hi ? "साइन इन करें" : "Sign in"} icon="log-in" onPress={() => router.push("/auth/phone")} />
+            <Button label={hi ? "वापस जाएँ" : "Go back"} variant="ghost" onPress={() => router.back()} />
+          </View>
+        </Screen>
+      );
+    }
+    const notAllowed = status === 404;
     return (
       <Screen scroll={false}>
         <StateView

@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { router, useLocalSearchParams, type Href } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { apiGet } from "@/lib/api";
 import type { ShivirDetail } from "@/lib/types";
 import { formatDateRange } from "@/lib/format";
@@ -11,6 +12,7 @@ import { Body, Button, Card, Screen, StateView, Title, Row as URow } from "@/com
 export default function ShivirDetailScreen() {
   const c = useColors();
   const { hi } = useLocale();
+  const { user } = useAuth();
   const { id } = useLocalSearchParams<{ id: string }>();
 
   const { data, isLoading, isError, refetch, isRefetching } = useQuery({
@@ -50,23 +52,26 @@ export default function ShivirDetailScreen() {
         ) : null}
       </Card>
 
-      {/* Volunteer / admin attendance scanner. Visible to everyone; the scanner
-          screen itself is server-authorized and shows a friendly "not available"
-          state to anyone who isn't a volunteer or in-scope admin for this shivir. */}
-      <Card>
-        <Title style={{ fontSize: 17 }}>{hi ? "उपस्थिति स्कैनर" : "Attendance scanner"}</Title>
-        <Body muted style={{ marginTop: 8, lineHeight: 23 }}>
-          {hi
-            ? "स्वयंसेवक यहाँ विद्यार्थियों के पहचान पत्र QR स्कैन करके उपस्थिति दर्ज कर सकते हैं।"
-            : "Volunteers can record attendance here by scanning students' ID-card QR codes."}
-        </Body>
-        <Button
-          label={hi ? "QR स्कैन करें" : "Scan QR"}
-          icon="scan-outline"
-          onPress={() => router.push(`/shivir-scan/${data.id}` as Href)}
-          style={{ marginTop: 14 }}
-        />
-      </Card>
+      {/* Volunteer / admin attendance scanner. Hidden from guests (they can't
+          scan and would only hit a sign-in wall); for signed-in users the
+          scanner screen is server-authorized and shows a friendly "not
+          available" state to anyone who isn't a volunteer or in-scope admin. */}
+      {user ? (
+        <Card>
+          <Title style={{ fontSize: 17 }}>{hi ? "उपस्थिति स्कैनर" : "Attendance scanner"}</Title>
+          <Body muted style={{ marginTop: 8, lineHeight: 23 }}>
+            {hi
+              ? "स्वयंसेवक यहाँ विद्यार्थियों के पहचान पत्र QR स्कैन करके उपस्थिति दर्ज कर सकते हैं।"
+              : "Volunteers can record attendance here by scanning students' ID-card QR codes."}
+          </Body>
+          <Button
+            label={hi ? "QR स्कैन करें" : "Scan QR"}
+            icon="scan-outline"
+            onPress={() => router.push(`/shivir-scan/${data.id}` as Href)}
+            style={{ marginTop: 14 }}
+          />
+        </Card>
+      ) : null}
 
       {data.description ? (
         <Card>
