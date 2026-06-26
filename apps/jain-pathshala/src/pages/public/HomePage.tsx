@@ -41,7 +41,7 @@ export default function HomePage() {
       >
         <div className="absolute inset-y-0 right-0 hidden md:block pointer-events-none">
           <img
-            src="/motif-mandala.svg"
+            src={`${import.meta.env.BASE_URL}motif-mandala.svg`}
             alt=""
             width={520}
             height={520}

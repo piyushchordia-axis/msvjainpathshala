@@ -51,7 +51,7 @@ export function TopNav() {
     <header className="sticky top-0 z-40 border-b border-border bg-background/90 backdrop-blur">
       <div className="container flex h-16 items-center justify-between gap-6">
         <Link href="/" className="flex items-center gap-3" aria-label="Jain Pathshala">
-          <img src="/logo-mark.svg" alt="" width={36} height={36} className="h-9 w-9" />
+          <img src={`${import.meta.env.BASE_URL}logo-mark.svg`} alt="" width={36} height={36} className="h-9 w-9" />
           <span className="font-display text-xl text-secondary leading-tight">Jain Pathshala</span>
         </Link>
 

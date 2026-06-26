@@ -57,7 +57,7 @@ export function Sidebar({ user }: { user: SessionUser }) {
   return (
     <aside className="hidden h-screen w-[220px] shrink-0 flex-col border-r border-maroon-700/40 bg-secondary text-cream md:flex">
       <div className="flex h-16 items-center gap-3 border-b border-maroon-700/40 px-4">
-        <img src="/logo-mark.svg" alt="" className="h-8 w-8" />
+        <img src={`${import.meta.env.BASE_URL}logo-mark.svg`} alt="" className="h-8 w-8" />
         <div className="leading-tight">
           <div className="font-display text-base text-cream">Jain Pathshala</div>
           <div className="text-[10px] uppercase tracking-[0.18em] text-cream-deeper/70">Admin</div>

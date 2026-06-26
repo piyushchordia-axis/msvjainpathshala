@@ -86,7 +86,7 @@ export default function LoginPage() {
     <div className="grid min-h-screen bg-background md:grid-cols-2">
       <aside className="relative hidden bg-primary text-primary-foreground md:flex md:items-end md:p-12">
         <div className="absolute inset-0 opacity-25" aria-hidden>
-          <img src="/motif-mandala.svg" alt="" className="h-full w-full object-cover" />
+          <img src={`${import.meta.env.BASE_URL}motif-mandala.svg`} alt="" className="h-full w-full object-cover" />
         </div>
         <div className="relative max-w-md">
           <div className="font-display text-3xl leading-tight">Jain Pathshala admin</div>
@@ -99,7 +99,7 @@ export default function LoginPage() {
       <main className="flex items-center justify-center p-6 md:p-12">
         <Card className="w-full max-w-sm">
           <CardHeader>
-            <img src="/logo-mark.svg" alt="" className="h-10 w-10 mb-2" />
+            <img src={`${import.meta.env.BASE_URL}logo-mark.svg`} alt="" className="h-10 w-10 mb-2" />
             <CardTitle className="font-display text-2xl text-secondary">
               {phase === 'phone' ? 'Sign in' : 'Enter OTP'}
             </CardTitle>
