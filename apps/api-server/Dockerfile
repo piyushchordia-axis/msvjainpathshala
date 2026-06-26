@@ -14,10 +14,17 @@ RUN corepack enable && corepack prepare pnpm@9.12.3 --activate
 WORKDIR /repo
 
 # Copy the workspace (node_modules/dist excluded via .dockerignore) and install
-# only what the api-server needs (itself + its workspace deps), then bundle.
+# what the api-server AND the admin web SPA need (each + their workspace deps),
+# then bundle the API and build the web app.
 COPY . .
-RUN pnpm install --frozen-lockfile --filter "@workspace/api-server..."
+RUN pnpm install --frozen-lockfile \
+      --filter "@workspace/api-server..." \
+      --filter "@workspace/jain-pathshala..."
 RUN pnpm --filter @workspace/api-server run build
+# Admin web SPA → served by the API at /admin (same origin). base=/admin/ so
+# assets resolve there; PORT is only required by vite.config at load time.
+RUN BASE_PATH=/admin/ PORT=3000 NODE_ENV=production \
+      pnpm --filter @workspace/jain-pathshala run build
 
 ########################## Runtime ##########################
 FROM node:22-alpine AS runtime
@@ -41,6 +48,8 @@ RUN npm init -y >/dev/null 2>&1 \
 
 # The bundle (includes the generated pino worker files).
 COPY --from=builder /repo/apps/api-server/dist ./dist
+# The admin web SPA build (static assets only; no node_modules at runtime).
+COPY --from=builder /repo/apps/jain-pathshala/dist/public ./admin-web
 
 # Persistent uploads dir + drop root.
 RUN mkdir -p /data/uploads \

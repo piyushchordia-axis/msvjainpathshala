@@ -1,3 +1,4 @@
+import path from "node:path";
 import express, { type Express, type Request } from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -130,6 +131,17 @@ app.get(/^\/uploads\/.+/, (req: Request, res) => {
     else res.destroy();
   });
   stream.pipe(res);
+});
+
+// Admin web SPA (apps/jain-pathshala, built with BASE_PATH=/admin/). Served
+// same-origin so its relative /api + /v1 calls and HttpOnly auth cookies just
+// work. Static assets first; any other /admin/* path falls back to index.html
+// for client-side (wouter) routing. ADMIN_WEB_DIR points at the copied build.
+const ADMIN_WEB_DIR =
+  process.env["ADMIN_WEB_DIR"] ?? path.join(process.cwd(), "admin-web");
+app.use("/admin", express.static(ADMIN_WEB_DIR));
+app.get(/^\/admin(?:\/.*)?$/, (_req: Request, res) => {
+  res.sendFile(path.join(ADMIN_WEB_DIR, "index.html"));
 });
 
 app.use("/api", router);
