@@ -25,6 +25,11 @@ process.on("unhandledRejection", (reason) => {
 });
 
 process.on("uncaughtException", (err) => {
+  // Also write straight to stderr: if the logger transport is itself broken,
+  // routing the fatal through it alone would swallow the cause.
+  process.stderr.write(
+    `uncaughtException: ${String((err as Error)?.stack ?? err)}\n`,
+  );
   logger.fatal({ err }, "Uncaught exception; shutting down");
   process.exit(1);
 });

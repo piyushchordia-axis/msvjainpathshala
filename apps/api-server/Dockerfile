@@ -25,7 +25,13 @@ ENV NODE_ENV=production \
     HOST=127.0.0.1 \
     PORT=8080 \
     UPLOADS_DIR=/data/uploads
-WORKDIR /app
+# Run from the SAME absolute path the bundle was built at (/repo/apps/api-server
+# in the builder). esbuild-plugin-pino bakes build-time absolute paths to its
+# worker files (thread-stream-worker.mjs, pino-pretty.mjs, …) into the bundle;
+# if the runtime dir differs, pino's transport worker can't be found and the
+# logger crashes (only triggered when a transport is active, e.g. pino-pretty
+# under NODE_ENV=development). Keeping the path identical makes that resolve.
+WORKDIR /repo/apps/api-server
 
 # Only the externalized native module. sharp 0.34 ships prebuilt musl binaries,
 # so no compiler/vips toolchain is needed.
@@ -39,7 +45,7 @@ COPY --from=builder /repo/apps/api-server/dist ./dist
 # Persistent uploads dir + drop root.
 RUN mkdir -p /data/uploads \
  && addgroup -S app && adduser -S app -G app \
- && chown -R app:app /app /data
+ && chown -R app:app /repo /data
 USER app
 
 EXPOSE 8080
