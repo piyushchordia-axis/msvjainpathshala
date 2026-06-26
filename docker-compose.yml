@@ -25,7 +25,9 @@ services:
     env_file:
       - apps/api-server/.env
     environment:
-      NODE_ENV: production
+      # Defaults to production; set NODE_ENV=development in a root .env on a
+      # test/QA host to enable the dev fixed-OTP path (settings.default_otp_code).
+      NODE_ENV: "${NODE_ENV:-production}"
       HOST: 127.0.0.1
       # API_PORT lets you avoid a clash with another service on the host
       # (e.g. set API_PORT=8090 in a root .env). nginx must proxy to the same port.

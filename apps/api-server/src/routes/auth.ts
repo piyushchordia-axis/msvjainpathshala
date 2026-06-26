@@ -77,9 +77,10 @@ router.post("/login", async (req: Request, res: Response) => {
     const otpToken = generateOtpToken();
     let code = generateOtpCode();
 
-    // Check settings table for a default OTP override (e.g. "123456").
-    // DEV-ONLY: never honour a fixed/default OTP in production, even if the
-    // settings row leaks into a prod DB via a seed.
+    // Dev-only fixed OTP: in non-production, a `default_otp_code` settings row
+    // (e.g. "000000") overrides the random code so every login uses one known
+    // code without live SMS. NEVER honoured in production — there, real SMS is
+    // the only path. (No "review phone" middle-ground: dev OTP or real SMS.)
     if (!isProd) {
       const [otpSetting] = await db
         .select()
@@ -89,20 +90,6 @@ router.post("/login", async (req: Request, res: Response) => {
       if (otpSetting?.value) {
         code = otpSetting.value;
       }
-    }
-
-    // Guarded review login: an allow-list of demo phones may use a fixed code
-    // even in production, so app-store reviewers / QA can sign in without live
-    // SMS. REVIEW_OTP_PHONE is a comma-separated list; ONLY those exact numbers
-    // are affected — every other phone keeps the normal random-code + SMS flow.
-    // Unset both env vars to disable.
-    const reviewPhones = (process.env["REVIEW_OTP_PHONE"] ?? "")
-      .split(",")
-      .map((p) => p.trim())
-      .filter(Boolean);
-    const reviewCode = process.env["REVIEW_OTP_CODE"];
-    if (reviewCode && reviewPhones.includes(parsed.phone)) {
-      code = reviewCode;
     }
 
     const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
