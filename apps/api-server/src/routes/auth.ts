@@ -91,13 +91,17 @@ router.post("/login", async (req: Request, res: Response) => {
       }
     }
 
-    // Guarded review login: a single allow-listed demo phone may use a fixed
-    // code even in production, so app-store reviewers can sign in without live
-    // SMS. ONLY this exact number is affected — every other phone keeps the
-    // normal random-code + SMS flow. Unset both env vars to disable.
-    const reviewPhone = process.env["REVIEW_OTP_PHONE"];
+    // Guarded review login: an allow-list of demo phones may use a fixed code
+    // even in production, so app-store reviewers / QA can sign in without live
+    // SMS. REVIEW_OTP_PHONE is a comma-separated list; ONLY those exact numbers
+    // are affected — every other phone keeps the normal random-code + SMS flow.
+    // Unset both env vars to disable.
+    const reviewPhones = (process.env["REVIEW_OTP_PHONE"] ?? "")
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
     const reviewCode = process.env["REVIEW_OTP_CODE"];
-    if (reviewPhone && reviewCode && parsed.phone === reviewPhone) {
+    if (reviewCode && reviewPhones.includes(parsed.phone)) {
       code = reviewCode;
     }
 
