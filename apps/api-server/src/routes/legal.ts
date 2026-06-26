@@ -168,4 +168,111 @@ router.get(["/delete-account", "/data-deletion", "/account-deletion"], (_req: Re
   send(res, page("Delete Your Account & Data", DELETE_ACCOUNT_BODY)),
 );
 
+// ---------------------------------------------------------------------------
+// Dev convenience: QR landing page for opening the Expo Go dev build.
+//
+// When the mobile app's Metro bundler runs with `expo start --tunnel` on the
+// SAME host as this API (the API container uses host networking), this route
+// reads the live tunnel host from Metro's manifest at 127.0.0.1:<port> and
+// renders a page with a tappable "Open in Expo Go" button + scannable QR.
+// Because the host is resolved per-request, the branded URL keeps working even
+// after the tunnel restarts and its *.exp.direct host changes.
+//   GET /qr   (alias /expo)
+// ---------------------------------------------------------------------------
+const METRO_PORT = process.env["EXPO_METRO_PORT"] ?? "8081";
+
+async function resolveExpUrl(): Promise<string | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${METRO_PORT}/manifest`, {
+      headers: { "expo-platform": "android" },
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      extra?: { expoClient?: { hostUri?: string } };
+    };
+    const hostUri = json?.extra?.expoClient?.hostUri;
+    if (!hostUri) return null;
+    return `exp://${hostUri}`;
+  } catch {
+    return null;
+  }
+}
+
+function qrLandingHtml(expUrl: string): string {
+  const tunneled = !expUrl.includes("localhost") && !expUrl.includes(":8081");
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Open Jain Pathshala in Expo Go</title>
+  <script src="https://unpkg.com/qr-code-styling@1.6.0/lib/qr-code-styling.js"></script>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif;
+      margin: 0; min-height: 100vh; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; background: #FDF6EC; color: #2A1A12; padding: 24px; }
+    h1 { font-size: 1.35rem; margin: 0 0 4px; color: #7B1E1E; text-align: center; }
+    p { color: #5b4636; max-width: 26rem; text-align: center; line-height: 1.55; margin: 6px 0; }
+    #qr { margin: 18px 0 8px; background: #fff; padding: 14px; border-radius: 16px;
+      box-shadow: 0 6px 24px rgba(0,0,0,.08); }
+    .btn { display: inline-block; margin: 14px 0 6px; padding: 14px 28px; font-size: 1.05rem;
+      font-weight: 600; color: #fff; background: #E8541A; border-radius: 999px;
+      text-decoration: none; box-shadow: 0 4px 14px rgba(232,84,26,.35); }
+    .btn:active { transform: translateY(1px); }
+    code { display: block; margin: 14px; padding: 10px 14px; background: #fff; border-radius: 8px;
+      word-break: break-all; font-size: 0.8rem; border: 1px solid #e7d9c6; color: #6b4a32; max-width: 26rem; }
+    .hint { color: #9A6A4E; font-size: 0.85rem; }
+    .step { font-weight: 600; color: #7B1E1E; }
+  </style>
+</head>
+<body>
+  <h1>Jain Pathshala Mobile</h1>
+  <p>Tap the button to open the app in <strong>Expo Go</strong>, or scan the QR below with your phone camera / the Expo Go app.</p>
+  <a class="btn" href="${expUrl}">Open in Expo Go</a>
+  <div id="qr"></div>
+  <p class="hint">${tunneled ? "Running over a secure tunnel — no shared Wi-Fi needed." : "LAN mode — phone must be on the same network."}</p>
+  <p><span class="step">1.</span> Install <strong>Expo Go</strong> from the App Store / Play Store first.<br/>
+     <span class="step">2.</span> Then tap the button or scan the code.</p>
+  <code>${expUrl}</code>
+  <p class="hint">In Expo Go you can also choose <em>Enter URL manually</em> and paste the link above.</p>
+  <script>
+    new QRCodeStyling({
+      width: 280, height: 280, data: ${JSON.stringify(expUrl)},
+      dotsOptions: { color: "#2A1A12", type: "rounded" },
+      backgroundOptions: { color: "#ffffff" },
+      cornersSquareOptions: { type: "extra-rounded", color: "#7B1E1E" },
+      qrOptions: { errorCorrectionLevel: "H" },
+    }).append(document.getElementById("qr"));
+  </script>
+</body>
+</html>`;
+}
+
+const QR_OFFLINE_BODY = `
+<p>The Expo development server is not running right now, so there is no live
+build to open.</p>
+<p>Start it on the server (in the <code>expo</code> tmux session) with
+<code>expo start --tunnel</code>, then reload this page.</p>
+`;
+
+router.get(["/qr", "/expo"], async (_req: Request, res: Response) => {
+  const expUrl = await resolveExpUrl();
+  if (!expUrl) {
+    res.setHeader("Cache-Control", "no-store");
+    res
+      .status(503)
+      .setHeader("Content-Type", "text/html; charset=utf-8")
+      .send(page("Expo dev server offline", QR_OFFLINE_BODY));
+    return;
+  }
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.status(200).send(qrLandingHtml(expUrl));
+});
+
 export default router;
