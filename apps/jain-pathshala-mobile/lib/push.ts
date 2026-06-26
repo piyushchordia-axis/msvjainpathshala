@@ -6,13 +6,23 @@
  * or a missing EAS projectId all return null/no-op rather than throwing, so a
  * failure never blocks sign-in.
  */
-import Constants from "expo-constants";
+import Constants, { ExecutionEnvironment } from "expo-constants";
 import * as Device from "expo-device";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { apiPost } from "@/lib/api";
 
 const PLACEHOLDER_PROJECT_ID = "00000000-0000-0000-0000-000000000000";
+
+/**
+ * True when running inside the Expo Go sandbox app. Expo removed remote push
+ * notifications from Expo Go in SDK 53, so calling the remote-push API there
+ * logs a (harmless-but-noisy) error. We skip push registration in Expo Go;
+ * it works normally in development/preview/production builds, where this is
+ * false. See https://docs.expo.dev/develop/development-builds/introduction/.
+ */
+const isExpoGo =
+  Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
 /** EAS projectId is required to mint a push token; read it from app config. */
 function getProjectId(): string | null {
@@ -31,6 +41,17 @@ function getProjectId(): string | null {
 export async function registerForPushNotificationsAsync(): Promise<string | null> {
   // Push only works on real hardware; the web build has no notifications API.
   if (Platform.OS === "web" || !Device.isDevice) return null;
+
+  // Remote push was removed from Expo Go (SDK 53+). Skip it there to avoid the
+  // expo-notifications error; push works in real builds where isExpoGo is false.
+  if (isExpoGo) {
+    if (__DEV__) {
+      console.log(
+        "[push] skipping push registration in Expo Go — use a development build to test notifications",
+      );
+    }
+    return null;
+  }
 
   try {
     const { status: existing } = await Notifications.getPermissionsAsync();
