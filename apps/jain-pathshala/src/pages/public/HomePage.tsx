@@ -3,12 +3,6 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { useLocale } from '@/lib/locale-context';
 
-const STATS = [
-  { v: '120+', k: 'Active centres' },
-  { v: '14,000+', k: 'Children learning every week' },
-  { v: '800+', k: 'Gurujis and Didis teaching' },
-];
-
 export default function HomePage() {
   const locale = useLocale();
   const isHindi = locale === 'hi';
@@ -22,6 +16,11 @@ export default function HomePage() {
         ctaSignin: 'मेरी पाठशाला में लॉगिन करें',
         missionTitle: 'हमारा उद्देश्य',
         missionBody: 'हम जैन परिवारों की अगली पीढ़ी को हमारे पूर्वजों की कोमल, अनुशासित परंपरा में पालने में मदद करते हैं — पाठशाला की पारंपरिक शिक्षा को आज के परिवारों की आवश्यक गर्मजोशी और संरचना के साथ जोड़ते हुए।',
+        highlights: [
+          { t: 'पास के केंद्र', d: 'अपने शहर और आस-पास के पाठशाला केंद्र खोजें।' },
+          { t: 'साप्ताहिक शिक्षा', d: 'बच्चे नियमित रूप से गुरुजी और दीदी से सीखते हैं।' },
+          { t: 'समर्पित शिक्षक', d: 'गुरुजी और दीदी इसी परंपरा में पले-बढ़े हैं।' },
+        ],
       }
     : {
         kicker: 'Megh Sanskar Vatika network',
@@ -31,6 +30,11 @@ export default function HomePage() {
         ctaSignin: 'Sign in to my Pathshala',
         missionTitle: 'Our mission',
         missionBody: 'We help Jain families raise the next generation in the gentle, disciplined tradition of our ancestors — combining classical Pathshala learning with the warmth and structure modern families need.',
+        highlights: [
+          { t: 'Centres near you', d: 'Find Pathshala centres in your city and nearby.' },
+          { t: 'Weekly learning', d: 'Children learn regularly with a Guruji or Didi.' },
+          { t: 'Dedicated teachers', d: 'Gurujis and Didis raised in the same tradition.' },
+        ],
       };
 
   return (
@@ -82,13 +86,13 @@ export default function HomePage() {
         </div>
       </section>
 
-      <section aria-labelledby="stats-title" className="container py-16">
-        <h2 id="stats-title" className="sr-only">By the numbers</h2>
+      <section aria-labelledby="highlights-title" className="container py-16">
+        <h2 id="highlights-title" className="sr-only">{isHindi ? 'हमारा नेटवर्क' : 'Our network'}</h2>
         <div className="grid gap-4 md:grid-cols-3">
-          {STATS.map((s) => (
-            <Card key={s.k} className="p-6">
-              <div className="font-mono text-3xl text-secondary">{s.v}</div>
-              <div className="mt-2 text-sm text-muted-foreground">{s.k}</div>
+          {copy.highlights.map((h) => (
+            <Card key={h.t} className="p-6">
+              <div className="font-display text-lg text-secondary">{h.t}</div>
+              <div className="mt-2 text-sm text-muted-foreground">{h.d}</div>
             </Card>
           ))}
         </div>

@@ -55,6 +55,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (token) setAuthToken(token);
         if (refresh) setRefreshToken(refresh);
         if (rawUser) setUser(JSON.parse(rawUser) as SessionUser);
+        // Cold-start of an already-signed-in session: (re)register this device
+        // for push, best-effort. Covers reinstall/restore/permission changes
+        // where sign-in never runs again. No-ops in Expo Go / placeholder EAS
+        // project (guarded in lib/push.ts) and never blocks hydration.
+        if (token && rawUser) void registerPushTokenWithApi();
       } catch {
       } finally {
         setLoading(false);

@@ -14,6 +14,10 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import { db, niyams, niyam_submissions, niyam_streaks, students } from "@workspace/db";
 import { and, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
+
+// Transaction handle drizzle hands a `db.transaction(cb)` callback; used so the
+// streak update can compose into the same tx as the status claim + award.
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
@@ -73,8 +77,13 @@ function previousDate(ymd: string): string {
  * date: continue the run if the last submission was the previous day, else
  * restart at 1; always bump the longest-streak high-water mark.
  */
-async function bumpStreak(studentId: string, niyamId: string, submissionDate: string): Promise<void> {
-  const [row] = await db
+async function bumpStreak(
+  studentId: string,
+  niyamId: string,
+  submissionDate: string,
+  exec: Tx | typeof db = db,
+): Promise<void> {
+  const [row] = await exec
     .select({
       id: niyam_streaks.id,
       current_streak: niyam_streaks.current_streak,
@@ -86,7 +95,7 @@ async function bumpStreak(studentId: string, niyamId: string, submissionDate: st
     .limit(1);
 
   if (!row) {
-    await db.insert(niyam_streaks).values({
+    await exec.insert(niyam_streaks).values({
       student_id: studentId,
       niyam_id: niyamId,
       current_streak: 1,
@@ -100,7 +109,7 @@ async function bumpStreak(studentId: string, niyamId: string, submissionDate: st
   const sameDay = row.last_submission_date === submissionDate;
   const current = sameDay ? row.current_streak : continued ? row.current_streak + 1 : 1;
   const longest = Math.max(row.longest_streak, current);
-  await db
+  await exec
     .update(niyam_streaks)
     .set({ current_streak: current, longest_streak: longest, last_submission_date: submissionDate })
     .where(eq(niyam_streaks.id, row.id));
@@ -303,14 +312,24 @@ router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Respons
       .returning({ id: niyam_submissions.id });
     if (updated.length === 0) return null;
 
-    const result = await awardPunya({
-      studentId: sub.student_id,
-      featureKey: "niyam_submission",
-      points: sub.points,
-      note: sub.notes ?? null,
-      awardedBy: req.authUser!.id,
-    });
-    await bumpStreak(sub.student_id, sub.niyam_id, sub.submission_date);
+    // Compose the award + streak into the SAME transaction that claimed the
+    // row so the status flip, the ledger credit, and the streak all commit
+    // (or roll back) together — a transient failure can't leave an approved
+    // submission without its credit. The idempotencyKey (scoped to this
+    // submission) is defense-in-depth on top of the CAS above: a re-approve
+    // can never double-credit even if the status guard were ever bypassed.
+    const result = await awardPunya(
+      {
+        studentId: sub.student_id,
+        featureKey: "niyam_submission",
+        points: sub.points,
+        note: sub.notes ?? null,
+        awardedBy: req.authUser!.id,
+        idempotencyKey: `submission:${sub.id}`,
+      },
+      tx,
+    );
+    await bumpStreak(sub.student_id, sub.niyam_id, sub.submission_date, tx);
     return result;
   });
 

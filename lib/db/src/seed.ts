@@ -76,6 +76,21 @@ function daysFromNow(n: number): Date {
 }
 
 async function main(): Promise<void> {
+  // Hard guard: this script truncates all domain tables. Never allow it to run
+  // against a production database, even if a prod DATABASE_URL is in the shell.
+  if (process.env.NODE_ENV === "production") {
+    console.error(
+      "Refusing to seed: NODE_ENV=production. This script TRUNCATEs all domain tables and would irreversibly wipe production data.",
+    );
+    process.exit(1);
+  }
+  if (process.env.ALLOW_SEED !== "1") {
+    console.error(
+      "Refusing to seed: destructive seed disabled. Set ALLOW_SEED=1 to explicitly opt in.",
+    );
+    process.exit(1);
+  }
+
   console.log("Seeding database…");
 
   // Clear domain tables (order does not matter with CASCADE).

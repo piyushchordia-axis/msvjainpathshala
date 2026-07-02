@@ -7,7 +7,6 @@
  * (shivir scanner / shikshak) via /verify using a constant-time HMAC check.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
-import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { db, digital_id_cards, students, centres } from "@workspace/db";
 import { and, eq, or } from "drizzle-orm";
 import { z } from "zod";
@@ -18,22 +17,12 @@ import { auditFromReq } from "../../lib/audit";
 import { storage, makeKey } from "../../lib/storage";
 import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
 import { qrDataUrl, svgToPng } from "../../lib/qr";
+import { buildCardPayload, signCardPayload, verifyCardSignature } from "../../lib/idcard-crypto";
 
 const router: IRouter = Router();
 router.use(requireAuth);
 
-const SECRET = process.env["JP_AUTH_SECRET"] ?? "jp-dev-secret-do-not-use-in-production";
-
-/**
- * Domain-separated key for QR HMACs, derived once from the auth-token secret so
- * that signing/verifying ID-card QRs never shares a key with auth tokens.
- */
-const QR_SECRET = createHmac("sha256", SECRET).update("id-card-qr-v1").digest();
-
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** Hex length of an HMAC-SHA256 signature (32 bytes -> 64 hex chars). */
-const SIGNATURE_HEX_LEN = 64;
 
 /* ---- local helper copy-pasted into admin route files ---- */
 function inScope(scope: AdminScope, centreId: string | null): boolean {
@@ -44,29 +33,9 @@ function inScope(scope: AdminScope, centreId: string | null): boolean {
 
 /** Build the canonical signed payload string and its HMAC-SHA256 signature. */
 function signPayload(studentId: string, cardNumber: string, versionNo: number) {
-  const qr_payload = JSON.stringify({ student_id: studentId, card_number: cardNumber, v: versionNo });
-  const qr_signature = createHmac("sha256", QR_SECRET).update(qr_payload).digest("hex");
+  const qr_payload = buildCardPayload({ student_id: studentId, card_number: cardNumber, v: versionNo });
+  const qr_signature = signCardPayload(qr_payload);
   return { qr_payload, qr_signature };
-}
-
-/** Constant-time hex-string comparison; false on any length/format mismatch. */
-function safeEqualHex(a: string, b: string): boolean {
-  if (typeof a !== "string" || typeof b !== "string") return false;
-  // Reject non-canonical signatures before decoding: Buffer.from(hex) silently
-  // truncates at the first non-hex char, so junk appended to a valid signature
-  // would otherwise decode to the same bytes. Require pure-hex of exact length.
-  if (
-    a.length !== SIGNATURE_HEX_LEN ||
-    b.length !== SIGNATURE_HEX_LEN ||
-    !/^[0-9a-f]+$/i.test(a) ||
-    !/^[0-9a-f]+$/i.test(b)
-  ) {
-    return false;
-  }
-  const ba = Buffer.from(a, "hex");
-  const bb = Buffer.from(b, "hex");
-  if (ba.length === 0 || ba.length !== bb.length) return false;
-  return timingSafeEqual(ba, bb);
 }
 
 function esc(s: string): string {
@@ -283,8 +252,7 @@ router.post("/verify", async (req: Request, res: Response) => {
     fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid verify payload.");
     return;
   }
-  const expected = createHmac("sha256", QR_SECRET).update(body.qr_payload).digest("hex");
-  if (!safeEqualHex(expected, body.qr_signature)) {
+  if (!verifyCardSignature(body.qr_payload, body.qr_signature)) {
     fail(res, 401, "ERR_SIGNATURE_INVALID", "Signature is invalid.");
     return;
   }

@@ -8,6 +8,11 @@ export const logger = pino({
     "req.headers.authorization",
     "req.headers.cookie",
     "res.headers['set-cookie']",
+    // PII: never log raw phone numbers. Callers should mask before logging
+    // (e.g. "****1234"); this is defense-in-depth for accidental raw values.
+    "phone",
+    "*.phone",
+    "req.body.phone",
   ],
   ...(isProduction
     ? {}

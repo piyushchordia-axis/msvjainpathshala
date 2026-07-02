@@ -38,6 +38,8 @@ import { awardPunya } from "../../lib/punya";
 const router: IRouter = Router();
 router.use(requireAuth, requireAdminPanel);
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function scopedCentreFilter(scope: AdminScope, column: PgColumn) {
   if (scope.centreIds === null) return undefined;
   if (scope.centreIds.length === 0) return sql`false`;
@@ -145,12 +147,17 @@ router.get("/gallery", async (req: Request, res: Response) => {
 
 /* POST /v1/admin/gallery/:id/feature */
 router.post("/gallery/:id/feature", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  if (!UUID_RE.test(id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Gallery item not found.");
+    return;
+  }
   const scope = await resolveAdminScope(req.authUser!);
   const [item] = await db
     .select({ id: gallery_items.id, centre_id: students.centre_id })
     .from(gallery_items)
     .innerJoin(students, eq(students.id, gallery_items.student_id))
-    .where(and(eq(gallery_items.id, String(req.params.id)), isNull(students.deleted_at)))
+    .where(and(eq(gallery_items.id, id), isNull(students.deleted_at)))
     .limit(1);
   if (!item || !inScope(scope, item.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Gallery item not found.");
@@ -169,12 +176,17 @@ router.post("/gallery/:id/feature", async (req: Request, res: Response) => {
 
 /* POST /v1/admin/gallery/:id/unfeature */
 router.post("/gallery/:id/unfeature", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  if (!UUID_RE.test(id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Gallery item not found.");
+    return;
+  }
   const scope = await resolveAdminScope(req.authUser!);
   const [item] = await db
     .select({ id: gallery_items.id, centre_id: students.centre_id })
     .from(gallery_items)
     .innerJoin(students, eq(students.id, gallery_items.student_id))
-    .where(and(eq(gallery_items.id, String(req.params.id)), isNull(students.deleted_at)))
+    .where(and(eq(gallery_items.id, id), isNull(students.deleted_at)))
     .limit(1);
   if (!item || !inScope(scope, item.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Gallery item not found.");
@@ -523,15 +535,27 @@ router.post("/centres", async (req: Request, res: Response) => {
   let body: z.infer<typeof createCentreSchema>;
   try { body = createCentreSchema.parse(req.body); }
   catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid centre data."); return; }
-  const scope = await resolveAdminScope(req.authUser!);
-  if (scope.centreIds !== null && scope.centreIds.length > 0) {
+  // Only geography admins create centres (mirrors the shivirs create route). An
+  // empty centre scope alone is NOT sufficient — a brand-new city/state admin, or
+  // any sanchalak/shikshak with no assignments, also has an empty scope.
+  const role = req.authUser!.role;
+  if (role !== "super_admin" && role !== "state_admin" && role !== "city_admin") {
     fail(res, 403, "ERR_FORBIDDEN", "Only national/state/city admins can create centres.");
     return;
+  }
+  // The target city must be within the caller's scope, and the state must be the
+  // city's actual state (never trust the client-supplied state_id).
+  let allowedCityIds: string[] | null = null;
+  if (role === "city_admin") allowedCityIds = req.authUser!.city_id ? [req.authUser!.city_id] : [];
+  else if (role === "state_admin") allowedCityIds = req.authUser!.state_id ? (await cityIdsForState(req.authUser!.state_id)) : [];
+  const [cityRow] = await db.select({ state_id: cities.state_id }).from(cities).where(eq(cities.id, body.city_id)).limit(1);
+  if (!cityRow || (allowedCityIds !== null && !allowedCityIds.includes(body.city_id))) {
+    fail(res, 403, "ERR_FORBIDDEN", "That city is outside your scope."); return;
   }
   const [row] = await db.insert(centres).values({
     name: body.name,
     city_id: body.city_id,
-    state_id: body.state_id,
+    state_id: cityRow.state_id,
     locality: body.locality ?? null,
     pincode: body.pincode ?? null,
     contact_phone: body.contact_phone ?? null,
@@ -624,8 +648,36 @@ router.post("/notices", async (req: Request, res: Response) => {
   try { body = createNoticeSchema.parse(req.body); }
   catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid notice data."); return; }
   const scope = await resolveAdminScope(req.authUser!);
-  if (body.centre_id && !inScope(scope, body.centre_id)) {
-    fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope."); return;
+  // Audience-based authorization (mirrors authorizeWrite in notices.ts):
+  //  - national / msv  → super_admin only
+  //  - state           → state_admin (their own state) or super_admin
+  //  - city            → city_admin (their own city) / state_admin / super_admin
+  //  - centre / batch  → target centre must be inside the caller's scope
+  // Without this, createNoticeSchema's defaults (audience="national",
+  // publish_now=true) let any admin-panel role publish an org-wide notice.
+  const role = req.authUser!.role;
+  if (role !== "super_admin") {
+    switch (body.audience) {
+      case "national":
+      case "msv":
+        fail(res, 403, "ERR_FORBIDDEN", "Only national admins can publish to this audience."); return;
+      case "state":
+        if (role !== "state_admin" || !req.authUser!.state_id) {
+          fail(res, 403, "ERR_FORBIDDEN", "You cannot target this state."); return;
+        }
+        break;
+      case "city":
+        if (role !== "city_admin" && role !== "state_admin") {
+          fail(res, 403, "ERR_FORBIDDEN", "You cannot target this city."); return;
+        }
+        break;
+      case "centre":
+      case "batch":
+        if (!inScope(scope, body.centre_id ?? null)) {
+          fail(res, 403, "ERR_FORBIDDEN", "Target is not in your scope."); return;
+        }
+        break;
+    }
   }
   const [row] = await db.insert(notices).values({
     title_en: body.title_en,

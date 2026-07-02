@@ -1,26 +1,5 @@
 modules = ["nodejs-24", "python-3.11", "postgresql-16"]
 
-[deployment]
-router = "application"
-deploymentTarget = "autoscale"
-
-# Build the whole workspace (typecheck + recursive `build`: api-server -> esbuild
-# bundle at dist/index.mjs, web -> Vite build at dist/public). The web Vite config
-# requires PORT + BASE_PATH even at build time, so they are provided here.
-[deployment.build]
-run = ["pnpm", "run", "build"]
-env = { "NODE_ENV" = "production", "BASE_PATH" = "/", "PORT" = "8080" }
-
-# Run the API server in production from its esbuild bundle (dist/index.mjs).
-# See docs/DEPLOYMENT.md for the full env-var contract and how the web app is served.
-[deployment.run]
-run = ["pnpm", "run", "start"]
-env = { "NODE_ENV" = "production", "PORT" = "8080" }
-
-[deployment.postBuild]
-args = ["pnpm", "store", "prune"]
-env = { "CI" = "true" }
-
 [workflows]
 runButton = "Project"
 

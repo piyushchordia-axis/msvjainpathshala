@@ -156,7 +156,9 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
   if (!API_BASE) {
     throw new ApiError(
       "ERR_CONFIG",
-      "API URL is not configured. Run `pnpm run dev` in jain-pathshala-mobile (API is proxied via Metro on port 8081).",
+      __DEV__
+        ? "API URL is not configured. Run `pnpm run dev` in jain-pathshala-mobile (API is proxied via Metro on port 8081)."
+        : "Something went wrong. Please try again.",
       0,
     );
   }
@@ -181,7 +183,9 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
     ) {
       throw new ApiError(
         "ERR_NETWORK",
-        `Cannot reach the API at ${API_BASE}. Same Wi‑Fi as PC, enable Local Network for Expo Go (iOS Settings), restart \`pnpm run dev\`, reload Expo Go. Test in phone Safari: ${API_BASE}/api/healthz`,
+        __DEV__
+          ? `Cannot reach the API at ${API_BASE}. Same Wi‑Fi as PC, enable Local Network for Expo Go (iOS Settings), restart \`pnpm run dev\`, reload Expo Go. Test in phone Safari: ${API_BASE}/api/healthz`
+          : "Can't reach the server. Check your connection and try again.",
         0,
       );
     }
@@ -199,7 +203,9 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
     const env = data?.error;
     const fallback =
       res.status >= 500
-        ? `Server error (${res.status}). Start Docker Desktop, run docker start jp-postgres, then retry.`
+        ? __DEV__
+          ? `Server error (${res.status}). Start Docker Desktop, run docker start jp-postgres, then retry.`
+          : "Something went wrong. Please try again."
         : `Request failed (${res.status})`;
     throw new ApiError(
       env?.code ?? "ERR_HTTP",

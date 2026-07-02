@@ -40,6 +40,11 @@ function clampLimit(raw: unknown, fallback: number, max: number): number {
   return Math.min(Math.floor(n), max);
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+function isUuid(v: unknown): v is string {
+  return typeof v === "string" && UUID_RE.test(v);
+}
+
 /** null = unrestricted; [] = see nothing */
 async function cityIdsForUser(user: User): Promise<string[] | null> {
   if (user.role === "super_admin") return null;
@@ -95,6 +100,10 @@ router.get("/curricula", async (req: Request, res: Response) => {
 router.get("/curricula/:id/tree", async (req: Request, res: Response) => {
   const cityIds = await cityIdsForUser(req.authUser!);
   const id = String(req.params.id);
+  if (!isUuid(id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Curriculum not found.");
+    return;
+  }
   const [curriculum] = await db.select().from(curricula).where(eq(curricula.id, id)).limit(1);
   if (!curriculum) {
     fail(res, 404, "ERR_NOT_FOUND", "Curriculum not found.");
@@ -180,6 +189,10 @@ router.get("/exams", async (req: Request, res: Response) => {
 router.post("/exams/:id/release-results", async (req: Request, res: Response) => {
   const cityIds = await cityIdsForUser(req.authUser!);
   const id = String(req.params.id);
+  if (!isUuid(id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Exam not found.");
+    return;
+  }
   const [exam] = await db.select().from(online_exams).where(eq(online_exams.id, id)).limit(1);
   if (!exam || (cityIds !== null && !cityIds.includes(exam.city_id))) {
     fail(res, 404, "ERR_NOT_FOUND", "Exam not found.");
@@ -193,6 +206,10 @@ router.post("/exams/:id/release-results", async (req: Request, res: Response) =>
 router.get("/exams/:id/attempts", async (req: Request, res: Response) => {
   const cityIds = await cityIdsForUser(req.authUser!);
   const id = String(req.params.id);
+  if (!isUuid(id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Exam not found.");
+    return;
+  }
   const [exam] = await db.select().from(online_exams).where(eq(online_exams.id, id)).limit(1);
   if (!exam || (cityIds !== null && !cityIds.includes(exam.city_id))) {
     fail(res, 404, "ERR_NOT_FOUND", "Exam not found.");
@@ -304,6 +321,16 @@ router.post("/curricula", requireRole("super_admin", "state_admin", "city_admin"
   let body: z.infer<typeof createCurriculumSchema>;
   try { body = createCurriculumSchema.parse(req.body); }
   catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid curriculum data."); return; }
+  // Validate the caller may write to the requested city scope. `cityIdsForUser`
+  // returns null for super_admin (unrestricted, incl. national/null) or the set
+  // of city ids the caller owns. Non-super_admins may NOT create national
+  // (city_id = null) curricula, and may only target cities in their scope.
+  const cityIds = await cityIdsForUser(req.authUser!);
+  if (cityIds !== null) {
+    if (!body.city_id || !cityIds.includes(body.city_id)) {
+      fail(res, 403, "ERR_FORBIDDEN", "City not in your scope."); return;
+    }
+  }
   const [row] = await db.insert(curricula).values({
     name: body.name,
     kind: body.kind,

@@ -655,8 +655,11 @@ router.post("/events/:id/submit", async (req: Request, res: Response) => {
   // attempt by setting submitted_at ONLY if it is still null. Points are awarded
   // exclusively on the winning transition, so two concurrent submits (or a
   // re-submit that slipped past the read-time guard above) can never
-  // double-award. `db.transaction` keeps grade-claim-award on one connection.
-  const claimed = await db.transaction(async (tx) => {
+  // double-award. `db.transaction` keeps grade-claim-award on one connection, and
+  // the award is composed into the SAME tx so a crash in the window can't strand
+  // points with no retry path. The attempt-scoped idempotencyKey makes the award
+  // exactly-once even if the whole request is retried after the claim commits.
+  const result = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${attempt.id}::text, 0))`);
     const rows = await tx
       .update(quiz_attempts)
@@ -669,36 +672,46 @@ router.post("/events/:id/submit", async (req: Request, res: Response) => {
       })
       .where(and(eq(quiz_attempts.id, attempt.id), isNull(quiz_attempts.submitted_at)))
       .returning({ id: quiz_attempts.id });
-    return rows.length > 0;
+    if (rows.length === 0) return { claimed: false as const, pointsAwarded: 0 };
+
+    // Award participation once; win bonus only when every question is correct.
+    let pointsAwarded = 0;
+    if (event.participation_points > 0) {
+      await awardPunya(
+        {
+          studentId: student.id,
+          featureKey: "quiz",
+          points: event.participation_points,
+          note: `Quiz participation: ${event.title_en}`,
+          idempotencyKey: `quiz-award:${attempt.id}:participation`,
+        },
+        tx,
+      );
+      pointsAwarded += event.participation_points;
+    }
+    if (allCorrect && event.win_points > 0) {
+      await awardPunya(
+        {
+          studentId: student.id,
+          featureKey: "quiz",
+          points: event.win_points,
+          note: `Quiz win: ${event.title_en}`,
+          idempotencyKey: `quiz-award:${attempt.id}:win`,
+        },
+        tx,
+      );
+      pointsAwarded += event.win_points;
+    }
+    return { claimed: true as const, pointsAwarded };
   });
 
   // Lost the race / already submitted by a concurrent request: do not re-award.
-  if (!claimed) {
+  if (!result.claimed) {
     fail(res, 409, "ERR_ALREADY_SUBMITTED", "This quiz was already submitted.");
     return;
   }
 
-  // Award participation once; win bonus only when every question is correct.
-  // Reached only on the winning claim above, so awards happen exactly once.
-  let pointsAwarded = 0;
-  if (event.participation_points > 0) {
-    await awardPunya({
-      studentId: student.id,
-      featureKey: "quiz",
-      points: event.participation_points,
-      note: `Quiz participation: ${event.title_en}`,
-    });
-    pointsAwarded += event.participation_points;
-  }
-  if (allCorrect && event.win_points > 0) {
-    await awardPunya({
-      studentId: student.id,
-      featureKey: "quiz",
-      points: event.win_points,
-      note: `Quiz win: ${event.title_en}`,
-    });
-    pointsAwarded += event.win_points;
-  }
+  const pointsAwarded = result.pointsAwarded;
 
   ok(res, {
     attempt_id: attempt.id,
@@ -963,8 +976,10 @@ router.post("/push/:id/submit", async (req: Request, res: Response) => {
   // the winning transition (fresh insert, or update of a not-yet-submitted row);
   // a conflict against an already-submitted row updates nothing and returns [].
   // Completion points are awarded exclusively on that winning transition, so two
-  // concurrent submits can never double-award.
-  const claimed = await db.transaction(async (tx) => {
+  // concurrent submits can never double-award. The award is composed into the
+  // SAME tx so a crash in the window can't strand points with no retry path; the
+  // attempt-scoped idempotencyKey makes it exactly-once across full retries too.
+  const result = await db.transaction(async (tx) => {
     await tx.execute(
       sql`select pg_advisory_xact_lock(hashtextextended(${pushId + ":" + student.id}::text, 0))`,
     );
@@ -977,26 +992,33 @@ router.post("/push/:id/submit", async (req: Request, res: Response) => {
         setWhere: isNull(push_quiz_attempts.submitted_at),
       })
       .returning({ id: push_quiz_attempts.id });
-    return rows.length > 0;
+    if (rows.length === 0) return { claimed: false as const, pointsAwarded: 0 };
+
+    // Reached only on the winning claim above, so completion points award once.
+    let pointsAwarded = 0;
+    if (pq.completion_points > 0) {
+      await awardPunya(
+        {
+          studentId: student.id,
+          featureKey: "push_quiz",
+          points: pq.completion_points,
+          note: "Push quiz completion",
+          idempotencyKey: `quiz-award:${rows[0].id}`,
+        },
+        tx,
+      );
+      pointsAwarded = pq.completion_points;
+    }
+    return { claimed: true as const, pointsAwarded };
   });
 
   // Lost the race / already submitted by a concurrent request: do not re-award.
-  if (!claimed) {
+  if (!result.claimed) {
     fail(res, 409, "ERR_ALREADY_SUBMITTED", "You have already submitted this quiz.");
     return;
   }
 
-  // Reached only on the winning claim above, so completion points award once.
-  let pointsAwarded = 0;
-  if (pq.completion_points > 0) {
-    await awardPunya({
-      studentId: student.id,
-      featureKey: "push_quiz",
-      points: pq.completion_points,
-      note: "Push quiz completion",
-    });
-    pointsAwarded = pq.completion_points;
-  }
+  const pointsAwarded = result.pointsAwarded;
 
   ok(res, {
     push_quiz_id: pushId,

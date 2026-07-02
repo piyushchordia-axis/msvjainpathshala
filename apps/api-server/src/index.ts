@@ -1,6 +1,8 @@
+import { pool } from "@workspace/db";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { startScheduler } from "./lib/scheduler";
+import { getSmsProvider } from "./lib/sms";
 
 const rawPort = process.env["PORT"];
 
@@ -41,6 +43,20 @@ const server = app.listen(port, host, () => {
   logger.info({ port, host }, "Server listening");
   // Start cron jobs (birthday wishes, etc.) only in the running server process.
   startScheduler();
+
+  // Eagerly construct the SMS provider in production so a missing/invalid SMS
+  // config fails LOUDLY at boot. Without this, getSmsProvider()'s prod
+  // fail-fast only fires on the first login attempt and is swallowed by the
+  // auth route's try/catch — the server would report healthy while nobody can
+  // log in. In non-prod the mock provider is used, so skip this.
+  if (process.env["NODE_ENV"] === "production") {
+    try {
+      getSmsProvider();
+    } catch (err) {
+      logger.fatal({ err }, "SMS provider unavailable in production; refusing to start");
+      process.exit(1);
+    }
+  }
 });
 
 // Graceful shutdown: stop accepting new connections, let in-flight requests
@@ -58,10 +74,17 @@ function shutdown(signal: NodeJS.Signals): void {
   }, 10_000);
   forceExit.unref();
 
-  server.close((err) => {
+  server.close(async (err) => {
     if (err) {
       logger.error({ err }, "Error while closing server");
       process.exit(1);
+    }
+    // Drain the pg pool so in-flight DB work finishes and connections close
+    // cleanly. Never let a pool-drain failure block the exit — log and proceed.
+    try {
+      await pool.end();
+    } catch (poolErr) {
+      logger.error({ err: poolErr }, "Error while draining pg pool");
     }
     logger.info("Server closed; exiting");
     process.exit(0);

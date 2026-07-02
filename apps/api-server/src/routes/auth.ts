@@ -30,6 +30,13 @@ const MAX_OTP_ATTEMPTS = 5;
 const RL_WINDOW_SECONDS = 15 * 60;
 const isProd = process.env.NODE_ENV === "production";
 
+// Mask a phone number for logs: keep only the last 4 digits (e.g. "****1234")
+// so operational logs never carry a full PII phone number.
+function maskPhone(phone: string): string {
+  const digits = phone.replace(/\D/g, "");
+  return digits.length <= 4 ? "****" : `****${digits.slice(-4)}`;
+}
+
 function toSessionUser(u: typeof users.$inferSelect): SessionUser {
   return {
     id: u.id,
@@ -111,7 +118,7 @@ router.post("/login", async (req: Request, res: Response) => {
       try {
         await getSmsProvider().sendOtp(parsed.phone, code);
       } catch (err) {
-        logger.error({ err, phone: parsed.phone }, "OTP SMS delivery failed");
+        logger.error({ err, phone: maskPhone(parsed.phone) }, "OTP SMS delivery failed");
       }
     }
 

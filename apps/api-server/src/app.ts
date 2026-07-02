@@ -73,6 +73,13 @@ app.use((_req, res, next) => {
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("X-Frame-Options", "DENY");
   res.setHeader("Referrer-Policy", "no-referrer");
+  // HSTS only in production (behind HTTPS at the nginx hop). Skipped in dev so
+  // plain-HTTP localhost previews aren't pinned to https.
+  if (isProd) {
+    res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+  // Content-Security-Policy is deliberately deferred: a strict CSP can break the
+  // same-origin admin SPA and needs per-app QA before we enable it.
   next();
 });
 app.use(cookieParser());

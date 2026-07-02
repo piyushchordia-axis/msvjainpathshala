@@ -32,6 +32,31 @@ jobs:
       - name: Typecheck
         run: pnpm run typecheck
 
+  build:
+    name: Build production API bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      # Build the production API artifact (esbuild bundle -> dist/index.mjs), the
+      # same build the Docker/deploy path runs. Catches a broken prod build that
+      # typecheck and the test suite would otherwise let through green.
+      - name: Build API bundle
+        run: pnpm --filter @workspace/api-server run build
+
   test:
     name: API tests
     runs-on: ubuntu-latest
@@ -80,7 +105,9 @@ jobs:
         run: pnpm --filter @workspace/db run push-force
 
       - name: Seed database
-        run: pnpm --filter @workspace/db run seed
+        # ALLOW_SEED opt-in: seed.ts refuses to run without it (destructive
+        # TRUNCATE guard). NODE_ENV=test here also keeps the prod guard happy.
+        run: ALLOW_SEED=1 pnpm --filter @workspace/db run seed
 
       - name: Run API tests
         working-directory: apps/api-server

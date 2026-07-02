@@ -273,26 +273,73 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
   // Idempotent on points: re-grading an already-graded submission updates only
   // the status/feedback metadata and never re-awards punya. Punya is awarded
   // exactly once, on the transition out of a not-yet-graded state.
-  const alreadyGraded = sub.status === "approved" || sub.status === "starred";
+  //
+  // Claim + grade + award run in ONE transaction: the status UPDATE is
+  // conditional (only fires on a not-yet-graded row) and we read whether it
+  // actually claimed the row. Only the call that wins the claim awards punya,
+  // so concurrent double-clicks can't double-award. If the award crashes after
+  // the claim, the whole tx rolls back — the status reverts and a retry can
+  // re-claim, so points are never permanently lost. awardPunya also carries a
+  // submission-scoped idempotency key as belt-and-suspenders against replays.
+  const points = body.status === "starred" ? Math.round(POINTS * 1.2) : POINTS;
 
-  await db
-    .update(homework_submissions)
-    .set({
-      status: body.status,
-      feedback_note: body.feedback_note ?? null,
-      marked_by: req.authUser!.id,
-      marked_at: new Date(),
-    })
-    .where(eq(homework_submissions.id, sub.id));
+  const result = await db.transaction(async (tx) => {
+    // Compare-and-set: claim the submission for a fresh (points-awarding) grade
+    // only if it is not already graded. `claimed` tells us whether THIS call is
+    // the one that transitioned it out of a not-yet-graded state.
+    const claimedRows = await tx
+      .update(homework_submissions)
+      .set({
+        status: body.status,
+        feedback_note: body.feedback_note ?? null,
+        marked_by: req.authUser!.id,
+        marked_at: new Date(),
+      })
+      .where(
+        and(
+          eq(homework_submissions.id, sub.id),
+          sql`${homework_submissions.status} not in ('approved', 'starred')`,
+        ),
+      )
+      .returning({ id: homework_submissions.id });
+    const claimed = claimedRows.length > 0;
 
-  if (alreadyGraded) {
-    const [bal] = await db
-      .select({ total_points: punya_balances.total_points })
-      .from(punya_balances)
-      .where(eq(punya_balances.student_id, sub.student_id))
-      .limit(1);
-    const totalPoints = bal?.total_points ?? 0;
+    if (!claimed) {
+      // Already graded (or claimed by a concurrent request): update only the
+      // status/feedback metadata, never re-award punya.
+      await tx
+        .update(homework_submissions)
+        .set({
+          status: body.status,
+          feedback_note: body.feedback_note ?? null,
+          marked_by: req.authUser!.id,
+          marked_at: new Date(),
+        })
+        .where(eq(homework_submissions.id, sub.id));
 
+      const [bal] = await tx
+        .select({ total_points: punya_balances.total_points })
+        .from(punya_balances)
+        .where(eq(punya_balances.student_id, sub.student_id))
+        .limit(1);
+      return { claimed: false, total_points: bal?.total_points ?? 0 };
+    }
+
+    const award = await awardPunya(
+      {
+        studentId: sub.student_id,
+        featureKey: "homework",
+        points,
+        note: body.status === "starred" ? "Homework starred" : "Homework approved",
+        awardedBy: req.authUser!.id,
+        idempotencyKey: `homework-grade:${sub.id}`,
+      },
+      tx,
+    );
+    return { claimed: true, total_points: award.total_points };
+  });
+
+  if (!result.claimed) {
     await auditFromReq(req, {
       action: "grade",
       entityKind: "homework_submission",
@@ -301,18 +348,9 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       metadata: { status: body.status, points: 0, re_grade: true },
     });
 
-    ok(res, { id: sub.id, status: body.status, total_points: totalPoints });
+    ok(res, { id: sub.id, status: body.status, total_points: result.total_points });
     return;
   }
-
-  const points = body.status === "starred" ? Math.round(POINTS * 1.2) : POINTS;
-  const award = await awardPunya({
-    studentId: sub.student_id,
-    featureKey: "homework",
-    points,
-    note: body.status === "starred" ? "Homework starred" : "Homework approved",
-    awardedBy: req.authUser!.id,
-  });
 
   await auditFromReq(req, {
     action: "grade",
@@ -322,7 +360,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     metadata: { status: body.status, points },
   });
 
-  ok(res, { id: sub.id, status: body.status, total_points: award.total_points });
+  ok(res, { id: sub.id, status: body.status, total_points: result.total_points });
 });
 
 /* ═══════════════════════════ Student / parent ═══════════════════════════ */

@@ -468,14 +468,22 @@ router.post("/:id/publish-results", requireAdminPanel, async (req: Request, res:
       // points are intentionally granted to all registrants — not a bug.
       const points = r.result_rank === 1 ? comp.winner_points : comp.participant_points;
       if (points <= 0) continue;
-      await awardPunya({
-        studentId: r.student_id,
-        featureKey: "competition",
-        points,
-        note: `${comp.name_en}${r.result_rank === 1 ? " (winner)" : ""}`,
-        awardedBy: req.authUser!.id,
-      });
-      awarded += 1;
+      // Compose the award into THIS publish transaction and key it per
+      // registration so a partial-loop failure followed by a republish can't
+      // double-credit: a second publish replays the same idempotency keys and
+      // awardPunya credits nothing for registrations already awarded.
+      const res = await awardPunya(
+        {
+          studentId: r.student_id,
+          featureKey: "competition",
+          points,
+          note: `${comp.name_en}${r.result_rank === 1 ? " (winner)" : ""}`,
+          awardedBy: req.authUser!.id,
+          idempotencyKey: `competition-award:${comp.id}:${r.id}`,
+        },
+        tx,
+      );
+      if (res.awarded) awarded += 1;
     }
     return { claimed: true as const, awarded, registrations: regs.length };
   });

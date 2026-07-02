@@ -32,7 +32,7 @@ import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
-import { resolveAdminScope, type AdminScope } from "../../lib/scope";
+import { resolveAdminScope, cityIdsForState, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 
 const router: IRouter = Router();
@@ -368,12 +368,12 @@ async function resolveTargetColumns(
  * - city audience: caller is city_admin of that city, or super_admin.
  * - national/msv: super_admin only.
  */
-function authorizeWrite(
+async function authorizeWrite(
   req: Request,
   body: NoticeBody,
   effectiveCentreId: string | null,
   scope: AdminScope,
-): { ok: true } | { ok: false; status: number; code: string; message: string } {
+): Promise<{ ok: true } | { ok: false; status: number; code: string; message: string }> {
   const role = req.authUser!.role;
   if (role === "super_admin") return { ok: true };
 
@@ -389,7 +389,11 @@ function authorizeWrite(
       return { ok: false, status: 403, code: "ERR_FORBIDDEN", message: "You cannot target this state." };
     case "city":
       if (role === "city_admin" && req.authUser!.city_id && body.city_id === req.authUser!.city_id) return { ok: true };
-      if (role === "state_admin" && req.authUser!.state_id) return { ok: true }; // state admin may target cities in their state (validated below by city lookup is omitted; scope governs centres)
+      // A state_admin may target cities, but only those inside their own state.
+      if (role === "state_admin" && req.authUser!.state_id) {
+        const cityIds = await cityIdsForState(req.authUser!.state_id);
+        if (body.city_id && cityIds.includes(body.city_id)) return { ok: true };
+      }
       return { ok: false, status: 403, code: "ERR_FORBIDDEN", message: "You cannot target this city." };
     case "national":
     case "msv":
@@ -413,7 +417,7 @@ router.post("/admin", requireAuth, requireAdminPanel, async (req: Request, res: 
     return;
   }
   const scope = await resolveAdminScope(req.authUser!);
-  const authz = authorizeWrite(req, body, resolved.effectiveCentreId, scope);
+  const authz = await authorizeWrite(req, body, resolved.effectiveCentreId, scope);
   if (!authz.ok) {
     fail(res, authz.status, authz.code, authz.message);
     return;
@@ -504,7 +508,7 @@ const editNotice = async (req: Request, res: Response): Promise<void> => {
     return;
   }
   const scope = await resolveAdminScope(req.authUser!);
-  const authz = authorizeWrite(req, body, resolved.effectiveCentreId, scope);
+  const authz = await authorizeWrite(req, body, resolved.effectiveCentreId, scope);
   if (!authz.ok) {
     fail(res, authz.status, authz.code, authz.message);
     return;

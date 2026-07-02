@@ -25,6 +25,7 @@ import { signUploadUrl } from "../../lib/file-tokens";
 import { buildDonationReceiptPdf } from "../../lib/pdf";
 import { getEmailProvider, hasRealEmailProvider } from "../../lib/email";
 import { requireAuth } from "../../middlewares/auth";
+import { cityIdsForState } from "../../lib/scope";
 import { logger } from "../../lib/logger";
 
 const router: IRouter = Router();
@@ -563,15 +564,23 @@ router.get("/:id/receipt", requireAuth, async (req: Request, res: Response) => {
   // Authorization. The owning donor always sees their own receipt. For admins,
   // donations have no centre (the AdminScope primitive is centre-based and does
   // not map), so we scope on the donation's CAMPAIGN city instead:
-  //  - super_admin / state_admin: org/state-wide finance & 80G compliance — allow.
+  //  - super_admin: org-wide finance & 80G compliance — allow unconditionally.
+  //  - state_admin: only when the campaign's city is within the admin's state.
   //  - city_admin: only when the campaign's city matches the admin's city.
   //  - sanchalak / shikshak: no donation visibility (not a finance role).
-  // A 404 (not 403) keeps the existence of others' donations opaque.
+  // A campaign-less donation (campaign_city_id null) has no city to scope on, so
+  // only super_admin (and the owner) may read it. A 404 (not 403) keeps the
+  // existence of others' donations opaque.
   const user = req.authUser!;
   const isOwner = donation.donor_user_id !== null && donation.donor_user_id === user.id;
   let isAdmin = false;
-  if (user.role === "super_admin" || user.role === "state_admin") {
+  if (user.role === "super_admin") {
     isAdmin = true;
+  } else if (user.role === "state_admin") {
+    const allowedCityIds = user.state_id ? await cityIdsForState(user.state_id) : [];
+    isAdmin =
+      donation.campaign_city_id !== null &&
+      allowedCityIds.includes(donation.campaign_city_id);
   } else if (user.role === "city_admin") {
     isAdmin =
       donation.campaign_city_id !== null && donation.campaign_city_id === user.city_id;

@@ -28,6 +28,11 @@ function clampLimit(raw: unknown, fallback: number, max: number): number {
 const ENQUIRY_KINDS = ["contact", "enquire", "donate"] as const;
 const ENQUIRY_STATUSES = ["new", "in_review", "closed"] as const;
 
+// Guard :id route params: a non-UUID passed to eq(<uuid column>, ...) makes
+// Postgres throw 22P02 and 500 the request. Match a UUID before any DB call.
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /* ═══════════════════════════ PUBLIC — intake ═══════════════════════════ */
 
 const createEnquirySchema = z.object({
@@ -127,6 +132,11 @@ router.post(
     }
 
     const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Enquiry not found.");
+      return;
+    }
+
     const [item] = await db
       .select({ id: enquiries.id })
       .from(enquiries)

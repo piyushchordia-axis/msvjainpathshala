@@ -34,6 +34,7 @@ import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { canAccessAdminPanel } from "@workspace/api-zod";
 import { auditFromReq } from "../../lib/audit";
+import { httpUrl } from "../../lib/validation";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -215,8 +216,8 @@ const baseFields = {
   title_hi: z.string().max(300).optional(),
   description_en: z.string().max(4000).optional(),
   description_hi: z.string().max(4000).optional(),
-  embed_url: z.string().url().max(2000).optional(),
-  file_url: z.string().url().max(2000).optional(),
+  embed_url: httpUrl(2000).optional(),
+  file_url: httpUrl(2000).optional(),
   access_tier: z.enum(LIBRARY_ACCESS_TIERS).default("public"),
   is_published: z.boolean().default(true),
 };
@@ -320,8 +321,8 @@ const updateSchema = z
     title_hi: z.string().max(300).nullable().optional(),
     description_en: z.string().max(4000).nullable().optional(),
     description_hi: z.string().max(4000).nullable().optional(),
-    embed_url: z.string().url().max(2000).nullable().optional(),
-    file_url: z.string().url().max(2000).nullable().optional(),
+    embed_url: httpUrl(2000).nullable().optional(),
+    file_url: httpUrl(2000).nullable().optional(),
     access_tier: z.enum(LIBRARY_ACCESS_TIERS).optional(),
     is_published: z.boolean().optional(),
   })

@@ -5,7 +5,7 @@ export function AboutPage() {
     <PageStub
       kicker="About"
       title="The Megh Sanskar Vatika story"
-      body="Our centres are sustained by Pratishthatha families, run by Sanchalaks, and taught by Gurujis and Didis who have come up through the same tradition they now share."
+      body="Our centres are sustained by Pratishthatha families, run by Sanchalaks, and taught by Gurujis and Didis who have come up through the same tradition they now share. A fuller version of this page is on the way."
     />
   );
 }
@@ -45,7 +45,7 @@ export function MsvPage() {
     <PageStub
       kicker="MSV"
       title="Megh Sanskar Vatika"
-      body="The MSV programme nurtures exceptional students through advanced Jain spiritual education."
+      body="The MSV programme nurtures exceptional students through advanced Jain spiritual education. More details about this programme are coming soon."
     />
   );
 }

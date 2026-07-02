@@ -27,13 +27,16 @@ import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
-import { signAccessToken, generateRefreshToken, verifyAccessToken } from "../../lib/tokens";
+import { signAccessToken, generateRefreshToken, verifyAccessToken, hashSecret } from "../../lib/tokens";
 import { setAuthCookies, setImpersonationCookies, clearAuthCookies } from "../../lib/cookies";
 import adminResourcesRouter from "./admin-resources";
 import adminModulesRouter from "./admin-modules";
 import { canTransitionEnrolment } from "./enrolments";
 
 const router: IRouter = Router();
+
+/** A canonical UUID, so a malformed `:id` param yields 404 rather than a Postgres 22P02 crash. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /* POST /v1/admin/impersonate/stop — end an impersonation session.
  *
@@ -80,6 +83,18 @@ router.post("/impersonate/stop", async (req: Request, res: Response) => {
     entityId: req.authUser?.id ?? null,
     summary: "Stopped impersonation session.",
   });
+
+  // Revoke the impersonation device_session so its 30-day refresh token can no
+  // longer be replayed. The jp_refresh cookie holds that session's refresh
+  // token; match the row by its hash (as logout does) and stamp revoked_at.
+  const refresh = cookies?.jp_refresh;
+  if (refresh) {
+    await db
+      .update(device_sessions)
+      .set({ revoked_at: new Date() })
+      .where(eq(device_sessions.refresh_token_hash, hashSecret(refresh)))
+      .catch(() => undefined);
+  }
 
   clearAuthCookies(res);
 
@@ -140,6 +155,10 @@ function toSessionUser(u: typeof users.$inferSelect): SessionUser {
  */
 router.post("/impersonate/:userId", requireRole("super_admin"), async (req: Request, res: Response) => {
   const targetId = String(req.params.userId);
+  if (!UUID_RE.test(targetId)) {
+    fail(res, 404, "ERR_NOT_FOUND", "User not found.");
+    return;
+  }
   if (targetId === req.authUser!.id) {
     fail(res, 422, "ERR_VALIDATION_FAILED", "You cannot impersonate yourself.");
     return;
@@ -309,11 +328,16 @@ router.post("/students/:id/status", async (req: Request, res: Response) => {
     fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid action.");
     return;
   }
+  const studentId = String(req.params.id);
+  if (!UUID_RE.test(studentId)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found in your scope.");
+    return;
+  }
   const scope = await resolveAdminScope(req.authUser!);
   const [student] = await db
     .select()
     .from(students)
-    .where(and(eq(students.id, String(req.params.id)), isNull(students.deleted_at)))
+    .where(and(eq(students.id, studentId), isNull(students.deleted_at)))
     .limit(1);
   if (!student || !inScope(scope, student.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Student not found in your scope.");
@@ -357,11 +381,16 @@ router.post("/batches/:id/:action", async (req: Request, res: Response) => {
     fail(res, 422, "ERR_VALIDATION_FAILED", "Unknown action.");
     return;
   }
+  const batchId = String(req.params.id);
+  if (!UUID_RE.test(batchId)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Batch not found in your scope.");
+    return;
+  }
   const scope = await resolveAdminScope(req.authUser!);
   const [batch] = await db
     .select()
     .from(batches)
-    .where(and(eq(batches.id, String(req.params.id)), isNull(batches.deleted_at)))
+    .where(and(eq(batches.id, batchId), isNull(batches.deleted_at)))
     .limit(1);
   if (!batch || !inScope(scope, batch.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Batch not found in your scope.");
@@ -444,8 +473,13 @@ router.post("/enrolments/:id/:action", async (req: Request, res: Response) => {
     return;
   }
 
+  const enrolmentId = String(req.params.id);
+  if (!UUID_RE.test(enrolmentId)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Enrolment not found in your scope.");
+    return;
+  }
   const scope = await resolveAdminScope(req.authUser!);
-  const [enrolment] = await db.select().from(enrolments).where(eq(enrolments.id, String(req.params.id))).limit(1);
+  const [enrolment] = await db.select().from(enrolments).where(eq(enrolments.id, enrolmentId)).limit(1);
   if (!enrolment || !inScope(scope, enrolment.requested_centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Enrolment not found in your scope.");
     return;
@@ -457,26 +491,61 @@ router.post("/enrolments/:id/:action", async (req: Request, res: Response) => {
     return;
   }
 
-  await db
-    .update(enrolments)
-    .set({
-      status: nextStatus,
-      reason: body.reason ?? null,
-      decided_by: req.authUser!.id,
-      decided_at: new Date(),
-    })
-    .where(eq(enrolments.id, enrolment.id));
+  // Flip the enrolment, and on approval enforce batch capacity + attach the
+  // student — all atomically so the capacity count can't be raced past the seat
+  // limit. Mirrors the capacity guard in the create-with-auto_approve path.
+  const result = await db.transaction(async (tx) => {
+    if (nextStatus === "approved") {
+      // Resolve the requested batch's seat limit, then count students already
+      // occupying an active seat in it.
+      const [batch] = await tx
+        .select({ capacity: batches.capacity })
+        .from(batches)
+        .where(eq(batches.id, enrolment.requested_batch_id))
+        .limit(1);
+      const [attached] = await tx
+        .select({ n: count() })
+        .from(students)
+        .where(
+          and(
+            eq(students.batch_id, enrolment.requested_batch_id),
+            eq(students.status, "active"),
+            isNull(students.deleted_at),
+          ),
+        );
+      if (batch && (attached?.n ?? 0) >= batch.capacity) {
+        return { kind: "full" as const };
+      }
+    }
 
-  // On approval, attach the student to the requested centre/batch and activate.
-  if (nextStatus === "approved") {
-    await db
-      .update(students)
+    await tx
+      .update(enrolments)
       .set({
-        centre_id: enrolment.requested_centre_id,
-        batch_id: enrolment.requested_batch_id,
-        status: "active",
+        status: nextStatus,
+        reason: body.reason ?? null,
+        decided_by: req.authUser!.id,
+        decided_at: new Date(),
       })
-      .where(eq(students.id, enrolment.student_id));
+      .where(eq(enrolments.id, enrolment.id));
+
+    // On approval, attach the student to the requested centre/batch and activate.
+    if (nextStatus === "approved") {
+      await tx
+        .update(students)
+        .set({
+          centre_id: enrolment.requested_centre_id,
+          batch_id: enrolment.requested_batch_id,
+          status: "active",
+        })
+        .where(eq(students.id, enrolment.student_id));
+    }
+
+    return { kind: "done" as const };
+  });
+
+  if (result.kind === "full") {
+    fail(res, 409, "ERR_BATCH_FULL", "This batch has no remaining capacity.");
+    return;
   }
 
   const auditAction = nextStatus === "approved" ? "approve" : nextStatus === "rejected" ? "reject" : "update";
