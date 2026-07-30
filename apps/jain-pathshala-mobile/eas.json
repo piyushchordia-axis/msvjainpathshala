@@ -21,6 +21,7 @@
     "preview": {
       "distribution": "internal",
       "channel": "preview",
+      "node": "22.22.1",
       "env": {
         "EXPO_PUBLIC_API_BASE_URL": "https://jainpathshala.enaacreations.com"
       },
@@ -34,6 +35,7 @@
     "production": {
       "channel": "production",
       "autoIncrement": true,
+      "node": "22.22.1",
       "env": {
         "EXPO_PUBLIC_API_BASE_URL": "https://jainpathshala.enaacreations.com"
       }
