@@ -23,6 +23,7 @@ import { router, Stack } from "expo-router";
 import type { Href } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import React, { useEffect } from "react";
+import { Platform } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
@@ -129,38 +130,44 @@ export default function RootLayout() {
 
   // Configure the foreground handler and deep-link into the relevant screen
   // when a push notification is tapped (including the cold-start case where the
-  // tap launched the app). expo-notifications is imported lazily and only
-  // outside Expo Go, where it is unavailable and would log an error (SDK 53+).
+  // tap launched the app). expo-notifications is imported lazily and only on
+  // native outside Expo Go: in Expo Go it is unavailable (SDK 53+), and on web
+  // getLastNotificationResponseAsync throws outright.
   useEffect(() => {
-    if (isExpoGo) return;
+    if (isExpoGo || Platform.OS === "web") return;
     let mounted = true;
     let sub: { remove: () => void } | undefined;
 
     void (async () => {
-      const Notifications = await import("expo-notifications");
+      try {
+        const Notifications = await import("expo-notifications");
 
-      // Show banners/sounds even while the app is foregrounded.
-      Notifications.setNotificationHandler({
-        handleNotification: async () => ({
-          shouldShowBanner: true,
-          shouldShowList: true,
-          shouldPlaySound: true,
-          shouldSetBadge: false,
-        }),
-      });
+        // Show banners/sounds even while the app is foregrounded.
+        Notifications.setNotificationHandler({
+          handleNotification: async () => ({
+            shouldShowBanner: true,
+            shouldShowList: true,
+            shouldPlaySound: true,
+            shouldSetBadge: false,
+          }),
+        });
 
-      const response = await Notifications.getLastNotificationResponseAsync();
-      if (mounted && response) {
-        router.push(
-          routeForNotificationData(response.notification.request.content.data),
-        );
+        const response = await Notifications.getLastNotificationResponseAsync();
+        if (mounted && response) {
+          router.push(
+            routeForNotificationData(response.notification.request.content.data),
+          );
+        }
+
+        sub = Notifications.addNotificationResponseReceivedListener((res) => {
+          router.push(
+            routeForNotificationData(res.notification.request.content.data),
+          );
+        });
+      } catch (err) {
+        // Notification deep-linking is a nicety: never let it take down boot.
+        if (__DEV__) console.warn("[notifications] setup skipped:", err);
       }
-
-      sub = Notifications.addNotificationResponseReceivedListener((res) => {
-        router.push(
-          routeForNotificationData(res.notification.request.content.data),
-        );
-      });
     })();
 
     return () => {
