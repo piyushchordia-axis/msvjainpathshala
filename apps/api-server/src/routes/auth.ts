@@ -101,11 +101,27 @@ router.post("/login", async (req: Request, res: Response) => {
 
     const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
 
+    // With a provider that mints its own code (2Factor AUTOGEN) the send has to
+    // happen first, because the session id it returns *is* the challenge — we
+    // never learn the code. Registered phones only, mirroring the dev_code and
+    // SMS gating below. A failure leaves sessionId null and falls through to the
+    // locally-hashed code, so the row is still written either way.
+    const provider = getSmsProvider();
+    let sessionId: string | null = null;
+    if (user && provider.ownsCode) {
+      try {
+        sessionId = await provider.sendOtp(parsed.phone, code);
+      } catch (err) {
+        logger.error({ err, phone: maskPhone(parsed.phone) }, "OTP SMS delivery failed");
+      }
+    }
+
     // Always create a token row so timing does not leak whether the phone exists.
     await db.insert(otp_codes).values({
       phone: parsed.phone,
       otp_token: otpToken,
-      code_hash: hashSecret(code),
+      code_hash: sessionId ? null : hashSecret(code),
+      session_id: sessionId,
       expires_at: expiresAt,
     });
 
@@ -114,9 +130,9 @@ router.post("/login", async (req: Request, res: Response) => {
     // the request, and must not reveal whether the phone is registered via
     // timing/error differences. In dev/test the mock resolves without network,
     // so existing tests and the dev_code path are unaffected.
-    if (user) {
+    if (user && !provider.ownsCode) {
       try {
-        await getSmsProvider().sendOtp(parsed.phone, code);
+        await provider.sendOtp(parsed.phone, code);
       } catch (err) {
         logger.error({ err, phone: maskPhone(parsed.phone) }, "OTP SMS delivery failed");
       }
@@ -128,8 +144,10 @@ router.post("/login", async (req: Request, res: Response) => {
     };
     // Surface the code in the response for registered users (no real SMS).
     // DEV-ONLY: returning the OTP in the response is an account-takeover
-    // backdoor in production — gate it behind a non-prod environment.
-    if (user && !isProd) payload.dev_code = code;
+    // backdoor in production — gate it behind a non-prod environment. Skipped
+    // when the provider owns the code: `code` was never sent to anyone, so
+    // echoing it would just hand back a value that cannot verify.
+    if (user && !isProd && !sessionId) payload.dev_code = code;
     res.status(200).json({ data: payload });
     return;
   }
@@ -157,7 +175,22 @@ router.post("/login", async (req: Request, res: Response) => {
     return;
   }
 
-  if (otp.code_hash !== hashSecret(parsed.code)) {
+  // A session_id means the provider holds the code (2Factor AUTOGEN) and is the
+  // only thing that can check it; otherwise compare against our stored hash. A
+  // provider error is treated as a mismatch — never as a pass.
+  let matched: boolean;
+  if (otp.session_id) {
+    try {
+      matched = await getSmsProvider().verifyOtp(otp.session_id, parsed.code);
+    } catch (err) {
+      logger.error({ err, phone: maskPhone(otp.phone) }, "OTP provider verify failed");
+      matched = false;
+    }
+  } else {
+    matched = otp.code_hash !== null && otp.code_hash === hashSecret(parsed.code);
+  }
+
+  if (!matched) {
     await db
       .update(otp_codes)
       .set({ attempts_count: otp.attempts_count + 1 })

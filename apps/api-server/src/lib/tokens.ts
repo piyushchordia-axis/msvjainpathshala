@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
 
 const SECRET = (() => {
   const fromEnv = process.env.JP_AUTH_SECRET;
@@ -74,5 +74,8 @@ export function generateOtpToken(): string {
 }
 
 export function generateOtpCode(): string {
-  return String(Math.floor(Math.random() * 1_000_000)).padStart(6, "0");
+  // CSPRNG, not Math.random: this is the sole authentication factor, and V8's
+  // PRNG state is recoverable from observed outputs. Unused when the SMS
+  // provider mints the code itself (2Factor AUTOGEN).
+  return String(randomInt(0, 1_000_000)).padStart(6, "0");
 }
