@@ -3,6 +3,7 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { startScheduler } from "./lib/scheduler";
 import { getSmsProvider } from "./lib/sms";
+import { warmTestOtpNumbers } from "./lib/otp-test-numbers";
 
 const rawPort = process.env["PORT"];
 
@@ -57,6 +58,12 @@ const server = app.listen(port, host, () => {
       process.exit(1);
     }
   }
+
+  // Parse the store-review test-number allow-list at boot too, so its "ACTIVE"
+  // warning lands in the startup logs. Lazily it would only appear on the first
+  // login, i.e. exactly when nobody is reading — and an allow-list left behind
+  // after review is precisely the thing that should be impossible to miss.
+  warmTestOtpNumbers();
 });
 
 // Graceful shutdown: stop accepting new connections, let in-flight requests

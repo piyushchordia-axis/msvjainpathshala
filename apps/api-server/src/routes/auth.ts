@@ -18,6 +18,7 @@ import {
 } from "../lib/tokens";
 import { setAuthCookies, clearAuthCookies } from "../lib/cookies";
 import { getSmsProvider } from "../lib/sms";
+import { testOtpCodeFor } from "../lib/otp-test-numbers";
 import { logger } from "../lib/logger";
 import { rateLimit } from "../lib/ratelimit";
 import { auditFromReq } from "../lib/audit";
@@ -84,11 +85,20 @@ router.post("/login", async (req: Request, res: Response) => {
     const otpToken = generateOtpToken();
     let code = generateOtpCode();
 
+    // Store-review test number: an operator-nominated phone that accepts a fixed
+    // code and never reaches the SMS provider (see lib/otp-test-numbers.ts).
+    // Checked before everything else so it is honoured in production too — that
+    // is the point of it — and gated on an explicit allow-list rather than on
+    // NODE_ENV. Every other control (rate limits, attempt cap, TTL, single use)
+    // still applies.
+    const testCode = testOtpCodeFor(parsed.phone);
+    if (testCode) code = testCode;
+
     // Dev-only fixed OTP: in non-production, a `default_otp_code` settings row
     // (e.g. "000000") overrides the random code so every login uses one known
-    // code without live SMS. NEVER honoured in production — there, real SMS is
-    // the only path. (No "review phone" middle-ground: dev OTP or real SMS.)
-    if (!isProd) {
+    // code without live SMS. NEVER honoured in production — there, real SMS (or
+    // a nominated test number) is the only path.
+    if (!isProd && !testCode) {
       const [otpSetting] = await db
         .select()
         .from(settings)
@@ -104,15 +114,17 @@ router.post("/login", async (req: Request, res: Response) => {
     // With a provider that mints its own code (2Factor AUTOGEN) the send has to
     // happen first, because the session id it returns *is* the challenge — we
     // never learn the code. Registered phones only, mirroring the dev_code and
-    // SMS gating below. A failure leaves sessionId null and falls through to the
-    // locally-hashed code, so the row is still written either way.
+    // SMS gating below; test numbers skip the provider entirely.
     const provider = getSmsProvider();
+    const deliverBySms = !!user && !testCode;
     let sessionId: string | null = null;
-    if (user && provider.ownsCode) {
+    let deliveryFailed = false;
+    if (deliverBySms && provider.ownsCode) {
       try {
         sessionId = await provider.sendOtp(parsed.phone, code);
       } catch (err) {
         logger.error({ err, phone: maskPhone(parsed.phone) }, "OTP SMS delivery failed");
+        deliveryFailed = true;
       }
     }
 
@@ -126,16 +138,28 @@ router.post("/login", async (req: Request, res: Response) => {
     });
 
     // Deliver the code via SMS for registered phones only (mirrors dev_code
-    // gating). Best-effort: a delivery failure must not leak the code or fail
-    // the request, and must not reveal whether the phone is registered via
-    // timing/error differences. In dev/test the mock resolves without network,
-    // so existing tests and the dev_code path are unaffected.
-    if (user && !provider.ownsCode) {
+    // gating). In dev/test the mock resolves without network, so existing tests
+    // and the dev_code path are unaffected.
+    if (deliverBySms && !provider.ownsCode) {
       try {
         await provider.sendOtp(parsed.phone, code);
       } catch (err) {
         logger.error({ err, phone: maskPhone(parsed.phone) }, "OTP SMS delivery failed");
+        deliveryFailed = true;
       }
+    }
+
+    // A delivery failure is reported, not swallowed. Previously the request
+    // still returned 200 and the user only discovered the problem as a bogus
+    // "Incorrect code" a screen later — which also hides a misconfigured or
+    // out-of-credit SMS account behind what looks like user error. The trade-off
+    // is a narrow registration oracle *while delivery is broken*: unknown
+    // numbers never attempt a send and so still get 200. That window only
+    // exists when the SMS path is already down, and the diagnosability is worth
+    // far more than the leak.
+    if (deliveryFailed) {
+      fail(res, 503, "ERR_SMS_UNAVAILABLE", "We couldn't send your code right now. Please try again in a moment.");
+      return;
     }
 
     const payload: { otp_token: string; expires_in_seconds: number; dev_code?: string } = {
@@ -146,8 +170,10 @@ router.post("/login", async (req: Request, res: Response) => {
     // DEV-ONLY: returning the OTP in the response is an account-takeover
     // backdoor in production — gate it behind a non-prod environment. Skipped
     // when the provider owns the code: `code` was never sent to anyone, so
-    // echoing it would just hand back a value that cannot verify.
-    if (user && !isProd && !sessionId) payload.dev_code = code;
+    // echoing it would just hand back a value that cannot verify. Also skipped
+    // for test numbers: the reviewer already has that code out of band, and
+    // echoing it would turn the allow-list into a public oracle.
+    if (user && !isProd && !sessionId && !testCode) payload.dev_code = code;
     res.status(200).json({ data: payload });
     return;
   }
@@ -232,12 +258,17 @@ router.post("/login", async (req: Request, res: Response) => {
   // request; this is an unauthenticated endpoint so seed authUser with the
   // just-resolved user. Best-effort — auditFromReq never throws.
   req.authUser = user;
+  // Tag the delivery path so a sign-in that used a nominated store-review test
+  // number is distinguishable in the audit trail from a real SMS login.
+  const viaTestNumber = testOtpCodeFor(otp.phone) !== null;
   await auditFromReq(req, {
     action: "login",
     entityKind: "auth_session",
     entityId: user.id,
-    summary: "User signed in via OTP",
-    metadata: { device_id: parsed.device_id },
+    summary: viaTestNumber
+      ? "User signed in via OTP (store-review test number)"
+      : "User signed in via OTP",
+    metadata: { device_id: parsed.device_id, test_number: viaTestNumber },
   });
 
   res.status(200).json({
