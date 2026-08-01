@@ -43,6 +43,13 @@
       "when": 1786099200000,
       "tag": "0005_niyam_module_fixes",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1786185600000,
+      "tag": "0006_niyam_rejected_kind",
+      "breakpoints": true
     }
   ]
 }

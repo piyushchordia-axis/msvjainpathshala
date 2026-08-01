@@ -1,8 +1,22 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import request from "supertest";
 import app from "../src/app";
-import { pool } from "@workspace/db";
+import {
+  pool,
+  db,
+  niyam_submissions,
+  gallery_items,
+  notifications,
+  punya_transactions,
+  users,
+  students,
+} from "@workspace/db";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { loginAs, auth, type Session } from "./helpers";
+
+/** Valid reject reason (≥20 chars) used across N2a reject tests. */
+const REJECT_REASON =
+  "Proof is unclear; please resubmit with a clearer photo.";
 
 afterAll(async () => {
   await pool.end();
@@ -125,11 +139,17 @@ describe("niyam-submissions", () => {
     expect(submit.status).toBe(200);
     const submissionId: string = submit.body.data.id;
 
-    const reject = await request(app).post(`/v1/niyam-submissions/${submissionId}/reject`).set(auth(shikshak.token)).send({ reason: "Proof unclear." });
+    const reject = await request(app)
+      .post(`/v1/niyam-submissions/${submissionId}/reject`)
+      .set(auth(shikshak.token))
+      .send({ reason: REJECT_REASON });
     expect(reject.status).toBe(200);
     expect(reject.body.data.status).toBe("rejected");
 
-    const reReject = await request(app).post(`/v1/niyam-submissions/${submissionId}/reject`).set(auth(shikshak.token)).send({ reason: "again" });
+    const reReject = await request(app)
+      .post(`/v1/niyam-submissions/${submissionId}/reject`)
+      .set(auth(shikshak.token))
+      .send({ reason: REJECT_REASON });
     expect(reReject.status).toBe(409);
     expect(reReject.body.error.code).toBe("ERR_INVALID_STATE");
   });
@@ -145,7 +165,10 @@ describe("niyam-submissions", () => {
     expect(first.status).toBe(200);
     const firstId: string = first.body.data.id;
 
-    const reject = await request(app).post(`/v1/niyam-submissions/${firstId}/reject`).set(auth(shikshak.token)).send({ reason: "Try again." });
+    const reject = await request(app)
+      .post(`/v1/niyam-submissions/${firstId}/reject`)
+      .set(auth(shikshak.token))
+      .send({ reason: REJECT_REASON });
     expect(reject.status).toBe(200);
 
     const resubmit = await request(app)
@@ -286,7 +309,7 @@ describe("niyam-submissions", () => {
     const reject = await request(app)
       .post(`/v1/niyam-submissions/${submissionId}/reject`)
       .set(auth(shikshak.token))
-      .send({ reason: "Retroactive reject" });
+      .send({ reason: REJECT_REASON });
     expect(reject.status).toBe(200);
     expect(reject.body.data.points_reversed).toBe(12);
 
@@ -296,7 +319,7 @@ describe("niyam-submissions", () => {
     const reReject = await request(app)
       .post(`/v1/niyam-submissions/${submissionId}/reject`)
       .set(auth(shikshak.token))
-      .send({ reason: "again" });
+      .send({ reason: REJECT_REASON });
     expect(reReject.status).toBe(409);
 
     const final = await request(app).get(`/v1/me/students/${child0}/punya`).set(auth(parent.token));
@@ -372,5 +395,270 @@ describe("niyam-submissions", () => {
     expect(statuses).toEqual([200, 409]);
     const okRes = a.status === 200 ? a : b;
     expect(okRes.body.data.points_awarded).toBe(10);
+  });
+
+  it("reject at 29 days reverses punya; at 31 days returns ERR_NIYAM_REVERSAL_WINDOW_EXPIRED", async () => {
+    const niyam29 = await createNiyam(`win29-${Date.now()}`, { approval_mode: "auto", points: 7 });
+    const before = await request(app).get(`/v1/me/students/${child0}/punya`).set(auth(parent.token));
+    const pointsBefore: number = before.body.data.total_points ?? 0;
+
+    const submit29 = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({ niyam_id: niyam29, student_id: child0, submission_date: todayIst(), proof_url: PROOF });
+    expect(submit29.status).toBe(200);
+    const id29: string = submit29.body.data.id;
+    expect(submit29.body.data.can_reject).toBe(true);
+
+    await db
+      .update(niyam_submissions)
+      .set({ created_at: sql`now() - interval '29 days'` })
+      .where(eq(niyam_submissions.id, id29));
+
+    const reject29 = await request(app)
+      .post(`/v1/niyam-submissions/${id29}/reject`)
+      .set(auth(shikshak.token))
+      .send({ reason: REJECT_REASON });
+    expect(reject29.status).toBe(200);
+    expect(reject29.body.data.points_reversed).toBe(7);
+
+    const after29 = await request(app).get(`/v1/me/students/${child0}/punya`).set(auth(parent.token));
+    expect(after29.body.data.total_points).toBe(pointsBefore);
+
+    const niyam31 = await createNiyam(`win31-${Date.now()}`, { approval_mode: "auto", points: 8 });
+    const before31 = await request(app).get(`/v1/me/students/${child0}/punya`).set(auth(parent.token));
+    const pointsBefore31: number = before31.body.data.total_points ?? 0;
+
+    const submit31 = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({ niyam_id: niyam31, student_id: child0, submission_date: todayIst(), proof_url: PROOF });
+    expect(submit31.status).toBe(200);
+    const id31: string = submit31.body.data.id;
+
+    const mid31 = await request(app).get(`/v1/me/students/${child0}/punya`).set(auth(parent.token));
+    expect(mid31.body.data.total_points).toBe(pointsBefore31 + 8);
+
+    await db
+      .update(niyam_submissions)
+      .set({ created_at: sql`now() - interval '31 days'` })
+      .where(eq(niyam_submissions.id, id31));
+
+    const reject31 = await request(app)
+      .post(`/v1/niyam-submissions/${id31}/reject`)
+      .set(auth(shikshak.token))
+      .send({ reason: REJECT_REASON });
+    expect(reject31.status).toBe(409);
+    expect(reject31.body.error.code).toBe("ERR_NIYAM_REVERSAL_WINDOW_EXPIRED");
+
+    const after31 = await request(app).get(`/v1/me/students/${child0}/punya`).set(auth(parent.token));
+    expect(after31.body.data.total_points).toBe(mid31.body.data.total_points);
+  });
+
+  it("reject a still-pending 60-day-old submission succeeds (window does not apply)", async () => {
+    const niyamId = await createNiyam(`pending60-${Date.now()}`, { approval_mode: "review" });
+    const submit = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({
+        niyam_id: niyamId,
+        student_id: child0,
+        submission_date: todayIst(),
+        proof_url: PROOF,
+        notes: "parent note must stay intact",
+      });
+    expect(submit.status).toBe(200);
+    const submissionId: string = submit.body.data.id;
+
+    await db
+      .update(niyam_submissions)
+      .set({ created_at: sql`now() - interval '60 days'` })
+      .where(eq(niyam_submissions.id, submissionId));
+
+    const reject = await request(app)
+      .post(`/v1/niyam-submissions/${submissionId}/reject`)
+      .set(auth(shikshak.token))
+      .send({ reason: REJECT_REASON });
+    expect(reject.status).toBe(200);
+    expect(reject.body.data.status).toBe("rejected");
+  });
+
+  it("reject with a 5-char reason returns 422 and leaves notes byte-identical", async () => {
+    const niyamId = await createNiyam(`short-reason-${Date.now()}`, { approval_mode: "review" });
+    const notes = "Keep this parent note exactly as written.";
+    const submit = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({
+        niyam_id: niyamId,
+        student_id: child0,
+        submission_date: todayIst(),
+        proof_url: PROOF,
+        notes,
+      });
+    expect(submit.status).toBe(200);
+    const submissionId: string = submit.body.data.id;
+
+    const reject = await request(app)
+      .post(`/v1/niyam-submissions/${submissionId}/reject`)
+      .set(auth(shikshak.token))
+      .send({ reason: "short" });
+    expect(reject.status).toBe(422);
+
+    const [row] = await db
+      .select({ notes: niyam_submissions.notes, status: niyam_submissions.status })
+      .from(niyam_submissions)
+      .where(eq(niyam_submissions.id, submissionId))
+      .limit(1);
+    expect(row.notes).toBe(notes);
+    expect(row.status).toBe("pending");
+  });
+
+  it("reject inserts a niyam_rejected notification for the parent", async () => {
+    const niyamId = await createNiyam(`notify-${Date.now()}`, { approval_mode: "review" });
+    const submit = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({ niyam_id: niyamId, student_id: child0, submission_date: todayIst(), proof_url: PROOF });
+    expect(submit.status).toBe(200);
+    const submissionId: string = submit.body.data.id;
+
+    const reject = await request(app)
+      .post(`/v1/niyam-submissions/${submissionId}/reject`)
+      .set(auth(shikshak.token))
+      .send({ reason: REJECT_REASON });
+    expect(reject.status).toBe(200);
+
+    const [note] = await db
+      .select({
+        id: notifications.id,
+        kind: notifications.kind,
+        body_en: notifications.body_en,
+      })
+      .from(notifications)
+      .where(
+        and(eq(notifications.user_id, parent.user.id), eq(notifications.kind, "niyam_rejected")),
+      )
+      .orderBy(desc(notifications.created_at))
+      .limit(1);
+    expect(note).toBeTruthy();
+    expect(note.body_en).toContain(REJECT_REASON);
+
+    const [subRow] = await db
+      .select({
+        rejection_reason: niyam_submissions.rejection_reason,
+        rejected_at: niyam_submissions.rejected_at,
+        notes: niyam_submissions.notes,
+      })
+      .from(niyam_submissions)
+      .where(eq(niyam_submissions.id, submissionId))
+      .limit(1);
+    expect(subRow.rejection_reason).toBe(REJECT_REASON);
+    expect(subRow.rejected_at).toBeTruthy();
+  });
+
+  it("auto-approved photo submission creates exactly one gallery_items row; invisible until opt-in", async () => {
+    const niyamId = await createNiyam(`gallery-${Date.now()}`, {
+      approval_mode: "auto",
+      proof_type: "photo",
+      max_uploads: 2,
+    });
+
+    const [owner] = await db
+      .select({ id: users.id, optIn: users.gallery_visibility_opt_in })
+      .from(students)
+      .innerJoin(users, eq(users.id, students.parent_id))
+      .where(eq(students.id, child0))
+      .limit(1);
+    expect(owner).toBeTruthy();
+    const seededOptIn = owner.optIn;
+
+    try {
+      await db
+        .update(users)
+        .set({ gallery_visibility_opt_in: false })
+        .where(eq(users.id, owner.id));
+
+      const submit = await request(app)
+        .post("/v1/niyam-submissions")
+        .set(auth(parent.token))
+        .send({
+          niyam_id: niyamId,
+          student_id: child0,
+          submission_date: todayIst(),
+          media: [{ url: PROOF, kind: "photo" }],
+        });
+      expect(submit.status).toBe(200);
+      expect(submit.body.data.status).toBe("auto_approved");
+      const submissionId: string = submit.body.data.id;
+
+      const galleryRows = await db
+        .select({ id: gallery_items.id, submission_id: gallery_items.submission_id })
+        .from(gallery_items)
+        .where(eq(gallery_items.submission_id, submissionId));
+      expect(galleryRows).toHaveLength(1);
+      expect(galleryRows[0]!.submission_id).toBe(submissionId);
+
+      const feedOff = await request(app).get("/v1/gallery?limit=200");
+      expect(feedOff.status).toBe(200);
+      const whenOff = feedOff.body.data.items.find(
+        (r: { id: string }) => r.id === galleryRows[0]!.id,
+      );
+      expect(whenOff).toBeUndefined();
+
+      await db
+        .update(users)
+        .set({ gallery_visibility_opt_in: true })
+        .where(eq(users.id, owner.id));
+
+      const feedOn = await request(app).get("/v1/gallery?limit=200");
+      expect(feedOn.status).toBe(200);
+      const whenOn = feedOn.body.data.items.find(
+        (r: { id: string }) => r.id === galleryRows[0]!.id,
+      );
+      expect(whenOn).toBeTruthy();
+    } finally {
+      await db
+        .update(users)
+        .set({ gallery_visibility_opt_in: seededOptIn })
+        .where(eq(users.id, owner.id));
+    }
+  });
+
+  it("auto-approve awards punya inside the same transaction (ledger always present with points)", async () => {
+    const niyamId = await createNiyam(`tx-award-${Date.now()}`, { approval_mode: "auto", points: 11 });
+    const submit = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({ niyam_id: niyamId, student_id: child0, submission_date: todayIst() });
+    expect(submit.status).toBe(200);
+    expect(submit.body.data.points_awarded).toBe(11);
+    const submissionId: string = submit.body.data.id;
+
+    const [sub] = await db
+      .select({
+        points_awarded: niyam_submissions.points_awarded,
+        punya_transaction_id: niyam_submissions.punya_transaction_id,
+        approved_at: niyam_submissions.approved_at,
+      })
+      .from(niyam_submissions)
+      .where(eq(niyam_submissions.id, submissionId))
+      .limit(1);
+    expect(sub.points_awarded).toBe(11);
+    expect(sub.punya_transaction_id).toBeTruthy();
+    expect(sub.approved_at).toBeTruthy();
+
+    const [ledger] = await db
+      .select({
+        id: punya_transactions.id,
+        points: punya_transactions.points,
+        idempotency_key: punya_transactions.idempotency_key,
+      })
+      .from(punya_transactions)
+      .where(eq(punya_transactions.idempotency_key, `submission:${submissionId}`))
+      .limit(1);
+    expect(ledger).toBeTruthy();
+    expect(ledger.points).toBe(11);
+    expect(ledger.id).toBe(sub.punya_transaction_id);
   });
 });

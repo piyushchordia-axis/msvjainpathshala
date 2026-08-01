@@ -34,6 +34,8 @@ export interface AwardPunyaResult {
   tier: string;
   /** True when this call actually credited; false when an idempotent replay. */
   awarded: boolean;
+  /** Ledger row id (null only if the insert path had no row to resolve). */
+  transaction_id: string | null;
 }
 
 // The exact transaction-handle type drizzle hands to a `db.transaction(cb)`
@@ -92,6 +94,8 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
   const key = input.idempotencyKey?.trim() || null;
   const source = sourceFromKey(input.featureKey, key);
 
+  let transactionId: string | null = null;
+
   if (key) {
     // Partial unique index on idempotency_key — ON CONFLICT DO NOTHING.
     const insertResult = await tx.execute(sql`
@@ -105,13 +109,13 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
       )
       on conflict (idempotency_key) where idempotency_key is not null
       do nothing
-      returning points
+      returning id, points
     `);
     const inserted =
-      (insertResult as unknown as { rows?: Array<{ points: number }> }).rows ?? [];
+      (insertResult as unknown as { rows?: Array<{ id: string; points: number }> }).rows ?? [];
     if (inserted.length === 0) {
       const [existing] = await tx
-        .select({ points: punya_transactions.points })
+        .select({ id: punya_transactions.id, points: punya_transactions.points })
         .from(punya_transactions)
         .where(eq(punya_transactions.idempotency_key, key))
         .limit(1);
@@ -122,18 +126,24 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
         total_points: total,
         tier: tierForPoints(total),
         awarded: false,
+        transaction_id: existing?.id ?? null,
       };
     }
+    transactionId = inserted[0]!.id;
   } else {
-    await tx.insert(punya_transactions).values({
-      student_id: input.studentId,
-      feature_key: input.featureKey,
-      points: input.points,
-      note: input.note ?? null,
-      awarded_by: input.awardedBy ?? null,
-      source_entity_kind: source.kind,
-      source_entity_id: source.id,
-    });
+    const [row] = await tx
+      .insert(punya_transactions)
+      .values({
+        student_id: input.studentId,
+        feature_key: input.featureKey,
+        points: input.points,
+        note: input.note ?? null,
+        awarded_by: input.awardedBy ?? null,
+        source_entity_kind: source.kind,
+        source_entity_id: source.id,
+      })
+      .returning({ id: punya_transactions.id });
+    transactionId = row?.id ?? null;
   }
 
   const total = await creditBalance(tx, input.studentId, input.points);
@@ -143,6 +153,7 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
     total_points: total,
     tier: tierForPoints(total),
     awarded: true,
+    transaction_id: transactionId,
   };
 }
 
@@ -179,6 +190,8 @@ export interface ReversePunyaResult {
   tier: string;
   /** True when this call actually debited; false on idempotent replay. */
   reversed: boolean;
+  /** Ledger row id for the reversal debit. */
+  transaction_id: string | null;
 }
 
 /** Strip a trailing `:reversal` suffix to find the original award key. */
@@ -221,14 +234,14 @@ async function runReverse(tx: Tx | Db, input: ReversePunyaInput): Promise<Revers
     )
     on conflict (idempotency_key) where idempotency_key is not null
     do nothing
-    returning points
+    returning id, points
   `);
   const inserted =
-    (insertResult as unknown as { rows?: Array<{ points: number }> }).rows ?? [];
+    (insertResult as unknown as { rows?: Array<{ id: string; points: number }> }).rows ?? [];
 
   if (inserted.length === 0) {
     const [existing] = await tx
-      .select({ points: punya_transactions.points })
+      .select({ id: punya_transactions.id, points: punya_transactions.points })
       .from(punya_transactions)
       .where(eq(punya_transactions.idempotency_key, key))
       .limit(1);
@@ -239,6 +252,7 @@ async function runReverse(tx: Tx | Db, input: ReversePunyaInput): Promise<Revers
       total_points: total,
       tier: tierForPoints(total),
       reversed: false,
+      transaction_id: existing?.id ?? null,
     };
   }
 
@@ -249,6 +263,7 @@ async function runReverse(tx: Tx | Db, input: ReversePunyaInput): Promise<Revers
     total_points: total,
     tier: tierForPoints(total),
     reversed: true,
+    transaction_id: inserted[0]!.id,
   };
 }
 

@@ -102,7 +102,7 @@ export const SERVICE_REQUEST_STATUSES = ["submitted", "in_review", "resolved"] a
 export const CURRICULUM_LEVELS = ["not_started", "in_progress", "completed", "mastered"] as const;
 export const QUIZ_SCOPES = ["national", "state", "city", "centre", "batch"] as const;
 export const COMPETITION_STATUSES = ["draft", "open", "closed", "results_published"] as const;
-export const NOTIFICATION_KINDS = ["general", "birthday", "homework", "quiz", "competition", "service_request", "exam", "shivir"] as const;
+export const NOTIFICATION_KINDS = ["general", "birthday", "homework", "quiz", "competition", "service_request", "exam", "shivir", "niyam_rejected"] as const;
 export const DONATION_PAYMENT_STATUSES = ["created", "pending", "captured", "failed", "refunded"] as const;
 export const AUDIT_ACTIONS = [
   "create",
