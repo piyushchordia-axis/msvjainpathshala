@@ -22,6 +22,7 @@ import {
   shivir_events,
   niyams,
   niyam_submissions,
+  niyam_submission_media,
   centre_holidays,
   settings,
   shikshak_batch_assignments,
@@ -39,6 +40,7 @@ import { awardPunya } from "../../lib/punya";
 import { isClientSettingKey } from "../../lib/client-settings";
 import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
 import { rejectionWindowFields } from "../../lib/niyam-constants";
+import { signUploadUrl } from "../../lib/file-tokens";
 
 const phoneSchema = z.string().regex(/^\+[1-9]\d{6,14}$/, "Phone must be E.164 (+91…)");
 const bloodGroupSchema = z.enum(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]);
@@ -306,8 +308,12 @@ router.get("/niyam-submissions", async (req: Request, res: Response) => {
       id: niyam_submissions.id,
       student_id: niyam_submissions.student_id,
       student_name: students.full_name,
+      student_code: students.student_code,
       niyam_id: niyam_submissions.niyam_id,
       niyam_title_en: niyams.title_en,
+      niyam_title_hi: niyams.title_hi,
+      proof_url: niyam_submissions.proof_url,
+      notes: niyam_submissions.notes,
       submission_date: niyam_submissions.submission_date,
       status: niyam_submissions.status,
       points_awarded: niyam_submissions.points_awarded,
@@ -348,12 +354,45 @@ router.get("/niyam-submissions", async (req: Request, res: Response) => {
       ? Buffer.from(`${last.submission_date}|${last.id}`, "utf8").toString("base64url")
       : null;
 
+  const ids = page.map((r) => r.id);
+  const mediaAll = ids.length
+    ? await db
+        .select({
+          id: niyam_submission_media.id,
+          submission_id: niyam_submission_media.submission_id,
+          url: niyam_submission_media.url,
+          kind: niyam_submission_media.kind,
+          mime: niyam_submission_media.mime,
+          ordinal: niyam_submission_media.ordinal,
+        })
+        .from(niyam_submission_media)
+        .where(inArray(niyam_submission_media.submission_id, ids))
+        .orderBy(asc(niyam_submission_media.ordinal))
+    : [];
+  const mediaBySub = new Map<string, typeof mediaAll>();
+  for (const m of mediaAll) {
+    const list = mediaBySub.get(m.submission_id) ?? [];
+    list.push(m);
+    mediaBySub.set(m.submission_id, list);
+  }
+
   const items = page.map((r) => ({
     id: r.id,
     student_id: r.student_id,
     student_name: r.student_name,
+    student_code: r.student_code,
     niyam_id: r.niyam_id,
     niyam_title_en: r.niyam_title_en,
+    niyam_title_hi: r.niyam_title_hi,
+    proof_url: signUploadUrl(r.proof_url),
+    notes: r.notes,
+    media: (mediaBySub.get(r.id) ?? []).map((m) => ({
+      id: m.id,
+      url: signUploadUrl(m.url),
+      kind: m.kind,
+      mime: m.mime,
+      ordinal: m.ordinal,
+    })),
     submission_date: r.submission_date,
     status: r.status,
     points_awarded: r.points_awarded,

@@ -21,6 +21,8 @@ import {
   punya_transactions,
   niyams,
   niyam_submissions,
+  niyam_streaks,
+  niyam_badges,
   shikshak_batch_assignments,
 } from "@workspace/db";
 import { and, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
@@ -394,10 +396,43 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
         ]),
     );
 
+    const niyamIds = items.map((i) => i.id);
+    const streakRows = await db
+      .select({
+        niyam_id: niyam_streaks.niyam_id,
+        current_streak: niyam_streaks.current_streak,
+        longest_streak: niyam_streaks.longest_streak,
+      })
+      .from(niyam_streaks)
+      .where(
+        and(eq(niyam_streaks.student_id, studentId), inArray(niyam_streaks.niyam_id, niyamIds)),
+      );
+    const streakByNiyam = new Map(streakRows.map((s) => [s.niyam_id, s]));
+
+    const badgeRows = await db
+      .select({
+        niyam_id: niyam_badges.niyam_id,
+        badge_key: niyam_badges.badge_key,
+        streak_length: niyam_badges.streak_length,
+        awarded_at: niyam_badges.awarded_at,
+      })
+      .from(niyam_badges)
+      .where(
+        and(eq(niyam_badges.student_id, studentId), inArray(niyam_badges.niyam_id, niyamIds)),
+      );
+    const badgesByNiyam = new Map<string, typeof badgeRows>();
+    for (const b of badgeRows) {
+      const list = badgesByNiyam.get(b.niyam_id) ?? [];
+      list.push(b);
+      badgesByNiyam.set(b.niyam_id, list);
+    }
+
     const enriched = items.map((n) => {
       const pKey = periodKey(n.niyam_type as "daily" | "weekly" | "monthly", today);
       const sub = periodByNiyam.get(n.id);
       const submitted = !!sub && sub.period_key === pKey;
+      const streak = streakByNiyam.get(n.id);
+      const earned = badgesByNiyam.get(n.id) ?? [];
       return {
         ...n,
         current_period_key: pKey,
@@ -412,6 +447,13 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
         period_status_tag_hi: submitted
           ? submittedPeriodTag(n.niyam_type as "daily" | "weekly" | "monthly", "hi")
           : null,
+        current_streak: streak?.current_streak ?? 0,
+        longest_streak: streak?.longest_streak ?? 0,
+        earned_badges: earned.map((b) => ({
+          badge_key: b.badge_key,
+          streak_length: b.streak_length,
+          awarded_at: b.awarded_at.toISOString(),
+        })),
       };
     });
     ok(res, { items: enriched }, { count: enriched.length });

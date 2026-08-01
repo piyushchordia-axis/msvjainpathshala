@@ -15,6 +15,8 @@ import {
   type ProofMediaItem,
 } from "@/components/NiyamProofPicker";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { NiyamBadgeRow } from "@/components/NiyamBadgeRow";
+import { badgeLabel, moreToNextBadge } from "@/lib/niyam-badges";
 import type { NiyamCatalogRow } from "@/lib/types";
 
 function periodDupMessage(niyamType: string, hi: boolean): string {
@@ -100,22 +102,33 @@ export default function NiyamSubmit() {
       {
         onSuccess: (res) => {
           const approved = res.status === "auto_approved" || res.status === "approved";
-          Alert.alert(
-            approved
-              ? hi
-                ? "स्वीकृत"
-                : "Approved"
-              : hi
-                ? "प्रस्तुत किया गया"
-                : "Submitted",
-            approved
-              ? hi
-                ? "आपका नियम स्वतः स्वीकृत हो गया है।"
-                : "Your niyam was auto-approved."
-              : hi
-                ? "आपका नियम समीक्षा के लिए भेज दिया गया है।"
-                : "Your niyam was submitted for review.",
-          );
+          const badges = res.new_badges ?? [];
+          if (badges.length > 0) {
+            const names = badges.map((b) => badgeLabel(b.badge_key, hi)).join(", ");
+            Alert.alert(
+              hi ? "बैज मिला!" : "Badge earned!",
+              hi
+                ? `बधाई हो — आपने अर्जित किया: ${names}`
+                : `Congratulations — you earned: ${names}`,
+            );
+          } else {
+            Alert.alert(
+              approved
+                ? hi
+                  ? "स्वीकृत"
+                  : "Approved"
+                : hi
+                  ? "प्रस्तुत किया गया"
+                  : "Submitted",
+              approved
+                ? hi
+                  ? "आपका नियम स्वतः स्वीकृत हो गया है।"
+                  : "Your niyam was auto-approved."
+                : hi
+                  ? "आपका नियम समीक्षा के लिए भेज दिया गया है।"
+                  : "Your niyam was submitted for review.",
+            );
+          }
           resetForm();
           catalog.refetch();
         },
@@ -252,6 +265,51 @@ export default function NiyamSubmit() {
                     textAlignVertical: "top",
                   }}
                 />
+
+                <NiyamBadgeRow
+                  niyamType={selected.niyam_type}
+                  earnedBadges={selected.earned_badges}
+                  hi={hi}
+                />
+
+                {(() => {
+                  const streak = selected.current_streak ?? 0;
+                  const next = moreToNextBadge(selected.niyam_type, streak);
+                  const unit =
+                    selected.niyam_type === "weekly"
+                      ? hi
+                        ? "सप्ताह"
+                        : "weeks"
+                      : selected.niyam_type === "monthly"
+                        ? hi
+                          ? "माह"
+                          : "months"
+                        : hi
+                          ? "दिन"
+                          : "days";
+                  return (
+                    <View style={{ marginTop: 12, marginBottom: 4 }}>
+                      <Body style={{ fontSize: 13, fontWeight: "700" }}>
+                        {hi
+                          ? `वर्तमान लकीर: ${streak}`
+                          : `Current streak: ${streak}`}
+                      </Body>
+                      {next ? (
+                        <Body muted style={{ fontSize: 12, marginTop: 4 }}>
+                          {hi
+                            ? `${next.remaining} और ${unit} — ${badgeLabel(next.milestone.key, true)} तक`
+                            : `${next.remaining} more ${unit} to your ${badgeLabel(next.milestone.key, false)}`}
+                        </Body>
+                      ) : (
+                        <Body muted style={{ fontSize: 12, marginTop: 4 }}>
+                          {hi
+                            ? "इस Niyam के सभी लकीर बैज अर्जित!"
+                            : "All streak badges earned for this Niyam!"}
+                        </Body>
+                      )}
+                    </View>
+                  );
+                })()}
 
                 <Row style={{ marginTop: 16, gap: 10 }}>
                   <Button

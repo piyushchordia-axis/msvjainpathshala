@@ -5,10 +5,12 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useNiyamCatalog, useStudentNiyams } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
+import { dateRangeLabel, endsInDaysLabel } from "@/lib/niyam-badges";
 import { AppHeader } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { NiyamListRow } from "@/components/NiyamListRow";
-import { Body, Button, Row, Screen, StateView, Title } from "@/components/ui";
+import { NiyamBadgeRow } from "@/components/NiyamBadgeRow";
+import { Body, Button, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 function statusTone(status: string): "success" | "warning" | "error" | "neutral" | "primary" {
   const s = status.toLowerCase();
@@ -124,8 +126,8 @@ export default function StudentNiyams() {
             </Title>
             <Body muted style={{ fontSize: 12, marginBottom: 8 }}>
               {hi
-                ? "नियम चुनें और प्रस्तुत करें — रंग: दैनिक · साप्ताहिक · मासिक"
-                : "Tap a niyam to submit — colors mark daily · weekly · monthly"}
+                ? "नियम चुनें — लकीर बैज और समाप्ति नीचे दिखती है।"
+                : "Tap a Niyam — streak badges and end dates appear below."}
             </Body>
 
             {catalog.isLoading ? (
@@ -144,31 +146,44 @@ export default function StudentNiyams() {
                 emptyText={hi ? "अभी कोई नियम उपलब्ध नहीं है।" : "No niyams available yet."}
               />
             ) : (
-              <View style={{ gap: 8 }}>
+              <View style={{ gap: 10 }}>
                 {catalogRows.map((row) => {
                   const title = hi ? row.title_hi : row.title_en;
                   const submitted = !!row.submitted_this_period;
                   const tag = hi ? row.period_status_tag_hi : row.period_status_tag_en;
                   const period = hi ? row.period_label_hi : row.period_label_en;
-                  const meta = [row.niyam_type, period, submitted ? tag : null]
+                  const range = dateRangeLabel(row.start_date, row.end_date, hi);
+                  const ends = endsInDaysLabel(row.end_date, hi);
+                  const meta = [row.niyam_type, period, range, submitted ? tag : null]
                     .filter(Boolean)
                     .join(" · ");
                   return (
-                    <NiyamListRow
-                      key={row.id}
-                      title={title}
-                      meta={meta}
-                      points={row.points}
-                      niyamType={row.niyam_type}
-                      emphasizedMeta={submitted}
-                      statusLabel={
-                        submitted
-                          ? (tag ?? (hi ? "प्रस्तुत" : "Submitted"))
-                          : null
-                      }
-                      statusTone={submitted ? "primary" : "neutral"}
-                      onPress={() => router.push("/niyam-submit")}
-                    />
+                    <View key={row.id}>
+                      <NiyamListRow
+                        title={title}
+                        meta={meta}
+                        points={row.points}
+                        niyamType={row.niyam_type}
+                        emphasizedMeta={submitted}
+                        statusLabel={
+                          submitted
+                            ? (tag ?? (hi ? "प्रस्तुत" : "Submitted"))
+                            : null
+                        }
+                        statusTone={submitted ? "primary" : "neutral"}
+                        onPress={() => router.push("/niyam-submit")}
+                      />
+                      {ends ? (
+                        <View style={{ marginTop: 6, marginLeft: 8 }}>
+                          <Pill label={ends} tone="warning" />
+                        </View>
+                      ) : null}
+                      <NiyamBadgeRow
+                        niyamType={row.niyam_type}
+                        earnedBadges={row.earned_badges}
+                        hi={hi}
+                      />
+                    </View>
                   );
                 })}
               </View>

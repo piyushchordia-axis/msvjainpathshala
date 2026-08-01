@@ -418,7 +418,16 @@ interface SubmitNiyamInput {
   media?: Array<{ url: string; kind: string; mime?: string; size_bytes?: number }>;
   notes?: string;
 }
-interface SubmitNiyamResult { id: string; status: string }
+export interface SubmitNiyamNewBadge {
+  badge_key: string;
+  streak_length: number;
+  points_awarded: number;
+}
+export interface SubmitNiyamResult {
+  id: string;
+  status: string;
+  new_badges?: SubmitNiyamNewBadge[];
+}
 export function useSubmitNiyam() {
   const qc = useQueryClient();
   return useMutation({

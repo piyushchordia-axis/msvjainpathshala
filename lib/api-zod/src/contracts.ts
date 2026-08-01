@@ -446,6 +446,13 @@ export const niyamSubmissionRowSchema = z.object({
 });
 export type NiyamSubmissionRow = z.infer<typeof niyamSubmissionRowSchema>;
 
+export const niyamEarnedBadgeSchema = z.object({
+  badge_key: z.string(),
+  streak_length: z.number(),
+  awarded_at: z.string(),
+});
+export type NiyamEarnedBadge = z.infer<typeof niyamEarnedBadgeSchema>;
+
 export const niyamCatalogRowSchema = z.object({
   id: z.string(),
   title_en: z.string(),
@@ -460,6 +467,8 @@ export const niyamCatalogRowSchema = z.object({
   points: z.number(),
   scope: z.string().optional(),
   msv_audience: z.string().optional(),
+  start_date: z.string().optional(),
+  end_date: z.string().nullable().optional(),
   current_period_key: z.string().optional(),
   period_label_en: z.string().optional(),
   period_label_hi: z.string().optional(),
@@ -468,8 +477,18 @@ export const niyamCatalogRowSchema = z.object({
   submission_date: z.string().nullable().optional(),
   period_status_tag_en: z.string().nullable().optional(),
   period_status_tag_hi: z.string().nullable().optional(),
+  current_streak: z.number().optional(),
+  longest_streak: z.number().optional(),
+  earned_badges: z.array(niyamEarnedBadgeSchema).optional(),
 });
 export type NiyamCatalogRow = z.infer<typeof niyamCatalogRowSchema>;
+
+export const niyamNewBadgeSchema = z.object({
+  badge_key: z.string(),
+  streak_length: z.number(),
+  points_awarded: z.number(),
+});
+export type NiyamNewBadge = z.infer<typeof niyamNewBadgeSchema>;
 
 /** Display helpers mirrored from api-server niyam-period.ts */
 export function niyamPeriodLabel(
