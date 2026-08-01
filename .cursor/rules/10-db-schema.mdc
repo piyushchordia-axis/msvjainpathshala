@@ -1,0 +1,48 @@
+---
+description: Drizzle schema and migration conventions for lib/db.
+globs: ["lib/db/**"]
+alwaysApply: false
+---
+
+# DB layer conventions
+
+## Table shape
+
+- ID column inline, first, verbatim: `id: uuid("id").primaryKey().defaultRandom(),`
+- `...timestamps()` spread into every table as the **last** entry.
+- `...softDelete()` only on soft-deletable top-level entities (`users`, `centres`, `batches`, `students`, `niyams`, `gallery_items`). Child, junction, log and event tables do not get it. Place it immediately before `...timestamps()`.
+- Audit columns are inline, not helpers. "Who" columns are nullable FKs to `users` with `onDelete: "set null"`, named by verb: `created_by`, `decided_by`, `marked_by`, `awarded_by`, `rejected_by`. "When" columns are `timestamp(..., { withTimezone: true })`.
+
+## Naming
+
+- Columns `snake_case`; the JS key must equal the SQL string arg — `full_name: text("full_name")`.
+- Table const is `snake_case`, plural, matching the `pgTable` name exactly.
+- FK columns `<singular_referenced>_id`. Disambiguated FKs prepend context (`donor_user_id`). Audit FKs end in `_by`.
+- `onDelete`: `"cascade"` for children/junctions/logs owned by a parent; `"set null"` for optional and audit references; `"restrict"` for geography/reference parents (`state_id`, `city_id`).
+- Export `type <Pascal> = typeof <table>.$inferSelect;` and `New<Pascal>` for each file's principal tables.
+
+## Enums — two-step, in `schema/enums.ts`
+
+```ts
+export const AWARD_TIERS = ["bronze", "silver", "gold"] as const;      // UPPER_SNAKE tuple
+export const awardTierEnum = pgEnum("award_tier_enum", AWARD_TIERS);   // grouped at file bottom
+```
+
+SQL enum name is snake_case + `_enum`. The column name is independent of the enum name.
+
+## Migrations — hand-written, not generated
+
+This repo does **not** use `drizzle-kit generate`. Migrations are hand-written numbered SQL in `lib/db/migrations/`, currently `0000_baseline` … `0004_student_parent_blood`.
+
+For every new migration:
+
+1. Create `lib/db/migrations/000N_<snake_name>.sql`.
+2. Guard every statement with `IF NOT EXISTS` / `IF EXISTS` so re-runs are safe.
+3. Add the matching entry to `migrations/meta/_journal.json` — `idx`, `version: "7"`, a `when` epoch-ms, `tag` equal to the filename without `.sql`, `breakpoints: true`.
+4. Keep the Drizzle schema file and the SQL in sync by hand. They are two separate edits.
+
+Apply with `pnpm --filter @workspace/db run migrate`.
+
+## Data migrations
+
+When a migration rewrites existing rows, order it: read/inspect → backfill → *then* add the constraint. Creating a unique index before the dedupe means the failure surfaces at runtime instead of loudly during migration.

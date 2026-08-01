@@ -1,0 +1,46 @@
+---
+description: Jain Pathshala monorepo — layout, response envelope, and known typecheck traps. Applies to all work in this repo.
+alwaysApply: true
+---
+
+# Jain Pathshala workspace
+
+pnpm workspaces monorepo. Shared dependency catalog (`catalog:`) + `workspace:*` internal deps + TypeScript project references.
+
+```
+lib/db/            @workspace/db       Drizzle schema + client + seed (TS source, no build)
+  src/schema/      one file per domain + _helpers.ts + enums.ts + index.ts (barrel)
+  migrations/      hand-written numbered SQL + meta/_journal.json
+lib/api-zod/       @workspace/api-zod  shared Zod contracts
+apps/api-server/   Express 5 + Drizzle, ESM
+  src/routes/v1/   one route file per module
+  src/lib/         envelope.ts, scope.ts, punya.ts, ratelimit.ts, audit.ts, push.ts, ...
+apps/jain-pathshala/         web — Vite + React + wouter, alias @/ → src/
+apps/jain-pathshala-mobile/  Expo + expo-router, alias @/ → repo root
+```
+
+Single import sources: DB client and all tables from `@workspace/db`; Drizzle operators from `drizzle-orm`; shared contracts from `@workspace/api-zod`.
+
+## Response envelope — single wrap, never double
+
+Success `{data, meta}`, failure `{error: {code, message, details}}` via `ok()` / `fail()` from `src/lib/envelope.ts`.
+
+`apiGet` / `apiPost` in the web client unwrap **exactly one** `data` layer. Pages read `res.items`, never `res.data.items`. Never double-wrap on the server.
+
+## Verification commands — read this before claiming a build is broken
+
+- **Never** judge your work by root `pnpm run typecheck`. It has **pre-existing** failures in shadcn components (`button-group.tsx`, `calendar.tsx`, `spinner.tsx`) caused by two coexisting `@types/react` versions — mobile pins `~19.1.10`, web uses catalog `^19.2.0`. These are structural and unrelated to any feature work. Do not chase them.
+- Typecheck only the package you changed: `pnpm --filter @workspace/api-server run typecheck`
+- API tests: `pnpm --filter @workspace/api-server run test`
+- API server binds to `PORT` (8080 in dev), not 5000.
+
+## Known TypeScript traps in this repo
+
+- `req.params.<x>` is typed `string | string[]`. Coerce at the call site: `const id = String(req.params.id)`.
+- A Drizzle helper that builds an `inArray(column, …)` condition for more than one table must type its column parameter as `PgColumn` from `drizzle-orm/pg-core` — not `typeof someTable.id`, which only accepts that one table's column.
+
+## Style
+
+- Bilingual content columns use `_en` / `_hi` suffixes. Every user-facing string ships in both languages.
+- Jain terms stay untranslated in both languages: Pathshala, Punya, Guruji, Sanchalak, Niyam, Shivir.
+- Comments explain *why*, not *what*. The existing code does this well — match it.

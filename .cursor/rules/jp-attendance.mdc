@@ -1,0 +1,13 @@
+---
+description: Attendance / sessions / sync / punya module conventions (stub — fill after Prompt 2).
+globs:
+  - "**/attendance/**"
+  - "**/sessions/**"
+  - "**/sync/**"
+  - "**/punya/**"
+alwaysApply: false
+---
+
+# JP attendance module
+
+TODO: fill after Prompt 2 (schema migrations, marking rules, GPS, sync drain order, Punya side-effects).

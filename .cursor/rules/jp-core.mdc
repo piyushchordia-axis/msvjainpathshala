@@ -1,0 +1,50 @@
+---
+description: Jain Pathshala core non-negotiables (stack, roles, DB, API, i18n, tokens, queues).
+alwaysApply: true
+---
+
+# JP core non-negotiables
+
+> Condensed from `CLAUDE.md` (repo root; authoritative over `SPEC.md`). Attendance binding decisions AT1–AT31 live there. The live codebase is Express 5 + Vite/wouter + Expo Router + `@workspace/*` — not NestJS / Next.js App Router / `@jp/shared`. Prefer matching **existing code** when stack text conflicts; treat Nest/`@jp` names as target-spec language until the stack is unified.
+
+## Stack
+
+- ORM: **Drizzle**, never Prisma.
+- API: **NestJS** per CLAUDE.md (code today: Express 5 in `apps/api-server`).
+- Jobs: **BullMQ** + Redis (code today: `node-cron` + optional ioredis for rate limits only).
+- Package manager: **pnpm workspaces**.
+- Mobile: **Expo Router v6**.
+- Web/admin: **Next.js App Router** per CLAUDE.md (code today: Vite + React + wouter).
+- **TypeScript everywhere** (no new JS sources).
+
+## Roles & scope
+
+Eight roles: `super_admin` → `state_admin` → `city_admin` → `sanchalak` → `shikshak` → `parent` → `student` → `guest`.
+
+Scope guards enforce **centre / batch / city** boundaries, not role level alone. A higher role without the right scope must still be denied.
+
+## Database
+
+- UUID primary keys.
+- `created_at` / `updated_at` with `withTimezone: true`.
+- Soft-delete via `status` and/or `deleted_at` (domain-appropriate).
+- Punya / attendance / sync: `idempotency_key` + UPSERT / `ON CONFLICT`.
+- Audit log is **append-only** — never update or delete audit rows.
+
+## API envelope
+
+- Success: `{ data, meta? }`.
+- Failure: `{ error: { code, message, details?, request_id? } }`.
+- Error codes from `@jp/shared/errors` (code today: string literals like `ERR_*` via `fail()` — no shared enum package yet). Never invent ad-hoc raw strings outside that enum when it exists.
+
+## Bilingual
+
+Every user-facing content field ships as `_en` and `_hi`. Jain terms stay untranslated: Pathshala, Punya, Guruji, Sanchalak, Niyam, Shivir.
+
+## Design tokens
+
+Never hardcode hex colors or spacing values in UI — use design tokens / CSS variables.
+
+## Queues
+
+Queue names are always imported from `@jp/shared/constants` (package NOT FOUND today — do not invent string literals when the package lands).

@@ -1,0 +1,50 @@
+---
+description: Invariants and locked decisions for the Niyam module fix pass. Attach when touching niyams, gallery, or punya.
+globs: ["**/niyam*", "**/gallery*", "**/punya*", "apps/jain-pathshala/src/pages/admin/NiyamReviewPage.tsx"]
+alwaysApply: false
+---
+
+# Niyam module — fix-pass invariants
+
+Full context: `docs/NIYAM_MODULE_REVIEW.md` (findings) and `docs/NIYAM_MODULE_FIX_PLAN.md` (plan).
+
+## Business rules that must hold — these are the ones most often got wrong
+
+**Q5 — 30-day rejection window.** A submission that awarded points can only be rejected within `NIYAM_REVERSAL_WINDOW_DAYS` (30) of `submitted_at`. Past that, return **409 `ERR_NIYAM_REVERSAL_WINDOW_EXPIRED`**. Enforce in the service layer, not a guard or middleware. A still-`pending` submission is exempt — it never awarded points. Never hardcode 30 in a client; the API returns `reversal_window_expires_at` and `can_reject`.
+
+**Q5 — auto-approve is the default.** `niyams.approval_mode` defaults to `'auto'`. Retroactive rejection is therefore the *primary* admin workflow, not an edge case. Any admin surface that lists only `pending` rows is broken by definition.
+
+**Q6 — gallery consent is blanket, per parent, and resolved at query time.** The consent join in `routes/v1/gallery.ts` (`coalesce(students.parent_id, students.user_id)` → `users.gallery_visibility_opt_in`) is the correct design: toggling is instant and needs no backfill. Do not replace it with a write-time check or a backfill job. Gallery rows are created for every approved submission regardless of opt-in; visibility is decided on read.
+
+**Q11 — students are never hard-deleted.** Every student lookup filters `isNull(students.deleted_at)` and, where points are involved, `status = 'active'`.
+
+**Punya is a financial-grade ledger.** Every award and reversal carries an `idempotency_key` with a unique index. `feature_key` holds only the clean feature key (`niyam_submission`) — it is user-visible in the parent ledger and the admin transaction list, and it is what per-feature reporting groups by. Never encode identifiers into it.
+
+**Points and streaks mutate only inside the submission transaction.** `awardPunya`, the streak recompute and the gallery insert all take the caller's `tx`. Audit writes and push notifications happen post-commit, best-effort — mirror the birthday-cron pattern in `routes/v1/notifications.ts`.
+
+## Locked decision — streak badge ladder
+
+Frequency-aware, one-time per `(student, niyam, badge_key)`:
+
+| Frequency | Milestones | Keys |
+|---|---|---|
+| `daily` | 7, 14, 30, 60, 100 consecutive days | `daily_7` … `daily_100` |
+| `weekly` | 4 consecutive weeks | `weekly_4` |
+| `monthly` | 3 consecutive months | `monthly_3` |
+
+Badges live in the `niyam_badges` table (unique index makes awarding idempotent under recompute), **not** as a boolean on `niyam_streaks`.
+
+**A rejection that breaks a streak does not revoke an already-earned badge.** Badges are historical achievements. `longest_streak` is `max(stored, recomputed)` so it can never decrease.
+
+> Note: `FullSpec_v4 §8.5` (7-day/30-day/4-week/3-month) and `PersonaFeatures.md:58` (7/14/30/60/100) contradict each other. The table above supersedes both.
+
+## Things that are correct — do not "fix" them
+
+- The period-uniqueness design: `period_key` + partial unique index `where status <> 'rejected'` + `pg_advisory_xact_lock` + in-transaction duplicate check. It is tested for concurrency and it works.
+- The atomic balance upsert `ON CONFLICT … total_points + delta … RETURNING`.
+- Returning **404** rather than 403 for out-of-scope rows — this avoids existence leaks and is deliberate.
+- The minimised public gallery payload (first name only, no full name, no parent data).
+
+## Client-side authorization is not authorization
+
+`msv_audience` and `scope` filtering currently exists only in `GET /v1/me/niyam-catalog`. Any endpoint that accepts a `niyam_id` must re-validate audience server-side.
