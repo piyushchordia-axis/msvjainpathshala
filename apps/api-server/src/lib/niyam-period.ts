@@ -7,6 +7,15 @@
  */
 export type NiyamPeriodType = "daily" | "weekly" | "monthly";
 
+/**
+ * Parents may submit for today or yesterday (IST) only — late evening catch-up
+ * across midnight, not arbitrary historical backfill. Enforced on submission_date.
+ */
+export const SUBMISSION_BACKDATE_DAYS = 1;
+
+/** Lookback window when rebuilding streaks from historical submissions. */
+export const STREAK_RECOMPUTE_LOOKBACK_DAYS = 400;
+
 /** Parse YYYY-MM-DD as a UTC noon Date (avoids DST edge cases; dates are IST calendar). */
 function parseYmd(ymd: string): Date {
   const [y, m, d] = ymd.split("-").map(Number);
@@ -18,6 +27,26 @@ function formatYmd(d: Date): string {
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
   const day = String(d.getUTCDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+/**
+ * Calendar date in Asia/Kolkata (YYYY-MM-DD). Used for period keys and the
+ * submit backdate window — never a fixed +5.5h offset on wall-clock alone.
+ */
+export function istCalendarDate(when: Date = new Date()): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(when);
+}
+
+/** Subtract `days` from a YYYY-MM-DD calendar date (IST date arithmetic). */
+export function addCalendarDays(ymd: string, days: number): string {
+  const d = parseYmd(ymd);
+  d.setUTCDate(d.getUTCDate() + days);
+  return formatYmd(d);
 }
 
 /** ISO week number (1–53) and ISO week-year for a UTC calendar date. */
@@ -106,6 +135,6 @@ export function allowedMediaKinds(
   if (proofType === "video") return ["video"];
   if (proofType === "audio") return ["audio"];
   if (proofType === "either") return ["photo", "video"];
-  if (proofType === "any") return ["photo", "video", "audio"];
-  return ["photo", "video"];
+  // "any" and unknown → all three (matches PROOF_TYPES; no dead fallback).
+  return ["photo", "video", "audio"];
 }

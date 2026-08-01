@@ -350,7 +350,8 @@ router.post(
       summary: `Generated progress report for ${student.student_code} (${body.period_kind} ${body.period_label}).`,
     });
 
-    ok(res, { id: row.id, pdf_url: signUploadUrl(row.pdf_url) });
+    // Progress PDFs are long-lived report downloads — override the 1h gallery default.
+    ok(res, { id: row.id, pdf_url: signUploadUrl(row.pdf_url, 7 * 24 * 3600) });
   },
 );
 
@@ -453,7 +454,7 @@ router.get("/students/:id/reports", async (req: Request, res: Response) => {
 
   const items = rows.map((r) => ({
     ...r,
-    pdf_url: signUploadUrl(r.pdf_url),
+    pdf_url: signUploadUrl(r.pdf_url, 7 * 24 * 3600),
     generated_at: r.generated_at.toISOString(),
   }));
   ok(res, { items }, { count: items.length });

@@ -31,6 +31,7 @@ import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/a
 import { resolveAdminScope, cityIdsForState } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { clampLimit } from "../../lib/route-helpers";
+import { validateNiyamPointsBounds } from "../../lib/niyam-points";
 
 const router: IRouter = Router();
 router.use(requireAuth, requireAdminPanel);
@@ -395,6 +396,8 @@ const createNiyamSchema = z.object({
   state_id: z.string().uuid().optional(),
   city_id: z.string().uuid().optional(),
   msv_audience: z.enum(["all", "msv", "non_msv"]).default("all"),
+  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
 });
 
 function authorizeNiyamGeo(
@@ -467,6 +470,12 @@ router.post("/niyams", requireRole("super_admin", "state_admin", "city_admin"), 
   );
   if (geoErr) { fail(res, 403, "ERR_FORBIDDEN", geoErr); return; }
 
+  const boundsErr = await validateNiyamPointsBounds(body.points);
+  if (boundsErr) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", boundsErr.message);
+    return;
+  }
+
   const proofRequired =
     body.proof_required ??
     (body.proof_type === "photo" || body.proof_type === "video" || body.proof_type === "audio");
@@ -487,6 +496,8 @@ router.post("/niyams", requireRole("super_admin", "state_admin", "city_admin"), 
     state_id: stateId,
     city_id: cityId,
     msv_audience: body.msv_audience,
+    ...(body.start_date ? { start_date: body.start_date } : {}),
+    ...(body.end_date !== undefined ? { end_date: body.end_date } : {}),
   }).returning({ id: niyams.id, title_en: niyams.title_en, is_active: niyams.is_active });
   await auditFromReq(req, {
     action: "create",
@@ -510,6 +521,8 @@ const patchNiyamSchema = z.object({
   approval_mode: z.enum(["auto", "review"]).optional(),
   max_uploads: z.coerce.number().int().min(0).max(10).optional(),
   msv_audience: z.enum(["all", "msv", "non_msv"]).optional(),
+  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
 });
 
 /* PATCH /v1/admin/niyams/:id — enable/disable + limited edits */
@@ -521,6 +534,14 @@ router.patch("/niyams/:id", requireRole("super_admin", "state_admin", "city_admi
   catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid niyam update."); return; }
   if (Object.keys(body).length === 0) {
     fail(res, 422, "ERR_VALIDATION_FAILED", "No fields to update."); return;
+  }
+
+  if (body.points !== undefined) {
+    const boundsErr = await validateNiyamPointsBounds(body.points);
+    if (boundsErr) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", boundsErr.message);
+      return;
+    }
   }
 
   const [existing] = await db.select().from(niyams).where(eq(niyams.id, id)).limit(1);
@@ -554,6 +575,8 @@ router.patch("/niyams/:id", requireRole("super_admin", "state_admin", "city_admi
     ...(body.approval_mode !== undefined ? { approval_mode: body.approval_mode } : {}),
     ...(body.max_uploads !== undefined ? { max_uploads: body.max_uploads } : {}),
     ...(body.msv_audience !== undefined ? { msv_audience: body.msv_audience } : {}),
+    ...(body.start_date !== undefined ? { start_date: body.start_date } : {}),
+    ...(body.end_date !== undefined ? { end_date: body.end_date } : {}),
   }).where(eq(niyams.id, id)).returning({
     id: niyams.id,
     title_en: niyams.title_en,

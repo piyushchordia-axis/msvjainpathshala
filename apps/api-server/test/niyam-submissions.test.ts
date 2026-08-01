@@ -5,6 +5,8 @@ import {
   pool,
   db,
   niyam_submissions,
+  niyam_streaks,
+  niyam_badges,
   gallery_items,
   notifications,
   punya_transactions,
@@ -13,6 +15,11 @@ import {
 } from "@workspace/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { loginAs, auth, type Session } from "./helpers";
+import {
+  resetMemoryRateLimitsForTests,
+  clearMemoryRateLimitKeyForTests,
+} from "../src/lib/ratelimit";
+import { periodKey } from "../src/lib/niyam-period";
 
 /** Valid reject reason (≥20 chars) used across N2a reject tests. */
 const REJECT_REASON =
@@ -660,5 +667,242 @@ describe("niyam-submissions", () => {
     expect(ledger).toBeTruthy();
     expect(ledger.points).toBe(11);
     expect(ledger.id).toBe(sub.punya_transaction_id);
+  });
+
+  it("awards daily_7 exactly once across day 7 and day 8", async () => {
+    const niyamId = await createNiyam(`badge7-${Date.now()}`, { approval_mode: "auto", points: 5 });
+    // Seed days -7..-2 (6 days); yesterday API submit → streak 7; today → streak 8.
+    for (let i = 7; i >= 2; i--) {
+      const d = daysAgoIst(i);
+      await db.insert(niyam_submissions).values({
+        niyam_id: niyamId,
+        student_id: child0,
+        submission_date: d,
+        period_key: periodKey("daily", d),
+        status: "auto_approved",
+        points_awarded: 5,
+        submitted_by: parent.user.id,
+      });
+    }
+
+    const day7 = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({ niyam_id: niyamId, student_id: child0, submission_date: daysAgoIst(1) });
+    expect(day7.status).toBe(200);
+    expect(day7.body.data.new_badges?.some((b: { badge_key: string }) => b.badge_key === "daily_7")).toBe(
+      true,
+    );
+
+    const badgesAfter7 = await db
+      .select()
+      .from(niyam_badges)
+      .where(
+        and(
+          eq(niyam_badges.student_id, child0),
+          eq(niyam_badges.niyam_id, niyamId),
+          eq(niyam_badges.badge_key, "daily_7"),
+        ),
+      );
+    expect(badgesAfter7).toHaveLength(1);
+
+    const day8 = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({ niyam_id: niyamId, student_id: child0, submission_date: todayIst() });
+    expect(day8.status).toBe(200);
+    expect(day8.body.data.new_badges?.some((b: { badge_key: string }) => b.badge_key === "daily_7")).toBe(
+      false,
+    );
+
+    const badgesAfter8 = await db
+      .select()
+      .from(niyam_badges)
+      .where(
+        and(
+          eq(niyam_badges.student_id, child0),
+          eq(niyam_badges.niyam_id, niyamId),
+          eq(niyam_badges.badge_key, "daily_7"),
+        ),
+      );
+    expect(badgesAfter8).toHaveLength(1);
+  });
+
+  it("rejecting mid-streak drops current_streak but keeps daily_7 and longest_streak", async () => {
+    const niyamId = await createNiyam(`badge-keep-${Date.now()}`, { approval_mode: "auto", points: 4 });
+    const ids: string[] = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = daysAgoIst(i);
+      const [row] = await db
+        .insert(niyam_submissions)
+        .values({
+          niyam_id: niyamId,
+          student_id: child1,
+          submission_date: d,
+          period_key: periodKey("daily", d),
+          status: "auto_approved",
+          points_awarded: 4,
+          submitted_by: parent.user.id,
+        })
+        .returning({ id: niyam_submissions.id });
+      ids.push(row.id);
+    }
+    await db.insert(niyam_streaks).values({
+      student_id: child1,
+      niyam_id: niyamId,
+      current_streak: 7,
+      longest_streak: 7,
+      last_submission_date: todayIst(),
+      last_period_key: periodKey("daily", todayIst()),
+    });
+    await db.insert(niyam_badges).values({
+      student_id: child1,
+      niyam_id: niyamId,
+      badge_key: "daily_7",
+      streak_length: 7,
+      points_awarded: 25,
+    });
+
+    // Reject day 4 of the streak (index 3 from oldest = daysAgo(3)).
+    const midId = ids[3]!;
+    const reject = await request(app)
+      .post(`/v1/niyam-submissions/${midId}/reject`)
+      .set(auth(shikshak.token))
+      .send({ reason: REJECT_REASON });
+    expect(reject.status).toBe(200);
+
+    const [streak] = await db
+      .select()
+      .from(niyam_streaks)
+      .where(and(eq(niyam_streaks.student_id, child1), eq(niyam_streaks.niyam_id, niyamId)))
+      .limit(1);
+    expect(streak.current_streak).toBeLessThan(7);
+    expect(streak.longest_streak).toBe(7);
+
+    const badges = await db
+      .select()
+      .from(niyam_badges)
+      .where(
+        and(
+          eq(niyam_badges.student_id, child1),
+          eq(niyam_badges.niyam_id, niyamId),
+          eq(niyam_badges.badge_key, "daily_7"),
+        ),
+      );
+    expect(badges).toHaveLength(1);
+  });
+
+  it("non-MSV student posting an msv_only niyam id gets 403", async () => {
+    const niyamId = await createNiyam(`msv-only-${Date.now()}`, {
+      approval_mode: "auto",
+      msv_audience: "msv",
+    });
+    // child1 is seeded msv_status=none
+    const res = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({ niyam_id: niyamId, student_id: child1, submission_date: todayIst() });
+    expect(res.status).toBe(403);
+    expect(res.body.error.code).toBe("ERR_FORBIDDEN");
+  });
+
+  it("submission outside [start_date, end_date] returns 422", async () => {
+    const niyamId = await createNiyam(`ended-${Date.now()}`, {
+      approval_mode: "auto",
+      start_date: daysAgoIst(30),
+      end_date: daysAgoIst(5),
+    });
+    const res = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({ niyam_id: niyamId, student_id: child0, submission_date: todayIst() });
+    expect(res.status).toBe(422);
+    expect(res.body.error.message).toMatch(/ended/i);
+  });
+
+  it("soft-deleted student returns 404 on submit", async () => {
+    const niyamId = await createNiyam(`deleted-stu-${Date.now()}`, { approval_mode: "auto" });
+    await db.update(students).set({ deleted_at: new Date() }).where(eq(students.id, child1));
+    try {
+      const res = await request(app)
+        .post("/v1/niyam-submissions")
+        .set(auth(parent.token))
+        .send({ niyam_id: niyamId, student_id: child1, submission_date: todayIst() });
+      expect(res.status).toBe(404);
+    } finally {
+      await db.update(students).set({ deleted_at: null }).where(eq(students.id, child1));
+    }
+  });
+
+  it("21st submission in an hour returns 429 ERR_RATE_LIMITED", async () => {
+    process.env.JP_TEST_RATE_LIMIT = "1";
+    resetMemoryRateLimitsForTests();
+    const minKey = `niyam:submit:min:${parent.user.id}`;
+    try {
+      for (let i = 0; i < 20; i++) {
+        const r = await request(app)
+          .post("/v1/niyam-submissions")
+          .set(auth(parent.token))
+          .send({});
+        expect(r.status).not.toBe(429);
+        // Clear the 5/min bucket so this test exercises the hourly cap specifically.
+        clearMemoryRateLimitKeyForTests(minKey);
+      }
+      const blocked = await request(app)
+        .post("/v1/niyam-submissions")
+        .set(auth(parent.token))
+        .send({});
+      expect(blocked.status).toBe(429);
+      expect(blocked.body.error.code).toBe("ERR_RATE_LIMITED");
+    } finally {
+      delete process.env.JP_TEST_RATE_LIMIT;
+      resetMemoryRateLimitsForTests();
+    }
+  });
+
+  it("listing two rows with the same submission_date paginates deterministically", async () => {
+    const niyamId = await createNiyam(`page-${Date.now()}`, { approval_mode: "review" });
+    const day = todayIst();
+    const a = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({ niyam_id: niyamId, student_id: child0, submission_date: day, proof_url: PROOF });
+    expect(a.status).toBe(200);
+    // Force same date; second child same day for deterministic id ordering.
+    const niyamId2 = await createNiyam(`page2-${Date.now()}`, { approval_mode: "review" });
+    const b = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({ niyam_id: niyamId2, student_id: child0, submission_date: day, proof_url: PROOF });
+    expect(b.status).toBe(200);
+
+    await db
+      .update(niyam_submissions)
+      .set({ submission_date: day })
+      .where(eq(niyam_submissions.id, a.body.data.id));
+    await db
+      .update(niyam_submissions)
+      .set({ submission_date: day })
+      .where(eq(niyam_submissions.id, b.body.data.id));
+
+    const page1 = await request(app)
+      .get("/v1/admin/niyam-submissions?limit=1&status=pending")
+      .set(auth(admin.token));
+    expect(page1.status).toBe(200);
+    expect(page1.body.data.items).toHaveLength(1);
+    expect(page1.body.data.next_cursor).toBeTruthy();
+
+    const page2 = await request(app)
+      .get(`/v1/admin/niyam-submissions?limit=1&status=pending&cursor=${page1.body.data.next_cursor}`)
+      .set(auth(admin.token));
+    expect(page2.status).toBe(200);
+    expect(page2.body.data.items).toHaveLength(1);
+    expect(page2.body.data.items[0].id).not.toBe(page1.body.data.items[0].id);
+
+    // Same cursor again yields the same second page (deterministic).
+    const page2b = await request(app)
+      .get(`/v1/admin/niyam-submissions?limit=1&status=pending&cursor=${page1.body.data.next_cursor}`)
+      .set(auth(admin.token));
+    expect(page2b.body.data.items[0].id).toBe(page2.body.data.items[0].id);
   });
 });

@@ -5,6 +5,7 @@
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import { z } from "zod";
+import { db, upload_objects } from "@workspace/db";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
 import { canAccessAdminPanel } from "@workspace/api-zod";
@@ -89,6 +90,10 @@ router.post("/", uploadMemory.single("file"), async (req: Request, res: Response
           : "jpg");
   const key = makeKey(folder, `upload.${ext}`);
   const stored = await storage.put(key, file.buffer, contentMime);
+  await db
+    .insert(upload_objects)
+    .values({ key, uploaded_by: req.authUser!.id })
+    .onConflictDoNothing();
   ok(res, stored);
 });
 

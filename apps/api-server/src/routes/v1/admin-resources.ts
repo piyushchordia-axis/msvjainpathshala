@@ -28,7 +28,7 @@ import {
   shikshak_centre_assignments,
 } from "@workspace/db";
 import { ageGroupFromDob } from "@workspace/db";
-import { and, asc, count, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull, lte, lt, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
@@ -38,6 +38,7 @@ import { auditFromReq } from "../../lib/audit";
 import { awardPunya } from "../../lib/punya";
 import { isClientSettingKey } from "../../lib/client-settings";
 import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
+import { rejectionWindowFields } from "../../lib/niyam-constants";
 
 const phoneSchema = z.string().regex(/^\+[1-9]\d{6,14}$/, "Phone must be E.164 (+91…)");
 const bloodGroupSchema = z.enum(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]);
@@ -267,28 +268,100 @@ router.get("/niyams", async (_req: Request, res: Response) => {
   ok(res, { items: rows }, { count: rows.length });
 });
 
-/* GET /v1/admin/niyam-submissions */
+function parseRepeatableQuery(raw: unknown): string[] {
+  if (raw == null) return [];
+  if (Array.isArray(raw)) return raw.map(String).filter(Boolean);
+  return [String(raw)].filter(Boolean);
+}
+
+function decodeAdminSubmissionCursor(raw: unknown): { date: string; id: string } | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const decoded = Buffer.from(raw, "base64url").toString("utf8");
+    const i = decoded.indexOf("|");
+    if (i < 0) return null;
+    const date = decoded.slice(0, i);
+    const id = decoded.slice(i + 1);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !id) return null;
+    return { date, id };
+  } catch {
+    return null;
+  }
+}
+
+/* GET /v1/admin/niyam-submissions — filters + cursor on (submission_date desc, id desc) */
 router.get("/niyam-submissions", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
   const limit = clampLimit(req.query.limit, 100, 300);
   const centreFilter = scopedCentreFilter(scope, students.centre_id);
+  const statuses = parseRepeatableQuery(req.query.status);
+  const studentId = typeof req.query.student_id === "string" ? req.query.student_id : null;
+  const niyamId = typeof req.query.niyam_id === "string" ? req.query.niyam_id : null;
+  const from = typeof req.query.from === "string" ? req.query.from : null;
+  const to = typeof req.query.to === "string" ? req.query.to : null;
+  const cursor = decodeAdminSubmissionCursor(req.query.cursor);
+
   const rows = await db
     .select({
       id: niyam_submissions.id,
+      student_id: niyam_submissions.student_id,
       student_name: students.full_name,
+      niyam_id: niyam_submissions.niyam_id,
       niyam_title_en: niyams.title_en,
       submission_date: niyam_submissions.submission_date,
       status: niyam_submissions.status,
       points_awarded: niyam_submissions.points_awarded,
       is_featured: niyam_submissions.is_featured,
+      created_at: niyam_submissions.created_at,
     })
     .from(niyam_submissions)
     .innerJoin(students, eq(students.id, niyam_submissions.student_id))
     .innerJoin(niyams, eq(niyams.id, niyam_submissions.niyam_id))
-    .where(and(isNull(students.deleted_at), centreFilter))
-    .orderBy(desc(niyam_submissions.submission_date))
-    .limit(limit);
-  ok(res, { items: rows }, { count: rows.length });
+    .where(
+      and(
+        isNull(students.deleted_at),
+        centreFilter,
+        statuses.length ? inArray(niyam_submissions.status, statuses as never) : undefined,
+        studentId ? eq(niyam_submissions.student_id, studentId) : undefined,
+        niyamId ? eq(niyam_submissions.niyam_id, niyamId) : undefined,
+        from ? gte(niyam_submissions.submission_date, from) : undefined,
+        to ? lte(niyam_submissions.submission_date, to) : undefined,
+        cursor
+          ? or(
+              lt(niyam_submissions.submission_date, cursor.date),
+              and(
+                eq(niyam_submissions.submission_date, cursor.date),
+                lt(niyam_submissions.id, cursor.id),
+              ),
+            )
+          : undefined,
+      ),
+    )
+    .orderBy(desc(niyam_submissions.submission_date), desc(niyam_submissions.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  const nextCursor =
+    hasMore && last
+      ? Buffer.from(`${last.submission_date}|${last.id}`, "utf8").toString("base64url")
+      : null;
+
+  const items = page.map((r) => ({
+    id: r.id,
+    student_id: r.student_id,
+    student_name: r.student_name,
+    niyam_id: r.niyam_id,
+    niyam_title_en: r.niyam_title_en,
+    submission_date: r.submission_date,
+    status: r.status,
+    points_awarded: r.points_awarded,
+    is_featured: r.is_featured,
+    created_at: r.created_at.toISOString(),
+    ...rejectionWindowFields(r.status, r.created_at),
+  }));
+  ok(res, { items, next_cursor: nextCursor }, { count: items.length });
 });
 
 /* GET /v1/admin/punya/configs */

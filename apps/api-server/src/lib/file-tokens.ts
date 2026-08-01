@@ -21,7 +21,8 @@ const SECRET = (() => {
 })();
 
 const DOMAIN = "upload-url-v1";
-const TTL_SECONDS = Number(process.env.UPLOAD_URL_TTL_SECONDS ?? 24 * 60 * 60);
+/** Spec §10.3 — 1h default (gallery hands these to anonymous callers for minors). */
+const TTL_SECONDS = Number(process.env.UPLOAD_URL_TTL_SECONDS ?? 3600);
 
 function sign(key: string, exp: number): string {
   return createHmac("sha256", SECRET).update(`${DOMAIN}\n${key}\n${exp}`).digest("base64url");
@@ -45,12 +46,18 @@ export function uploadKeyFromUrl(url: string): string | null {
  * /uploads route will serve it; otherwise return it unchanged (external URLs,
  * e.g. admin-pasted library links, are not ours to sign). Safe to call on any
  * URL-ish field.
+ *
+ * @param ttlSeconds Optional per-call override (e.g. long-lived progress-report PDFs).
  */
-export function signUploadUrl<T extends string | null | undefined>(url: T): T {
+export function signUploadUrl<T extends string | null | undefined>(
+  url: T,
+  ttlSeconds?: number,
+): T {
   if (!url) return url;
   const key = uploadKeyFromUrl(url);
   if (key === null) return url;
-  const exp = Math.floor(Date.now() / 1000) + TTL_SECONDS;
+  const ttl = ttlSeconds ?? TTL_SECONDS;
+  const exp = Math.floor(Date.now() / 1000) + ttl;
   const sig = sign(key, exp);
   const sep = url.includes("?") ? "&" : "?";
   return `${url}${sep}se=${exp}&sig=${sig}` as T;

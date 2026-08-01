@@ -50,6 +50,13 @@
       "when": 1786185600000,
       "tag": "0006_niyam_rejected_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786272000000,
+      "tag": "0007_niyam_hardening",
+      "breakpoints": true
     }
   ]
 }

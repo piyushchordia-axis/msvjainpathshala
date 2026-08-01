@@ -1,8 +1,19 @@
-import { AnyPgColumn, boolean, index, integer, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import {
+  AnyPgColumn,
+  boolean,
+  index,
+  integer,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 import { timestamps } from "./_helpers";
 import { tierEnum } from "./enums";
+import { cities } from "./geography";
 import { students } from "./students";
 import { users } from "./identity";
 
@@ -10,17 +21,42 @@ export const punya_features = pgTable("punya_features", {
   id: uuid("id").primaryKey().defaultRandom(),
   key: text("key").notNull(),
   label: text("label").notNull(),
+  min_points: integer("min_points"),
+  max_points: integer("max_points"),
   is_active: boolean("is_active").notNull().default(true),
   ...timestamps(),
 });
 
-export const punya_configs = pgTable("punya_configs", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  feature_key: text("feature_key").notNull(),
-  points: integer("points").notNull().default(0),
-  is_active: boolean("is_active").notNull().default(true),
-  ...timestamps(),
-});
+export const punya_configs = pgTable(
+  "punya_configs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    feature_key: text("feature_key").notNull(),
+    points: integer("points").notNull().default(0),
+    /** Null = global/default config; set for a city-level override. */
+    city_id: uuid("city_id").references(() => cities.id, { onDelete: "cascade" }),
+    is_active: boolean("is_active").notNull().default(true),
+    ...timestamps(),
+  },
+  (t) => ({
+    feature_city_idx: index("idx_punya_configs_feature_city").on(t.feature_key, t.city_id),
+  }),
+);
+
+/** Registry of uploaded storage keys → owning user (proof URL ownership). */
+export const upload_objects = pgTable(
+  "upload_objects",
+  {
+    key: text("key").primaryKey(),
+    uploaded_by: uuid("uploaded_by")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    uploaded_by_idx: index("idx_upload_objects_uploaded_by").on(t.uploaded_by),
+  }),
+);
 
 export const punya_transactions = pgTable(
   "punya_transactions",

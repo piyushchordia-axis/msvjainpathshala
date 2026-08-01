@@ -23,34 +23,28 @@ import {
   niyam_submissions,
   shikshak_batch_assignments,
 } from "@workspace/db";
-import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
-import { periodKey, periodLabel, submittedPeriodTag } from "../../lib/niyam-period";
+import {
+  periodKey,
+  periodLabel,
+  submittedPeriodTag,
+  istCalendarDate,
+} from "../../lib/niyam-period";
 import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
 import { upsertIdCardArt } from "../../lib/idcard-render";
 import { auditFromReq } from "../../lib/audit";
 import { storage } from "../../lib/storage";
-import { clampLimit } from "../../lib/route-helpers";
+import { clampLimit, ownedStudentId } from "../../lib/route-helpers";
+import { studentCanAccessNiyam } from "../../lib/niyam-audience";
 
 const router: IRouter = Router();
 
 router.use(requireAuth);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-
-/** Resolve a student the caller owns (parent of, or is, that student). */
-async function ownedStudentId(req: Request, id: string): Promise<string | null> {
-  const uid = req.authUser!.id;
-  const [row] = await db
-    .select({ id: students.id })
-    .from(students)
-    .where(and(eq(students.id, id), isNull(students.deleted_at), or(eq(students.parent_id, uid), eq(students.user_id, uid))))
-    .limit(1);
-  return row?.id ?? null;
-}
 
 /* GET /v1/me/children — students owned by the caller (parent: kids; student: self) */
 router.get("/children", async (req: Request, res: Response) => {
@@ -314,6 +308,7 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
     };
   }
 
+  const today = istCalendarDate();
   const rows = await db
     .select({
       id: niyams.id,
@@ -331,20 +326,31 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
       state_id: niyams.state_id,
       city_id: niyams.city_id,
       msv_audience: niyams.msv_audience,
+      start_date: niyams.start_date,
+      end_date: niyams.end_date,
     })
     .from(niyams)
-    .where(eq(niyams.is_active, true))
+    .where(
+      and(
+        eq(niyams.is_active, true),
+        lte(niyams.start_date, today),
+        or(isNull(niyams.end_date), gte(niyams.end_date, today)),
+      ),
+    )
     .orderBy(desc(niyams.points));
 
   const items = studentCtx
-    ? rows.filter((n) => {
-        if (n.msv_audience === "msv" && studentCtx!.msv_status !== "approved") return false;
-        if (n.msv_audience === "non_msv" && studentCtx!.msv_status === "approved") return false;
-        if (n.scope === "national") return true;
-        if (n.scope === "state") return !!n.state_id && n.state_id === studentCtx!.state_id;
-        if (n.scope === "city") return !!n.city_id && n.city_id === studentCtx!.city_id;
-        return false;
-      })
+    ? rows.filter((n) =>
+        studentCanAccessNiyam(
+          {
+            msv_audience: n.msv_audience,
+            scope: n.scope,
+            state_id: n.state_id,
+            city_id: n.city_id,
+          },
+          studentCtx!,
+        ),
+      )
     : rows;
 
   // Current-period submission status in one query (no N+1).
@@ -353,11 +359,6 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
     { status: string; submission_date: string; period_key: string }
   >();
   if (studentId && items.length > 0) {
-    const today = (() => {
-      const now = new Date();
-      const ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
-      return ist.toISOString().slice(0, 10);
-    })();
     const keys = items.map((n) => ({
       id: n.id,
       type: n.niyam_type as "daily" | "weekly" | "monthly",

@@ -20,7 +20,7 @@
 import { logger } from "./logger";
 
 function isTestEnv(): boolean {
-  return process.env.NODE_ENV === "test";
+  return process.env.NODE_ENV === "test" || process.env.VITEST === "true";
 }
 
 // ---------------------------------------------------------------------------
@@ -104,7 +104,8 @@ async function redisRateLimited(
  * Redis failure is logged and treated as not-limited (fail open).
  */
 export async function rateLimit(key: string, limit: number, windowSec: number): Promise<boolean> {
-  if (isTestEnv()) return false;
+  // Integration suite logs in repeatedly — skip unless a test opts in.
+  if (isTestEnv() && process.env.JP_TEST_RATE_LIMIT !== "1") return false;
   const client = await getRedis().catch(() => undefined);
   if (!client) {
     return memoryRateLimited(key, limit, windowSec * 1000);
@@ -116,4 +117,14 @@ export async function rateLimit(key: string, limit: number, windowSec: number): 
     logger.error({ err, key }, "[ratelimit] redis command failed; failing open (request allowed)");
     return false;
   }
+}
+
+/** Clear in-memory buckets between rate-limit tests. */
+export function resetMemoryRateLimitsForTests(): void {
+  rlBuckets.clear();
+}
+
+/** Delete a single in-memory key (e.g. clear the per-minute bucket while testing the hourly cap). */
+export function clearMemoryRateLimitKeyForTests(key: string): void {
+  rlBuckets.delete(key);
 }
