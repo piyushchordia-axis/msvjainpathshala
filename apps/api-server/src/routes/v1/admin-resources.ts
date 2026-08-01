@@ -27,6 +27,7 @@ import {
   shikshak_batch_assignments,
   shikshak_centre_assignments,
 } from "@workspace/db";
+import { ageGroupFromDob } from "@workspace/db";
 import { and, asc, count, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
@@ -36,6 +37,10 @@ import { resolveAdminScope, cityIdsForState, type AdminScope } from "../../lib/s
 import { auditFromReq } from "../../lib/audit";
 import { awardPunya } from "../../lib/punya";
 import { isClientSettingKey } from "../../lib/client-settings";
+
+const phoneSchema = z.string().regex(/^\+[1-9]\d{6,14}$/, "Phone must be E.164 (+91…)");
+const bloodGroupSchema = z.enum(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]);
+const guardianRelationSchema = z.enum(["father", "mother", "guardian"]);
 
 const router: IRouter = Router();
 router.use(requireAuth, requireAdminPanel);
@@ -812,34 +817,186 @@ router.post("/batches", async (req: Request, res: Response) => {
 
 const createStudentSchema = z.object({
   full_name: z.string().min(1).max(200),
-  age_group: z.enum(["bal", "kishor", "tarun", "yuva"]),
   centre_id: z.string().uuid(),
+  dob: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Date of birth is required (YYYY-MM-DD)."),
   batch_id: z.string().uuid().optional(),
   gender: z.enum(["male", "female", "other"]).optional(),
-  dob: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  blood_group: bloodGroupSchema.optional(),
+  parent_full_name: z.string().min(1).max(200),
+  parent_phone: phoneSchema,
+  guardian_relation: guardianRelationSchema,
+  /** Ignored if sent — age group is always derived from dob. */
+  age_group: z.enum(["bal", "kishor", "tarun", "yuva"]).optional(),
 });
+
+async function ensureParentLogin(opts: {
+  phone: string;
+  full_name: string;
+  city_id: string | null;
+  state_id: string | null;
+  centre_id: string | null;
+}): Promise<{ ok: true; userId: string; created: boolean } | { ok: false; message: string }> {
+  const [existing] = await db
+    .select({
+      id: users.id,
+      role: users.role,
+      full_name: users.full_name,
+      is_active: users.is_active,
+    })
+    .from(users)
+    .where(and(eq(users.phone, opts.phone), isNull(users.deleted_at)))
+    .limit(1);
+
+  if (existing) {
+    if (existing.role !== "parent") {
+      return {
+        ok: false,
+        message: `Phone ${opts.phone} is already registered as ${existing.role}. Use a different parent number.`,
+      };
+    }
+    if (!existing.is_active) {
+      return { ok: false, message: "This parent account is inactive. Reactivate it before linking." };
+    }
+    if (existing.full_name !== opts.full_name.trim()) {
+      await db
+        .update(users)
+        .set({ full_name: opts.full_name.trim(), updated_at: new Date() })
+        .where(eq(users.id, existing.id));
+    }
+    return { ok: true, userId: existing.id, created: false };
+  }
+
+  const [row] = await db
+    .insert(users)
+    .values({
+      phone: opts.phone,
+      full_name: opts.full_name.trim(),
+      role: "parent",
+      city_id: opts.city_id,
+      state_id: opts.state_id,
+      centre_id_default: opts.centre_id,
+      is_active: true,
+      preferred_language: "en",
+    })
+    .returning({ id: users.id });
+  return { ok: true, userId: row.id, created: true };
+}
 
 /* POST /v1/admin/students */
 router.post("/students", async (req: Request, res: Response) => {
   let body: z.infer<typeof createStudentSchema>;
-  try { body = createStudentSchema.parse(req.body); }
-  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid student data."); return; }
+  try {
+    body = createStudentSchema.parse(req.body);
+  } catch (err) {
+    fail(
+      res,
+      422,
+      "ERR_VALIDATION_FAILED",
+      err instanceof z.ZodError ? err.issues[0]?.message ?? "Invalid student data." : "Invalid student data.",
+    );
+    return;
+  }
+
+  const age_group = ageGroupFromDob(body.dob);
+  if (!age_group) {
+    fail(
+      res,
+      422,
+      "ERR_VALIDATION_FAILED",
+      "Date of birth must yield an age between 5 and 21 years (Bal–Yuva).",
+    );
+    return;
+  }
+
   const scope = await resolveAdminScope(req.authUser!);
   if (!inScope(scope, body.centre_id)) {
-    fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope."); return;
+    fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope.");
+    return;
   }
+
+  const [centre] = await db
+    .select({ id: centres.id, city_id: centres.city_id, state_id: centres.state_id })
+    .from(centres)
+    .where(and(eq(centres.id, body.centre_id), isNull(centres.deleted_at)))
+    .limit(1);
+  if (!centre) {
+    fail(res, 404, "ERR_NOT_FOUND", "Centre not found.");
+    return;
+  }
+
+  if (body.batch_id) {
+    const [batch] = await db
+      .select({ id: batches.id, centre_id: batches.centre_id, age_groups: batches.age_groups })
+      .from(batches)
+      .where(and(eq(batches.id, body.batch_id), isNull(batches.deleted_at)))
+      .limit(1);
+    if (!batch || batch.centre_id !== body.centre_id) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Batch must belong to the selected centre.");
+      return;
+    }
+    const allowed = (batch.age_groups as string[] | null) ?? [];
+    if (allowed.length > 0 && !allowed.includes(age_group)) {
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        `This batch does not accept age group ${age_group} (from date of birth).`,
+      );
+      return;
+    }
+  }
+
+  const parent = await ensureParentLogin({
+    phone: body.parent_phone,
+    full_name: body.parent_full_name,
+    city_id: centre.city_id,
+    state_id: centre.state_id,
+    centre_id: centre.id,
+  });
+  if (!parent.ok) {
+    fail(res, 409, "ERR_DUPLICATE", parent.message);
+    return;
+  }
+
   const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(students);
   const student_code = `STU${String((total ?? 0) + 1).padStart(6, "0")}`;
-  const [row] = await db.insert(students).values({
-    full_name: body.full_name,
-    student_code,
-    age_group: body.age_group,
-    centre_id: body.centre_id,
-    batch_id: body.batch_id ?? null,
-    gender: body.gender ?? null,
-    dob: body.dob ?? null,
-  }).returning({ id: students.id, student_code: students.student_code, full_name: students.full_name });
-  ok(res, row);
+  const [row] = await db
+    .insert(students)
+    .values({
+      full_name: body.full_name.trim(),
+      student_code,
+      age_group,
+      centre_id: body.centre_id,
+      batch_id: body.batch_id ?? null,
+      gender: body.gender ?? null,
+      dob: body.dob,
+      blood_group: body.blood_group ?? null,
+      guardian_relation: body.guardian_relation,
+      parent_id: parent.userId,
+    })
+    .returning({
+      id: students.id,
+      student_code: students.student_code,
+      full_name: students.full_name,
+      age_group: students.age_group,
+      parent_id: students.parent_id,
+      blood_group: students.blood_group,
+    });
+
+  await auditFromReq(req, {
+    action: "create",
+    entityKind: "student",
+    entityId: row.id,
+    summary: `Registered student ${row.full_name} (${row.student_code}).`,
+    metadata: {
+      parent_id: parent.userId,
+      parent_created: parent.created,
+      age_group,
+      guardian_relation: body.guardian_relation,
+    },
+  });
+
+  ok(res, { ...row, parent_created: parent.created });
 });
 
 const createNoticeSchema = z.object({

@@ -128,12 +128,17 @@ function AddCentreDialog({ onAdded }: { onAdded: () => void }) {
 }
 
 export function CentresPage() {
+  const { user } = useAuth();
+  const canCreateCentre =
+    user?.role === 'super_admin' ||
+    user?.role === 'state_admin' ||
+    user?.role === 'city_admin';
   const { items, loading, error, reload } = useAdminList<CentreRow>('/v1/admin/centres');
   return (
     <AdminPageShell
       title="Centres"
-      subtitle="Manage centres in your scope."
-      actions={<AddCentreDialog onAdded={reload} />}
+      subtitle="Manage centres in your scope. Open a centre to add sanchalaks and Guruji / Didi."
+      actions={canCreateCentre ? <AddCentreDialog onAdded={reload} /> : undefined}
     >
       {error ? <AdminError message={error} /> : null}
       <AdminTable columns={['Centre', 'Location', 'Phone', 'Batches', 'Status']} loading={loading} empty="" colSpan={5}>

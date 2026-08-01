@@ -262,4 +262,102 @@ describe("staffing", () => {
     expect(res.body.error.code).toBe("ERR_NO_PRIMARY");
     await pool.query(`delete from batches where id = $1`, [batchId]);
   });
+
+  it("creates staff, one-shot tags+batches, pick excludes tagged; permission gates", async () => {
+    const admin = await loginAs("city_admin");
+    const sanch = await loginAs("sanchalak");
+    const digitPhone = (prefix: string) =>
+      `+${prefix}${String(Date.now()).slice(-8)}${Math.floor(Math.random() * 90 + 10)}`;
+
+    const created = await request(app)
+      .post("/v1/admin/users/staff")
+      .set(auth(admin.token))
+      .send({
+        phone: digitPhone("9197"),
+        full_name: "Created Shikshak API",
+        role: "shikshak",
+        gender: "female",
+        centre_id: GHATKOPAR,
+      });
+    expect(created.status).toBe(200);
+    expect(created.body.data.role).toBe("shikshak");
+    createdUsers.push(created.body.data.id);
+
+    const dup = await request(app)
+      .post("/v1/admin/users/staff")
+      .set(auth(admin.token))
+      .send({
+        phone: "+919800000005",
+        full_name: "Dup Phone",
+        role: "shikshak",
+      });
+    expect(dup.status).toBe(409);
+    expect(dup.body.error.code).toBe("ERR_DUPLICATE");
+
+    const blocked = await request(app)
+      .post("/v1/admin/users/staff")
+      .set(auth(sanch.token))
+      .send({
+        phone: digitPhone("9196"),
+        full_name: "Blocked Sanchalak",
+        role: "sanchalak",
+      });
+    expect(blocked.status).toBe(403);
+    expect(blocked.body.error.code).toBe("ERR_FORBIDDEN");
+
+    const oneShotPhone = digitPhone("9195");
+    const oneShot = await request(app)
+      .post(`/v1/admin/centres/${GHATKOPAR}/staff`)
+      .set(auth(admin.token))
+      .send({
+        role: "shikshak",
+        phone: oneShotPhone,
+        full_name: "One Shot Staff",
+        gender: "male",
+        batch_ids: [BAL_BATCH],
+        primary_batch_id: BAL_BATCH,
+      });
+    expect(oneShot.status).toBe(200);
+    expect(oneShot.body.data.created).toBe(true);
+    expect(oneShot.body.data.user.phone).toBe(oneShotPhone);
+    expect(oneShot.body.data.batches).toEqual(
+      expect.arrayContaining([expect.objectContaining({ batch_id: BAL_BATCH, is_primary: true })]),
+    );
+    createdUsers.push(oneShot.body.data.user.id);
+    createdCentreTags.push(oneShot.body.data.assignment_id);
+
+    const batchRow = await pool.query(
+      `select id from shikshak_batch_assignments
+       where user_id = $1 and batch_id = $2 and is_active`,
+      [oneShot.body.data.user.id, BAL_BATCH],
+    );
+    expect(batchRow.rows.length).toBe(1);
+    createdBatchAssigns.push(batchRow.rows[0].id);
+
+    await request(app)
+      .post(`/v1/admin/batches/${BAL_BATCH}/primary`)
+      .set(auth(admin.token))
+      .send({ user_id: SHIKSHAK_ID });
+
+    const pick = await request(app)
+      .get(`/v1/admin/users/pick?role=shikshak&centre_id=${GHATKOPAR}`)
+      .set(auth(admin.token));
+    expect(pick.status).toBe(200);
+    const ids = (pick.body.data.items as { id: string }[]).map((u) => u.id);
+    expect(ids).not.toContain(SHIKSHAK_ID);
+
+    const sanchCreate = await request(app)
+      .post(`/v1/admin/centres/${GHATKOPAR}/staff`)
+      .set(auth(sanch.token))
+      .send({
+        role: "shikshak",
+        phone: digitPhone("9194"),
+        full_name: "Sanch Created Shikshak",
+        gender: "female",
+      });
+    expect(sanchCreate.status).toBe(200);
+    expect(sanchCreate.body.data.created).toBe(true);
+    createdUsers.push(sanchCreate.body.data.user.id);
+    createdCentreTags.push(sanchCreate.body.data.assignment_id);
+  });
 });

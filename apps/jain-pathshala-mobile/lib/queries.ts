@@ -596,6 +596,7 @@ export interface IdCardRow {
   photo_url?: string | null;
   version_no: number;
   is_active: boolean;
+  last_regenerated_at?: string | null;
 }
 export function useMyIdCard(studentId?: string) {
   return useQuery({
@@ -627,9 +628,17 @@ export function useSetStudentPhoto() {
         photo_url: string | null;
         id_card: IdCardRow;
       }>(`/v1/me/students/${studentId}/photo`, { photo_url }),
-    onSuccess: (_res, vars) => {
-      qc.invalidateQueries({ queryKey: qk.idCard(vars.studentId) });
-      qc.invalidateQueries({ queryKey: qk.children });
+    onSuccess: (res, vars) => {
+      // Apply the freshly rendered card immediately so the UI doesn't keep the
+      // previous PNG (expo-image + signed URL cache) until a later refetch.
+      if (res?.id_card) {
+        qc.setQueryData<IdCardRow | null>(qk.idCard(vars.studentId), {
+          ...res.id_card,
+          photo_url: res.photo_url ?? res.id_card.photo_url,
+        });
+      }
+      void qc.invalidateQueries({ queryKey: qk.idCard(vars.studentId) });
+      void qc.invalidateQueries({ queryKey: qk.children });
     },
   });
 }

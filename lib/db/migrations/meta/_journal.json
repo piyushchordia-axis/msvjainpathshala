@@ -29,6 +29,13 @@
       "when": 1785926400000,
       "tag": "0003_student_photo",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786012800000,
+      "tag": "0004_student_parent_blood",
+      "breakpoints": true
     }
   ]
 }

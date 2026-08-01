@@ -100,12 +100,14 @@ export function NiyamProofPicker({
   const atCap = value.length >= maxUploads || maxUploads <= 0;
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder, 200);
-  const previewPlayer = useAudioPlayer(null);
-  const previewStatus = useAudioPlayerStatus(previewPlayer);
   const [audioReady, setAudioReady] = useState(Platform.OS === "web");
   const [webRecording, setWebRecording] = useState(false);
   const [webElapsedMs, setWebElapsedMs] = useState(0);
   const [pendingAudio, setPendingAudio] = useState<PendingAudio | null>(null);
+  // Bind source to pending URI so the player reloads when a take is ready
+  // (replace()+immediate play often fails silently after a recording session).
+  const previewPlayer = useAudioPlayer(pendingAudio?.uri ?? null, { updateInterval: 200 });
+  const previewStatus = useAudioPlayerStatus(previewPlayer);
   const webStopRef = useRef<(() => void) | null>(null);
   const webChunksRef = useRef<BlobPart[]>([]);
   const webRecorderRef = useRef<MediaRecorder | null>(null);
@@ -140,7 +142,12 @@ export function NiyamProofPicker({
       try {
         const status = await AudioModule.requestRecordingPermissionsAsync();
         if (status.granted) {
-          await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+          await setAudioModeAsync({
+            playsInSilentMode: true,
+            allowsRecording: true,
+            shouldRouteThroughEarpiece: false,
+            interruptionMode: "doNotMix",
+          });
           setAudioReady(true);
         } else {
           setAudioReady(false);
@@ -304,6 +311,27 @@ export function NiyamProofPicker({
     await enqueueUpload(kind, asset.uri, name, mime);
   }
 
+  async function setRecordingAudioMode(): Promise<void> {
+    if (Platform.OS === "web") return;
+    await setAudioModeAsync({
+      playsInSilentMode: true,
+      allowsRecording: true,
+      shouldRouteThroughEarpiece: false,
+      interruptionMode: "doNotMix",
+    });
+  }
+
+  /** Leave playAndRecord so preview routes to the loudspeaker, not the earpiece. */
+  async function setPlaybackAudioMode(): Promise<void> {
+    if (Platform.OS === "web") return;
+    await setAudioModeAsync({
+      playsInSilentMode: true,
+      allowsRecording: false,
+      shouldRouteThroughEarpiece: false,
+      interruptionMode: "doNotMix",
+    });
+  }
+
   async function ensureNativeMic(): Promise<boolean> {
     try {
       const status = await AudioModule.requestRecordingPermissionsAsync();
@@ -314,7 +342,7 @@ export function NiyamProofPicker({
         );
         return false;
       }
-      await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+      await setRecordingAudioMode();
       setAudioReady(true);
       return true;
     } catch (err) {
@@ -340,19 +368,22 @@ export function NiyamProofPicker({
       URL.revokeObjectURL(pendingAudio.uri);
     }
     setPendingAudio(null);
+    void setRecordingAudioMode();
   }
 
   async function playPendingAudio() {
     if (!pendingAudio) return;
     try {
-      if (Platform.OS !== "web") {
-        await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: false });
-      }
       if (previewStatus.playing) {
         previewPlayer.pause();
         return;
       }
-      previewPlayer.replace({ uri: pendingAudio.uri });
+      // Recording leaves the session in playAndRecord (often earpiece / inaudible).
+      // Always flip to playback mode before Play.
+      await setPlaybackAudioMode();
+      previewPlayer.volume = 1;
+      previewPlayer.replace(pendingAudio.uri);
+      await new Promise((r) => setTimeout(r, 150));
       await previewPlayer.seekTo(0);
       previewPlayer.play();
     } catch (err) {
@@ -445,6 +476,8 @@ export function NiyamProofPicker({
           Alert.alert(hi ? "त्रुटि" : "Error", hi ? "रिकॉर्डिंग सहेजी नहीं गई।" : "Recording was not saved.");
           return;
         }
+        // Switch out of recording session before preview so Play is audible.
+        await setPlaybackAudioMode();
         setPendingAudio({ uri, name: "recording.m4a", mime: "audio/mp4" });
       } else {
         try {
@@ -452,7 +485,7 @@ export function NiyamProofPicker({
         } catch {
           /* ignore */
         }
-        await setAudioModeAsync({ playsInSilentMode: true, allowsRecording: true });
+        await setRecordingAudioMode();
         await audioRecorder.prepareToRecordAsync();
         audioRecorder.record();
       }

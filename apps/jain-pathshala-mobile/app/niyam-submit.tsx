@@ -7,6 +7,7 @@ import { useNiyamCatalog, useSubmitNiyam } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
 import { bodyFamily } from "@/constants/typography";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
+import { NiyamListRow } from "@/components/NiyamListRow";
 import {
   NiyamProofPicker,
   mediaReady,
@@ -279,9 +280,9 @@ export default function NiyamSubmit() {
               </Card>
             ) : (
               <>
-                <Title style={{ fontSize: 17, marginLeft: 2 }}>
+                <Body style={{ fontSize: 13, fontWeight: "700", marginBottom: 8, marginLeft: 2, color: c.mutedForeground }}>
                   {hi ? "एक नियम चुनें" : "Pick a niyam"}
-                </Title>
+                </Body>
                 {catalog.isLoading ? (
                   <StateView status="loading" emptyText="" />
                 ) : catalog.isError ? (
@@ -298,54 +299,32 @@ export default function NiyamSubmit() {
                     emptyText={hi ? "अभी कोई नियम उपलब्ध नहीं है।" : "No niyams available yet."}
                   />
                 ) : (
-                  catalogRows.map((row) => {
-                    const title = hi ? row.title_hi : row.title_en;
-                    const desc = hi ? row.description_hi : row.description_en;
-                    const submitted = !!row.submitted_this_period;
-                    const tag = hi ? row.period_status_tag_hi : row.period_status_tag_en;
-                    return (
-                      <Card key={row.id}>
-                        <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-                          <View style={{ flex: 1, paddingRight: 10 }}>
-                            <Title style={{ fontSize: 16 }}>{title}</Title>
-                          </View>
-                          <Pill label={`+${row.points}`} tone="primary" />
-                        </Row>
-                        {desc ? (
-                          <Body muted style={{ marginTop: 8 }}>
-                            {desc}
-                          </Body>
-                        ) : null}
-                        <Row style={{ marginTop: 12, gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-                          <Pill label={row.niyam_type} />
-                          {(hi ? row.period_label_hi : row.period_label_en) ? (
-                            <Pill label={(hi ? row.period_label_hi : row.period_label_en) ?? ""} />
-                          ) : null}
-                          {submitted && tag ? <Pill label={tag} tone="primary" /> : null}
-                        </Row>
-                        <Row style={{ marginTop: 12, justifyContent: "flex-end" }}>
-                          <Button
-                            label={
-                              submitted
-                                ? hi
-                                  ? "देखें"
-                                  : "View"
-                                : hi
-                                  ? "चुनें"
-                                  : "Select"
-                            }
-                            variant="outline"
-                            icon="chevron-forward"
-                            onPress={() => {
-                              setSelectedId(row.id);
-                              setMedia([]);
-                              setNotes("");
-                            }}
-                          />
-                        </Row>
-                      </Card>
-                    );
-                  })
+                  <View style={{ gap: 8 }}>
+                    {catalogRows.map((row) => {
+                      const title = hi ? row.title_hi : row.title_en;
+                      const submitted = !!row.submitted_this_period;
+                      const tag = hi ? row.period_status_tag_hi : row.period_status_tag_en;
+                      const period = hi ? row.period_label_hi : row.period_label_en;
+                      const meta = [row.niyam_type, period, submitted ? tag : null]
+                        .filter(Boolean)
+                        .join(" · ");
+                      return (
+                        <NiyamListRow
+                          key={row.id}
+                          title={title}
+                          meta={meta}
+                          points={row.points}
+                          niyamType={row.niyam_type}
+                          emphasizedMeta={submitted}
+                          onPress={() => {
+                            setSelectedId(row.id);
+                            setMedia([]);
+                            setNotes("");
+                          }}
+                        />
+                      );
+                    })}
+                  </View>
                 )}
               </>
             )}

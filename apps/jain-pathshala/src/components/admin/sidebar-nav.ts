@@ -81,7 +81,7 @@ export const ADMIN_NAV: NavGroup[] = [
   {
     heading: 'Operations',
     items: [
-      { href: '/admin/centres', label: 'Centres', icon: Building2, min: 'city_admin' },
+      { href: '/admin/centres', label: 'Centres', icon: Building2, min: 'sanchalak' },
       { href: '/admin/holidays', label: 'Holiday calendar', icon: CalendarDays, min: 'sanchalak' },
       { href: '/admin/attendance', label: 'Attendance', icon: CalendarCheck, min: 'shikshak' },
       { href: '/admin/notices', label: 'Notices', icon: Megaphone, min: 'shikshak' },

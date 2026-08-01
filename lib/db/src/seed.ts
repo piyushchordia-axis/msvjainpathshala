@@ -67,6 +67,7 @@ import { sql } from "drizzle-orm";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { seedIndoreNetwork } from "./seed-indore";
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -370,23 +371,6 @@ async function main(): Promise<void> {
     })
     .returning();
 
-  const [centreIndore] = await db
-    .insert(centres)
-    .values({
-      state_id: madhyaPradesh.id,
-      city_id: indore.id,
-      name: "Indore Jain Pathshala",
-      locality: "Sapna Sangeeta",
-      pincode: "452001",
-      contact_phone: "+917300000004",
-      contact_email: "indore@example.org",
-      lat: "22.7196000",
-      lng: "75.8577000",
-      gps_radius_m: 250,
-      status: "active",
-    })
-    .returning();
-
   /* ---------------- Batches ---------------- */
   const [batchA1] = await db
     .insert(batches)
@@ -433,51 +417,33 @@ async function main(): Promise<void> {
     })
     .returning();
 
-  const [batchIndore1] = await db
-    .insert(batches)
-    .values({
-      centre_id: centreIndore.id,
-      name: "Bal Batch - Sunday Morning",
-      age_groups: ["bal"],
-      day_of_week: [7],
-      start_time: "09:00:00",
-      end_time: "10:30:00",
-      capacity: 30,
-      language_preference: "hi",
-      status: "active",
-    })
-    .returning();
-
-  const [batchIndore2] = await db
-    .insert(batches)
-    .values({
-      centre_id: centreIndore.id,
-      name: "Kishor Batch - Sunday Morning",
-      age_groups: ["kishor"],
-      day_of_week: [7],
-      start_time: "10:30:00",
-      end_time: "12:00:00",
-      capacity: 25,
-      language_preference: "hi",
-      status: "active",
-    })
-    .returning();
-
-  /* ---------------- Assignments ---------------- */
+  /* ---------------- Assignments (Mumbai) ---------------- */
   await db.insert(sanchalak_centre_assignments).values([
     { user_id: sanchalak.id, centre_id: centreA.id },
-    { user_id: indoreSanchalak.id, centre_id: centreIndore.id },
   ]);
   await db.insert(shikshak_centre_assignments).values([
     { user_id: shikshak.id, centre_id: centreA.id },
-    { user_id: indoreShikshak.id, centre_id: centreIndore.id },
   ]);
   await db.insert(shikshak_batch_assignments).values([
     { user_id: shikshak.id, batch_id: batchA1.id, is_primary: true },
     { user_id: shikshak.id, batch_id: batchA2.id, is_primary: true },
-    { user_id: indoreShikshak.id, batch_id: batchIndore1.id, is_primary: true },
-    { user_id: indoreShikshak.id, batch_id: batchIndore2.id, is_primary: true },
   ]);
+
+  /* ---------------- Indore network (5 centres + staffing + students) ---------------- */
+  const indoreNet = await seedIndoreNetwork({
+    stateId: madhyaPradesh.id,
+    cityId: indore.id,
+    assignedBy: indoreCityAdmin.id,
+    personas: {
+      sanchalak: indoreSanchalak,
+      shikshak: indoreShikshak,
+      parent: indoreParent,
+      studentUser: indoreStudentUser,
+    },
+  });
+  const centreIndore = indoreNet.demo.centre0;
+  const batchIndore1 = indoreNet.demo.batchBal0;
+  const batchIndore2 = indoreNet.demo.batchKishor0;
 
   /* ---------------- Students ---------------- */
   const studentSeeds = [
@@ -530,40 +496,9 @@ async function main(): Promise<void> {
       msv_status: "none" as const,
       dob: "2011-06-18",
     },
-    {
-      full_name: "Reyansh Jain",
-      code: "STU000101",
-      age_group: "bal" as const,
-      centre_id: centreIndore.id,
-      batch_id: batchIndore1.id,
-      msv_status: "approved" as const,
-      user_id: indoreStudentUser.id,
-      parent_id: indoreParent.id,
-      dob: "2016-08-21",
-    },
-    {
-      full_name: "Myra Sethi",
-      code: "STU000102",
-      age_group: "bal" as const,
-      centre_id: centreIndore.id,
-      batch_id: batchIndore1.id,
-      msv_status: "none" as const,
-      parent_id: indoreParent.id,
-      dob: "2015-12-05",
-    },
-    {
-      full_name: "Arjun Porwal",
-      code: "STU000103",
-      age_group: "kishor" as const,
-      centre_id: centreIndore.id,
-      batch_id: batchIndore2.id,
-      msv_status: "applied" as const,
-      parent_id: indoreParent.id,
-      dob: "2012-03-14",
-    },
   ];
 
-  const insertedStudents = await db
+  const mumbaiStudents = await db
     .insert(students)
     .values(
       studentSeeds.map((s) => ({
@@ -580,6 +515,17 @@ async function main(): Promise<void> {
       })),
     )
     .returning();
+
+  // Preserve prior index assumptions for Mumbai rows (0–4), then append Indore.
+  const indoreReyansh = indoreNet.students.find((s) => s.student_code === "STU000101")!;
+  const indoreMyra = indoreNet.students.find((s) => s.student_code === "STU000102")!;
+  const indoreArjun = indoreNet.students.find((s) => s.student_code === "STU000103")!;
+  const insertedStudents = [
+    ...mumbaiStudents,
+    indoreReyansh,
+    indoreMyra,
+    indoreArjun,
+  ] as typeof mumbaiStudents;
 
   /* ---------------- Enrolments ---------------- */
   await db.insert(enrolments).values([
@@ -633,23 +579,60 @@ async function main(): Promise<void> {
       decided_at: daysAgo(20),
     },
     { student_id: insertedStudents[7].id, status: "applied" },
+    ...indoreNet.students
+      .filter(
+        (s) =>
+          (s.msv_status === "approved" || s.msv_status === "applied") &&
+          s.student_code !== "STU000101" &&
+          s.student_code !== "STU000103",
+      )
+      .map((s) =>
+        s.msv_status === "approved"
+          ? {
+              student_id: s.id,
+              status: "approved" as const,
+              decided_by: indoreCityAdmin.id,
+              decided_at: daysAgo(15),
+            }
+          : { student_id: s.id, status: "applied" as const },
+      ),
   ]);
 
   /* ---------------- Sessions + Attendance ---------------- */
+  const indoreAttendanceSample = (batchId: string, limit = 4) =>
+    indoreNet.students.filter((s) => s.batch_id === batchId).slice(0, limit).map((s) => s.id);
+
   const batchStudents: Record<string, string[]> = {
     [batchA1.id]: [insertedStudents[0].id, insertedStudents[1].id],
     [batchA2.id]: [insertedStudents[2].id, insertedStudents[4].id],
     [batchB1.id]: [insertedStudents[3].id],
-    [batchIndore1.id]: [insertedStudents[5].id, insertedStudents[6].id],
-    [batchIndore2.id]: [insertedStudents[7].id],
+    [batchIndore1.id]: indoreAttendanceSample(batchIndore1.id, 6),
+    [batchIndore2.id]: indoreAttendanceSample(batchIndore2.id, 6),
   };
 
-  const sessionBatches: Array<{ batch: typeof batchA1; teacherId: string }> = [
+  // Sample sessions for remaining Indore centre-0 tarun + one batch at each other centre.
+  for (const [ci, key] of [
+    [0, "tarun"],
+    [1, "bal"],
+    [2, "kishor"],
+    [3, "tarun"],
+    [4, "bal"],
+  ] as const) {
+    const b = indoreNet.batchGrid[ci]![key];
+    batchStudents[b.id] = indoreAttendanceSample(b.id, 4);
+  }
+
+  const sessionBatches: Array<{ batch: { id: string }; teacherId: string }> = [
     { batch: batchA1, teacherId: shikshak.id },
     { batch: batchA2, teacherId: shikshak.id },
     { batch: batchB1, teacherId: shikshak.id },
     { batch: batchIndore1, teacherId: indoreShikshak.id },
     { batch: batchIndore2, teacherId: indoreShikshak.id },
+    { batch: indoreNet.batchGrid[0]!.tarun, teacherId: indoreNet.shikshaks[1]!.id },
+    { batch: indoreNet.batchGrid[1]!.bal, teacherId: indoreNet.shikshaks[1]!.id },
+    { batch: indoreNet.batchGrid[2]!.kishor, teacherId: indoreNet.shikshaks[3]!.id },
+    { batch: indoreNet.batchGrid[3]!.tarun, teacherId: indoreNet.shikshaks[5]!.id },
+    { batch: indoreNet.batchGrid[4]!.bal, teacherId: indoreNet.shikshaks[6]!.id },
   ];
 
   for (const { batch, teacherId } of sessionBatches) {
@@ -1389,10 +1372,15 @@ async function main(): Promise<void> {
   console.log("  --- Indore (Madhya Pradesh) ---");
   console.log("  state_admin : +919800000011");
   console.log("  city_admin  : +919800000012");
-  console.log("  sanchalak   : +919800000013");
-  console.log("  shikshak    : +919800000014");
-  console.log("  parent      : +919800000015");
-  console.log("  student     : +919800000016");
+  console.log(`  centres     : ${indoreNet.centres.length}  | batches: ${indoreNet.batches.length}  | students: ${indoreNet.students.length}`);
+  console.log("  sanchalak   : +919800000013  (+ multi-centre sanchalaks +919800002020…)");
+  console.log("  shikshak    : +919800000014  (+ shikshaks +919800002030…)");
+  console.log("  parent      : +919800000015  (3 children)  | more parents +919800002040…");
+  console.log("  student     : +919800000016  (Reyansh Jain / STU000101)");
+  for (const [i, c] of indoreNet.centres.entries()) {
+    const n = indoreNet.students.filter((s) => s.centre_id === c.id).length;
+    console.log(`    centre[${i}] ${c.name} — ${n} students`);
+  }
 
   /* ---------------- Digital ID cards (PNG + QR) ---------------- */
   // Rendered via api-server helpers (qrcode/sharp + same HMAC as /v1/id-cards).

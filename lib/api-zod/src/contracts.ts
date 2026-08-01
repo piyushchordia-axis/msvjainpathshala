@@ -49,6 +49,27 @@ export const AGE_GROUP_META = {
   yuva: { label_en: "Yuva 17-21 years", label_hi: "युवा 17-21 वर्ष", min: 17, max: 21 },
 } as const satisfies Record<AgeGroup, { label_en: string; label_hi: string; min: number; max: number }>;
 
+/** Whole years completed as of `on` (default today, local calendar). */
+export function ageYearsFromDob(dob: string | Date, on: Date = new Date()): number {
+  const d = typeof dob === "string" ? new Date(`${dob.slice(0, 10)}T00:00:00`) : dob;
+  if (Number.isNaN(d.getTime())) return NaN;
+  let age = on.getFullYear() - d.getFullYear();
+  const monthDelta = on.getMonth() - d.getMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && on.getDate() < d.getDate())) age -= 1;
+  return age;
+}
+
+/** Map DOB → age group using AGE_GROUP_META ranges. Null if outside 5–21. */
+export function ageGroupFromDob(dob: string | Date, on: Date = new Date()): AgeGroup | null {
+  const age = ageYearsFromDob(dob, on);
+  if (!Number.isFinite(age) || age < 0) return null;
+  for (const g of AGE_GROUPS) {
+    const meta = AGE_GROUP_META[g];
+    if (age >= meta.min && age <= meta.max) return g;
+  }
+  return null;
+}
+
 export function formatAgeGroup(code: string, lang: "en" | "hi" = "en"): string {
   const meta = AGE_GROUP_META[code as AgeGroup];
   if (!meta) return code;
@@ -187,6 +208,26 @@ export const staffingAssignBodySchema = z.object({
   user_id: z.string().uuid(),
 });
 
+export const createStaffUserBodySchema = z.object({
+  phone: z.string().regex(/^\+[1-9]\d{6,14}$/),
+  full_name: z.string().min(1).max(200),
+  role: z.enum(["sanchalak", "shikshak"]),
+  gender: z.enum(["male", "female", "other"]).optional(),
+  city_id: z.string().uuid().optional(),
+  state_id: z.string().uuid().optional(),
+  centre_id: z.string().uuid().optional(),
+});
+
+export const centreStaffBodySchema = z.object({
+  role: z.enum(["sanchalak", "shikshak"]),
+  user_id: z.string().uuid().optional(),
+  phone: z.string().regex(/^\+[1-9]\d{6,14}$/).optional(),
+  full_name: z.string().min(1).max(200).optional(),
+  gender: z.enum(["male", "female", "other"]).optional(),
+  batch_ids: z.array(z.string().uuid()).max(50).optional(),
+  primary_batch_id: z.string().uuid().optional(),
+});
+
 export const staffingCentreShikshakRowSchema = z.object({
   id: z.string(),
   user_id: z.string(),
@@ -195,6 +236,15 @@ export const staffingCentreShikshakRowSchema = z.object({
   gender: z.string().nullable().optional(),
   is_active: z.boolean(),
   batch_count: z.number().optional(),
+  batches: z
+    .array(
+      z.object({
+        batch_id: z.string(),
+        batch_name: z.string(),
+        is_primary: z.boolean(),
+      }),
+    )
+    .optional(),
 });
 
 export const staffingBatchShikshakRowSchema = z.object({

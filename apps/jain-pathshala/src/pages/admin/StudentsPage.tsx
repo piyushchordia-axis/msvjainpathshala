@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
-import { AGE_GROUPS, formatAgeGroup } from '@workspace/api-zod';
+import { ageGroupFromDob, formatAgeGroup } from '@workspace/api-zod';
 import { toast } from '@/components/ui/toast-jp';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
@@ -14,6 +14,13 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+
+const BLOOD_GROUPS = ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] as const;
+const GUARDIAN_RELATIONS = [
+  { value: 'father', label: 'Father' },
+  { value: 'mother', label: 'Mother' },
+  { value: 'guardian', label: 'Guardian' },
+] as const;
 
 interface AdminStudentRow {
   id: string;
@@ -23,6 +30,14 @@ interface AdminStudentRow {
   dob: string | null;
   msv_status: string;
   status: 'active' | 'inactive';
+}
+
+function normalizePhone(raw: string): string {
+  const digits = raw.replace(/\D/g, '');
+  if (raw.trim().startsWith('+')) return `+${digits}`;
+  if (digits.length === 10) return `+91${digits}`;
+  if (digits.length === 12 && digits.startsWith('91')) return `+${digits}`;
+  return raw.trim();
 }
 
 function StatusPill({ status }: { status: string }) {
@@ -89,8 +104,6 @@ function StudentRowActions({
 interface CentreOpt { id: string; name: string; }
 interface BatchOpt { id: string; name: string; centre_id: string; }
 
-const AGE_GROUPS_S = AGE_GROUPS;
-
 function AddStudentDialog({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -99,9 +112,12 @@ function AddStudentDialog({ onAdded }: { onAdded: () => void }) {
   const [fullName, setFullName] = useState('');
   const [centreId, setCentreId] = useState('');
   const [batchId, setBatchId] = useState('');
-  const [ageGroup, setAgeGroup] = useState('');
   const [gender, setGender] = useState('');
   const [dob, setDob] = useState('');
+  const [bloodGroup, setBloodGroup] = useState('');
+  const [guardianRelation, setGuardianRelation] = useState<'father' | 'mother' | 'guardian'>('father');
+  const [parentName, setParentName] = useState('');
+  const [parentPhone, setParentPhone] = useState('');
 
   useEffect(() => {
     if (!open) return;
@@ -110,23 +126,54 @@ function AddStudentDialog({ onAdded }: { onAdded: () => void }) {
   }, [open]);
 
   const filteredBatches = centreId ? batches.filter((b) => b.centre_id === centreId) : batches;
+  const derivedAgeGroup = dob ? ageGroupFromDob(dob) : null;
+
+  function resetForm() {
+    setFullName('');
+    setCentreId('');
+    setBatchId('');
+    setGender('');
+    setDob('');
+    setBloodGroup('');
+    setGuardianRelation('father');
+    setParentName('');
+    setParentPhone('');
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!fullName.trim() || !centreId || !ageGroup) return;
+    const phone = normalizePhone(parentPhone);
+    if (!fullName.trim() || !centreId || !dob || !parentName.trim() || !phone.startsWith('+')) {
+      toast.error('Fill student name, centre, date of birth, and parent name + phone.');
+      return;
+    }
+    if (!derivedAgeGroup) {
+      toast.error('Date of birth must be between 5 and 21 years of age.');
+      return;
+    }
     setBusy(true);
     try {
-      const res = await apiPost<{ student_code: string }>('/v1/admin/students', {
-        full_name: fullName.trim(),
-        centre_id: centreId,
-        batch_id: batchId || undefined,
-        age_group: ageGroup,
-        gender: gender || undefined,
-        dob: dob || undefined,
-      });
-      toast.success(`Student registered (${res.student_code}).`);
+      const res = await apiPost<{ student_code: string; parent_created?: boolean }>(
+        '/v1/admin/students',
+        {
+          full_name: fullName.trim(),
+          centre_id: centreId,
+          batch_id: batchId || undefined,
+          gender: gender || undefined,
+          dob,
+          blood_group: bloodGroup || undefined,
+          parent_full_name: parentName.trim(),
+          parent_phone: phone,
+          guardian_relation: guardianRelation,
+        },
+      );
+      toast.success(
+        res.parent_created
+          ? `Student registered (${res.student_code}). Parent login created.`
+          : `Student registered (${res.student_code}). Linked to existing parent.`,
+      );
       setOpen(false);
-      setFullName(''); setCentreId(''); setBatchId(''); setAgeGroup(''); setGender(''); setDob('');
+      resetForm();
       onAdded();
     } catch (err) {
       toast.error('Failed to register student.', err instanceof ApiError ? err.message : undefined);
@@ -135,12 +182,20 @@ function AddStudentDialog({ onAdded }: { onAdded: () => void }) {
     }
   }
 
+  const canSubmit =
+    !!fullName.trim() &&
+    !!centreId &&
+    !!dob &&
+    !!derivedAgeGroup &&
+    !!parentName.trim() &&
+    !!parentPhone.trim();
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <Button size="sm"><Plus className="mr-1 h-4 w-4" />Add student</Button>
       </DialogTrigger>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Register student</DialogTitle></DialogHeader>
         <form className="space-y-4 pt-2" onSubmit={submit}>
           <div className="space-y-1">
@@ -156,14 +211,19 @@ function AddStudentDialog({ onAdded }: { onAdded: () => void }) {
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-1">
-            <Label className="text-xs font-medium">Age group *</Label>
-            <Select value={ageGroup} onValueChange={setAgeGroup}>
-              <SelectTrigger><SelectValue placeholder="Select age group" /></SelectTrigger>
-              <SelectContent>
-                {AGE_GROUPS_S.map((g) => <SelectItem key={g} value={g}>{formatAgeGroup(g)}</SelectItem>)}
-              </SelectContent>
-            </Select>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs font-medium">Date of birth *</Label>
+              <Input type="date" value={dob} onChange={(e) => setDob(e.target.value)} required />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs font-medium">Age group</Label>
+              <Input
+                readOnly
+                value={dob ? (derivedAgeGroup ? formatAgeGroup(derivedAgeGroup) : 'Outside 5–21 yrs') : 'From date of birth'}
+                className="bg-muted"
+              />
+            </div>
           </div>
           <div className="space-y-1">
             <Label className="text-xs font-medium">Batch (optional)</Label>
@@ -187,13 +247,63 @@ function AddStudentDialog({ onAdded }: { onAdded: () => void }) {
               </Select>
             </div>
             <div className="space-y-1">
-              <Label className="text-xs font-medium">Date of birth</Label>
-              <Input type="date" value={dob} onChange={(e) => setDob(e.target.value)} />
+              <Label className="text-xs font-medium">Blood group</Label>
+              <Select value={bloodGroup} onValueChange={setBloodGroup}>
+                <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
+                <SelectContent>
+                  {BLOOD_GROUPS.map((g) => (
+                    <SelectItem key={g} value={g}>{g}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
+
+          <div className="rounded-md border border-border/70 p-3 space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Parent / guardian login
+            </p>
+            <div className="space-y-1">
+              <Label className="text-xs font-medium">Relation *</Label>
+              <Select
+                value={guardianRelation}
+                onValueChange={(v) => setGuardianRelation(v as 'father' | 'mother' | 'guardian')}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {GUARDIAN_RELATIONS.map((r) => (
+                    <SelectItem key={r.value} value={r.value}>{r.label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs font-medium">Name *</Label>
+              <Input
+                value={parentName}
+                onChange={(e) => setParentName(e.target.value)}
+                placeholder="Parent / guardian full name"
+                required
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs font-medium">Mobile *</Label>
+              <Input
+                value={parentPhone}
+                onChange={(e) => setParentPhone(e.target.value)}
+                placeholder="+91 98XXXXXXXX"
+                inputMode="tel"
+                required
+              />
+              <p className="text-[11px] text-muted-foreground">
+                They can sign in with this number (OTP) to manage the student.
+              </p>
+            </div>
+          </div>
+
           <div className="flex justify-end gap-2 pt-2">
             <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
-            <Button type="submit" disabled={busy || !fullName.trim() || !centreId || !ageGroup}>
+            <Button type="submit" disabled={busy || !canSubmit}>
               {busy ? 'Saving…' : 'Register'}
             </Button>
           </div>

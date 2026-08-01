@@ -9,9 +9,8 @@ import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
-import { Body, Button, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 import { QuickActions } from "@/components/QuickActions";
-import { formatAgeGroup } from "@workspace/api-zod";
 
 export default function StudentHome() {
   const c = useColors();
@@ -26,7 +25,8 @@ export default function StudentHome() {
   const firstName = user?.full_name?.split(" ")[0] ?? (hi ? "विद्यार्थी" : "Student");
 
   const attendanceRows = attendance.data?.items ?? [];
-  const recentRows = attendanceRows.slice(0, 5);
+  const recentRows = attendanceRows.slice(0, 2);
+  const hasMoreAttendance = attendanceRows.length > 2;
   const presentCount = attendanceRows.filter(
     (r) => r.status.toLowerCase() === "present",
   ).length;
@@ -77,102 +77,103 @@ export default function StudentHome() {
 
             <AnimatedMount delay={120}>
               <Card>
-                <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <View style={{ flex: 1, paddingRight: 10 }}>
-                    <Title style={{ fontSize: 19 }}>{activeChild.full_name}</Title>
-                    <Body muted style={{ marginTop: 2, fontSize: 13 }}>{activeChild.student_code}</Body>
+                <Row style={{ justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                  <View style={{ flex: 1 }}>
+                    <Body muted style={{ fontSize: 12 }}>
+                      {hi ? "विद्यार्थी आईडी" : "Student ID"}
+                    </Body>
+                    <Title style={{ fontSize: 20, marginTop: 2 }}>{activeChild.student_code}</Title>
                   </View>
-                  <Pill label={activeChild.tier} tone="primary" />
+                  <Button
+                    label={hi ? "पहचान पत्र" : "ID Card"}
+                    icon="card-outline"
+                    variant="outline"
+                    onPress={() => router.push("/idcard")}
+                  />
                 </Row>
-
-                <Row style={{ marginTop: 14, alignItems: "baseline", gap: 8 }}>
-                  <Numeric style={{ fontSize: 30 }} countUp>
-                    {activeChild.total_points}
-                  </Numeric>
-                  <Body muted>{hi ? "कुल पुण्य अंक" : "total punya points"}</Body>
-                </Row>
-
-                <View style={{ height: 1, backgroundColor: c.border, marginVertical: 14 }} />
-
-                <View style={{ gap: 8 }}>
-                  <Row style={{ justifyContent: "space-between" }}>
-                    <Body muted style={{ fontSize: 13 }}>{hi ? "आयु वर्ग" : "Age group"}</Body>
-                    <Body style={{ fontSize: 14 }}>{formatAgeGroup(activeChild.age_group, hi ? "hi" : "en")}</Body>
-                  </Row>
-                  <Row style={{ justifyContent: "space-between" }}>
-                    <Body muted style={{ fontSize: 13 }}>{hi ? "केंद्र" : "Centre"}</Body>
-                    <Body style={{ fontSize: 14 }}>{activeChild.centre_name ?? "—"}</Body>
-                  </Row>
-                  <Row style={{ justifyContent: "space-between" }}>
-                    <Body muted style={{ fontSize: 13 }}>{hi ? "बैच" : "Batch"}</Body>
-                    <Body style={{ fontSize: 14 }}>{activeChild.batch_name ?? "—"}</Body>
-                  </Row>
-                  {activeChild.msv_status && activeChild.msv_status !== "none" ? (
-                    <Row style={{ justifyContent: "space-between" }}>
-                      <Body muted style={{ fontSize: 13 }}>{hi ? "एमएसवी स्थिति" : "MSV status"}</Body>
-                      <Pill label={activeChild.msv_status} />
-                    </Row>
+                {activeChild.centre_name ? (
+                  <Body style={{ marginTop: 12 }}>{activeChild.centre_name}</Body>
+                ) : null}
+                <Row style={{ gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
+                  <Pill
+                    label={
+                      hi
+                        ? `${activeChild.total_points} पुण्य`
+                        : `${activeChild.total_points} punya`
+                    }
+                    tone="primary"
+                  />
+                  {activeChild.tier ? (
+                    <Pill label={activeChild.tier} tone="info" />
                   ) : null}
-                </View>
-
-                <Button
-                  label={hi ? "पहचान पत्र" : "ID Card"}
-                  icon="card-outline"
-                  variant="outline"
-                  style={{ marginTop: 14 }}
-                  onPress={() => router.push("/idcard")}
-                />
+                  {activeChild.msv_status === "approved" ? (
+                    <Pill label="MSV" tone="neutral" />
+                  ) : null}
+                </Row>
               </Card>
             </AnimatedMount>
 
-            <Row style={{ justifyContent: "space-between", marginTop: 4, marginLeft: 2 }}>
-              <Title style={{ fontSize: 17 }}>{hi ? "उपस्थिति" : "Attendance"}</Title>
-              {presentRate !== null ? (
-                <Pill
-                  label={`${presentRate}% ${hi ? "उपस्थित" : "present"}`}
-                  tone={presentRate >= 75 ? "success" : presentRate >= 50 ? "warning" : "error"}
-                />
-              ) : null}
-            </Row>
+            <AnimatedMount delay={180}>
+              <Card>
+                <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
+                  <Title style={{ fontSize: 17 }}>{hi ? "उपस्थिति" : "Attendance"}</Title>
+                  {presentRate !== null ? (
+                    <Pill
+                      label={`${presentRate}% ${hi ? "उपस्थित" : "present"}`}
+                      tone={presentRate >= 75 ? "success" : presentRate >= 50 ? "warning" : "error"}
+                    />
+                  ) : null}
+                </Row>
 
-            {attendance.isLoading ? (
-              <StateView status="loading" emptyText="" />
-            ) : attendance.isError ? (
-              <StateView
-                status="error"
-                emptyText=""
-                errorText={hi ? "उपस्थिति लोड नहीं हुई।" : "Could not load attendance."}
-                onRetry={attendance.refetch}
-                retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
-              />
-            ) : recentRows.length === 0 ? (
-              <StateView status="empty" emptyText={hi ? "अभी कोई उपस्थिति दर्ज नहीं है।" : "No attendance recorded yet."} />
-            ) : (
-              <AnimatedMount delay={180}>
-                <Card style={{ padding: 0, overflow: "hidden" }}>
-                  {recentRows.map((row, i) => (
-                    <Row
-                      key={row.id}
-                      style={{
-                        justifyContent: "space-between",
-                        paddingHorizontal: 14,
-                        paddingVertical: 12,
-                        borderBottomWidth: i < recentRows.length - 1 ? 1 : 0,
-                        borderBottomColor: c.border,
-                      }}
-                    >
-                      <View style={{ flex: 1, paddingRight: 10 }}>
-                        <Body style={{ fontSize: 14 }}>{formatDate(row.session_date)}</Body>
-                        {row.topic ? (
-                          <Body muted style={{ fontSize: 12, marginTop: 1 }} numberOfLines={1}>{row.topic}</Body>
-                        ) : null}
-                      </View>
-                      <Pill label={row.status} tone={statusTone(row.status)} />
-                    </Row>
-                  ))}
-                </Card>
-              </AnimatedMount>
-            )}
+                {attendance.isLoading ? (
+                  <StateView status="loading" emptyText="" />
+                ) : attendance.isError ? (
+                  <StateView
+                    status="error"
+                    emptyText=""
+                    errorText={hi ? "उपस्थिति लोड नहीं हुई।" : "Could not load attendance."}
+                    onRetry={attendance.refetch}
+                    retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
+                  />
+                ) : recentRows.length === 0 ? (
+                  <Body muted style={{ marginTop: 10 }}>
+                    {hi ? "अभी कोई उपस्थिति दर्ज नहीं है।" : "No attendance recorded yet."}
+                  </Body>
+                ) : (
+                  <View style={{ marginTop: 12 }}>
+                    {recentRows.map((row, i) => (
+                      <Row
+                        key={row.id}
+                        style={{
+                          justifyContent: "space-between",
+                          paddingVertical: 10,
+                          borderTopWidth: i === 0 ? 0 : 1,
+                          borderTopColor: c.border,
+                        }}
+                      >
+                        <View style={{ flex: 1, paddingRight: 10 }}>
+                          <Body style={{ fontSize: 14 }}>{formatDate(row.session_date)}</Body>
+                          {row.topic ? (
+                            <Body muted style={{ fontSize: 12, marginTop: 1 }} numberOfLines={1}>
+                              {row.topic}
+                            </Body>
+                          ) : null}
+                        </View>
+                        <Pill label={row.status} tone={statusTone(row.status)} />
+                      </Row>
+                    ))}
+                    {hasMoreAttendance ? (
+                      <Button
+                        label={hi ? "और देखें →" : "View more →"}
+                        variant="ghost"
+                        style={{ marginTop: 4, alignSelf: "flex-start" }}
+                        onPress={() => router.push("/my-attendance")}
+                      />
+                    ) : null}
+                  </View>
+                )}
+              </Card>
+            </AnimatedMount>
           </>
         )}
       </Screen>

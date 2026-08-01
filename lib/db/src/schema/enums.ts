@@ -28,6 +28,27 @@ export const AGE_GROUP_META = {
 
 export type AgeGroup = (typeof AGE_GROUPS)[number];
 
+/** Whole years completed as of `on` (default today, local calendar). */
+export function ageYearsFromDob(dob: string | Date, on: Date = new Date()): number {
+  const d = typeof dob === "string" ? new Date(`${dob.slice(0, 10)}T00:00:00`) : dob;
+  if (Number.isNaN(d.getTime())) return NaN;
+  let age = on.getFullYear() - d.getFullYear();
+  const monthDelta = on.getMonth() - d.getMonth();
+  if (monthDelta < 0 || (monthDelta === 0 && on.getDate() < d.getDate())) age -= 1;
+  return age;
+}
+
+/** Map DOB → age group using AGE_GROUP_META ranges. Null if outside 5–21. */
+export function ageGroupFromDob(dob: string | Date, on: Date = new Date()): AgeGroup | null {
+  const age = ageYearsFromDob(dob, on);
+  if (!Number.isFinite(age) || age < 0) return null;
+  for (const g of AGE_GROUPS) {
+    const meta = AGE_GROUP_META[g];
+    if (age >= meta.min && age <= meta.max) return g;
+  }
+  return null;
+}
+
 export function formatAgeGroup(code: string, lang: "en" | "hi" = "en"): string {
   const meta = AGE_GROUP_META[code as AgeGroup];
   if (!meta) return code;

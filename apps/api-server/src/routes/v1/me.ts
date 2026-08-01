@@ -179,8 +179,13 @@ router.put("/students/:id/photo", async (req: Request, res: Response) => {
     student_id: id,
     photo_url: signUploadUrl(body.photo_url),
     id_card: {
-      ...card,
+      student_id: card.student_id,
+      card_number: card.card_number,
       png_url: signUploadUrl(card.png_url),
+      photo_url: signUploadUrl(body.photo_url),
+      version_no: card.version_no,
+      is_active: card.is_active,
+      last_regenerated_at: card.last_regenerated_at,
     },
   });
 });

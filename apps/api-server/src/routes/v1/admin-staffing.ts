@@ -14,13 +14,17 @@ import {
   shikshak_centre_assignments,
   shikshak_batch_assignments,
 } from "@workspace/db";
-import { and, asc, count, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, count, eq, inArray, isNull, notInArray, or } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, inCentreScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import type { Role } from "@workspace/api-zod";
+
+const phoneSchema = z.string().regex(/^\+[1-9]\d{6,14}$/, "Phone must be E.164 (+91…)");
+const genderSchema = z.enum(["male", "female", "other"]);
+const staffRoleSchema = z.enum(["sanchalak", "shikshak"]);
 
 const router: IRouter = Router();
 router.use(requireAuth, requireAdminPanel);
@@ -286,13 +290,15 @@ router.get("/centres/:id/shikshaks", async (req: Request, res: Response) => {
     .orderBy(asc(users.full_name));
 
   const userIds = rows.map((r) => r.user_id);
-  const counts =
+  const batchAssigns =
     userIds.length === 0
       ? []
       : await db
           .select({
             user_id: shikshak_batch_assignments.user_id,
-            batch_count: count(),
+            batch_id: batches.id,
+            batch_name: batches.name,
+            is_primary: shikshak_batch_assignments.is_primary,
           })
           .from(shikshak_batch_assignments)
           .innerJoin(batches, eq(batches.id, shikshak_batch_assignments.batch_id))
@@ -304,9 +310,24 @@ router.get("/centres/:id/shikshaks", async (req: Request, res: Response) => {
               isNull(batches.deleted_at),
             ),
           )
-          .groupBy(shikshak_batch_assignments.user_id);
-  const countMap = new Map(counts.map((c) => [c.user_id, Number(c.batch_count)]));
-  const items = rows.map((r) => ({ ...r, batch_count: countMap.get(r.user_id) ?? 0 }));
+          .orderBy(asc(batches.name));
+  const byUser = new Map<
+    string,
+    { batch_id: string; batch_name: string; is_primary: boolean }[]
+  >();
+  for (const a of batchAssigns) {
+    const list = byUser.get(a.user_id) ?? [];
+    list.push({
+      batch_id: a.batch_id,
+      batch_name: a.batch_name,
+      is_primary: a.is_primary,
+    });
+    byUser.set(a.user_id, list);
+  }
+  const items = rows.map((r) => {
+    const batchesForUser = byUser.get(r.user_id) ?? [];
+    return { ...r, batch_count: batchesForUser.length, batches: batchesForUser };
+  });
   ok(res, { items }, { count: items.length });
 });
 
@@ -829,13 +850,441 @@ router.get("/staffing/me", async (req: Request, res: Response) => {
   });
 });
 
-/* GET /v1/admin/users/pick?role=shikshak|sanchalak — role-filtered picker for staffing UIs */
+const createStaffBodySchema = z.object({
+  phone: phoneSchema,
+  full_name: z.string().min(1).max(200),
+  role: staffRoleSchema,
+  gender: genderSchema.optional(),
+  city_id: z.string().uuid().optional(),
+  state_id: z.string().uuid().optional(),
+  centre_id: z.string().uuid().optional(),
+});
+
+async function insertStaffUser(opts: {
+  phone: string;
+  full_name: string;
+  role: "sanchalak" | "shikshak";
+  gender?: "male" | "female" | "other" | null;
+  city_id?: string | null;
+  state_id?: string | null;
+  centre_id_default?: string | null;
+}): Promise<
+  | { ok: true; user: { id: string; phone: string; full_name: string; role: string; gender: string | null } }
+  | { ok: false; code: "ERR_DUPLICATE" }
+> {
+  const [dup] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(and(eq(users.phone, opts.phone), isNull(users.deleted_at)))
+    .limit(1);
+  if (dup) return { ok: false, code: "ERR_DUPLICATE" };
+
+  const [row] = await db
+    .insert(users)
+    .values({
+      phone: opts.phone,
+      full_name: opts.full_name.trim(),
+      role: opts.role,
+      gender: opts.gender ?? null,
+      city_id: opts.city_id ?? null,
+      state_id: opts.state_id ?? null,
+      centre_id_default: opts.centre_id_default ?? null,
+      is_active: true,
+      preferred_language: "en",
+    })
+    .returning({
+      id: users.id,
+      phone: users.phone,
+      full_name: users.full_name,
+      role: users.role,
+      gender: users.gender,
+    });
+  return { ok: true, user: row };
+}
+
+async function ensureCentreTag(
+  role: "sanchalak" | "shikshak",
+  userId: string,
+  centreId: string,
+  assignedBy: string,
+): Promise<string> {
+  if (role === "sanchalak") {
+    const [existing] = await db
+      .select({ id: sanchalak_centre_assignments.id, is_active: sanchalak_centre_assignments.is_active })
+      .from(sanchalak_centre_assignments)
+      .where(
+        and(
+          eq(sanchalak_centre_assignments.user_id, userId),
+          eq(sanchalak_centre_assignments.centre_id, centreId),
+        ),
+      )
+      .limit(1);
+    if (existing?.is_active) return existing.id;
+    if (existing) {
+      const [row] = await db
+        .update(sanchalak_centre_assignments)
+        .set({
+          is_active: true,
+          deactivated_at: null,
+          assigned_by: assignedBy,
+          updated_at: new Date(),
+        })
+        .where(eq(sanchalak_centre_assignments.id, existing.id))
+        .returning({ id: sanchalak_centre_assignments.id });
+      return row.id;
+    }
+    const [row] = await db
+      .insert(sanchalak_centre_assignments)
+      .values({ user_id: userId, centre_id: centreId, assigned_by: assignedBy })
+      .returning({ id: sanchalak_centre_assignments.id });
+    return row.id;
+  }
+
+  const [existing] = await db
+    .select({ id: shikshak_centre_assignments.id, is_active: shikshak_centre_assignments.is_active })
+    .from(shikshak_centre_assignments)
+    .where(
+      and(
+        eq(shikshak_centre_assignments.user_id, userId),
+        eq(shikshak_centre_assignments.centre_id, centreId),
+      ),
+    )
+    .limit(1);
+  if (existing?.is_active) return existing.id;
+  if (existing) {
+    const [row] = await db
+      .update(shikshak_centre_assignments)
+      .set({
+        is_active: true,
+        deactivated_at: null,
+        assigned_by: assignedBy,
+        updated_at: new Date(),
+      })
+      .where(eq(shikshak_centre_assignments.id, existing.id))
+      .returning({ id: shikshak_centre_assignments.id });
+    return row.id;
+  }
+  const [row] = await db
+    .insert(shikshak_centre_assignments)
+    .values({ user_id: userId, centre_id: centreId, assigned_by: assignedBy })
+    .returning({ id: shikshak_centre_assignments.id });
+  return row.id;
+}
+
+async function assignBatchesForCentre(opts: {
+  userId: string;
+  centreId: string;
+  batchIds: string[];
+  primaryBatchId: string | null;
+  assignedBy: string;
+}): Promise<{ batch_id: string; is_primary: boolean }[]> {
+  const uniqueBatchIds = [...new Set(opts.batchIds)];
+  if (uniqueBatchIds.length === 0) return [];
+
+  const centreBatches = await db
+    .select({ id: batches.id })
+    .from(batches)
+    .where(
+      and(
+        inArray(batches.id, uniqueBatchIds),
+        eq(batches.centre_id, opts.centreId),
+        isNull(batches.deleted_at),
+      ),
+    );
+  if (centreBatches.length !== uniqueBatchIds.length) {
+    throw new Error("ERR_BATCH_CENTRE_MISMATCH");
+  }
+
+  const preferredPrimary =
+    opts.primaryBatchId && uniqueBatchIds.includes(opts.primaryBatchId)
+      ? opts.primaryBatchId
+      : uniqueBatchIds[0]!;
+
+  const results: { batch_id: string; is_primary: boolean }[] = [];
+
+  await db.transaction(async (tx) => {
+    for (const batchId of uniqueBatchIds) {
+      const [existingPrimary] = await tx
+        .select({ id: shikshak_batch_assignments.id })
+        .from(shikshak_batch_assignments)
+        .where(
+          and(
+            eq(shikshak_batch_assignments.batch_id, batchId),
+            eq(shikshak_batch_assignments.is_active, true),
+            eq(shikshak_batch_assignments.is_primary, true),
+          ),
+        )
+        .limit(1);
+
+      const isPrimary = batchId === preferredPrimary || !existingPrimary;
+
+      if (isPrimary && existingPrimary) {
+        await tx
+          .update(shikshak_batch_assignments)
+          .set({ is_primary: false, updated_at: new Date() })
+          .where(eq(shikshak_batch_assignments.id, existingPrimary.id));
+      }
+
+      const [existing] = await tx
+        .select({
+          id: shikshak_batch_assignments.id,
+          is_active: shikshak_batch_assignments.is_active,
+        })
+        .from(shikshak_batch_assignments)
+        .where(
+          and(
+            eq(shikshak_batch_assignments.user_id, opts.userId),
+            eq(shikshak_batch_assignments.batch_id, batchId),
+          ),
+        )
+        .limit(1);
+
+      if (existing?.is_active) {
+        await tx
+          .update(shikshak_batch_assignments)
+          .set({ is_primary: isPrimary, updated_at: new Date() })
+          .where(eq(shikshak_batch_assignments.id, existing.id));
+      } else if (existing) {
+        await tx
+          .update(shikshak_batch_assignments)
+          .set({
+            is_active: true,
+            is_primary: isPrimary,
+            deactivated_at: null,
+            assigned_by: opts.assignedBy,
+            updated_at: new Date(),
+          })
+          .where(eq(shikshak_batch_assignments.id, existing.id));
+      } else {
+        await tx.insert(shikshak_batch_assignments).values({
+          user_id: opts.userId,
+          batch_id: batchId,
+          is_primary: isPrimary,
+          assigned_by: opts.assignedBy,
+        });
+      }
+      results.push({ batch_id: batchId, is_primary: isPrimary });
+    }
+  });
+
+  return results;
+}
+
+/* POST /v1/admin/users/staff — create a sanchalak or shikshak login */
+router.post("/users/staff", async (req: Request, res: Response) => {
+  let body: z.infer<typeof createStaffBodySchema>;
+  try {
+    body = createStaffBodySchema.parse(req.body);
+  } catch (err) {
+    fail(
+      res,
+      422,
+      "ERR_VALIDATION_FAILED",
+      err instanceof z.ZodError ? err.issues[0]?.message ?? "Invalid staff data." : "Invalid staff data.",
+    );
+    return;
+  }
+
+  if (body.role === "sanchalak" && !isCityPlus(req.authUser!.role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Only city admins and above can create sanchalaks.");
+    return;
+  }
+  if (body.role === "shikshak" && !isSanchalakPlus(req.authUser!.role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "You cannot create shikshaks.");
+    return;
+  }
+
+  let cityId = body.city_id ?? req.authUser!.city_id ?? null;
+  let stateId = body.state_id ?? req.authUser!.state_id ?? null;
+  let centreDefault = body.centre_id ?? null;
+
+  if (body.centre_id) {
+    const centre = await loadCentreInScope(req, body.centre_id);
+    if (!centre) {
+      fail(res, 404, "ERR_NOT_FOUND", "Centre not found in your scope.");
+      return;
+    }
+    const [geo] = await db
+      .select({ city_id: centres.city_id, state_id: centres.state_id })
+      .from(centres)
+      .where(eq(centres.id, centre.id))
+      .limit(1);
+    cityId = geo?.city_id ?? cityId;
+    stateId = geo?.state_id ?? stateId;
+    centreDefault = centre.id;
+  }
+
+  const created = await insertStaffUser({
+    phone: body.phone,
+    full_name: body.full_name,
+    role: body.role,
+    gender: body.gender ?? null,
+    city_id: cityId,
+    state_id: stateId,
+    centre_id_default: centreDefault,
+  });
+  if (!created.ok) {
+    fail(res, 409, "ERR_DUPLICATE", "A user with this phone already exists.");
+    return;
+  }
+
+  await auditFromReq(req, {
+    action: "create",
+    entityKind: "user",
+    entityId: created.user.id,
+    summary: `Created ${body.role} ${created.user.full_name} (${created.user.phone}).`,
+    metadata: { role: body.role, phone: created.user.phone },
+  });
+  ok(res, created.user);
+});
+
+const centreStaffBodySchema = z
+  .object({
+    role: staffRoleSchema,
+    user_id: z.string().uuid().optional(),
+    phone: phoneSchema.optional(),
+    full_name: z.string().min(1).max(200).optional(),
+    gender: genderSchema.optional(),
+    batch_ids: z.array(z.string().uuid()).max(50).optional(),
+    primary_batch_id: z.string().uuid().optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (!val.user_id && (!val.phone || !val.full_name)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Provide user_id or phone + full_name to create.",
+      });
+    }
+  });
+
+/**
+ * POST /v1/admin/centres/:id/staff — create (optional) + tag to centre +
+ * (shikshak) assign batches in one step.
+ */
+router.post("/centres/:id/staff", async (req: Request, res: Response) => {
+  let body: z.infer<typeof centreStaffBodySchema>;
+  try {
+    body = centreStaffBodySchema.parse(req.body);
+  } catch (err) {
+    fail(
+      res,
+      422,
+      "ERR_VALIDATION_FAILED",
+      err instanceof z.ZodError ? err.issues[0]?.message ?? "Invalid staffing payload." : "Invalid staffing payload.",
+    );
+    return;
+  }
+
+  if (body.role === "sanchalak" && !isCityPlus(req.authUser!.role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Only city admins and above can assign sanchalaks.");
+    return;
+  }
+  if (body.role === "shikshak" && !isSanchalakPlus(req.authUser!.role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "You cannot assign shikshaks to centres.");
+    return;
+  }
+
+  const centre = await loadCentreInScope(req, String(req.params.id));
+  if (!centre) {
+    fail(res, 404, "ERR_NOT_FOUND", "Centre not found in your scope.");
+    return;
+  }
+
+  const [geo] = await db
+    .select({ city_id: centres.city_id, state_id: centres.state_id })
+    .from(centres)
+    .where(eq(centres.id, centre.id))
+    .limit(1);
+
+  let userId = body.user_id ?? null;
+  let created = false;
+
+  if (!userId) {
+    const inserted = await insertStaffUser({
+      phone: body.phone!,
+      full_name: body.full_name!,
+      role: body.role,
+      gender: body.gender ?? null,
+      city_id: geo?.city_id ?? req.authUser!.city_id ?? null,
+      state_id: geo?.state_id ?? req.authUser!.state_id ?? null,
+      centre_id_default: centre.id,
+    });
+    if (!inserted.ok) {
+      fail(res, 409, "ERR_DUPLICATE", "A user with this phone already exists.");
+      return;
+    }
+    userId = inserted.user.id;
+    created = true;
+  } else {
+    const target = await userWithRole(userId, body.role);
+    if (!target) {
+      fail(res, 422, "ERR_WRONG_ROLE", `User must be an active ${body.role}.`);
+      return;
+    }
+  }
+
+  const assignmentId = await ensureCentreTag(body.role, userId, centre.id, req.authUser!.id);
+
+  let batchResults: { batch_id: string; is_primary: boolean }[] = [];
+  if (body.role === "shikshak" && (body.batch_ids?.length ?? 0) > 0) {
+    try {
+      batchResults = await assignBatchesForCentre({
+        userId,
+        centreId: centre.id,
+        batchIds: body.batch_ids!,
+        primaryBatchId: body.primary_batch_id ?? null,
+        assignedBy: req.authUser!.id,
+      });
+    } catch (err) {
+      if (err instanceof Error && err.message === "ERR_BATCH_CENTRE_MISMATCH") {
+        fail(res, 422, "ERR_VALIDATION_FAILED", "All batches must belong to this centre.");
+        return;
+      }
+      throw err;
+    }
+  }
+
+  const [userRow] = await db
+    .select({
+      id: users.id,
+      phone: users.phone,
+      full_name: users.full_name,
+      role: users.role,
+      gender: users.gender,
+    })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+
+  await auditFromReq(req, {
+    action: created ? "create" : "assign",
+    entityKind: body.role === "sanchalak" ? "sanchalak_centre_assignment" : "shikshak_centre_assignment",
+    entityId: assignmentId,
+    summary: `${created ? "Created and tagged" : "Tagged"} ${body.role} ${userRow?.full_name ?? userId} to ${centre.name}.`,
+    metadata: {
+      user_id: userId,
+      centre_id: centre.id,
+      created,
+      batch_ids: batchResults.map((b) => b.batch_id),
+    },
+  });
+
+  ok(res, {
+    user: userRow,
+    created,
+    centre_id: centre.id,
+    assignment_id: assignmentId,
+    batches: batchResults,
+  });
+});
+
+/* GET /v1/admin/users/pick?role=shikshak|sanchalak&centre_id= — role-filtered picker */
 router.get("/users/pick", async (req: Request, res: Response) => {
   if (!isSanchalakPlus(req.authUser!.role)) {
     fail(res, 403, "ERR_FORBIDDEN", "Not allowed.");
     return;
   }
-  const roleParse = z.enum(["shikshak", "sanchalak"]).safeParse(req.query.role);
+  const roleParse = staffRoleSchema.safeParse(req.query.role);
   if (!roleParse.success) {
     fail(res, 422, "ERR_VALIDATION_FAILED", "role must be shikshak or sanchalak.");
     return;
@@ -844,6 +1293,54 @@ router.get("/users/pick", async (req: Request, res: Response) => {
     fail(res, 403, "ERR_FORBIDDEN", "Only city admins and above can list sanchalaks.");
     return;
   }
+
+  const centreIdRaw = typeof req.query.centre_id === "string" ? req.query.centre_id : null;
+  let excludeIds: string[] = [];
+  if (centreIdRaw) {
+    if (!UUID_RE.test(centreIdRaw)) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "centre_id must be a UUID.");
+      return;
+    }
+    const centre = await loadCentreInScope(req, centreIdRaw);
+    if (!centre) {
+      fail(res, 404, "ERR_NOT_FOUND", "Centre not found in your scope.");
+      return;
+    }
+    if (roleParse.data === "sanchalak") {
+      const tagged = await db
+        .select({ user_id: sanchalak_centre_assignments.user_id })
+        .from(sanchalak_centre_assignments)
+        .where(
+          and(
+            eq(sanchalak_centre_assignments.centre_id, centre.id),
+            eq(sanchalak_centre_assignments.is_active, true),
+          ),
+        );
+      excludeIds = tagged.map((t) => t.user_id);
+    } else {
+      const tagged = await db
+        .select({ user_id: shikshak_centre_assignments.user_id })
+        .from(shikshak_centre_assignments)
+        .where(
+          and(
+            eq(shikshak_centre_assignments.centre_id, centre.id),
+            eq(shikshak_centre_assignments.is_active, true),
+          ),
+        );
+      excludeIds = tagged.map((t) => t.user_id);
+    }
+  }
+
+  const caller = req.authUser!;
+  const geoFilter =
+    caller.role === "super_admin"
+      ? undefined
+      : caller.city_id
+        ? or(eq(users.city_id, caller.city_id), isNull(users.city_id))
+        : caller.state_id
+          ? or(eq(users.state_id, caller.state_id), isNull(users.state_id))
+          : undefined;
+
   const rows = await db
     .select({
       id: users.id,
@@ -858,6 +1355,8 @@ router.get("/users/pick", async (req: Request, res: Response) => {
         eq(users.role, roleParse.data),
         eq(users.is_active, true),
         isNull(users.deleted_at),
+        geoFilter,
+        excludeIds.length ? notInArray(users.id, excludeIds) : undefined,
       ),
     )
     .orderBy(asc(users.full_name))

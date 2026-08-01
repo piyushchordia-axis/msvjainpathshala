@@ -10,9 +10,8 @@ import { AppHeader } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
-import { Body, Button, Card, Kicker, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { Body, Button, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 import { QuickActions } from "@/components/QuickActions";
-import { formatAgeGroup } from "@workspace/api-zod";
 
 export default function ParentHome() {
   const c = useColors();
@@ -40,7 +39,8 @@ export default function ParentHome() {
   };
 
   const rows = attendance.data?.items ?? [];
-  const recent = rows.slice(0, 5);
+  const recent = rows.slice(0, 2);
+  const hasMoreAttendance = rows.length > 2;
   const presentCount = rows.filter((r) => r.status.toLowerCase() === "present").length;
   const presentRate = rows.length > 0 ? Math.round((presentCount / rows.length) * 100) : 0;
 
@@ -92,41 +92,39 @@ export default function ParentHome() {
             {activeChild ? (
               <AnimatedMount delay={60}>
                 <Card>
-                  <Kicker>{hi ? "बच्चा" : "Child"}</Kicker>
-                  <Title style={{ fontSize: 20, marginTop: 4 }}>{activeChild.full_name}</Title>
-                  <Body muted style={{ marginTop: 2 }}>
-                    {activeChild.student_code} · {formatAgeGroup(activeChild.age_group, hi ? "hi" : "en")}
-                  </Body>
+                  <Row style={{ justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                    <View style={{ flex: 1 }}>
+                      <Body muted style={{ fontSize: 12 }}>
+                        {hi ? "विद्यार्थी आईडी" : "Student ID"}
+                      </Body>
+                      <Title style={{ fontSize: 20, marginTop: 2 }}>{activeChild.student_code}</Title>
+                    </View>
+                    <Button
+                      label={hi ? "पहचान पत्र" : "ID Card"}
+                      icon="card-outline"
+                      variant="outline"
+                      onPress={() => router.push("/idcard")}
+                    />
+                  </Row>
                   {activeChild.centre_name ? (
-                    <Body style={{ marginTop: 8 }}>{activeChild.centre_name}</Body>
+                    <Body style={{ marginTop: 12 }}>{activeChild.centre_name}</Body>
                   ) : null}
-                  {activeChild.batch_name ? (
-                    <Body muted style={{ marginTop: 2 }}>{activeChild.batch_name}</Body>
-                  ) : null}
-                  <Row style={{ gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                  <Row style={{ gap: 8, marginTop: 12, flexWrap: "wrap", alignItems: "center" }}>
                     <Pill
                       label={
                         hi
-                          ? `${activeChild.total_points} अंक`
-                          : `${activeChild.total_points} pts`
+                          ? `${activeChild.total_points} पुण्य`
+                          : `${activeChild.total_points} punya`
                       }
                       tone="primary"
                     />
-                    <Pill label={activeChild.tier} tone="info" />
-                    {activeChild.msv_status && activeChild.msv_status !== "none" ? (
-                      <Pill
-                        label={`MSV: ${activeChild.msv_status}`}
-                        tone="neutral"
-                      />
+                    {activeChild.tier ? (
+                      <Pill label={activeChild.tier} tone="info" />
+                    ) : null}
+                    {activeChild.msv_status === "approved" ? (
+                      <Pill label="MSV" tone="neutral" />
                     ) : null}
                   </Row>
-                  <Button
-                    label={hi ? "पहचान पत्र" : "ID Card"}
-                    icon="card-outline"
-                    variant="outline"
-                    style={{ marginTop: 14 }}
-                    onPress={() => router.push("/idcard")}
-                  />
                 </Card>
               </AnimatedMount>
             ) : null}
@@ -186,6 +184,14 @@ export default function ParentHome() {
                         ) : null}
                       </View>
                     ))}
+                    {hasMoreAttendance ? (
+                      <Button
+                        label={hi ? "और देखें →" : "View more →"}
+                        variant="ghost"
+                        style={{ marginTop: 4, alignSelf: "flex-start" }}
+                        onPress={() => router.push("/my-attendance")}
+                      />
+                    ) : null}
                   </View>
                 )}
               </Card>

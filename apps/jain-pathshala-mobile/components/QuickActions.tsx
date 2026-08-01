@@ -15,6 +15,7 @@ type Action = { href: string; icon: keyof typeof Ionicons.glyphMap; en: string; 
 
 const ACTIONS: Action[] = [
   { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "सूचनाएँ" },
+  { href: "/my-attendance", icon: "checkmark-done-outline", en: "Attendance", hi: "उपस्थिति" },
   { href: "/niyam-submit", icon: "sparkles-outline", en: "Submit Niyam", hi: "नियम भेजें" },
   { href: "/homework", icon: "book-outline", en: "Homework", hi: "गृहकार्य" },
   { href: "/quizzes", icon: "help-circle-outline", en: "Quizzes", hi: "प्रश्नोत्तरी" },

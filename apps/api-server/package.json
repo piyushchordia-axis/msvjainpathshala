@@ -17,6 +17,7 @@
     "@pdf-lib/fontkit": "^1.1.1",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
+    "bwip-js": "^4.11.2",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "drizzle-orm": "catalog:",
@@ -35,6 +36,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@types/bwip-js": "^3.2.3",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",

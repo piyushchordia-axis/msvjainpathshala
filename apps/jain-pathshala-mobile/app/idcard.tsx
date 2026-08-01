@@ -21,12 +21,15 @@ export default function IdCardScreen() {
   const row = card.data;
   const pngUri = resolveUploadUrl(row?.png_url);
   const photoUri = resolveUploadUrl(row?.photo_url ?? activeChild?.photo_url ?? null);
+  const cardArtKey = row
+    ? `${row.card_number}:${row.last_regenerated_at ?? ""}:${row.version_no}:${row.png_url}`
+    : "";
   const [imageFailed, setImageFailed] = useState(false);
   const [uploading, setUploading] = useState(false);
 
   useEffect(() => {
     setImageFailed(false);
-  }, [activeStudentId, pngUri]);
+  }, [activeStudentId, cardArtKey]);
 
   async function pickAndUpload(from: "camera" | "library") {
     if (!activeStudentId || uploading || setPhoto.isPending) return;
@@ -78,6 +81,12 @@ export default function IdCardScreen() {
         "student-photos",
       );
       await setPhoto.mutateAsync({ studentId: activeStudentId, photo_url: uploaded.url });
+      try {
+        await Image.clearMemoryCache();
+        await Image.clearDiskCache();
+      } catch {
+        /* best-effort cache bust */
+      }
       await Promise.all([card.refetch(), refetch()]);
       Alert.alert(
         hi ? "फोटो सहेजी गई" : "Photo saved",
@@ -225,9 +234,11 @@ export default function IdCardScreen() {
                 <Card style={{ padding: 0, overflow: "hidden" }}>
                   {pngUri && !imageFailed ? (
                     <Image
-                      key={pngUri}
+                      key={cardArtKey || pngUri}
                       source={{ uri: pngUri }}
-                      style={{ width: "100%", aspectRatio: 600 / 380, backgroundColor: c.muted }}
+                      cacheKey={cardArtKey || pngUri}
+                      recyclingKey={cardArtKey || pngUri}
+                      style={{ width: "100%", aspectRatio: 480 / 640, backgroundColor: c.muted }}
                       contentFit="contain"
                       accessibilityLabel={hi ? "पहचान पत्र छवि" : "ID card image"}
                       onError={() => setImageFailed(true)}
@@ -236,7 +247,7 @@ export default function IdCardScreen() {
                     <View
                       style={{
                         width: "100%",
-                        aspectRatio: 600 / 380,
+                        aspectRatio: 480 / 640,
                         backgroundColor: c.muted,
                         alignItems: "center",
                         justifyContent: "center",

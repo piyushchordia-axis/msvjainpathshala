@@ -23,6 +23,10 @@ export const students = pgTable(
     gender: genderEnum("gender"),
     dob: date("dob"),
     age_group: ageGroupEnum("age_group").notNull(),
+    /** ABO blood group for ID cards (e.g. A+, O−). */
+    blood_group: varchar("blood_group", { length: 8 }),
+    /** Relationship of parent_id to the student: father | mother | guardian. */
+    guardian_relation: varchar("guardian_relation", { length: 20 }),
     /** Owner-uploaded headshot used on the digital ID card (signed /uploads URL). */
     photo_url: text("photo_url"),
     centre_id: uuid("centre_id").references(() => centres.id, { onDelete: "set null" }),

@@ -112,12 +112,15 @@ function BatchRowActions({
           <div className="space-y-3 pt-2">
             {tagged.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                No shikshaks tagged to this centre yet.{' '}
+                No Guruji / Didi tagged to this centre yet. Create or tag them on{' '}
                 {batch.centre_id ? (
                   <a className="underline" href={`/admin/centres/${batch.centre_id}`}>
-                    Open centre staffing
+                    centre staffing
                   </a>
-                ) : null}
+                ) : (
+                  'centre staffing'
+                )}
+                , then assign batches there or here.
               </p>
             ) : (
               <div className="flex gap-2">
