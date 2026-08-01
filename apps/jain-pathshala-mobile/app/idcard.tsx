@@ -235,8 +235,7 @@ export default function IdCardScreen() {
                   {pngUri && !imageFailed ? (
                     <Image
                       key={cardArtKey || pngUri}
-                      source={{ uri: pngUri }}
-                      cacheKey={cardArtKey || pngUri}
+                      source={{ uri: pngUri, cacheKey: cardArtKey || pngUri }}
                       recyclingKey={cardArtKey || pngUri}
                       style={{ width: "100%", aspectRatio: 480 / 640, backgroundColor: c.muted }}
                       contentFit="contain"
