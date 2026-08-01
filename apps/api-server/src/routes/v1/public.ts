@@ -10,14 +10,10 @@ import {
 } from "@workspace/db";
 import { and, asc, count, desc, eq, gte, sql } from "drizzle-orm";
 import { ok, fail } from "../../lib/envelope";
+import { clampLimit } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

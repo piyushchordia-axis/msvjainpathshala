@@ -24,6 +24,7 @@ import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { auditFromReq } from "../../lib/audit";
 import { resolveAdminScope, cityIdsForState } from "../../lib/scope";
+import { clampLimit } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 
@@ -35,11 +36,6 @@ function isFormKind(v: unknown): v is FormKind {
   return typeof v === "string" && (FORM_KINDS as readonly string[]).includes(v);
 }
 
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 /**
  * Resolve the active config for a kind: prefer the city-specific one (highest

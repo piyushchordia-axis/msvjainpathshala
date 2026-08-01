@@ -52,6 +52,7 @@ export const gallery_items = pgTable(
     student_idx: index("idx_gallery_items_student").on(t.student_id),
     niyam_idx: index("idx_gallery_items_niyam").on(t.niyam_id),
     public_idx: index("idx_gallery_items_public").on(t.is_public),
+    submission_idx: index("idx_gallery_items_submission").on(t.submission_id),
   }),
 );
 

@@ -15,17 +15,13 @@ import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
 import { sendPush } from "../../lib/push";
 import { registerCron } from "../../lib/scheduler";
+import { clampLimit } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 router.use(requireAuth);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 /* ---- route-local schemas (inline, NOT in api-zod) ---- */
 const pushTokenSchema = z.object({

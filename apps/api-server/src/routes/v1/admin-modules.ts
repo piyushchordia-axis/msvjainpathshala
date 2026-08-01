@@ -30,15 +30,11 @@ import { httpUrl } from "../../lib/validation";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
+import { clampLimit } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 router.use(requireAuth, requireAdminPanel);
 
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function isUuid(v: unknown): v is string {

@@ -15,21 +15,14 @@ export interface AwardPunyaInput {
   note?: string | null;
   awardedBy?: string | null;
   /**
-   * Optional idempotency key. When supplied, awardPunya is exactly-once for the
-   * (studentId, featureKey, idempotencyKey) triple: a second call with the same
-   * key does NOT credit again and instead returns the already-awarded result.
+   * Optional idempotency key. When supplied, awardPunya is exactly-once for that
+   * key: a second call does NOT credit again and returns the already-awarded
+   * result. Stored on punya_transactions.idempotency_key (unique when not null).
    *
    * Callers that already serialize/claim a row before awarding (niyam approval,
    * competition publish, quiz submit) don't need this — they guarantee
    * exactly-once upstream. It exists for entry points that have no natural row
-   * to claim, e.g. the manual admin award, where a double-submit would
-   * otherwise double-credit.
-   *
-   * NOTE: there is no dedicated idempotency column on punya_transactions, so the
-   * key is persisted on the ledger row's `feature_key` as `<featureKey>#<key>`.
-   * The lookup below matches that exact composite, and the row stores the same
-   * composite, so the de-dupe is self-consistent without a schema change. The
-   * `note` (user-facing) is left untouched.
+   * to claim, e.g. the manual admin award.
    */
   idempotencyKey?: string | null;
 }
@@ -49,6 +42,47 @@ export interface AwardPunyaResult {
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type Db = typeof db;
 
+const SUBMISSION_ID_RE =
+  /^submission:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?::|$)/i;
+
+/** Best-effort parse of source entity fields from feature + idempotency key. */
+function sourceFromKey(
+  featureKey: string,
+  idempotencyKey: string | null,
+): { kind: string | null; id: string | null } {
+  if (!idempotencyKey) return { kind: featureKey || null, id: null };
+  const m = SUBMISSION_ID_RE.exec(idempotencyKey);
+  if (m) return { kind: featureKey || "niyam_submission", id: m[1]! };
+  return { kind: featureKey || null, id: null };
+}
+
+async function readBalance(tx: Tx | Db, studentId: string, fallbackPoints: number) {
+  const [bal] = await tx
+    .select({ total_points: punya_balances.total_points })
+    .from(punya_balances)
+    .where(eq(punya_balances.student_id, studentId))
+    .limit(1);
+  const total = bal?.total_points ?? fallbackPoints;
+  return total;
+}
+
+async function creditBalance(tx: Tx | Db, studentId: string, delta: number): Promise<number> {
+  const result = await tx.execute(
+    sql`insert into punya_balances (student_id, total_points)
+        values (${studentId}, ${delta})
+        on conflict (student_id) do update
+          set total_points = punya_balances.total_points + ${delta}
+        returning total_points`,
+  );
+  const rows = (result as unknown as { rows?: Array<{ total_points: number }> }).rows ?? [];
+  const total = Number(rows[0]?.total_points ?? delta);
+  await tx
+    .update(punya_balances)
+    .set({ tier: tierForPoints(total) })
+    .where(eq(punya_balances.student_id, studentId));
+  return total;
+}
+
 /**
  * Core award, run inside a caller-supplied transaction so the ledger insert,
  * balance upsert, and tier recompute all commit (or roll back) together with
@@ -56,67 +90,53 @@ type Db = typeof db;
  */
 async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunyaResult> {
   const key = input.idempotencyKey?.trim() || null;
-  // Composite stored on the ledger row when an idempotency key is supplied.
-  // Plain featureKey otherwise, so existing callers' rows are unchanged.
-  const ledgerFeatureKey = key ? `${input.featureKey}#${key}` : input.featureKey;
+  const source = sourceFromKey(input.featureKey, key);
 
   if (key) {
-    // Serialize concurrent calls for this logical award so the existence check
-    // below + the insert are atomic. Without the lock, two parallel double
-    // submits would both miss the row and both credit. Lock is released on
-    // commit/rollback of the surrounding transaction.
-    await tx.execute(
-      sql`select pg_advisory_xact_lock(hashtextextended(${`punya:${input.studentId}:${ledgerFeatureKey}`}, 0))`,
-    );
-    const [existing] = await tx
-      .select({ points: punya_transactions.points })
-      .from(punya_transactions)
-      .where(
-        and(
-          eq(punya_transactions.student_id, input.studentId),
-          eq(punya_transactions.feature_key, ledgerFeatureKey),
-        ),
+    // Partial unique index on idempotency_key — ON CONFLICT DO NOTHING.
+    const insertResult = await tx.execute(sql`
+      insert into punya_transactions (
+        student_id, feature_key, points, note, awarded_by,
+        idempotency_key, source_entity_kind, source_entity_id
+      ) values (
+        ${input.studentId}, ${input.featureKey}, ${input.points},
+        ${input.note ?? null}, ${input.awardedBy ?? null},
+        ${key}, ${source.kind}, ${source.id}
       )
-      .limit(1);
-    if (existing) {
-      // Idempotent replay: report the CURRENT balance, credit nothing.
-      const [bal] = await tx
-        .select({ total_points: punya_balances.total_points })
-        .from(punya_balances)
-        .where(eq(punya_balances.student_id, input.studentId))
+      on conflict (idempotency_key) where idempotency_key is not null
+      do nothing
+      returning points
+    `);
+    const inserted =
+      (insertResult as unknown as { rows?: Array<{ points: number }> }).rows ?? [];
+    if (inserted.length === 0) {
+      const [existing] = await tx
+        .select({ points: punya_transactions.points })
+        .from(punya_transactions)
+        .where(eq(punya_transactions.idempotency_key, key))
         .limit(1);
-      const total = bal?.total_points ?? existing.points;
+      const total = await readBalance(tx, input.studentId, existing?.points ?? 0);
       return {
         student_id: input.studentId,
-        points_awarded: existing.points,
+        points_awarded: existing?.points ?? input.points,
         total_points: total,
         tier: tierForPoints(total),
         awarded: false,
       };
     }
+  } else {
+    await tx.insert(punya_transactions).values({
+      student_id: input.studentId,
+      feature_key: input.featureKey,
+      points: input.points,
+      note: input.note ?? null,
+      awarded_by: input.awardedBy ?? null,
+      source_entity_kind: source.kind,
+      source_entity_id: source.id,
+    });
   }
 
-  await tx.insert(punya_transactions).values({
-    student_id: input.studentId,
-    feature_key: ledgerFeatureKey,
-    points: input.points,
-    note: input.note ?? null,
-    awarded_by: input.awardedBy ?? null,
-  });
-  const result = await tx.execute(
-    sql`insert into punya_balances (student_id, total_points)
-        values (${input.studentId}, ${input.points})
-        on conflict (student_id) do update
-          set total_points = punya_balances.total_points + ${input.points}
-        returning total_points`,
-  );
-  const rows = (result as unknown as { rows?: Array<{ total_points: number }> }).rows ?? [];
-  const total = Number(rows[0]?.total_points ?? input.points);
-  await tx
-    .update(punya_balances)
-    .set({ tier: tierForPoints(total) })
-    .where(eq(punya_balances.student_id, input.studentId));
-
+  const total = await creditBalance(tx, input.studentId, input.points);
   return {
     student_id: input.studentId,
     points_awarded: input.points,
@@ -132,11 +152,6 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
  * - Pass an existing `tx` to compose this award into a larger transaction (e.g.
  *   so a caller's row-claim + the award commit together).
  * - Omit `tx` to run in a fresh transaction of its own.
- *
- * All three writes (ledger insert + atomic balance upsert + tier) commit
- * together, so a crash can't leave the ledger and the cached balance out of
- * sync. The upsert increments in-DB on a UNIQUE(student_id) row, so concurrent
- * awards can't lose updates or create duplicate balance rows.
  */
 export async function awardPunya(input: AwardPunyaInput, tx?: Tx): Promise<AwardPunyaResult> {
   if (tx) return runAward(tx, input);
@@ -151,8 +166,8 @@ export interface ReversePunyaInput {
   note?: string | null;
   awardedBy?: string | null;
   /**
-   * Required. Stored as `<featureKey>#<idempotencyKey>`. A second reverse with
-   * the same key is a no-op (does not double-debit).
+   * Required. Stored on idempotency_key. A second reverse with the same key is
+   * a no-op (does not double-debit).
    */
   idempotencyKey: string;
 }
@@ -166,64 +181,68 @@ export interface ReversePunyaResult {
   reversed: boolean;
 }
 
+/** Strip a trailing `:reversal` suffix to find the original award key. */
+function awardKeyFromReversal(key: string): string {
+  return key.endsWith(":reversal") ? key.slice(0, -":reversal".length) : key;
+}
+
 async function runReverse(tx: Tx | Db, input: ReversePunyaInput): Promise<ReversePunyaResult> {
   const points = Math.abs(input.points);
   const key = input.idempotencyKey.trim();
-  const ledgerFeatureKey = `${input.featureKey}#${key}`;
+  const originalKey = awardKeyFromReversal(key);
 
-  await tx.execute(
-    sql`select pg_advisory_xact_lock(hashtextextended(${`punya:${input.studentId}:${ledgerFeatureKey}`}, 0))`,
-  );
-
-  const [existing] = await tx
-    .select({ points: punya_transactions.points })
+  const [original] = await tx
+    .select({
+      id: punya_transactions.id,
+      source_entity_kind: punya_transactions.source_entity_kind,
+      source_entity_id: punya_transactions.source_entity_id,
+    })
     .from(punya_transactions)
     .where(
       and(
         eq(punya_transactions.student_id, input.studentId),
-        eq(punya_transactions.feature_key, ledgerFeatureKey),
+        eq(punya_transactions.idempotency_key, originalKey),
       ),
     )
     .limit(1);
 
-  if (existing) {
-    const [bal] = await tx
-      .select({ total_points: punya_balances.total_points })
-      .from(punya_balances)
-      .where(eq(punya_balances.student_id, input.studentId))
+  const sourceKind = original?.source_entity_kind ?? sourceFromKey(input.featureKey, originalKey).kind;
+  const sourceId = original?.source_entity_id ?? sourceFromKey(input.featureKey, originalKey).id;
+  const debit = -points;
+
+  const insertResult = await tx.execute(sql`
+    insert into punya_transactions (
+      student_id, feature_key, points, note, awarded_by,
+      idempotency_key, reversal_of, source_entity_kind, source_entity_id
+    ) values (
+      ${input.studentId}, ${input.featureKey}, ${debit},
+      ${input.note ?? null}, ${input.awardedBy ?? null},
+      ${key}, ${original?.id ?? null}, ${sourceKind}, ${sourceId}
+    )
+    on conflict (idempotency_key) where idempotency_key is not null
+    do nothing
+    returning points
+  `);
+  const inserted =
+    (insertResult as unknown as { rows?: Array<{ points: number }> }).rows ?? [];
+
+  if (inserted.length === 0) {
+    const [existing] = await tx
+      .select({ points: punya_transactions.points })
+      .from(punya_transactions)
+      .where(eq(punya_transactions.idempotency_key, key))
       .limit(1);
-    const total = bal?.total_points ?? 0;
+    const total = await readBalance(tx, input.studentId, 0);
     return {
       student_id: input.studentId,
-      points_reversed: Math.abs(existing.points),
+      points_reversed: Math.abs(existing?.points ?? points),
       total_points: total,
       tier: tierForPoints(total),
       reversed: false,
     };
   }
 
-  const debit = -points;
-  await tx.insert(punya_transactions).values({
-    student_id: input.studentId,
-    feature_key: ledgerFeatureKey,
-    points: debit,
-    note: input.note ?? null,
-    awarded_by: input.awardedBy ?? null,
-  });
-  const result = await tx.execute(
-    sql`insert into punya_balances (student_id, total_points)
-        values (${input.studentId}, ${debit})
-        on conflict (student_id) do update
-          set total_points = punya_balances.total_points + ${debit}
-        returning total_points`,
-  );
-  const rows = (result as unknown as { rows?: Array<{ total_points: number }> }).rows ?? [];
-  const total = Number(rows[0]?.total_points ?? debit);
-  await tx
-    .update(punya_balances)
-    .set({ tier: tierForPoints(total) })
-    .where(eq(punya_balances.student_id, input.studentId));
-
+  const total = await creditBalance(tx, input.studentId, debit);
   return {
     student_id: input.studentId,
     points_reversed: points,

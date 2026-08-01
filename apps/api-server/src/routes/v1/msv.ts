@@ -19,26 +19,11 @@ import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
+import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 router.use(requireAuth);
 
-/* ---- local helpers copy-pasted into every admin route file ---- */
-function scopedCentreFilter(scope: AdminScope, column: PgColumn) {
-  if (scope.centreIds === null) return undefined;
-  if (scope.centreIds.length === 0) return sql`false`;
-  return inArray(column, scope.centreIds);
-}
-function inScope(scope: AdminScope, centreId: string | null): boolean {
-  if (scope.centreIds === null) return true;
-  if (!centreId) return false;
-  return scope.centreIds.includes(centreId);
-}
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 /** Resolve a student the caller owns (parent of, or is, that student). */
 async function ownedStudent(req: Request, id: string) {

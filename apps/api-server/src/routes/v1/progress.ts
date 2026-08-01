@@ -28,21 +28,11 @@ import { auditFromReq } from "../../lib/audit";
 import { storage, makeKey } from "../../lib/storage";
 import { signUploadUrl } from "../../lib/file-tokens";
 import { PdfBuilder } from "../../lib/pdf";
+import { inScope, scopedCentreFilter } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 router.use(requireAuth);
 
-/* ---- local helpers copy-pasted into every admin route file ---- */
-function scopedCentreFilter(scope: AdminScope, column: PgColumn) {
-  if (scope.centreIds === null) return undefined;
-  if (scope.centreIds.length === 0) return sql`false`;
-  return inArray(column, scope.centreIds);
-}
-function inScope(scope: AdminScope, centreId: string | null): boolean {
-  if (scope.centreIds === null) return true;
-  if (!centreId) return false;
-  return scope.centreIds.includes(centreId);
-}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 

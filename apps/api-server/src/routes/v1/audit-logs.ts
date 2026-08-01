@@ -11,15 +11,11 @@ import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { ok } from "../../lib/envelope";
 import { requireAuth, requireRole } from "../../middlewares/auth";
+import { clampLimit } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 router.use(requireAuth, requireRole("super_admin", "state_admin"));
 
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 const actionSchema = z.enum(AUDIT_ACTIONS);
 const entityKindSchema = z.string().min(1).max(120);

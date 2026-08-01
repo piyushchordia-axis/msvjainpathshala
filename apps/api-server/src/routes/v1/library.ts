@@ -35,6 +35,7 @@ import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { canAccessAdminPanel } from "@workspace/api-zod";
 import { auditFromReq } from "../../lib/audit";
 import { httpUrl } from "../../lib/validation";
+import { clampLimit } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -43,11 +44,6 @@ type AccessTier = (typeof LIBRARY_ACCESS_TIERS)[number];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 /**
  * The set of access tiers a caller is allowed to read. `public` is always

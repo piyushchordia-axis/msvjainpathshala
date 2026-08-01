@@ -27,6 +27,7 @@ import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope } from "../../lib/scope";
 import { awardPunya } from "../../lib/punya";
 import { auditFromReq } from "../../lib/audit";
+import { clampLimit } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -73,11 +74,6 @@ function cityInScope(cityIds: string[] | null, cityId: string | null): boolean {
   return cityIds.includes(cityId);
 }
 
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 /** The students owned by this user (parent: kids; student: self). */
 async function ownedStudents(uid: string) {

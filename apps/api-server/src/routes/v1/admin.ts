@@ -34,6 +34,7 @@ import adminResourcesRouter from "./admin-resources";
 import adminModulesRouter from "./admin-modules";
 import adminStaffingRouter from "./admin-staffing";
 import { canTransitionEnrolment } from "./enrolments";
+import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 
@@ -118,17 +119,7 @@ router.use(adminModulesRouter);
 router.use(adminStaffingRouter);
 
 /** Returns a Drizzle condition limiting `column` to the user's scope, or undefined for unrestricted. */
-function scopedCentreFilter(scope: AdminScope, column: PgColumn) {
-  if (scope.centreIds === null) return undefined;
-  if (scope.centreIds.length === 0) return sql`false`;
-  return inArray(column, scope.centreIds);
-}
 
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 function toSessionUser(u: typeof users.$inferSelect): SessionUser {
   return {
@@ -592,10 +583,5 @@ router.post("/enrolments/:id/:action", async (req: Request, res: Response) => {
   ok(res, { id: enrolment.id, status: nextStatus });
 });
 
-function inScope(scope: AdminScope, centreId: string | null): boolean {
-  if (scope.centreIds === null) return true;
-  if (!centreId) return false;
-  return scope.centreIds.includes(centreId);
-}
 
 export default router;

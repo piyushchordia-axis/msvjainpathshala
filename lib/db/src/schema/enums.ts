@@ -71,6 +71,16 @@ export const ENROLMENT_STATUSES = ["pending", "approved", "rejected", "waitliste
 export const MSV_STATUSES = ["none", "applied", "waitlisted", "approved", "rejected", "revoked"] as const;
 export const TIERS = ["jigyasu", "shravak", "sadhak", "shraman", "tirthankar"] as const;
 export const NIYAM_TYPES = ["daily", "weekly", "monthly"] as const;
+/** Streak milestone badge keys (frequency-aware ladder — see NIYAM_MODULE_FIX_PLAN D1). */
+export const NIYAM_BADGE_KEYS = [
+  "daily_7",
+  "daily_14",
+  "daily_30",
+  "daily_60",
+  "daily_100",
+  "weekly_4",
+  "monthly_3",
+] as const;
 /** Allowed media kinds. `either` = photo|video; `any` = photo|video|audio. */
 export const PROOF_TYPES = ["photo", "video", "audio", "either", "any"] as const;
 export const NIYAM_APPROVAL_MODES = ["auto", "review"] as const;
@@ -136,6 +146,7 @@ export const enrolmentStatusEnum = pgEnum("enrolment_status_enum", ENROLMENT_STA
 export const msvStatusEnum = pgEnum("msv_status_enum", MSV_STATUSES);
 export const tierEnum = pgEnum("tier_enum", TIERS);
 export const niyamTypeEnum = pgEnum("niyam_type_enum", NIYAM_TYPES);
+export const niyamBadgeKeyEnum = pgEnum("niyam_badge_key_enum", NIYAM_BADGE_KEYS);
 export const proofTypeEnum = pgEnum("proof_type_enum", PROOF_TYPES);
 export const niyamApprovalModeEnum = pgEnum("niyam_approval_mode_enum", NIYAM_APPROVAL_MODES);
 export const niyamMediaKindEnum = pgEnum("niyam_media_kind_enum", NIYAM_MEDIA_KINDS);

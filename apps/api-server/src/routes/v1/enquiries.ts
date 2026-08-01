@@ -16,14 +16,10 @@ import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { auditFromReq } from "../../lib/audit";
+import { clampLimit } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 const ENQUIRY_KINDS = ["contact", "enquire", "donate"] as const;
 const ENQUIRY_STATUSES = ["new", "in_review", "closed"] as const;

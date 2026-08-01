@@ -17,6 +17,7 @@ import { auditFromReq } from "../../lib/audit";
 import { signUploadUrl } from "../../lib/file-tokens";
 import { verifyCardSignature } from "../../lib/idcard-crypto";
 import { upsertIdCardArt } from "../../lib/idcard-render";
+import { inScope } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -24,11 +25,6 @@ router.use(requireAuth);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /* ---- local helper copy-pasted into admin route files ---- */
-function inScope(scope: AdminScope, centreId: string | null): boolean {
-  if (scope.centreIds === null) return true;
-  if (!centreId) return false;
-  return scope.centreIds.includes(centreId);
-}
 
 /* POST /v1/id-cards/generate-all — generate/regenerate for every scoped student */
 router.post("/generate-all", requireAdminPanel, async (req: Request, res: Response) => {

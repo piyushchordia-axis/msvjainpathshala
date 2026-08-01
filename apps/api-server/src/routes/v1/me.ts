@@ -32,6 +32,7 @@ import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
 import { upsertIdCardArt } from "../../lib/idcard-render";
 import { auditFromReq } from "../../lib/audit";
 import { storage } from "../../lib/storage";
+import { clampLimit } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 
@@ -39,11 +40,6 @@ router.use(requireAuth);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 /** Resolve a student the caller owns (parent of, or is, that student). */
 async function ownedStudentId(req: Request, id: string): Promise<string | null> {

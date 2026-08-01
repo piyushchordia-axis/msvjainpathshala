@@ -1,4 +1,5 @@
-import { boolean, index, integer, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { AnyPgColumn, boolean, index, integer, pgTable, text, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 import { timestamps } from "./_helpers";
 import { tierEnum } from "./enums";
@@ -32,11 +33,24 @@ export const punya_transactions = pgTable(
     points: integer("points").notNull(),
     note: text("note"),
     awarded_by: uuid("awarded_by").references(() => users.id, { onDelete: "set null" }),
+    idempotency_key: text("idempotency_key"),
+    reversal_of: uuid("reversal_of").references((): AnyPgColumn => punya_transactions.id, {
+      onDelete: "set null",
+    }),
+    source_entity_kind: text("source_entity_kind"),
+    source_entity_id: uuid("source_entity_id"),
     ...timestamps(),
   },
   (t) => ({
     student_idx: index("idx_punya_transactions_student").on(t.student_id),
     student_created_idx: index("idx_punya_transactions_student_created").on(t.student_id, t.created_at),
+    feature_idx: index("idx_punya_transactions_feature").on(t.feature_key),
+    idempotency_uq: uniqueIndex("punya_transactions_idempotency_key_uq")
+      .on(t.idempotency_key)
+      .where(sql`${t.idempotency_key} is not null`),
+    reversal_idx: index("idx_punya_transactions_reversal")
+      .on(t.reversal_of)
+      .where(sql`${t.reversal_of} is not null`),
   }),
 );
 

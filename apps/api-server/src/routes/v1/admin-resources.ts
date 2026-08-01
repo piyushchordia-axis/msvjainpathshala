@@ -37,6 +37,7 @@ import { resolveAdminScope, cityIdsForState, type AdminScope } from "../../lib/s
 import { auditFromReq } from "../../lib/audit";
 import { awardPunya } from "../../lib/punya";
 import { isClientSettingKey } from "../../lib/client-settings";
+import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
 
 const phoneSchema = z.string().regex(/^\+[1-9]\d{6,14}$/, "Phone must be E.164 (+91…)");
 const bloodGroupSchema = z.enum(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]);
@@ -47,23 +48,8 @@ router.use(requireAuth, requireAdminPanel);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function scopedCentreFilter(scope: AdminScope, column: PgColumn) {
-  if (scope.centreIds === null) return undefined;
-  if (scope.centreIds.length === 0) return sql`false`;
-  return inArray(column, scope.centreIds);
-}
 
-function inScope(scope: AdminScope, centreId: string | null): boolean {
-  if (scope.centreIds === null) return true;
-  if (!centreId) return false;
-  return scope.centreIds.includes(centreId);
-}
 
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 function noticeScopeWhere(scope: AdminScope) {
   if (scope.centreIds === null) return undefined;

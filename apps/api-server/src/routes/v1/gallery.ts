@@ -32,27 +32,13 @@ import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { storage } from "../../lib/storage";
+import { clampLimit, firstName, inScope } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/* ---- local helpers copy-pasted into every admin route file ---- */
-function inScope(scope: AdminScope, centreId: string | null): boolean {
-  if (scope.centreIds === null) return true;
-  if (!centreId) return false;
-  return scope.centreIds.includes(centreId);
-}
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
-function firstName(full: string | null): string {
-  if (!full) return "—";
-  return full.trim().split(/\s+/)[0] ?? full;
-}
 
 /* ═══════════════════════════════ Public ═══════════════════════════════ */
 

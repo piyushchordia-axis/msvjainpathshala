@@ -15,17 +15,15 @@ import {
   gallery_items,
 } from "@workspace/db";
 import { and, asc, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
-import type { PgColumn } from "drizzle-orm/pg-core";
-
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
 import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
-import { resolveAdminScope, type AdminScope } from "../../lib/scope";
+import { resolveAdminScope } from "../../lib/scope";
 import { awardPunya, reversePunya } from "../../lib/punya";
 import { auditFromReq } from "../../lib/audit";
+import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
 import {
   allowedMediaKinds,
   periodKey,
@@ -33,24 +31,10 @@ import {
   type NiyamPeriodType,
 } from "../../lib/niyam-period";
 
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
 const router: IRouter = Router();
 router.use(requireAuth);
-
-function scopedCentreFilter(scope: AdminScope, column: PgColumn) {
-  if (scope.centreIds === null) return undefined;
-  if (scope.centreIds.length === 0) return sql`false`;
-  return inArray(column, scope.centreIds);
-}
-function inScope(scope: AdminScope, centreId: string | null): boolean {
-  if (scope.centreIds === null) return true;
-  if (!centreId) return false;
-  return scope.centreIds.includes(centreId);
-}
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 async function ownedStudentId(req: Request, id: string): Promise<string | null> {
   const uid = req.authUser!.id;

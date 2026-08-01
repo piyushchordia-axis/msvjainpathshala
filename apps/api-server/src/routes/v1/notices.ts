@@ -34,23 +34,14 @@ import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
+import { clampLimit, inScope } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 /* ---- local scope helpers (mirrors the pattern in every admin route file) ---- */
-function inScope(scope: AdminScope, centreId: string | null): boolean {
-  if (scope.centreIds === null) return true;
-  if (!centreId) return false;
-  return scope.centreIds.includes(centreId);
-}
 
 const ORDER = [desc(notices.pinned), desc(notices.published_at), desc(notices.created_at)] as const;
 

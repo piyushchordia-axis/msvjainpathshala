@@ -39,6 +39,7 @@ import { requireAuth } from "../../middlewares/auth";
 import { resolveAdminScope } from "../../lib/scope";
 import { awardPunya } from "../../lib/punya";
 import { auditFromReq } from "../../lib/audit";
+import { clampLimit } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -394,11 +395,6 @@ router.post("/questions", async (req: Request, res: Response) => {
   ok(res, { id: row.id });
 });
 
-function clampLimit(raw: unknown, fallback: number, max: number): number {
-  const n = Number(raw);
-  if (!Number.isFinite(n) || n <= 0) return fallback;
-  return Math.min(Math.floor(n), max);
-}
 
 /* GET /v1/quizzes/questions?limit= — scoped question bank (admin panel) */
 router.get("/questions", async (req: Request, res: Response) => {
