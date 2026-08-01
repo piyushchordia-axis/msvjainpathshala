@@ -13,7 +13,7 @@ import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
-import { resolveAdminScope, type AdminScope } from "../../lib/scope";
+import { resolveAdminScope, inBatchWriteScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 
 const router: IRouter = Router();
@@ -24,6 +24,11 @@ function scopedCentreFilter(scope: AdminScope, column: PgColumn) {
   if (scope.centreIds === null) return undefined;
   if (scope.centreIds.length === 0) return sql`false`;
   return inArray(column, scope.centreIds);
+}
+function scopedBatchFilter(scope: AdminScope, column: PgColumn) {
+  if (scope.batchIds === null) return undefined;
+  if (scope.batchIds.length === 0) return sql`false`;
+  return inArray(column, scope.batchIds);
 }
 function inScope(scope: AdminScope, centreId: string | null): boolean {
   if (scope.centreIds === null) return true;
@@ -54,6 +59,7 @@ router.get("/sessions", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
   const limit = clampLimit(req.query.limit, 50, 200);
   const centreFilter = scopedCentreFilter(scope, batches.centre_id);
+  const batchScopeFilter = scopedBatchFilter(scope, sessions.batch_id);
 
   const batchIdRaw = req.query.batch_id;
   const batchIdParse = z.string().uuid().safeParse(batchIdRaw);
@@ -76,7 +82,7 @@ router.get("/sessions", async (req: Request, res: Response) => {
     .innerJoin(batches, eq(batches.id, sessions.batch_id))
     .innerJoin(centres, eq(centres.id, batches.centre_id))
     .leftJoin(attendance, eq(attendance.session_id, sessions.id))
-    .where(and(centreFilter, batchFilter))
+    .where(and(centreFilter, batchScopeFilter, batchFilter))
     .groupBy(sessions.id, batches.name, centres.name)
     .orderBy(desc(sessions.session_date))
     .limit(limit);
@@ -102,7 +108,7 @@ router.post("/sessions", async (req: Request, res: Response) => {
     .from(batches)
     .where(eq(batches.id, body.batch_id))
     .limit(1);
-  if (!batch || !inScope(scope, batch.centre_id)) {
+  if (!batch || !inBatchWriteScope(scope, batch.id, batch.centre_id)) {
     fail(res, 403, "ERR_FORBIDDEN", "Batch not in your scope."); return;
   }
 
@@ -222,7 +228,7 @@ router.post("/sessions/:id/mark", async (req: Request, res: Response) => {
     .innerJoin(centres, eq(centres.id, batches.centre_id))
     .where(eq(sessions.id, id))
     .limit(1);
-  if (!session || !inScope(scope, session.centre_id)) {
+  if (!session || !inBatchWriteScope(scope, session.batch_id, session.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Session not found."); return;
   }
   // A cancelled session must not be marked (doing so would un-cancel it).
@@ -324,12 +330,12 @@ router.post("/sessions/:id/cancel", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
   const id = String(req.params.id);
   const [session] = await db
-    .select({ id: sessions.id, centre_id: batches.centre_id })
+    .select({ id: sessions.id, batch_id: sessions.batch_id, centre_id: batches.centre_id })
     .from(sessions)
     .innerJoin(batches, eq(batches.id, sessions.batch_id))
     .where(eq(sessions.id, id))
     .limit(1);
-  if (!session || !inScope(scope, session.centre_id)) {
+  if (!session || !inBatchWriteScope(scope, session.batch_id, session.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Session not found."); return;
   }
 

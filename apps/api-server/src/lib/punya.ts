@@ -142,3 +142,99 @@ export async function awardPunya(input: AwardPunyaInput, tx?: Tx): Promise<Award
   if (tx) return runAward(tx, input);
   return db.transaction((t) => runAward(t, input));
 }
+
+export interface ReversePunyaInput {
+  studentId: string;
+  featureKey: string;
+  /** Absolute points to claw back (positive number). */
+  points: number;
+  note?: string | null;
+  awardedBy?: string | null;
+  /**
+   * Required. Stored as `<featureKey>#<idempotencyKey>`. A second reverse with
+   * the same key is a no-op (does not double-debit).
+   */
+  idempotencyKey: string;
+}
+
+export interface ReversePunyaResult {
+  student_id: string;
+  points_reversed: number;
+  total_points: number;
+  tier: string;
+  /** True when this call actually debited; false on idempotent replay. */
+  reversed: boolean;
+}
+
+async function runReverse(tx: Tx | Db, input: ReversePunyaInput): Promise<ReversePunyaResult> {
+  const points = Math.abs(input.points);
+  const key = input.idempotencyKey.trim();
+  const ledgerFeatureKey = `${input.featureKey}#${key}`;
+
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtextextended(${`punya:${input.studentId}:${ledgerFeatureKey}`}, 0))`,
+  );
+
+  const [existing] = await tx
+    .select({ points: punya_transactions.points })
+    .from(punya_transactions)
+    .where(
+      and(
+        eq(punya_transactions.student_id, input.studentId),
+        eq(punya_transactions.feature_key, ledgerFeatureKey),
+      ),
+    )
+    .limit(1);
+
+  if (existing) {
+    const [bal] = await tx
+      .select({ total_points: punya_balances.total_points })
+      .from(punya_balances)
+      .where(eq(punya_balances.student_id, input.studentId))
+      .limit(1);
+    const total = bal?.total_points ?? 0;
+    return {
+      student_id: input.studentId,
+      points_reversed: Math.abs(existing.points),
+      total_points: total,
+      tier: tierForPoints(total),
+      reversed: false,
+    };
+  }
+
+  const debit = -points;
+  await tx.insert(punya_transactions).values({
+    student_id: input.studentId,
+    feature_key: ledgerFeatureKey,
+    points: debit,
+    note: input.note ?? null,
+    awarded_by: input.awardedBy ?? null,
+  });
+  const result = await tx.execute(
+    sql`insert into punya_balances (student_id, total_points)
+        values (${input.studentId}, ${debit})
+        on conflict (student_id) do update
+          set total_points = punya_balances.total_points + ${debit}
+        returning total_points`,
+  );
+  const rows = (result as unknown as { rows?: Array<{ total_points: number }> }).rows ?? [];
+  const total = Number(rows[0]?.total_points ?? debit);
+  await tx
+    .update(punya_balances)
+    .set({ tier: tierForPoints(total) })
+    .where(eq(punya_balances.student_id, input.studentId));
+
+  return {
+    student_id: input.studentId,
+    points_reversed: points,
+    total_points: total,
+    tier: tierForPoints(total),
+    reversed: true,
+  };
+}
+
+/** Claw back previously awarded Punya idempotently (negative ledger row). */
+export async function reversePunya(input: ReversePunyaInput, tx?: Tx): Promise<ReversePunyaResult> {
+  if (tx) return runReverse(tx, input);
+  return db.transaction((t) => runReverse(t, input));
+}

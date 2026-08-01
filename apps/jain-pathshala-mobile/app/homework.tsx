@@ -6,6 +6,7 @@ import { useSessionView } from "@/contexts/SessionViewContext";
 import { useHomework, useSubmitHomework } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { bodyFamily } from "@/constants/typography";
+import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 type Tone = "success" | "warning" | "error" | "info" | "primary" | "neutral";
@@ -148,7 +149,10 @@ export default function HomeworkScreen() {
               : "Your student profile isn't ready yet."
           }
         />
-      ) : homework.isLoading ? (
+      ) : (
+        <>
+          <ChildSwitcher />
+          {homework.isLoading ? (
         <StateView status="loading" emptyText="" />
       ) : homework.isError ? (
         <StateView
@@ -220,6 +224,8 @@ export default function HomeworkScreen() {
             </Card>
           );
         })
+      )}
+        </>
       )}
     </Screen>
   );

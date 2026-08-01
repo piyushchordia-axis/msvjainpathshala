@@ -29,11 +29,13 @@ import enquiriesRouter from "./v1/enquiries";
 import curriculumRouter from "./v1/curriculum";
 import libraryRouter from "./v1/library";
 import enrolmentsRouter from "./v1/enrolments";
+import clientSettingsRouter from "./v1/client-settings";
 
 const router: IRouter = Router();
 
 router.use("/public", publicRouter);
 router.use("/admin", adminRouter);
+router.use("/settings/public", clientSettingsRouter);
 router.use("/notices", noticesRouter);
 router.use("/gallery", galleryRouter);
 router.use("/me", meRouter);

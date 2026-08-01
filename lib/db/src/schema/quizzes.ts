@@ -19,6 +19,12 @@ export const questions = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     scope: quizScopeEnum("scope").notNull().default("national"),
+    /** Multi-select targets for the chosen scope (empty when national). */
+    state_ids: uuid("state_ids").array().notNull().default([]),
+    city_ids: uuid("city_ids").array().notNull().default([]),
+    centre_ids: uuid("centre_ids").array().notNull().default([]),
+    batch_ids: uuid("batch_ids").array().notNull().default([]),
+    /** Legacy single city FK kept for listing filters; prefer city_ids. */
     city_id: uuid("city_id").references(() => cities.id, { onDelete: "set null" }),
     question_en: text("question_en").notNull(),
     question_hi: text("question_hi"),
@@ -43,6 +49,11 @@ export const quiz_events = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     scope: quizScopeEnum("scope").notNull().default("city"),
+    state_ids: uuid("state_ids").array().notNull().default([]),
+    city_ids: uuid("city_ids").array().notNull().default([]),
+    centre_ids: uuid("centre_ids").array().notNull().default([]),
+    batch_ids: uuid("batch_ids").array().notNull().default([]),
+    /** Legacy single FKs (first of multi-select) for older filters. */
     city_id: uuid("city_id").references(() => cities.id, { onDelete: "set null" }),
     centre_id: uuid("centre_id").references(() => centres.id, { onDelete: "set null" }),
     batch_id: uuid("batch_id").references(() => batches.id, { onDelete: "set null" }),
@@ -112,9 +123,13 @@ export const push_quizzes = pgTable(
   "push_quizzes",
   {
     id: uuid("id").primaryKey().defaultRandom(),
-    batch_id: uuid("batch_id")
-      .notNull()
-      .references(() => batches.id, { onDelete: "cascade" }),
+    scope: quizScopeEnum("scope").notNull().default("batch"),
+    state_ids: uuid("state_ids").array().notNull().default([]),
+    city_ids: uuid("city_ids").array().notNull().default([]),
+    centre_ids: uuid("centre_ids").array().notNull().default([]),
+    batch_ids: uuid("batch_ids").array().notNull().default([]),
+    /** Legacy primary batch (first of batch_ids when scope=batch); null for broader scopes. */
+    batch_id: uuid("batch_id").references(() => batches.id, { onDelete: "cascade" }),
     shikshak_user_id: uuid("shikshak_user_id").references(() => users.id, { onDelete: "set null" }),
     started_at: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
     expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),

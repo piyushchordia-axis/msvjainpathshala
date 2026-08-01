@@ -5,7 +5,7 @@
  */
 import { Alert } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiPost, ApiError } from "@/lib/api";
+import { apiGet, apiPost, apiPut, ApiError } from "@/lib/api";
 import type {
   AdminBatchRow,
   AdminStudentRow,
@@ -37,18 +37,20 @@ export const qk = {
   shivir: (id: string) => ["public", "shivir", id] as const,
   library: ["public", "library"] as const,
   notices: ["public", "notices"] as const,
-  gallery: ["public", "gallery"] as const,
+  gallery: (limit: number) => ["public", "gallery", limit] as const,
+  clientSettings: ["public", "settings"] as const,
   children: ["me", "children"] as const,
   attendance: (id: string) => ["me", "attendance", id] as const,
   punya: (id: string) => ["me", "punya", id] as const,
   niyams: (id: string) => ["me", "niyams", id] as const,
-  niyamCatalog: ["me", "niyam-catalog"] as const,
+  niyamCatalog: (studentId?: string) => ["me", "niyam-catalog", studentId ?? ""] as const,
   today: ["me", "today"] as const,
   attendanceSession: (id: string) => ["shikshak", "attendance-session", id] as const,
   overview: ["admin", "overview"] as const,
   adminStudents: (s?: string) => ["admin", "students", s ?? "all"] as const,
   adminEnrolments: (s?: string) => ["admin", "enrolments", s ?? "all"] as const,
   adminBatches: ["admin", "batches"] as const,
+  staffingMe: ["admin", "staffing", "me"] as const,
   // Wave 4 (new student/parent flows)
   notifications: ["me", "notifications"] as const,
   homework: (id: string) => ["me", "homework", id] as const,
@@ -107,11 +109,38 @@ export function useNotices() {
   });
 }
 
-export function useGallery() {
+export type GalleryMediaItem = PublicGalleryItem & {
+  image_url?: string | null;
+  thumbnail_url?: string | null;
+  caption?: string | null;
+  caption_hi?: string | null;
+};
+
+export function useGallery(limit = 60) {
   return useQuery({
-    queryKey: qk.gallery,
-    queryFn: () => apiGet<List<PublicGalleryItem>>("/v1/gallery?limit=60"),
+    queryKey: qk.gallery(limit),
+    queryFn: () => apiGet<List<GalleryMediaItem>>(`/v1/gallery?limit=${limit}`),
   });
+}
+
+export type ClientSettingRow = { key: string; value: string };
+
+export function useClientSettings(enabled = true) {
+  return useQuery({
+    queryKey: qk.clientSettings,
+    queryFn: () => apiGet<{ items: ClientSettingRow[] }>("/v1/settings/public"),
+    enabled,
+  });
+}
+
+/** Parse allowlisted carousel interval; clamp 1000–15000; default 2000. */
+export function carouselIntervalMs(
+  data: { items: ClientSettingRow[] } | undefined | null,
+): number {
+  const raw = data?.items?.find((i) => i.key === "gallery_carousel_interval_ms")?.value;
+  const n = Number.parseInt(String(raw ?? ""), 10);
+  if (!Number.isFinite(n)) return 2000;
+  return Math.min(15000, Math.max(1000, n));
 }
 
 /* ------------------------------------------------------------------- me --- */
@@ -150,11 +179,17 @@ export function useStudentNiyams(studentId?: string) {
   });
 }
 
-export function useNiyamCatalog(enabled = true) {
+export function useNiyamCatalog(enabled = true, studentId?: string | null) {
   return useQuery({
-    queryKey: qk.niyamCatalog,
-    queryFn: () => apiGet<List<NiyamCatalogRow>>("/v1/me/niyam-catalog"),
-    enabled,
+    queryKey: qk.niyamCatalog(studentId ?? undefined),
+    queryFn: () =>
+      apiGet<List<NiyamCatalogRow>>(
+        studentId
+          ? `/v1/me/niyam-catalog?student_id=${encodeURIComponent(studentId)}`
+          : "/v1/me/niyam-catalog",
+      ),
+    // Require an explicit student when one is expected so status never bleeds across children.
+    enabled: enabled && (studentId == null || studentId.length > 0),
   });
 }
 
@@ -283,6 +318,26 @@ export function useAdminBatches(enabled = true) {
   });
 }
 
+export type StaffingMePayload = {
+  user_id: string;
+  centres: { centre_id: string; centre_name: string }[];
+  batches: {
+    batch_id: string;
+    batch_name: string | null;
+    centre_id: string;
+    is_primary: boolean;
+  }[];
+  sanchalak_centres?: { centre_id: string; centre_name: string }[];
+};
+
+export function useMyStaffing(enabled = true) {
+  return useQuery({
+    queryKey: qk.staffingMe,
+    queryFn: () => apiGet<StaffingMePayload>("/v1/admin/staffing/me"),
+    enabled,
+  });
+}
+
 /* ------------------------------------------------------------ mutations --- */
 
 export function useEnrolmentAction() {
@@ -360,6 +415,7 @@ interface SubmitNiyamInput {
   student_id: string;
   submission_date?: string;
   proof_url?: string;
+  media?: Array<{ url: string; kind: string; mime?: string; size_bytes?: number }>;
   notes?: string;
 }
 interface SubmitNiyamResult { id: string; status: string }
@@ -371,6 +427,7 @@ export function useSubmitNiyam() {
     onSuccess: (_res, vars) => {
       qc.invalidateQueries({ queryKey: qk.niyams(vars.studentId) });
       qc.invalidateQueries({ queryKey: qk.punya(vars.studentId) });
+      qc.invalidateQueries({ queryKey: qk.niyamCatalog(vars.studentId) });
     },
   });
 }
@@ -416,6 +473,10 @@ export interface QuizEventRow {
   participation_points: number;
   win_points: number;
   already_attempted: boolean;
+  /** True when the student submitted with every answer correct. */
+  is_winner?: boolean;
+  /** Punya awarded for this attempt (participation + win if applicable). */
+  points_earned?: number;
 }
 export interface QuizOption { text_en: string; text_hi: string | null }
 export interface QuizQuestion { id: string; question_en: string; question_hi: string | null; options: QuizOption[] }
@@ -532,6 +593,7 @@ export interface IdCardRow {
   student_id: string;
   card_number: string;
   png_url: string;
+  photo_url?: string | null;
   version_no: number;
   is_active: boolean;
 }
@@ -547,5 +609,27 @@ export function useMyIdCard(studentId?: string) {
       }
     },
     enabled: !!studentId,
+  });
+}
+
+export function useSetStudentPhoto() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      studentId,
+      photo_url,
+    }: {
+      studentId: string;
+      photo_url: string | null;
+    }) =>
+      apiPut<{
+        student_id: string;
+        photo_url: string | null;
+        id_card: IdCardRow;
+      }>(`/v1/me/students/${studentId}/photo`, { photo_url }),
+    onSuccess: (_res, vars) => {
+      qc.invalidateQueries({ queryKey: qk.idCard(vars.studentId) });
+      qc.invalidateQueries({ queryKey: qk.children });
+    },
   });
 }

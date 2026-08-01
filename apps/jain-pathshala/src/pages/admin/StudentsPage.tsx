@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
+import { AGE_GROUPS, formatAgeGroup } from '@workspace/api-zod';
 import { toast } from '@/components/ui/toast-jp';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
@@ -88,7 +89,7 @@ function StudentRowActions({
 interface CentreOpt { id: string; name: string; }
 interface BatchOpt { id: string; name: string; centre_id: string; }
 
-const AGE_GROUPS_S = ['bal', 'kishor', 'tarun', 'yuva'] as const;
+const AGE_GROUPS_S = AGE_GROUPS;
 
 function AddStudentDialog({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
@@ -160,7 +161,7 @@ function AddStudentDialog({ onAdded }: { onAdded: () => void }) {
             <Select value={ageGroup} onValueChange={setAgeGroup}>
               <SelectTrigger><SelectValue placeholder="Select age group" /></SelectTrigger>
               <SelectContent>
-                {AGE_GROUPS_S.map((g) => <SelectItem key={g} value={g} className="capitalize">{g}</SelectItem>)}
+                {AGE_GROUPS_S.map((g) => <SelectItem key={g} value={g}>{formatAgeGroup(g)}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -276,15 +277,17 @@ export default function StudentsPage() {
                     <td className="px-4 py-3 font-mono text-xs text-muted-foreground">
                       {s.student_code}
                     </td>
-                    <td className="px-4 py-3 text-xs uppercase tracking-wide text-muted-foreground">
-                      {s.age_group}
+                    <td className="px-4 py-3 text-xs text-muted-foreground">
+                      {formatAgeGroup(s.age_group)}
                     </td>
                     <td className="px-4 py-3 text-xs">{s.dob ?? '—'}</td>
                     <td className="px-4 py-3">
                       {s.msv_status === 'approved' ? (
                         <Badge className="bg-yellow-100 text-yellow-800 border-yellow-200">MSV</Badge>
-                      ) : (
+                      ) : s.msv_status && s.msv_status !== 'none' ? (
                         <span className="text-xs text-muted-foreground">{s.msv_status}</span>
+                      ) : (
+                        <span className="text-xs text-muted-foreground">—</span>
                       )}
                     </td>
                     <td className="px-4 py-3">

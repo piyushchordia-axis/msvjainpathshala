@@ -45,6 +45,8 @@ function toSessionUser(u: typeof users.$inferSelect): SessionUser {
     role: u.role,
     full_name: u.full_name,
     preferred_language: u.preferred_language,
+    state_id: u.state_id ?? null,
+    city_id: u.city_id ?? null,
   };
 }
 

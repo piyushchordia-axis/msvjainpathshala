@@ -213,8 +213,8 @@ describe("enrolments — capacity guard", () => {
 
     const batchId = randomUUID();
     await pool.query(
-      `insert into batches (id, centre_id, name, age_group, start_time, end_time, capacity, status)
-       values ($1, $2, $3, 'bal', '09:00', '10:00', 1, 'active')`,
+      `insert into batches (id, centre_id, name, age_groups, start_time, end_time, capacity, status)
+       values ($1, $2, $3, ARRAY['bal']::age_group_enum[], '09:00', '10:00', 1, 'active')`,
       [batchId, centreId, `Test Batch ${batchId.slice(0, 6)}`],
     );
     createdBatches.push(batchId);

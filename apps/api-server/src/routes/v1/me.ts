@@ -23,9 +23,15 @@ import {
   niyam_submissions,
   shikshak_batch_assignments,
 } from "@workspace/db";
-import { and, desc, eq, isNull, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
+import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
+import { periodKey, periodLabel, submittedPeriodTag } from "../../lib/niyam-period";
+import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
+import { upsertIdCardArt } from "../../lib/idcard-render";
+import { auditFromReq } from "../../lib/audit";
+import { storage } from "../../lib/storage";
 
 const router: IRouter = Router();
 
@@ -63,6 +69,7 @@ router.get("/children", async (req: Request, res: Response) => {
       batch_name: batches.name,
       msv_status: students.msv_status,
       status: students.status,
+      photo_url: students.photo_url,
       total_points: sql<number>`coalesce(${punya_balances.total_points}, 0)::int`,
       tier: sql<string>`coalesce(${punya_balances.tier}, 'jigyasu')`,
     })
@@ -73,7 +80,109 @@ router.get("/children", async (req: Request, res: Response) => {
     .where(and(isNull(students.deleted_at), or(eq(students.parent_id, uid), eq(students.user_id, uid))))
     .orderBy(students.full_name);
 
-  ok(res, { items: rows }, { count: rows.length });
+  ok(
+    res,
+    {
+      items: rows.map((r) => ({
+        ...r,
+        photo_url: signUploadUrl(r.photo_url),
+      })),
+    },
+    { count: rows.length },
+  );
+});
+
+const studentPhotoSchema = z.object({
+  photo_url: z.string().min(1).max(1000).nullable(),
+});
+
+/**
+ * PUT /v1/me/students/:id/photo — parent/student sets the ID-card headshot.
+ * Accepts a previously uploaded /uploads URL (folder student-photos) or null to clear.
+ * Refreshes the digital ID card PNG without rotating the QR version.
+ */
+router.put("/students/:id/photo", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  if (!UUID_RE.test(id) || !(await ownedStudentId(req, id))) {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
+    return;
+  }
+
+  let body: z.infer<typeof studentPhotoSchema>;
+  try {
+    body = studentPhotoSchema.parse(req.body);
+  } catch {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "photo_url must be a URL string or null.");
+    return;
+  }
+
+  if (body.photo_url !== null) {
+    const key = uploadKeyFromUrl(body.photo_url);
+    if (!key || !key.startsWith("student-photos/")) {
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        "photo_url must be an uploaded file under student-photos.",
+      );
+      return;
+    }
+  }
+
+  const [student] = await db
+    .select({
+      id: students.id,
+      full_name: students.full_name,
+      student_code: students.student_code,
+      msv_status: students.msv_status,
+      photo_url: students.photo_url,
+      centre_name: centres.name,
+    })
+    .from(students)
+    .leftJoin(centres, eq(centres.id, students.centre_id))
+    .where(eq(students.id, id))
+    .limit(1);
+  if (!student) {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
+    return;
+  }
+
+  const previousKey = student.photo_url ? uploadKeyFromUrl(student.photo_url) : null;
+
+  await db
+    .update(students)
+    .set({ photo_url: body.photo_url, updated_at: new Date() })
+    .where(eq(students.id, id));
+
+  const card = await upsertIdCardArt({
+    studentId: id,
+    fullName: student.full_name ?? student.student_code,
+    studentCode: student.student_code,
+    centreName: student.centre_name ?? "—",
+    msvBadge: student.msv_status === "approved",
+    photoUrl: body.photo_url,
+    rotateQr: false,
+  });
+
+  if (previousKey && previousKey !== uploadKeyFromUrl(body.photo_url ?? "")) {
+    await storage.remove(previousKey);
+  }
+
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "student",
+    entityId: id,
+    summary: body.photo_url ? "Student ID photo updated." : "Student ID photo cleared.",
+  });
+
+  ok(res, {
+    student_id: id,
+    photo_url: signUploadUrl(body.photo_url),
+    id_card: {
+      ...card,
+      png_url: signUploadUrl(card.png_url),
+    },
+  });
 });
 
 /* GET /v1/me/students/:id/attendance?limit= */
@@ -163,8 +272,47 @@ router.get("/students/:id/niyams", async (req: Request, res: Response) => {
   ok(res, { items: rows }, { count: rows.length });
 });
 
-/* GET /v1/me/niyam-catalog — active niyam definitions (browse) */
-router.get("/niyam-catalog", async (_req: Request, res: Response) => {
+/* GET /v1/me/niyam-catalog?student_id= — active niyams visible to this student */
+router.get("/niyam-catalog", async (req: Request, res: Response) => {
+  const studentIdRaw = req.query.student_id;
+  const studentId = typeof studentIdRaw === "string" && UUID_RE.test(studentIdRaw) ? studentIdRaw : null;
+
+  let studentCtx: {
+    msv_status: string;
+    city_id: string | null;
+    state_id: string | null;
+  } | null = null;
+
+  if (studentId) {
+    const uid = req.authUser!.id;
+    const [owned] = await db
+      .select({
+        id: students.id,
+        msv_status: students.msv_status,
+        city_id: centres.city_id,
+        state_id: centres.state_id,
+      })
+      .from(students)
+      .leftJoin(centres, eq(centres.id, students.centre_id))
+      .where(
+        and(
+          eq(students.id, studentId),
+          isNull(students.deleted_at),
+          or(eq(students.parent_id, uid), eq(students.user_id, uid)),
+        ),
+      )
+      .limit(1);
+    if (!owned) {
+      fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
+      return;
+    }
+    studentCtx = {
+      msv_status: owned.msv_status,
+      city_id: owned.city_id,
+      state_id: owned.state_id,
+    };
+  }
+
   const rows = await db
     .select({
       id: niyams.id,
@@ -173,13 +321,102 @@ router.get("/niyam-catalog", async (_req: Request, res: Response) => {
       description_en: niyams.description_en,
       description_hi: niyams.description_hi,
       niyam_type: niyams.niyam_type,
+      proof_type: niyams.proof_type,
+      proof_required: niyams.proof_required,
+      approval_mode: niyams.approval_mode,
+      max_uploads: niyams.max_uploads,
       points: niyams.points,
+      scope: niyams.scope,
+      state_id: niyams.state_id,
+      city_id: niyams.city_id,
+      msv_audience: niyams.msv_audience,
     })
     .from(niyams)
     .where(eq(niyams.is_active, true))
     .orderBy(desc(niyams.points));
 
-  ok(res, { items: rows }, { count: rows.length });
+  const items = studentCtx
+    ? rows.filter((n) => {
+        if (n.msv_audience === "msv" && studentCtx!.msv_status !== "approved") return false;
+        if (n.msv_audience === "non_msv" && studentCtx!.msv_status === "approved") return false;
+        if (n.scope === "national") return true;
+        if (n.scope === "state") return !!n.state_id && n.state_id === studentCtx!.state_id;
+        if (n.scope === "city") return !!n.city_id && n.city_id === studentCtx!.city_id;
+        return false;
+      })
+    : rows;
+
+  // Current-period submission status in one query (no N+1).
+  let periodByNiyam = new Map<
+    string,
+    { status: string; submission_date: string; period_key: string }
+  >();
+  if (studentId && items.length > 0) {
+    const today = (() => {
+      const now = new Date();
+      const ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
+      return ist.toISOString().slice(0, 10);
+    })();
+    const keys = items.map((n) => ({
+      id: n.id,
+      type: n.niyam_type as "daily" | "weekly" | "monthly",
+      key: periodKey(n.niyam_type as "daily" | "weekly" | "monthly", today),
+    }));
+    const currentKeys = [...new Set(keys.map((k) => k.key))];
+    const subs = await db
+      .select({
+        niyam_id: niyam_submissions.niyam_id,
+        status: niyam_submissions.status,
+        submission_date: niyam_submissions.submission_date,
+        period_key: niyam_submissions.period_key,
+      })
+      .from(niyam_submissions)
+      .where(
+        and(
+          eq(niyam_submissions.student_id, studentId),
+          inArray(niyam_submissions.niyam_id, items.map((i) => i.id)),
+          inArray(niyam_submissions.period_key, currentKeys),
+          ne(niyam_submissions.status, "rejected"),
+        ),
+      );
+    periodByNiyam = new Map(
+      subs
+        .filter((s) => s.period_key)
+        .map((s) => [
+          s.niyam_id,
+          {
+            status: s.status,
+            submission_date: s.submission_date,
+            period_key: s.period_key!,
+          },
+        ]),
+    );
+
+    const enriched = items.map((n) => {
+      const pKey = periodKey(n.niyam_type as "daily" | "weekly" | "monthly", today);
+      const sub = periodByNiyam.get(n.id);
+      const submitted = !!sub && sub.period_key === pKey;
+      return {
+        ...n,
+        current_period_key: pKey,
+        period_label_en: periodLabel(n.niyam_type as "daily" | "weekly" | "monthly", pKey, "en"),
+        period_label_hi: periodLabel(n.niyam_type as "daily" | "weekly" | "monthly", pKey, "hi"),
+        submitted_this_period: submitted,
+        submission_status: submitted ? sub!.status : null,
+        submission_date: submitted ? sub!.submission_date : null,
+        period_status_tag_en: submitted
+          ? submittedPeriodTag(n.niyam_type as "daily" | "weekly" | "monthly", "en")
+          : null,
+        period_status_tag_hi: submitted
+          ? submittedPeriodTag(n.niyam_type as "daily" | "weekly" | "monthly", "hi")
+          : null,
+      };
+    });
+    ok(res, { items: enriched }, { count: enriched.length });
+    return;
+  }
+
+  ok(res, { items }, { count: items.length });
 });
 
 /* GET /v1/me/today — recent sessions for the batches a shikshak teaches */

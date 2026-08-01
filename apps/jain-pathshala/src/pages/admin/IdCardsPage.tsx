@@ -25,11 +25,19 @@ interface GeneratedCard {
   version_no: number;
 }
 
+interface BulkGenerateResult {
+  generated: number;
+  skipped: number;
+  failed: number;
+  total: number;
+}
+
 export default function IdCardsPage() {
-  const { items, loading, error } = useAdminList<AdminStudentRow>('/v1/admin/students?limit=500');
+  const { items, loading, error, reload } = useAdminList<AdminStudentRow>('/v1/admin/students?limit=500');
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [card, setCard] = useState<GeneratedCard | null>(null);
 
   const filtered = useMemo(() => {
@@ -61,10 +69,50 @@ export default function IdCardsPage() {
     }
   }
 
+  async function generateAll(onlyMissing: boolean) {
+    const label = onlyMissing ? 'missing cards only' : 'all active students';
+    if (!window.confirm(`Generate ID cards for ${label}? This may take a minute.`)) return;
+    setBulkBusy(true);
+    try {
+      const res = await apiPost<BulkGenerateResult>('/v1/id-cards/generate-all', {
+        only_missing: onlyMissing,
+      });
+      toast.success(
+        'Bulk generation finished.',
+        `${res.generated} generated, ${res.skipped} skipped, ${res.failed} failed (of ${res.total}).`,
+      );
+      reload();
+    } catch (err) {
+      toast.error('Bulk generation failed.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   return (
     <AdminPageShell
       title="Digital ID Cards"
       subtitle="Generate signed, scannable QR ID cards for students in your scope."
+      actions={
+        <div className="flex flex-wrap gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={bulkBusy || loading}
+            onClick={() => void generateAll(true)}
+          >
+            {bulkBusy ? 'Working…' : 'Generate missing'}
+          </Button>
+          <Button
+            size="sm"
+            disabled={bulkBusy || loading}
+            onClick={() => void generateAll(false)}
+          >
+            <CreditCard className="mr-1 h-4 w-4" />
+            {bulkBusy ? 'Working…' : 'Generate all'}
+          </Button>
+        </div>
+      }
     >
       {error ? <AdminError message={error} /> : null}
 
@@ -105,7 +153,7 @@ export default function IdCardsPage() {
           </div>
 
           <div className="mt-4 flex items-center gap-3">
-            <Button onClick={generate} disabled={!selectedId || busy}>
+            <Button onClick={generate} disabled={!selectedId || busy || bulkBusy}>
               <CreditCard className="mr-1 h-4 w-4" />
               {busy ? 'Generating…' : 'Generate / Regenerate'}
             </Button>

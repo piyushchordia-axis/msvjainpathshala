@@ -4,6 +4,7 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { useAdminStudents } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
+import { formatAgeGroup } from "@workspace/api-zod";
 import { Body, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 export default function StudentsScreen() {
@@ -35,7 +36,7 @@ export default function StudentsScreen() {
                 <View style={{ flex: 1, paddingRight: 8 }}>
                   <Title style={{ fontSize: 17 }}>{s.full_name ?? s.student_code}</Title>
                   <Body muted style={{ fontSize: 12, marginTop: 2 }}>
-                    {[s.student_code, s.age_group].filter(Boolean).join(" · ") || "—"}
+                    {[s.student_code, formatAgeGroup(s.age_group, hi ? "hi" : "en")].filter(Boolean).join(" · ") || "—"}
                   </Body>
                 </View>
                 <Pill tone={s.status === "active" ? "success" : "neutral"} label={s.status} />
@@ -46,7 +47,9 @@ export default function StudentsScreen() {
                     {hi ? "जन्म" : "DOB"}: {formatDate(s.dob)}
                   </Body>
                 ) : null}
-                {s.msv_status ? <Pill label={`MSV: ${s.msv_status}`} /> : null}
+                {s.msv_status && s.msv_status !== "none" ? (
+                  <Pill label={`MSV: ${s.msv_status}`} />
+                ) : null}
               </Row>
             </Card>
           ))

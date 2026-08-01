@@ -1,0 +1,8 @@
+# Files that execute inside Linux containers or via sh must keep LF endings
+# even when the repo is checked out on Windows with core.autocrlf=true.
+# CRLF here makes the shell read `\r` as part of each command and fail.
+*.sh text eol=lf
+.husky/* text eol=lf
+Dockerfile text eol=lf
+Dockerfile.* text eol=lf
+*.Dockerfile text eol=lf

@@ -3,7 +3,7 @@ import { View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { AppHeader } from "@/components/AppHeader";
+import { AppHeader, LanguageToggle } from "@/components/AppHeader";
 import { DeleteAccountButton } from "@/components/DeleteAccountButton";
 import { Body, Button, Card, Kicker, Pill, Row, Screen, Title } from "@/components/ui";
 
@@ -28,6 +28,17 @@ export default function ProfileScreen() {
               <Pill tone="primary" label={user.role} />
             </Row>
           ) : null}
+        </Card>
+        <Card>
+          <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Title style={{ fontSize: 16 }}>{hi ? "भाषा" : "Language"}</Title>
+              <Body muted style={{ marginTop: 4, fontSize: 13 }}>
+                {hi ? "ऐप की भाषा चुनें" : "Choose the app language"}
+              </Body>
+            </View>
+            <LanguageToggle />
+          </Row>
         </Card>
         <Button
           label={hi ? "साइन आउट" : "Sign out"}

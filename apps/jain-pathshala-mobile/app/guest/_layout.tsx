@@ -27,6 +27,7 @@ export default function GuestLayout() {
 
   return (
     <Tabs
+      initialRouteName="home"
       screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: c.primary,
@@ -48,6 +49,8 @@ export default function GuestLayout() {
           ) : null,
       }}
     >
+      {/* Sign-in first — browsing tabs stay open for guests without an account. */}
+      {tab("home", hi ? "साइन इन" : "Sign in", "log-in")}
       {tab("centres", hi ? "केंद्र" : "Centres", "location")}
       {tab("shivirs", hi ? "शिविर" : "Shivirs", "bonfire")}
       {tab("library", hi ? "पुस्तकालय" : "Library", "library")}

@@ -1,4 +1,5 @@
 import { View } from "react-native";
+import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -6,13 +7,17 @@ import { useSessionView } from "@/contexts/SessionViewContext";
 import { useAttendance, usePunya } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
-import { Body, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { GalleryCarousel } from "@/components/GalleryCarousel";
+import { AnimatedMount } from "@/components/AnimatedMount";
+import { Body, Button, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 import { QuickActions } from "@/components/QuickActions";
+import { formatAgeGroup } from "@workspace/api-zod";
 
 export default function StudentHome() {
   const c = useColors();
   const { hi } = useLocale();
   const { user } = useAuth();
+  const router = useRouter();
   const { activeChild, activeStudentId, loading, isError, refetch } = useSessionView();
 
   const attendance = useAttendance(activeStudentId ?? undefined);
@@ -62,42 +67,63 @@ export default function StudentHome() {
           />
         ) : (
           <>
-            <QuickActions />
-            <Card>
-              <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-                <View style={{ flex: 1, paddingRight: 10 }}>
-                  <Title style={{ fontSize: 19 }}>{activeChild.full_name}</Title>
-                  <Body muted style={{ marginTop: 2, fontSize: 13 }}>{activeChild.student_code}</Body>
+            <AnimatedMount delay={0}>
+              <GalleryCarousel />
+            </AnimatedMount>
+
+            <AnimatedMount delay={60}>
+              <QuickActions />
+            </AnimatedMount>
+
+            <AnimatedMount delay={120}>
+              <Card>
+                <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                  <View style={{ flex: 1, paddingRight: 10 }}>
+                    <Title style={{ fontSize: 19 }}>{activeChild.full_name}</Title>
+                    <Body muted style={{ marginTop: 2, fontSize: 13 }}>{activeChild.student_code}</Body>
+                  </View>
+                  <Pill label={activeChild.tier} tone="primary" />
+                </Row>
+
+                <Row style={{ marginTop: 14, alignItems: "baseline", gap: 8 }}>
+                  <Numeric style={{ fontSize: 30 }} countUp>
+                    {activeChild.total_points}
+                  </Numeric>
+                  <Body muted>{hi ? "कुल पुण्य अंक" : "total punya points"}</Body>
+                </Row>
+
+                <View style={{ height: 1, backgroundColor: c.border, marginVertical: 14 }} />
+
+                <View style={{ gap: 8 }}>
+                  <Row style={{ justifyContent: "space-between" }}>
+                    <Body muted style={{ fontSize: 13 }}>{hi ? "आयु वर्ग" : "Age group"}</Body>
+                    <Body style={{ fontSize: 14 }}>{formatAgeGroup(activeChild.age_group, hi ? "hi" : "en")}</Body>
+                  </Row>
+                  <Row style={{ justifyContent: "space-between" }}>
+                    <Body muted style={{ fontSize: 13 }}>{hi ? "केंद्र" : "Centre"}</Body>
+                    <Body style={{ fontSize: 14 }}>{activeChild.centre_name ?? "—"}</Body>
+                  </Row>
+                  <Row style={{ justifyContent: "space-between" }}>
+                    <Body muted style={{ fontSize: 13 }}>{hi ? "बैच" : "Batch"}</Body>
+                    <Body style={{ fontSize: 14 }}>{activeChild.batch_name ?? "—"}</Body>
+                  </Row>
+                  {activeChild.msv_status && activeChild.msv_status !== "none" ? (
+                    <Row style={{ justifyContent: "space-between" }}>
+                      <Body muted style={{ fontSize: 13 }}>{hi ? "एमएसवी स्थिति" : "MSV status"}</Body>
+                      <Pill label={activeChild.msv_status} />
+                    </Row>
+                  ) : null}
                 </View>
-                <Pill label={activeChild.tier} tone="primary" />
-              </Row>
 
-              <Row style={{ marginTop: 14, alignItems: "baseline", gap: 8 }}>
-                <Title style={{ fontSize: 30 }}>{activeChild.total_points}</Title>
-                <Body muted>{hi ? "कुल पुण्य अंक" : "total punya points"}</Body>
-              </Row>
-
-              <View style={{ height: 1, backgroundColor: c.border, marginVertical: 14 }} />
-
-              <View style={{ gap: 8 }}>
-                <Row style={{ justifyContent: "space-between" }}>
-                  <Body muted style={{ fontSize: 13 }}>{hi ? "आयु वर्ग" : "Age group"}</Body>
-                  <Body style={{ fontSize: 14 }}>{activeChild.age_group}</Body>
-                </Row>
-                <Row style={{ justifyContent: "space-between" }}>
-                  <Body muted style={{ fontSize: 13 }}>{hi ? "केंद्र" : "Centre"}</Body>
-                  <Body style={{ fontSize: 14 }}>{activeChild.centre_name ?? "—"}</Body>
-                </Row>
-                <Row style={{ justifyContent: "space-between" }}>
-                  <Body muted style={{ fontSize: 13 }}>{hi ? "बैच" : "Batch"}</Body>
-                  <Body style={{ fontSize: 14 }}>{activeChild.batch_name ?? "—"}</Body>
-                </Row>
-                <Row style={{ justifyContent: "space-between" }}>
-                  <Body muted style={{ fontSize: 13 }}>{hi ? "एमएसवी स्थिति" : "MSV status"}</Body>
-                  <Pill label={activeChild.msv_status} />
-                </Row>
-              </View>
-            </Card>
+                <Button
+                  label={hi ? "पहचान पत्र" : "ID Card"}
+                  icon="card-outline"
+                  variant="outline"
+                  style={{ marginTop: 14 }}
+                  onPress={() => router.push("/idcard")}
+                />
+              </Card>
+            </AnimatedMount>
 
             <Row style={{ justifyContent: "space-between", marginTop: 4, marginLeft: 2 }}>
               <Title style={{ fontSize: 17 }}>{hi ? "उपस्थिति" : "Attendance"}</Title>
@@ -122,28 +148,30 @@ export default function StudentHome() {
             ) : recentRows.length === 0 ? (
               <StateView status="empty" emptyText={hi ? "अभी कोई उपस्थिति दर्ज नहीं है।" : "No attendance recorded yet."} />
             ) : (
-              <Card style={{ padding: 0, overflow: "hidden" }}>
-                {recentRows.map((row, i) => (
-                  <Row
-                    key={row.id}
-                    style={{
-                      justifyContent: "space-between",
-                      paddingHorizontal: 14,
-                      paddingVertical: 12,
-                      borderBottomWidth: i < recentRows.length - 1 ? 1 : 0,
-                      borderBottomColor: c.border,
-                    }}
-                  >
-                    <View style={{ flex: 1, paddingRight: 10 }}>
-                      <Body style={{ fontSize: 14 }}>{formatDate(row.session_date)}</Body>
-                      {row.topic ? (
-                        <Body muted style={{ fontSize: 12, marginTop: 1 }} numberOfLines={1}>{row.topic}</Body>
-                      ) : null}
-                    </View>
-                    <Pill label={row.status} tone={statusTone(row.status)} />
-                  </Row>
-                ))}
-              </Card>
+              <AnimatedMount delay={180}>
+                <Card style={{ padding: 0, overflow: "hidden" }}>
+                  {recentRows.map((row, i) => (
+                    <Row
+                      key={row.id}
+                      style={{
+                        justifyContent: "space-between",
+                        paddingHorizontal: 14,
+                        paddingVertical: 12,
+                        borderBottomWidth: i < recentRows.length - 1 ? 1 : 0,
+                        borderBottomColor: c.border,
+                      }}
+                    >
+                      <View style={{ flex: 1, paddingRight: 10 }}>
+                        <Body style={{ fontSize: 14 }}>{formatDate(row.session_date)}</Body>
+                        {row.topic ? (
+                          <Body muted style={{ fontSize: 12, marginTop: 1 }} numberOfLines={1}>{row.topic}</Body>
+                        ) : null}
+                      </View>
+                      <Pill label={row.status} tone={statusTone(row.status)} />
+                    </Row>
+                  ))}
+                </Card>
+              </AnimatedMount>
             )}
           </>
         )}

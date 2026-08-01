@@ -6,8 +6,8 @@
  * authoring/listing routes additionally gate with requireAdminPanel; the
  * student take-flow routes resolve + verify ownership of the student id passed.
  *
- * Question bank + scheduled events are CITY-scoped. Push quizzes are batch-scoped
- * (a shikshak who teaches that batch, or an admin whose scope covers its centre).
+ * Question bank, scheduled events, and push quizzes support national→batch
+ * scope with multi-select targets, gated by the creator's admin access.
  *
  * Grading: an answer for a question is correct iff the SET of selected indices
  * equals the SET of that question's correct_indices (order-independent).
@@ -28,6 +28,7 @@ import {
   centres,
   batches,
   cities,
+  states,
   type User,
 } from "@workspace/db";
 import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
@@ -101,6 +102,35 @@ async function cityForCentre(centreId: string | null): Promise<string | null> {
   return row?.city_id ?? null;
 }
 
+/** City + state for a centre (student geography). */
+async function geoForCentre(centreId: string | null): Promise<{ city_id: string | null; state_id: string | null }> {
+  if (!centreId) return { city_id: null, state_id: null };
+  const [row] = await db
+    .select({ city_id: centres.city_id, state_id: centres.state_id })
+    .from(centres)
+    .where(eq(centres.id, centreId))
+    .limit(1);
+  return { city_id: row?.city_id ?? null, state_id: row?.state_id ?? null };
+}
+
+type QuizScope = (typeof QUIZ_SCOPES)[number];
+
+type QuizTargets = {
+  scope: string;
+  state_ids?: string[] | null;
+  city_ids?: string[] | null;
+  centre_ids?: string[] | null;
+  batch_ids?: string[] | null;
+  city_id?: string | null;
+  centre_id?: string | null;
+  batch_id?: string | null;
+  age_groups?: string[];
+};
+
+function uniqIds(ids: string[]): string[] {
+  return Array.from(new Set(ids.filter(Boolean)));
+}
+
 /** Compare two number sets for equality, order-independent. */
 function sameIndexSet(a: number[], b: number[]): boolean {
   const sa = Array.from(new Set(a));
@@ -111,35 +141,182 @@ function sameIndexSet(a: number[], b: number[]): boolean {
   return true;
 }
 
-/**
- * Does this scheduled event apply to the given student? city / centre / batch
- * narrow successively; national/state events apply by the student's city being
- * present (state events still resolve to a concrete city on the event row).
- *
- * age_groups targeting: when the event lists one or more age groups, the student
- * must fall into one of them; an empty list targets all age groups. This gate is
- * applied on top of the geographic narrowing below.
- */
-function eventMatchesStudent(
-  ev: {
-    scope: string;
-    city_id: string | null;
-    centre_id: string | null;
-    batch_id: string | null;
-    age_groups: string[];
+function targetsForScope(
+  scope: QuizScope,
+  input: {
+    state_ids?: string[];
+    city_ids?: string[];
+    centre_ids?: string[];
+    batch_ids?: string[];
+    city_id?: string;
+    centre_id?: string;
+    batch_id?: string;
   },
+): { state_ids: string[]; city_ids: string[]; centre_ids: string[]; batch_ids: string[] } {
+  const city_ids = uniqIds([...(input.city_ids ?? []), ...(input.city_id ? [input.city_id] : [])]);
+  const centre_ids = uniqIds([...(input.centre_ids ?? []), ...(input.centre_id ? [input.centre_id] : [])]);
+  const batch_ids = uniqIds([...(input.batch_ids ?? []), ...(input.batch_id ? [input.batch_id] : [])]);
+  const state_ids = uniqIds([...(input.state_ids ?? [])]);
+  if (scope === "national") return { state_ids: [], city_ids: [], centre_ids: [], batch_ids: [] };
+  if (scope === "state") return { state_ids, city_ids: [], centre_ids: [], batch_ids: [] };
+  if (scope === "city") return { state_ids: [], city_ids, centre_ids: [], batch_ids: [] };
+  if (scope === "centre") return { state_ids: [], city_ids: [], centre_ids, batch_ids: [] };
+  return { state_ids: [], city_ids: [], centre_ids: [], batch_ids };
+}
+
+function allowedQuizScopes(role: string): QuizScope[] {
+  if (role === "super_admin") return [...QUIZ_SCOPES];
+  if (role === "state_admin") return ["state", "city", "centre", "batch"];
+  if (role === "city_admin") return ["city", "centre", "batch"];
+  return ["centre", "batch"];
+}
+
+/**
+ * Validate multi-select targets against the creator's access. Returns an error
+ * message or null when OK. Also returns normalized targets.
+ */
+async function authorizeQuizTargets(
+  user: User,
+  scope: QuizScope,
+  raw: {
+    state_ids?: string[];
+    city_ids?: string[];
+    centre_ids?: string[];
+    batch_ids?: string[];
+    city_id?: string;
+    centre_id?: string;
+    batch_id?: string;
+  },
+): Promise<{ error: string | null; targets: ReturnType<typeof targetsForScope> }> {
+  if (!allowedQuizScopes(user.role).includes(scope)) {
+    return { error: `Your role cannot create ${scope}-scoped quizzes.`, targets: targetsForScope(scope, raw) };
+  }
+  const targets = targetsForScope(scope, raw);
+
+  if (scope === "national") {
+    if (user.role !== "super_admin") {
+      return { error: "Only national admins can create national quizzes.", targets };
+    }
+    return { error: null, targets };
+  }
+
+  if (scope === "state") {
+    if (targets.state_ids.length === 0) return { error: "Select at least one state.", targets };
+    if (user.role === "super_admin") {
+      const rows = await db.select({ id: states.id }).from(states).where(inArray(states.id, targets.state_ids));
+      if (rows.length !== targets.state_ids.length) return { error: "One or more states were not found.", targets };
+      return { error: null, targets };
+    }
+    if (user.role === "state_admin") {
+      if (!user.state_id || targets.state_ids.some((id) => id !== user.state_id)) {
+        return { error: "You can only target your own state.", targets };
+      }
+      return { error: null, targets };
+    }
+    return { error: "You cannot create state-scoped quizzes.", targets };
+  }
+
+  if (scope === "city") {
+    if (targets.city_ids.length === 0) return { error: "Select at least one city.", targets };
+    const cityIds = await cityScopeForUser(user);
+    for (const id of targets.city_ids) {
+      if (!cityInScope(cityIds, id)) return { error: "A selected city is outside your scope.", targets };
+    }
+    return { error: null, targets };
+  }
+
+  if (scope === "centre") {
+    if (targets.centre_ids.length === 0) return { error: "Select at least one centre.", targets };
+    const adminScope = await resolveAdminScope(user);
+    if (adminScope.centreIds !== null) {
+      for (const id of targets.centre_ids) {
+        if (!adminScope.centreIds.includes(id)) return { error: "A selected centre is outside your scope.", targets };
+      }
+    }
+    const rows = await db.select({ id: centres.id }).from(centres).where(and(inArray(centres.id, targets.centre_ids), isNull(centres.deleted_at)));
+    if (rows.length !== targets.centre_ids.length) return { error: "One or more centres were not found.", targets };
+    return { error: null, targets };
+  }
+
+  // batch
+  if (targets.batch_ids.length === 0) return { error: "Select at least one batch.", targets };
+  const batchRows = await db
+    .select({ id: batches.id, centre_id: batches.centre_id })
+    .from(batches)
+    .where(inArray(batches.id, targets.batch_ids));
+  if (batchRows.length !== targets.batch_ids.length) return { error: "One or more batches were not found.", targets };
+  const adminScope = await resolveAdminScope(user);
+  if (adminScope.centreIds !== null) {
+    for (const b of batchRows) {
+      if (!adminScope.centreIds.includes(b.centre_id)) {
+        return { error: "A selected batch is outside your scope.", targets };
+      }
+    }
+  }
+  return { error: null, targets };
+}
+
+/** Effective legacy city_id for admin listing filters. */
+async function primaryCityForTargets(
+  scope: QuizScope,
+  targets: ReturnType<typeof targetsForScope>,
+): Promise<string | null> {
+  if (scope === "city" && targets.city_ids[0]) return targets.city_ids[0];
+  if (scope === "centre" && targets.centre_ids[0]) return cityForCentre(targets.centre_ids[0]);
+  if (scope === "batch" && targets.batch_ids[0]) {
+    const [b] = await db.select({ centre_id: batches.centre_id }).from(batches).where(eq(batches.id, targets.batch_ids[0])).limit(1);
+    return b ? cityForCentre(b.centre_id) : null;
+  }
+  return null;
+}
+
+/**
+ * Does this scheduled/push quiz apply to the given student?
+ * Scope drives which target array is checked; legacy single FKs are used as fallback.
+ */
+function quizMatchesStudent(
+  ev: QuizTargets,
   student: { centre_id: string | null; batch_id: string | null; age_group: string | null },
   studentCityId: string | null,
+  studentStateId: string | null,
 ): boolean {
-  // Age-group targeting: a non-empty list must include the student's age group.
-  if (ev.age_groups.length > 0 && !(student.age_group && ev.age_groups.includes(student.age_group))) {
+  if (ev.age_groups && ev.age_groups.length > 0 && !(student.age_group && ev.age_groups.includes(student.age_group))) {
     return false;
   }
-  if (ev.batch_id) return ev.batch_id === student.batch_id;
-  if (ev.centre_id) return ev.centre_id === student.centre_id;
-  if (ev.city_id) return ev.city_id === studentCityId;
-  // national/state with no concrete narrowing applies to everyone.
-  return true;
+  const stateIds = ev.state_ids?.length ? ev.state_ids : [];
+  const cityIds = ev.city_ids?.length ? ev.city_ids : ev.city_id ? [ev.city_id] : [];
+  const centreIds = ev.centre_ids?.length ? ev.centre_ids : ev.centre_id ? [ev.centre_id] : [];
+  const batchIds = ev.batch_ids?.length ? ev.batch_ids : ev.batch_id ? [ev.batch_id] : [];
+
+  switch (ev.scope) {
+    case "batch":
+      return !!student.batch_id && batchIds.includes(student.batch_id);
+    case "centre":
+      return !!student.centre_id && centreIds.includes(student.centre_id);
+    case "city":
+      return !!studentCityId && cityIds.includes(studentCityId);
+    case "state":
+      return !!studentStateId && stateIds.includes(studentStateId);
+    case "national":
+      return true;
+    default: {
+      // Legacy rows with no scope discipline: narrow by most specific FK present.
+      if (batchIds.length) return !!student.batch_id && batchIds.includes(student.batch_id);
+      if (centreIds.length) return !!student.centre_id && centreIds.includes(student.centre_id);
+      if (cityIds.length) return !!studentCityId && cityIds.includes(studentCityId);
+      return true;
+    }
+  }
+}
+
+/** @deprecated use quizMatchesStudent */
+function eventMatchesStudent(
+  ev: QuizTargets,
+  student: { centre_id: string | null; batch_id: string | null; age_group: string | null },
+  studentCityId: string | null,
+  studentStateId: string | null = null,
+): boolean {
+  return quizMatchesStudent(ev, student, studentCityId, studentStateId);
 }
 
 /* ═══════════════════════════ ADMIN — question bank ═══════════════════════════ */
@@ -148,6 +325,10 @@ const createQuestionSchema = z.object({
   question_en: z.string().min(1).max(2000),
   question_hi: z.string().max(2000).optional(),
   scope: z.enum(QUIZ_SCOPES).default("national"),
+  state_ids: z.array(z.string().uuid()).default([]),
+  city_ids: z.array(z.string().uuid()).default([]),
+  centre_ids: z.array(z.string().uuid()).default([]),
+  batch_ids: z.array(z.string().uuid()).default([]),
   city_id: z.string().uuid().optional(),
   options: z
     .array(z.object({ text_en: z.string().min(1).max(1000), text_hi: z.string().max(1000).optional() }))
@@ -182,18 +363,22 @@ router.post("/questions", async (req: Request, res: Response) => {
     }
   }
 
-  // city-scoped questions: the chosen city must be in the caller's city scope.
-  const cityIds = await cityScopeForUser(req.authUser!);
-  if (body.city_id && !cityInScope(cityIds, body.city_id)) {
-    fail(res, 403, "ERR_FORBIDDEN", "City not in your scope.");
+  const auth = await authorizeQuizTargets(req.authUser!, body.scope, body);
+  if (auth.error) {
+    fail(res, 403, "ERR_FORBIDDEN", auth.error);
     return;
   }
+  const primaryCity = await primaryCityForTargets(body.scope, auth.targets);
 
   const [row] = await db
     .insert(questions)
     .values({
       scope: body.scope,
-      city_id: body.city_id ?? null,
+      state_ids: auth.targets.state_ids,
+      city_ids: auth.targets.city_ids,
+      centre_ids: auth.targets.centre_ids,
+      batch_ids: auth.targets.batch_ids,
+      city_id: primaryCity,
       question_en: body.question_en,
       question_hi: body.question_hi ?? null,
       options: body.options.map((o) => ({ text_en: o.text_en, text_hi: o.text_hi })),
@@ -267,6 +452,10 @@ const createEventSchema = z
     title_en: z.string().min(1).max(300),
     title_hi: z.string().max(300).optional(),
     scope: z.enum(QUIZ_SCOPES),
+    state_ids: z.array(z.string().uuid()).default([]),
+    city_ids: z.array(z.string().uuid()).default([]),
+    centre_ids: z.array(z.string().uuid()).default([]),
+    batch_ids: z.array(z.string().uuid()).default([]),
     city_id: z.string().uuid().optional(),
     centre_id: z.string().uuid().optional(),
     batch_id: z.string().uuid().optional(),
@@ -293,35 +482,14 @@ router.post("/events", async (req: Request, res: Response) => {
     return;
   }
 
+  const auth = await authorizeQuizTargets(req.authUser!, body.scope, body);
+  if (auth.error) {
+    fail(res, 403, "ERR_FORBIDDEN", auth.error);
+    return;
+  }
+
   const cityIds = await cityScopeForUser(req.authUser!);
-
-  // Resolve the event's effective city for scope-guarding. A centre/batch
-  // implies a city; an explicit city_id is honoured directly.
-  let effectiveCity: string | null = body.city_id ?? null;
-  if (body.batch_id) {
-    const [b] = await db
-      .select({ centre_id: batches.centre_id })
-      .from(batches)
-      .where(eq(batches.id, body.batch_id))
-      .limit(1);
-    if (!b) {
-      fail(res, 404, "ERR_NOT_FOUND", "Batch not found.");
-      return;
-    }
-    effectiveCity = await cityForCentre(b.centre_id);
-  } else if (body.centre_id) {
-    effectiveCity = await cityForCentre(body.centre_id);
-  }
-
-  if (effectiveCity && !cityInScope(cityIds, effectiveCity)) {
-    fail(res, 403, "ERR_FORBIDDEN", "Target not in your scope.");
-    return;
-  }
-  // A non-super admin must not create a city-agnostic (national/state w/o city) event.
-  if (!effectiveCity && cityIds !== null) {
-    fail(res, 403, "ERR_FORBIDDEN", "Specify a city, centre, or batch in your scope.");
-    return;
-  }
+  const primaryCity = await primaryCityForTargets(body.scope, auth.targets);
 
   // All referenced questions must exist and be within the caller's city scope.
   const qRows = await db
@@ -343,9 +511,13 @@ router.post("/events", async (req: Request, res: Response) => {
     .insert(quiz_events)
     .values({
       scope: body.scope,
-      city_id: effectiveCity,
-      centre_id: body.centre_id ?? null,
-      batch_id: body.batch_id ?? null,
+      state_ids: auth.targets.state_ids,
+      city_ids: auth.targets.city_ids,
+      centre_ids: auth.targets.centre_ids,
+      batch_ids: auth.targets.batch_ids,
+      city_id: primaryCity,
+      centre_id: auth.targets.centre_ids[0] ?? null,
+      batch_id: auth.targets.batch_ids[0] ?? null,
       title_en: body.title_en,
       title_hi: body.title_hi ?? null,
       start_at: new Date(body.start_at),
@@ -399,6 +571,10 @@ router.get("/events", async (req: Request, res: Response) => {
     .select({
       id: quiz_events.id,
       scope: quiz_events.scope,
+      state_ids: quiz_events.state_ids,
+      city_ids: quiz_events.city_ids,
+      centre_ids: quiz_events.centre_ids,
+      batch_ids: quiz_events.batch_ids,
       city_id: quiz_events.city_id,
       centre_id: quiz_events.centre_id,
       batch_id: quiz_events.batch_id,
@@ -443,13 +619,17 @@ router.get("/events/available", async (req: Request, res: Response) => {
     fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
     return;
   }
-  const studentCity = await cityForCentre(student.centre_id);
+  const studentGeo = await geoForCentre(student.centre_id);
 
   const now = new Date();
   const rows = await db
     .select({
       id: quiz_events.id,
       scope: quiz_events.scope,
+      state_ids: quiz_events.state_ids,
+      city_ids: quiz_events.city_ids,
+      centre_ids: quiz_events.centre_ids,
+      batch_ids: quiz_events.batch_ids,
       city_id: quiz_events.city_id,
       centre_id: quiz_events.centre_id,
       batch_id: quiz_events.batch_id,
@@ -465,29 +645,51 @@ router.get("/events/available", async (req: Request, res: Response) => {
     .where(and(lte(quiz_events.start_at, now), gte(quiz_events.end_at, now)))
     .orderBy(asc(quiz_events.end_at));
 
-  const matching = rows.filter((ev) => eventMatchesStudent(ev, student, studentCity));
+  const matching = rows.filter((ev) =>
+    eventMatchesStudent(ev, student, studentGeo.city_id, studentGeo.state_id),
+  );
 
-  // already_attempted flag per event.
+  // Attempt outcome per event (for completed-state UI).
   const ids = matching.map((m) => m.id);
   const attempted = ids.length
     ? await db
-        .select({ quiz_event_id: quiz_attempts.quiz_event_id })
+        .select({
+          quiz_event_id: quiz_attempts.quiz_event_id,
+          correct_count: quiz_attempts.correct_count,
+          total_count: quiz_attempts.total_count,
+          submitted_at: quiz_attempts.submitted_at,
+        })
         .from(quiz_attempts)
         .where(and(inArray(quiz_attempts.quiz_event_id, ids), eq(quiz_attempts.student_id, student.id)))
     : [];
-  const attemptedSet = new Set(attempted.map((a) => a.quiz_event_id));
+  const attemptByEvent = new Map(attempted.map((a) => [a.quiz_event_id, a]));
 
-  const items = matching.map((m) => ({
-    id: m.id,
-    scope: m.scope,
-    title_en: m.title_en,
-    title_hi: m.title_hi,
-    start_at: m.start_at.toISOString(),
-    end_at: m.end_at.toISOString(),
-    participation_points: m.participation_points,
-    win_points: m.win_points,
-    already_attempted: attemptedSet.has(m.id),
-  }));
+  const items = matching.map((m) => {
+    const att = attemptByEvent.get(m.id);
+    const already_attempted = !!att;
+    const is_winner =
+      !!att?.submitted_at &&
+      (att.total_count ?? 0) > 0 &&
+      att.correct_count === att.total_count;
+    let points_earned = 0;
+    if (att?.submitted_at) {
+      if (m.participation_points > 0) points_earned += m.participation_points;
+      if (is_winner && m.win_points > 0) points_earned += m.win_points;
+    }
+    return {
+      id: m.id,
+      scope: m.scope,
+      title_en: m.title_en,
+      title_hi: m.title_hi,
+      start_at: m.start_at.toISOString(),
+      end_at: m.end_at.toISOString(),
+      participation_points: m.participation_points,
+      win_points: m.win_points,
+      already_attempted,
+      is_winner,
+      points_earned,
+    };
+  });
   ok(res, { items }, { count: items.length });
 });
 
@@ -545,8 +747,8 @@ router.post("/events/:id/start", async (req: Request, res: Response) => {
     return;
   }
 
-  const studentCity = await cityForCentre(student.centre_id);
-  if (!eventMatchesStudent(event, student, studentCity)) {
+  const studentGeo = await geoForCentre(student.centre_id);
+  if (!eventMatchesStudent(event, student, studentGeo.city_id, studentGeo.state_id)) {
     fail(res, 403, "ERR_FORBIDDEN", "This quiz is not available for this student.");
     return;
   }
@@ -727,7 +929,12 @@ router.post("/events/:id/submit", async (req: Request, res: Response) => {
 
 const createPushSchema = z
   .object({
-    batch_id: z.string().uuid(),
+    scope: z.enum(QUIZ_SCOPES).default("batch"),
+    state_ids: z.array(z.string().uuid()).default([]),
+    city_ids: z.array(z.string().uuid()).default([]),
+    centre_ids: z.array(z.string().uuid()).default([]),
+    batch_ids: z.array(z.string().uuid()).default([]),
+    batch_id: z.string().uuid().optional(),
     expires_at: z.string().datetime(),
     completion_points: z.coerce.number().int().min(0).max(10000).default(0),
     questions: z
@@ -747,14 +954,7 @@ const createPushSchema = z
   })
   .refine((b) => new Date(b.expires_at) > new Date(), { message: "expires_at must be in the future" });
 
-/** Does this user (admin-panel) have authority over the given batch's centre? */
-async function batchInAdminScope(user: User, centreId: string): Promise<boolean> {
-  const scope = await resolveAdminScope(user);
-  if (scope.centreIds === null) return true;
-  return scope.centreIds.includes(centreId);
-}
-
-/* POST /v1/quizzes/push — shikshak/admin starts a live push quiz for a batch */
+/* POST /v1/quizzes/push — admin starts a live push quiz for selected targets */
 router.post("/push", async (req: Request, res: Response) => {
   if (!canAccessAdminPanel(req.authUser?.role)) {
     fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
@@ -778,24 +978,26 @@ router.post("/push", async (req: Request, res: Response) => {
     }
   }
 
-  const [batch] = await db
-    .select({ id: batches.id, centre_id: batches.centre_id })
-    .from(batches)
-    .where(eq(batches.id, body.batch_id))
-    .limit(1);
-  if (!batch) {
-    fail(res, 404, "ERR_NOT_FOUND", "Batch not found.");
+  const auth = await authorizeQuizTargets(req.authUser!, body.scope, body);
+  if (auth.error) {
+    fail(res, 403, "ERR_FORBIDDEN", auth.error);
     return;
   }
-  if (!(await batchInAdminScope(req.authUser!, batch.centre_id))) {
-    fail(res, 404, "ERR_NOT_FOUND", "Batch not found.");
-    return;
-  }
+
+  // batch_id column is optional; keep first batch for legacy readers when present.
+  const primaryBatchId = auth.targets.batch_ids[0] ?? null;
+  // For non-batch scopes, pick any in-scope batch as a placeholder FK if needed —
+  // column is nullable now, so leave null for national/state/city/centre.
 
   const [pq] = await db
     .insert(push_quizzes)
     .values({
-      batch_id: batch.id,
+      scope: body.scope,
+      state_ids: auth.targets.state_ids,
+      city_ids: auth.targets.city_ids,
+      centre_ids: auth.targets.centre_ids,
+      batch_ids: auth.targets.batch_ids,
+      batch_id: primaryBatchId,
       shikshak_user_id: req.authUser!.id,
       started_at: new Date(),
       expires_at: new Date(body.expires_at),
@@ -818,7 +1020,7 @@ router.post("/push", async (req: Request, res: Response) => {
     action: "create",
     entityKind: "push_quiz",
     entityId: pq.id,
-    summary: `Started push quiz for batch ${batch.id}`,
+    summary: `Started push quiz (${body.scope})`,
   });
 
   ok(res, { id: pq.id });
@@ -839,26 +1041,35 @@ router.get("/push/active", async (req: Request, res: Response) => {
     return;
   }
 
-  // Derive the batch from the student unless an explicit (matching) one is given.
-  const batchId = parsed.data.batch_id ?? student.batch_id;
-  if (!batchId || (parsed.data.batch_id && parsed.data.batch_id !== student.batch_id)) {
+  // Optional batch_id must match the student's enrolled batch when provided.
+  if (parsed.data.batch_id && parsed.data.batch_id !== student.batch_id) {
     ok(res, { active: null });
     return;
   }
 
+  const studentGeo = await geoForCentre(student.centre_id);
   const now = new Date();
-  const [pq] = await db
+  const candidates = await db
     .select({
       id: push_quizzes.id,
+      scope: push_quizzes.scope,
+      state_ids: push_quizzes.state_ids,
+      city_ids: push_quizzes.city_ids,
+      centre_ids: push_quizzes.centre_ids,
+      batch_ids: push_quizzes.batch_ids,
       batch_id: push_quizzes.batch_id,
       started_at: push_quizzes.started_at,
       expires_at: push_quizzes.expires_at,
       completion_points: push_quizzes.completion_points,
     })
     .from(push_quizzes)
-    .where(and(eq(push_quizzes.batch_id, batchId), gte(push_quizzes.expires_at, now)))
+    .where(gte(push_quizzes.expires_at, now))
     .orderBy(sql`${push_quizzes.started_at} desc`)
-    .limit(1);
+    .limit(40);
+
+  const pq = candidates.find((row) =>
+    quizMatchesStudent(row, student, studentGeo.city_id, studentGeo.state_id),
+  );
   if (!pq) {
     ok(res, { active: null });
     return;

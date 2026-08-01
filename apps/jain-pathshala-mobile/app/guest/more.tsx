@@ -3,7 +3,7 @@ import { useRouter, type Href } from "expo-router";
 import { Pressable, View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
-import { AppHeader } from "@/components/AppHeader";
+import { AppHeader, LanguageToggle } from "@/components/AppHeader";
 import { Body, Button, Card, Row, Screen, Title } from "@/components/ui";
 
 interface LinkRow {
@@ -55,6 +55,18 @@ export default function GuestMoreScreen() {
 
         <Title style={{ fontSize: 16, marginTop: 6, marginLeft: 2 }}>{hi ? "जानकारी" : "Information"}</Title>
         <Card style={{ padding: 0, overflow: "hidden" }}>{about.map(renderRow)}</Card>
+
+        <Card>
+          <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Title style={{ fontSize: 16 }}>{hi ? "भाषा" : "Language"}</Title>
+              <Body muted style={{ marginTop: 4, fontSize: 13 }}>
+                {hi ? "ऐप की भाषा चुनें" : "Choose the app language"}
+              </Body>
+            </View>
+            <LanguageToggle />
+          </Row>
+        </Card>
 
         <Card>
           <Title style={{ fontSize: 18 }}>{hi ? "अपने खाते में जाएँ" : "Access your account"}</Title>

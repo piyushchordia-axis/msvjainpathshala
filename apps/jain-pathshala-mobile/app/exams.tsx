@@ -21,6 +21,7 @@ import { useSessionView } from "@/contexts/SessionViewContext";
 import { apiGet, apiPost, ApiError } from "@/lib/api";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
+import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { Body, Button, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 /* ----------------------------------------------------------------- types --- */
@@ -556,7 +557,10 @@ export default function Exams() {
             status="empty"
             emptyText={hi ? "आपकी विद्यार्थी प्रोफ़ाइल अभी तैयार नहीं है।" : "Your student profile isn't ready yet."}
           />
-        ) : exams.isLoading ? (
+        ) : (
+          <>
+            <ChildSwitcher />
+            {exams.isLoading ? (
           <StateView status="loading" emptyText="" />
         ) : exams.isError ? (
           <StateView
@@ -635,6 +639,8 @@ export default function Exams() {
               </Card>
             );
           })
+        )}
+          </>
         )}
       </Screen>
     </View>

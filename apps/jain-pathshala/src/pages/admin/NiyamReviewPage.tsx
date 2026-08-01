@@ -16,6 +16,14 @@ import {
   DialogClose,
 } from '@/components/ui/dialog';
 
+interface MediaRow {
+  id: string;
+  url: string;
+  kind: string;
+  mime: string | null;
+  ordinal: number;
+}
+
 // Mirrors GET /v1/niyam-submissions/pending row shape exactly.
 interface PendingRow {
   id: string;
@@ -26,8 +34,39 @@ interface PendingRow {
   niyam_title_en: string;
   niyam_title_hi: string;
   proof_url: string | null;
+  media?: MediaRow[];
   notes: string | null;
   submission_date: string;
+}
+
+function ProofCell({ row }: { row: PendingRow }) {
+  const media = row.media?.length
+    ? row.media
+    : row.proof_url
+      ? [{ id: 'legacy', url: row.proof_url, kind: 'photo', mime: null, ordinal: 0 }]
+      : [];
+
+  if (media.length === 0) return <>—</>;
+
+  return (
+    <div className="flex flex-col gap-1">
+      {media.map((m) => {
+        const href = safeHref(m.url);
+        if (!href) return null;
+        return (
+          <a
+            key={m.id}
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className="text-primary underline underline-offset-2 capitalize"
+          >
+            {m.kind}
+          </a>
+        );
+      })}
+    </div>
+  );
 }
 
 function ApproveButton({ id, onChanged }: { id: string; onChanged: () => void }) {
@@ -131,18 +170,7 @@ export default function NiyamReviewPage() {
               {new Date(s.submission_date).toLocaleDateString('en-GB')}
             </td>
             <td className="px-4 py-3 text-xs">
-              {safeHref(s.proof_url) ? (
-                <a
-                  href={safeHref(s.proof_url)}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-primary underline underline-offset-2"
-                >
-                  View
-                </a>
-              ) : (
-                '—'
-              )}
+              <ProofCell row={s} />
             </td>
             <td className="px-4 py-3 text-xs text-muted-foreground">{s.notes ?? '—'}</td>
             <td className="px-4 py-3">

@@ -19,7 +19,9 @@
  */
 import { logger } from "./logger";
 
-const isTest = process.env.NODE_ENV === "test";
+function isTestEnv(): boolean {
+  return process.env.NODE_ENV === "test";
+}
 
 // ---------------------------------------------------------------------------
 // In-memory fixed-window backend (dev/test, and the fallback when no Redis).
@@ -102,7 +104,7 @@ async function redisRateLimited(
  * Redis failure is logged and treated as not-limited (fail open).
  */
 export async function rateLimit(key: string, limit: number, windowSec: number): Promise<boolean> {
-  if (isTest) return false;
+  if (isTestEnv()) return false;
   const client = await getRedis().catch(() => undefined);
   if (!client) {
     return memoryRateLimited(key, limit, windowSec * 1000);

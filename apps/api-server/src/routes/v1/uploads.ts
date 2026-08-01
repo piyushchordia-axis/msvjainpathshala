@@ -8,7 +8,7 @@ import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
 import { canAccessAdminPanel } from "@workspace/api-zod";
-import { uploadMemory, ALLOWED_MIME_TYPES } from "../../lib/upload";
+import { uploadMemory, ALLOWED_MIME_TYPES, normalizeUploadMime } from "../../lib/upload";
 import { storage, makeKey } from "../../lib/storage";
 import { fileTypeFromBuffer } from "file-type";
 
@@ -16,8 +16,8 @@ const router: IRouter = Router();
 router.use(requireAuth);
 
 // Folders that hold admin-published content — students/parents must not be able
-// to plant files under these paths. (niyam-proof/homework/registration/misc
-// stay open to any authenticated user for their own submissions.)
+// to plant files under these paths. (niyam-proof/homework/registration/
+// student-photos/misc stay open to any authenticated user for their own files.)
 const ADMIN_FOLDERS = new Set(["gallery", "library", "id-cards", "competitions", "shivirs"]);
 
 const folderSchema = z.enum([
@@ -27,6 +27,7 @@ const folderSchema = z.enum([
   "library",
   "id-cards",
   "registration",
+  "student-photos",
   "competitions",
   "shivirs",
   "misc",
@@ -39,8 +40,9 @@ router.post("/", uploadMemory.single("file"), async (req: Request, res: Response
     fail(res, 422, "ERR_VALIDATION_FAILED", "No file provided or file type not allowed.");
     return;
   }
-  if (!ALLOWED_MIME_TYPES.has(file.mimetype)) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "File type not allowed.");
+  const declared = normalizeUploadMime(file.mimetype);
+  if (!declared || !ALLOWED_MIME_TYPES.has(declared)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", `File type not allowed (${file.mimetype || "unknown"}).`);
     return;
   }
   const folderParse = folderSchema.safeParse(req.body?.folder ?? "misc");
@@ -54,13 +56,39 @@ router.post("/", uploadMemory.single("file"), async (req: Request, res: Response
   // so a script file mislabeled as image/png can't be stored. Derive the stored
   // extension from the detected type too (ignore the client filename).
   const detected = await fileTypeFromBuffer(file.buffer);
-  if (!detected || !ALLOWED_MIME_TYPES.has(detected.mime)) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "File content does not match an allowed type.");
+  const detectedMime = normalizeUploadMime(detected?.mime ?? null);
+  // Some short AAC/M4A recordings are detected as audio/mp4; HEIC may be reported
+  // as image/heic. Accept either detected or declared when both are allowlisted
+  // and the buffer is non-empty (declared alone is never enough for unknown magic).
+  const contentMime =
+    detectedMime && ALLOWED_MIME_TYPES.has(detectedMime)
+      ? detectedMime
+      : detected == null && file.buffer.length > 0 && ALLOWED_MIME_TYPES.has(declared)
+        ? // file-type returns undefined for a few valid formats (e.g. some wav/caf);
+          // fall back to the normalized client mime only when magic is unknown.
+          declared
+        : null;
+  if (!contentMime) {
+    fail(
+      res,
+      422,
+      "ERR_VALIDATION_FAILED",
+      `File content does not match an allowed type${detected?.mime ? ` (detected ${detected.mime})` : ""}.`,
+    );
     return;
   }
 
-  const key = makeKey(folder, `upload.${detected.ext}`);
-  const stored = await storage.put(key, file.buffer, detected.mime);
+  const ext =
+    detected?.ext ??
+    (contentMime.startsWith("audio/")
+      ? "m4a"
+      : contentMime.startsWith("video/")
+        ? "mp4"
+        : contentMime === "image/png"
+          ? "png"
+          : "jpg");
+  const key = makeKey(folder, `upload.${ext}`);
+  const stored = await storage.put(key, file.buffer, contentMime);
   ok(res, stored);
 });
 

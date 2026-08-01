@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { AGE_GROUPS, formatAgeGroup, formatAgeGroups } from '@workspace/api-zod';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
@@ -57,7 +58,7 @@ interface RosterRow {
   status: 'registered' | 'ranked';
 }
 
-const AGE_GROUPS = ['bal', 'kishor', 'tarun', 'yuva'] as const;
+// AGE_GROUPS imported from @workspace/api-zod
 
 // Forward-only lifecycle target via POST /:id/status (publish has its own action).
 const NEXT_STATUS: Record<CompetitionRow['status'], { value: 'open' | 'closed'; label: string } | null> = {
@@ -194,9 +195,9 @@ function AddCompetitionDialog({ onAdded }: { onAdded: () => void }) {
           <FormRow label="Eligible age groups (none = all)">
             <div className="flex flex-wrap gap-3 pt-1">
               {AGE_GROUPS.map((g) => (
-                <label key={g} className="flex items-center gap-1.5 text-sm capitalize">
+                <label key={g} className="flex items-center gap-1.5 text-sm">
                   <input type="checkbox" checked={ages.includes(g)} onChange={() => toggleAge(g)} />
-                  {g}
+                  {formatAgeGroup(g)}
                 </label>
               ))}
             </div>
@@ -399,7 +400,7 @@ export default function CompetitionsPage() {
               <div className="font-medium">{c.name_en}</div>
               <div className="text-xs text-muted-foreground">
                 {c.msv_only ? 'MSV only · ' : ''}
-                {c.eligible_age_groups.length ? c.eligible_age_groups.join(', ') : 'all ages'}
+                {c.eligible_age_groups.length ? formatAgeGroups(c.eligible_age_groups) : 'all ages'}
               </div>
             </td>
             <td className="px-4 py-3 text-xs">{c.city_name}</td>

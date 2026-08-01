@@ -80,6 +80,46 @@ function rewriteLocalhostForDevice(base: string): string {
 
 export const API_BASE = resolveApiBase();
 
+/**
+ * Make an /uploads (or other API-hosted) URL loadable on device.
+ * Seeded/dev cards often store `http://localhost:8080/uploads/...`; the phone
+ * cannot reach that host, and in Expo Go media should go through API_BASE
+ * (Metro proxies /uploads → api-server).
+ */
+export function resolveUploadUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  if (url.startsWith("data:") || url.startsWith("blob:")) return url;
+
+  if (url.startsWith("/")) {
+    return API_BASE ? `${API_BASE}${url}` : url;
+  }
+
+  if (!__DEV__ || !/localhost|127\.0\.0\.1/i.test(url)) return url;
+
+  try {
+    const parsed = new URL(url);
+    if (API_BASE) {
+      const base = new URL(API_BASE);
+      parsed.protocol = base.protocol;
+      parsed.hostname = base.hostname;
+      parsed.port = base.port;
+      return parsed.toString();
+    }
+    const host = hostFromExpoManifest();
+    if (host) {
+      parsed.hostname = host;
+      return parsed.toString();
+    }
+    if (Platform.OS === "android") {
+      parsed.hostname = "10.0.2.2";
+      return parsed.toString();
+    }
+  } catch {
+    /* keep original */
+  }
+  return url;
+}
+
 let authToken: string | null = null;
 let refreshToken: string | null = null;
 let persistTokens: ((access: string, refresh: string) => void) | null = null;
@@ -248,4 +288,134 @@ export async function apiGet<T>(path: string): Promise<T> {
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const res = await post<{ data: T } | T>(path, body);
   return unwrap<T>(res);
+}
+
+export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+  const res = await request<{ data: T } | T>(path, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+  return unwrap<T>(res);
+}
+
+export type UploadFileInput = {
+  /** Local file URI (native) or object URL / blob URI (web). */
+  uri: string;
+  name: string;
+  type: string;
+  /** Required on web when `uri` is not a Blob-backed fetchable URL; optional elsewhere. */
+  blob?: Blob;
+};
+
+export type UploadResult = {
+  key: string;
+  url: string;
+  content_type: string;
+  size: number;
+};
+
+/**
+ * Multipart upload to POST /v1/uploads.
+ * Native: FormData with { uri, name, type } (React Native convention).
+ * Web: append a real Blob — never use the RN-shaped object on web.
+ */
+export async function apiUpload(
+  file: UploadFileInput,
+  folder = "niyam-proof",
+  retry = true,
+): Promise<UploadResult> {
+  if (!API_BASE) {
+    throw new ApiError(
+      "ERR_CONFIG",
+      __DEV__
+        ? "API URL is not configured. Run `pnpm run dev` in jain-pathshala-mobile."
+        : "Something went wrong. Please try again.",
+      0,
+    );
+  }
+
+  const form = new FormData();
+  form.append("folder", folder);
+
+  const mime = (file.type || "application/octet-stream").split(";")[0]!.trim();
+  const safeName =
+    file.name && file.name.includes(".")
+      ? file.name
+      : mime.startsWith("video/")
+        ? "proof.mp4"
+        : mime.startsWith("audio/")
+          ? "recording.m4a"
+          : "proof.jpg";
+
+  if (file.blob) {
+    form.append("file", file.blob, safeName);
+  } else if (Platform.OS === "web") {
+    // Web: local picker URIs are blob:/data: — fetch into a real Blob.
+    try {
+      const blobRes = await fetch(file.uri);
+      const blob = await blobRes.blob();
+      const typed =
+        blob.type && blob.type !== "application/octet-stream"
+          ? blob
+          : new Blob([blob], { type: mime });
+      form.append("file", typed, safeName);
+    } catch (err) {
+      throw new ApiError(
+        "ERR_UPLOAD_READ",
+        err instanceof Error ? err.message : "Could not read the selected file.",
+        0,
+      );
+    }
+  } else {
+    // Native: do NOT fetch(uri) into a Blob — RN FormData needs the {uri,name,type} shape.
+    form.append("file", {
+      uri: file.uri,
+      name: safeName,
+      type: mime,
+    } as unknown as Blob);
+  }
+
+  // Videos / longer audio need more than the default JSON timeout.
+  const timeoutMs = mime.startsWith("video/") ? 120_000 : REQUEST_TIMEOUT_MS;
+
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(
+      `${API_BASE}/v1/uploads`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "application/json",
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+          // Do NOT set Content-Type — boundary is set by fetch/FormData.
+        },
+        body: form,
+      },
+      timeoutMs,
+    );
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/network request failed|failed to fetch|network error|timed out|timeout|aborted/i.test(msg)) {
+      throw new ApiError("ERR_NETWORK", "Can't reach the server. Check your connection and try again.", 0);
+    }
+    throw err;
+  }
+
+  if (res.status === 401 && retry) {
+    if (await runRefresh()) return apiUpload(file, folder, false);
+  }
+  if (!res.ok) {
+    let data: Partial<ApiErrorEnvelope> = {};
+    try {
+      data = (await res.json()) as Partial<ApiErrorEnvelope>;
+    } catch {}
+    throw new ApiError(
+      data?.error?.code ?? "ERR_HTTP",
+      data?.error?.message ?? `Upload failed (${res.status})`,
+      res.status,
+      data?.error?.details,
+    );
+  }
+  const json = (await res.json()) as { data: UploadResult } | UploadResult;
+  return unwrap<UploadResult>(json);
 }

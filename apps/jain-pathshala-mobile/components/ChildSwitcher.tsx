@@ -3,17 +3,36 @@ import { bodyFamily } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
+import { Body } from "@/components/ui";
+
+type Props = {
+  /**
+   * When true (default), always show who the screen is scoped to — even with a
+   * single child. Set false on screens that already render a full child card
+   * (e.g. parent home) so the name isn't duplicated when there is only one.
+   */
+  alwaysShow?: boolean;
+};
 
 /**
- * Horizontal chips letting a parent switch which child every "me" screen is
- * scoped to. Hidden when there is only one child (e.g. the student persona).
+ * Shows which child every "me" activity screen is scoped to.
+ * With multiple children, also offers chips to switch.
  */
-export function ChildSwitcher() {
+export function ChildSwitcher({ alwaysShow = true }: Props) {
   const c = useColors();
   const { hi } = useLocale();
-  const { children, activeStudentId, setActiveStudentId } = useSessionView();
+  const { children, activeStudentId, activeChild, setActiveStudentId } = useSessionView();
 
-  if (children.length <= 1) return null;
+  if (!activeChild) return null;
+
+  if (children.length <= 1) {
+    if (!alwaysShow) return null;
+    return (
+      <Body muted style={{ marginLeft: 2 }}>
+        {activeChild.full_name}
+      </Body>
+    );
+  }
 
   return (
     <View style={{ gap: 8 }}>

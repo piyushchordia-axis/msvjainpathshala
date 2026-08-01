@@ -6,7 +6,7 @@ const API_TARGET =
   process.env.API_PROXY_TARGET?.replace(/\/$/, "") ?? "http://127.0.0.1:8080";
 
 /** Paths served by api-server (see apps/api-server/src/app.ts). */
-const API_PREFIXES = ["/api", "/v1"];
+const API_PREFIXES = ["/api", "/v1", "/uploads"];
 
 function isApiPath(url) {
   const path = (url ?? "").split("?")[0];

@@ -16,6 +16,7 @@ import {
   centres,
   batches,
   sanchalak_centre_assignments,
+  shikshak_centre_assignments,
   shikshak_batch_assignments,
   students,
   enrolments,
@@ -26,6 +27,7 @@ import {
   punya_balances,
   niyams,
   niyam_submissions,
+  niyam_submission_media,
   notices,
   shivir_events,
   library_items,
@@ -62,6 +64,9 @@ import {
 } from "./schema";
 import { tierForPoints } from "./schema/enums";
 import { sql } from "drizzle-orm";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -73,6 +78,19 @@ function daysAgo(n: number): Date {
 
 function daysFromNow(n: number): Date {
   return new Date(Date.now() + n * 24 * 60 * 60 * 1000);
+}
+
+/** Mirror of api-server niyam-period helper for seed inserts. */
+function periodKey(niyamType: string, ymd: string): string {
+  if (niyamType === "daily") return ymd;
+  if (niyamType === "monthly") return ymd.slice(0, 7);
+  const [y, m, d] = ymd.split("-").map(Number);
+  const tmp = new Date(Date.UTC(y!, m! - 1, d!, 12, 0, 0));
+  const dayNum = tmp.getUTCDay() || 7;
+  tmp.setUTCDate(tmp.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(tmp.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((tmp.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${tmp.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
 }
 
 async function main(): Promise<void> {
@@ -110,11 +128,11 @@ async function main(): Promise<void> {
       exam_answers, exam_attempts, exam_question_options, exam_questions, online_exams,
       curriculum_items, curriculum_sections, curricula,
       gallery_items, library_items, shivir_events, notices,
-      niyam_streaks, niyam_submissions, niyams,
+      niyam_streaks, niyam_submission_media, niyam_submissions, niyams,
       punya_balances, punya_transactions, punya_configs, punya_features,
       session_cancellations, attendance, sessions,
       digital_id_cards, msv_enrolments, enrolments, students,
-      shikshak_batch_assignments, sanchalak_centre_assignments,
+      shikshak_batch_assignments, shikshak_centre_assignments, sanchalak_centre_assignments,
       centre_holidays, batches, centres,
       notice_reads, library_access_logs, settings,
       otp_codes, device_sessions, users,
@@ -128,6 +146,10 @@ async function main(): Promise<void> {
     .values({ name: "Maharashtra", code: "MH" })
     .returning();
   const [gujarat] = await db.insert(states).values({ name: "Gujarat", code: "GJ" }).returning();
+  const [madhyaPradesh] = await db
+    .insert(states)
+    .values({ name: "Madhya Pradesh", code: "MP" })
+    .returning();
 
   const [mumbai] = await db
     .insert(cities)
@@ -140,6 +162,10 @@ async function main(): Promise<void> {
   const [ahmedabad] = await db
     .insert(cities)
     .values({ state_id: gujarat.id, name: "Ahmedabad", code: "AMD" })
+    .returning();
+  const [indore] = await db
+    .insert(cities)
+    .values({ state_id: madhyaPradesh.id, name: "Indore", code: "IDR" })
     .returning();
 
   /* ---------------- Users (personas) ---------------- */
@@ -225,6 +251,79 @@ async function main(): Promise<void> {
     })
     .returning();
 
+  /* ---------------- Indore personas (Madhya Pradesh) ---------------- */
+  const [indoreStateAdmin] = await db
+    .insert(users)
+    .values({
+      phone: "+919800000011",
+      role: "state_admin",
+      full_name: "MP State Admin (Indore)",
+      preferred_language: "hi",
+      state_id: madhyaPradesh.id,
+    })
+    .returning();
+
+  const [indoreCityAdmin] = await db
+    .insert(users)
+    .values({
+      phone: "+919800000012",
+      role: "city_admin",
+      full_name: "Indore City Admin",
+      preferred_language: "hi",
+      state_id: madhyaPradesh.id,
+      city_id: indore.id,
+    })
+    .returning();
+
+  const [indoreSanchalak] = await db
+    .insert(users)
+    .values({
+      phone: "+919800000013",
+      role: "sanchalak",
+      full_name: "Indore Sanchalak",
+      preferred_language: "hi",
+      state_id: madhyaPradesh.id,
+      city_id: indore.id,
+    })
+    .returning();
+
+  const [indoreShikshak] = await db
+    .insert(users)
+    .values({
+      phone: "+919800000014",
+      role: "shikshak",
+      full_name: "Indore Shikshak",
+      preferred_language: "hi",
+      state_id: madhyaPradesh.id,
+      city_id: indore.id,
+    })
+    .returning();
+
+  const [indoreParent] = await db
+    .insert(users)
+    .values({
+      phone: "+919800000015",
+      role: "parent",
+      full_name: "Indore Parent",
+      preferred_language: "hi",
+      state_id: madhyaPradesh.id,
+      city_id: indore.id,
+      gallery_visibility_opt_in: true,
+    })
+    .returning();
+
+  const [indoreStudentUser] = await db
+    .insert(users)
+    .values({
+      phone: "+919800000016",
+      role: "student",
+      full_name: "Reyansh Jain",
+      preferred_language: "hi",
+      state_id: madhyaPradesh.id,
+      city_id: indore.id,
+    })
+    .returning();
+
   /* ---------------- Centres ---------------- */
   const [centreA] = await db
     .insert(centres)
@@ -271,14 +370,30 @@ async function main(): Promise<void> {
     })
     .returning();
 
+  const [centreIndore] = await db
+    .insert(centres)
+    .values({
+      state_id: madhyaPradesh.id,
+      city_id: indore.id,
+      name: "Indore Jain Pathshala",
+      locality: "Sapna Sangeeta",
+      pincode: "452001",
+      contact_phone: "+917300000004",
+      contact_email: "indore@example.org",
+      lat: "22.7196000",
+      lng: "75.8577000",
+      gps_radius_m: 250,
+      status: "active",
+    })
+    .returning();
+
   /* ---------------- Batches ---------------- */
   const [batchA1] = await db
     .insert(batches)
     .values({
       centre_id: centreA.id,
       name: "Bal Batch - Sunday Morning",
-      age_group: "bal",
-      shikshak_id: shikshak.id,
+      age_groups: ["bal"],
       day_of_week: [7],
       start_time: "09:00:00",
       end_time: "10:30:00",
@@ -293,8 +408,7 @@ async function main(): Promise<void> {
     .values({
       centre_id: centreA.id,
       name: "Kishor Batch - Sunday Morning",
-      age_group: "kishor",
-      shikshak_id: shikshak.id,
+      age_groups: ["kishor"],
       day_of_week: [7],
       start_time: "10:30:00",
       end_time: "12:00:00",
@@ -309,7 +423,7 @@ async function main(): Promise<void> {
     .values({
       centre_id: centreB.id,
       name: "Tarun Batch - Saturday Evening",
-      age_group: "tarun",
+      age_groups: ["tarun"],
       day_of_week: [6],
       start_time: "17:00:00",
       end_time: "18:30:00",
@@ -319,14 +433,50 @@ async function main(): Promise<void> {
     })
     .returning();
 
+  const [batchIndore1] = await db
+    .insert(batches)
+    .values({
+      centre_id: centreIndore.id,
+      name: "Bal Batch - Sunday Morning",
+      age_groups: ["bal"],
+      day_of_week: [7],
+      start_time: "09:00:00",
+      end_time: "10:30:00",
+      capacity: 30,
+      language_preference: "hi",
+      status: "active",
+    })
+    .returning();
+
+  const [batchIndore2] = await db
+    .insert(batches)
+    .values({
+      centre_id: centreIndore.id,
+      name: "Kishor Batch - Sunday Morning",
+      age_groups: ["kishor"],
+      day_of_week: [7],
+      start_time: "10:30:00",
+      end_time: "12:00:00",
+      capacity: 25,
+      language_preference: "hi",
+      status: "active",
+    })
+    .returning();
+
   /* ---------------- Assignments ---------------- */
-  await db.insert(sanchalak_centre_assignments).values({
-    user_id: sanchalak.id,
-    centre_id: centreA.id,
-  });
+  await db.insert(sanchalak_centre_assignments).values([
+    { user_id: sanchalak.id, centre_id: centreA.id },
+    { user_id: indoreSanchalak.id, centre_id: centreIndore.id },
+  ]);
+  await db.insert(shikshak_centre_assignments).values([
+    { user_id: shikshak.id, centre_id: centreA.id },
+    { user_id: indoreShikshak.id, centre_id: centreIndore.id },
+  ]);
   await db.insert(shikshak_batch_assignments).values([
-    { user_id: shikshak.id, batch_id: batchA1.id },
-    { user_id: shikshak.id, batch_id: batchA2.id },
+    { user_id: shikshak.id, batch_id: batchA1.id, is_primary: true },
+    { user_id: shikshak.id, batch_id: batchA2.id, is_primary: true },
+    { user_id: indoreShikshak.id, batch_id: batchIndore1.id, is_primary: true },
+    { user_id: indoreShikshak.id, batch_id: batchIndore2.id, is_primary: true },
   ]);
 
   /* ---------------- Students ---------------- */
@@ -359,6 +509,7 @@ async function main(): Promise<void> {
       centre_id: centreA.id,
       batch_id: batchA2.id,
       msv_status: "applied" as const,
+      parent_id: parent.id,
       dob: "2012-01-22",
     },
     {
@@ -378,6 +529,37 @@ async function main(): Promise<void> {
       batch_id: batchA2.id,
       msv_status: "none" as const,
       dob: "2011-06-18",
+    },
+    {
+      full_name: "Reyansh Jain",
+      code: "STU000101",
+      age_group: "bal" as const,
+      centre_id: centreIndore.id,
+      batch_id: batchIndore1.id,
+      msv_status: "approved" as const,
+      user_id: indoreStudentUser.id,
+      parent_id: indoreParent.id,
+      dob: "2016-08-21",
+    },
+    {
+      full_name: "Myra Sethi",
+      code: "STU000102",
+      age_group: "bal" as const,
+      centre_id: centreIndore.id,
+      batch_id: batchIndore1.id,
+      msv_status: "none" as const,
+      parent_id: indoreParent.id,
+      dob: "2015-12-05",
+    },
+    {
+      full_name: "Arjun Porwal",
+      code: "STU000103",
+      age_group: "kishor" as const,
+      centre_id: centreIndore.id,
+      batch_id: batchIndore2.id,
+      msv_status: "applied" as const,
+      parent_id: indoreParent.id,
+      dob: "2012-03-14",
     },
   ];
 
@@ -444,6 +626,13 @@ async function main(): Promise<void> {
       decided_at: daysAgo(35),
     },
     { student_id: insertedStudents[2].id, status: "applied" },
+    {
+      student_id: insertedStudents[5].id,
+      status: "approved",
+      decided_by: indoreStateAdmin.id,
+      decided_at: daysAgo(20),
+    },
+    { student_id: insertedStudents[7].id, status: "applied" },
   ]);
 
   /* ---------------- Sessions + Attendance ---------------- */
@@ -451,9 +640,19 @@ async function main(): Promise<void> {
     [batchA1.id]: [insertedStudents[0].id, insertedStudents[1].id],
     [batchA2.id]: [insertedStudents[2].id, insertedStudents[4].id],
     [batchB1.id]: [insertedStudents[3].id],
+    [batchIndore1.id]: [insertedStudents[5].id, insertedStudents[6].id],
+    [batchIndore2.id]: [insertedStudents[7].id],
   };
 
-  for (const batch of [batchA1, batchA2, batchB1]) {
+  const sessionBatches: Array<{ batch: typeof batchA1; teacherId: string }> = [
+    { batch: batchA1, teacherId: shikshak.id },
+    { batch: batchA2, teacherId: shikshak.id },
+    { batch: batchB1, teacherId: shikshak.id },
+    { batch: batchIndore1, teacherId: indoreShikshak.id },
+    { batch: batchIndore2, teacherId: indoreShikshak.id },
+  ];
+
+  for (const { batch, teacherId } of sessionBatches) {
     for (let w = 1; w <= 4; w++) {
       const [session] = await db
         .insert(sessions)
@@ -462,7 +661,7 @@ async function main(): Promise<void> {
           session_date: isoDate(daysAgo(w * 7)),
           status: "completed",
           topic: `Week ${5 - w} — Navkar Mantra & stavan`,
-          conducted_by: shikshak.id,
+          conducted_by: teacherId,
         })
         .returning();
 
@@ -474,7 +673,7 @@ async function main(): Promise<void> {
           session_id: session.id,
           student_id: studentId,
           status,
-          marked_by: shikshak.id,
+          marked_by: teacherId,
         });
       }
     }
@@ -490,7 +689,10 @@ async function main(): Promise<void> {
         description_en: "Recite the Navkar Mantra nine times.",
         description_hi: "नवकार मंत्र नौ बार बोलें।",
         niyam_type: "daily",
-        proof_type: "either",
+        proof_type: "any",
+        proof_required: false,
+        approval_mode: "auto",
+        max_uploads: 3,
         points: 10,
       },
       {
@@ -498,14 +700,32 @@ async function main(): Promise<void> {
         title_hi: "चौविहार (सूर्यास्त के बाद नहीं)",
         niyam_type: "daily",
         proof_type: "photo",
+        proof_required: true,
+        approval_mode: "review",
+        max_uploads: 2,
         points: 15,
       },
       {
         title_en: "Samayik (weekly)",
         title_hi: "सामायिक (साप्ताहिक)",
         niyam_type: "weekly",
-        proof_type: "either",
+        proof_type: "any",
+        proof_required: false,
+        approval_mode: "auto",
+        max_uploads: 5,
         points: 25,
+      },
+      {
+        title_en: "Monthly Pratikraman",
+        title_hi: "मासिक प्रतिक्रमण",
+        description_en: "Complete monthly pratikraman with optional audio/video proof.",
+        description_hi: "मासिक प्रतिक्रमण पूरा करें।",
+        niyam_type: "monthly",
+        proof_type: "audio",
+        proof_required: true,
+        approval_mode: "review",
+        max_uploads: 1,
+        points: 40,
       },
     ])
     .returning();
@@ -515,13 +735,16 @@ async function main(): Promise<void> {
 
   for (const student of insertedStudents) {
     for (let d = 0; d < 6; d++) {
-      const niyam = insertedNiyams[d % insertedNiyams.length];
+      // Prefer daily auto niyam for streak-friendly seed history.
+      const niyam = insertedNiyams[0];
+      const submissionDate = isoDate(daysAgo(d));
       const [submission] = await db
         .insert(niyam_submissions)
         .values({
           niyam_id: niyam.id,
           student_id: student.id,
-          submission_date: isoDate(daysAgo(d)),
+          submission_date: submissionDate,
+          period_key: periodKey(niyam.niyam_type, submissionDate),
           status: "auto_approved",
           points_awarded: niyam.points,
           is_featured: d === 0 && student.msv_status === "approved",
@@ -559,26 +782,50 @@ async function main(): Promise<void> {
     });
   }
 
-  // A few pending niyam submissions with proof, awaiting shikshak review.
-  await db.insert(niyam_submissions).values([
+  // Pending review submissions with proof media.
+  const pendingProof1 = "http://localhost:8080/uploads/niyam-proof/seed-sample1.jpg";
+  const pendingProof2 = "http://localhost:8080/uploads/niyam-proof/seed-sample2.jpg";
+  const pendingRows = await db
+    .insert(niyam_submissions)
+    .values([
+      {
+        niyam_id: insertedNiyams[1].id,
+        student_id: insertedStudents[0].id,
+        submission_date: isoDate(daysAgo(0)),
+        period_key: periodKey(insertedNiyams[1].niyam_type, isoDate(daysAgo(0))),
+        status: "pending",
+        points_awarded: 0,
+        proof_url: pendingProof1,
+        notes: "Completed chauvihar today.",
+        submitted_by: parent.id,
+      },
+      {
+        niyam_id: insertedNiyams[3].id,
+        student_id: insertedStudents[1].id,
+        submission_date: isoDate(daysAgo(1)),
+        period_key: periodKey(insertedNiyams[3].niyam_type, isoDate(daysAgo(1))),
+        status: "pending",
+        points_awarded: 0,
+        proof_url: pendingProof2,
+        submitted_by: parent.id,
+      },
+    ])
+    .returning();
+
+  await db.insert(niyam_submission_media).values([
     {
-      niyam_id: insertedNiyams[1].id,
-      student_id: insertedStudents[0].id,
-      submission_date: isoDate(daysAgo(0)),
-      status: "pending",
-      points_awarded: 0,
-      proof_url: "https://example.org/proof/sample1.jpg",
-      notes: "Completed chauvihar today.",
-      submitted_by: parent.id,
+      submission_id: pendingRows[0]!.id,
+      url: pendingProof1,
+      kind: "photo",
+      mime: "image/jpeg",
+      ordinal: 0,
     },
     {
-      niyam_id: insertedNiyams[2].id,
-      student_id: insertedStudents[1].id,
-      submission_date: isoDate(daysAgo(1)),
-      status: "pending",
-      points_awarded: 0,
-      proof_url: "https://example.org/proof/sample2.jpg",
-      submitted_by: parent.id,
+      submission_id: pendingRows[1]!.id,
+      url: pendingProof2,
+      kind: "photo",
+      mime: "image/jpeg",
+      ordinal: 0,
     },
   ]);
 
@@ -897,11 +1144,18 @@ async function main(): Promise<void> {
   ]);
 
   /* ---------------- Settings ---------------- */
-  await db.insert(settings).values({
-    key: "default_otp_code",
-    value: "123456",
-    updated_at: new Date(),
-  });
+  await db.insert(settings).values([
+    {
+      key: "default_otp_code",
+      value: "123456",
+      updated_at: new Date(),
+    },
+    {
+      key: "gallery_carousel_interval_ms",
+      value: "2000",
+      updated_at: new Date(),
+    },
+  ]);
 
   /* ---------------- Homework (Wave 2) ---------------- */
   const [homeworkA1] = await db
@@ -952,10 +1206,10 @@ async function main(): Promise<void> {
           type: "select",
           required: true,
           options: [
-            { value: "bal", label_en: "Bal", label_hi: "बाल" },
-            { value: "kishor", label_en: "Kishor", label_hi: "किशोर" },
-            { value: "tarun", label_en: "Tarun", label_hi: "तरुण" },
-            { value: "yuva", label_en: "Yuva", label_hi: "युवा" },
+            { value: "bal", label_en: "Bal 5-8 years", label_hi: "बाल 5-8 वर्ष" },
+            { value: "kishor", label_en: "Kishor 9-12 years", label_hi: "किशोर 9-12 वर्ष" },
+            { value: "tarun", label_en: "Tarun 13-16 years", label_hi: "तरुण 13-16 वर्ष" },
+            { value: "yuva", label_en: "Yuva 17-21 years", label_hi: "युवा 17-21 वर्ष" },
           ],
         },
         { key: "parent_phone", label_en: "Parent Phone", label_hi: "अभिभावक फ़ोन", type: "tel", required: false },
@@ -1119,17 +1373,52 @@ async function main(): Promise<void> {
   /* ---------------- Enquiries (Wave 3 public inbox) ---------------- */
   await db.insert(enquiries).values([
     { kind: "enquire", name: "Riya Sharma", phone: "+919812345678", city: "Mumbai", message: "I would like to enrol my 8-year-old son in the nearest centre.", status: "new" },
+    { kind: "enquire", name: "Neha Jain", phone: "+919811122233", city: "Indore", message: "Looking for Bal batch timings at Indore Jain Pathshala.", status: "new" },
   ]);
 
   console.log("Seed complete.");
   console.log("\nLogin phones (OTP code: 123456 for all users via settings):");
+  console.log("  --- Mumbai / national ---");
   console.log("  super_admin : +919800000001");
-  console.log("  state_admin : +919800000002");
-  console.log("  city_admin  : +919800000003");
+  console.log("  state_admin : +919800000002  (Maharashtra)");
+  console.log("  city_admin  : +919800000003  (Mumbai)");
   console.log("  sanchalak   : +919800000004");
   console.log("  shikshak    : +919800000005");
   console.log("  parent      : +919800000006");
   console.log("  student     : +919800000007");
+  console.log("  --- Indore (Madhya Pradesh) ---");
+  console.log("  state_admin : +919800000011");
+  console.log("  city_admin  : +919800000012");
+  console.log("  sanchalak   : +919800000013");
+  console.log("  shikshak    : +919800000014");
+  console.log("  parent      : +919800000015");
+  console.log("  student     : +919800000016");
+
+  /* ---------------- Digital ID cards (PNG + QR) ---------------- */
+  // Rendered via api-server helpers (qrcode/sharp + same HMAC as /v1/id-cards).
+  const apiServerRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../apps/api-server");
+  const uploadsDir = path.join(apiServerRoot, "uploads");
+  console.log("\nGenerating digital ID cards…");
+  const idCardGen = spawnSync(
+    "pnpm",
+    ["exec", "tsx", "./scripts/generate-id-cards-for-seed.ts"],
+    {
+      cwd: apiServerRoot,
+      shell: true,
+      stdio: "inherit",
+      env: {
+        ...process.env,
+        DATABASE_URL: process.env.DATABASE_URL,
+        JP_AUTH_SECRET: process.env.JP_AUTH_SECRET ?? "jp-dev-secret-do-not-use-in-production",
+        UPLOADS_DIR: process.env.UPLOADS_DIR ?? uploadsDir,
+        PUBLIC_API_URL: process.env.PUBLIC_API_URL ?? "http://localhost:8080",
+        NODE_ENV: process.env.NODE_ENV ?? "development",
+      },
+    },
+  );
+  if (idCardGen.status !== 0) {
+    throw new Error("Digital ID card generation failed (see output above).");
+  }
 }
 
 main()

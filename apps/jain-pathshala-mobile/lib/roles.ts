@@ -21,7 +21,7 @@ export function routeForRole(role: Role | null | undefined): Href {
     case "sanchalak":
       return "/admin/dashboard";
     default:
-      return "/guest/centres";
+      return "/guest/home";
   }
 }
 

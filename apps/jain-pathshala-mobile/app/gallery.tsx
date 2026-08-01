@@ -3,8 +3,9 @@ import { Image, View } from "react-native";
 import { fonts } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
-import { apiGet } from "@/lib/api";
+import { apiGet, resolveUploadUrl } from "@/lib/api";
 import type { GalleryItem, ListResponse } from "@/lib/types";
+import { formatAgeGroup } from "@workspace/api-zod";
 import { Body, Card, Pill, Screen, StateView, Title } from "@/components/ui";
 import { Text } from "react-native";
 
@@ -46,7 +47,7 @@ export default function GalleryScreen() {
           {items.map((item) => {
             const niyam = hi && item.niyam_title_hi ? item.niyam_title_hi : item.niyam_title_en;
             const caption = (hi ? item.caption_hi : item.caption) || item.caption || niyam;
-            const uri = item.thumbnail_url ?? item.image_url ?? null;
+            const uri = resolveUploadUrl(item.thumbnail_url ?? item.image_url ?? null);
             return (
               <Card key={item.id} style={{ width: "47%", padding: 0, overflow: "hidden" }}>
                 {uri ? (
@@ -66,7 +67,11 @@ export default function GalleryScreen() {
                   {item.is_featured ? <Pill tone="warning" label={hi ? "विशेष" : "Featured"} /> : null}
                   {item.first_name ? <Body style={{ fontSize: 13, fontFamily: fonts.display }}>{item.first_name}</Body> : null}
                   {caption ? <Body style={{ fontSize: 13 }} numberOfLines={2}>{caption}</Body> : null}
-                  {item.age_group ? <Body muted style={{ fontSize: 12 }}>{item.age_group}</Body> : null}
+                  {item.age_group ? (
+                    <Body muted style={{ fontSize: 12 }}>
+                      {formatAgeGroup(item.age_group, hi ? "hi" : "en")}
+                    </Body>
+                  ) : null}
                 </View>
               </Card>
             );

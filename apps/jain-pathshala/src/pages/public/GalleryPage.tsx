@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { useLocale } from '@/lib/locale-context';
+import { formatAgeGroup } from '@workspace/api-zod';
 
 interface GalleryItem {
   id: string;
@@ -16,13 +17,6 @@ interface GalleryItem {
   is_featured: boolean;
   created_at: string;
 }
-
-const AGE_LABEL: Record<string, string> = {
-  bal: 'Bal',
-  kishor: 'Kishor',
-  tarun: 'Tarun',
-  yuva: 'Yuva',
-};
 
 export default function GalleryPage() {
   const locale = useLocale();
@@ -110,7 +104,7 @@ export default function GalleryPage() {
                       )}
                       {g.age_group ? (
                         <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground">
-                          {AGE_LABEL[g.age_group] ?? g.age_group}
+                          {formatAgeGroup(g.age_group, hi ? 'hi' : 'en')}
                         </span>
                       ) : null}
                     </div>

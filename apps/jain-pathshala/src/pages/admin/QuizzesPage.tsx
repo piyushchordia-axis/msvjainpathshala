@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2, Check } from 'lucide-react';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
+import { useAuth } from '@/lib/auth-context';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminError } from '@/components/admin/AdminPageShell';
 import { Card } from '@/components/ui/card';
@@ -44,12 +45,173 @@ interface EventRow {
   win_points: number;
   question_count: number;
   created_at: string;
+  state_ids?: string[];
+  city_ids?: string[];
+  centre_ids?: string[];
+  batch_ids?: string[];
 }
 
-const QUIZ_SCOPES = ['national', 'state', 'city', 'centre', 'batch'] as const;
+type QuizScope = 'national' | 'state' | 'city' | 'centre' | 'batch';
+const QUIZ_SCOPES: QuizScope[] = ['national', 'state', 'city', 'centre', 'batch'];
+
+interface GeoState { id: string; name: string }
+interface GeoCity { id: string; name: string; state_id: string }
+interface CentreOpt { id: string; name: string; city_name?: string }
+interface BatchOpt { id: string; name: string | null; centre_name: string; centre_id?: string }
+
+function allowedScopesForRole(role: string | undefined): QuizScope[] {
+  if (role === 'super_admin') return [...QUIZ_SCOPES];
+  if (role === 'state_admin') return ['state', 'city', 'centre', 'batch'];
+  if (role === 'city_admin') return ['city', 'centre', 'batch'];
+  return ['centre', 'batch'];
+}
+
+function defaultScopeForRole(role: string | undefined): QuizScope {
+  const allowed = allowedScopesForRole(role);
+  return allowed.includes('city') ? 'city' : allowed[0] ?? 'batch';
+}
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className="space-y-1"><Label className="text-xs font-medium">{label}</Label>{children}</div>;
+}
+
+/** Scope dropdown + multi-select of matching geo/entities (filtered by access). */
+function QuizScopeTargets({
+  scope,
+  onScopeChange,
+  selectedIds,
+  onSelectedChange,
+  allowedScopes,
+  states,
+  cities,
+  centres,
+  batches,
+}: {
+  scope: QuizScope;
+  onScopeChange: (s: QuizScope) => void;
+  selectedIds: Set<string>;
+  onSelectedChange: (next: Set<string>) => void;
+  allowedScopes: QuizScope[];
+  states: GeoState[];
+  cities: GeoCity[];
+  centres: CentreOpt[];
+  batches: BatchOpt[];
+}) {
+  const options = useMemo(() => {
+    if (scope === 'state') return states.map((s) => ({ id: s.id, label: s.name }));
+    if (scope === 'city') return cities.map((c) => ({ id: c.id, label: c.name }));
+    if (scope === 'centre') {
+      return centres.map((c) => ({ id: c.id, label: c.city_name ? `${c.name} · ${c.city_name}` : c.name }));
+    }
+    if (scope === 'batch') {
+      return batches.map((b) => ({ id: b.id, label: `${b.name ?? 'Batch'} · ${b.centre_name}` }));
+    }
+    return [];
+  }, [scope, states, cities, centres, batches]);
+
+  function toggle(id: string) {
+    const next = new Set(selectedIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    onSelectedChange(next);
+  }
+
+  function setScope(s: QuizScope) {
+    onScopeChange(s);
+    onSelectedChange(new Set());
+  }
+
+  return (
+    <div className="space-y-3">
+      <FormRow label="Scope *">
+        <Select value={scope} onValueChange={(v) => setScope(v as QuizScope)}>
+          <SelectTrigger><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {allowedScopes.map((s) => (
+              <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </FormRow>
+      {scope === 'national' ? (
+        <p className="text-xs text-muted-foreground">National quizzes are available to all students.</p>
+      ) : (
+        <div className="space-y-2">
+          <Label className="text-xs font-medium">
+            {scope === 'state' ? 'States' : scope === 'city' ? 'Cities' : scope === 'centre' ? 'Centres' : 'Batches'}
+            {' '}({selectedIds.size} selected) *
+          </Label>
+          <div className="max-h-40 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+            {options.length === 0 ? (
+              <p className="p-2 text-xs text-muted-foreground">No options in your access scope.</p>
+            ) : (
+              options.map((o) => (
+                <label key={o.id} className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/40">
+                  <input type="checkbox" checked={selectedIds.has(o.id)} onChange={() => toggle(o.id)} />
+                  <span>{o.label}</span>
+                </label>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function useQuizTargetOptions(open: boolean) {
+  const { user } = useAuth();
+  const [states, setStates] = useState<GeoState[]>([]);
+  const [cities, setCities] = useState<GeoCity[]>([]);
+  const [centres, setCentres] = useState<CentreOpt[]>([]);
+  const [batches, setBatches] = useState<BatchOpt[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    void Promise.all([
+      apiGet<{ states: GeoState[]; cities: GeoCity[] }>('/v1/admin/geography'),
+      apiGet<{ items: CentreOpt[] }>('/v1/admin/centres'),
+      apiGet<{ items: BatchOpt[] }>('/v1/admin/batches'),
+    ]).then(([geo, c, b]) => {
+      let stateList = geo?.states ?? [];
+      let cityList = geo?.cities ?? [];
+      if (user?.role === 'state_admin' && user.state_id) {
+        stateList = stateList.filter((s) => s.id === user.state_id);
+        cityList = cityList.filter((c) => c.state_id === user.state_id);
+      }
+      if (user?.role === 'city_admin' && user.city_id) {
+        cityList = cityList.filter((c) => c.id === user.city_id);
+        const sid = cityList[0]?.state_id;
+        stateList = sid ? stateList.filter((s) => s.id === sid) : [];
+      }
+      setStates(stateList);
+      setCities(cityList);
+      setCentres(c?.items ?? []);
+      setBatches(b?.items ?? []);
+    }).catch(() => {
+      /* pickers stay empty; API will still enforce access */
+    });
+  }, [open, user?.role, user?.state_id, user?.city_id]);
+
+  return { states, cities, centres, batches, user };
+}
+
+function targetsPayload(scope: QuizScope, selected: Set<string>) {
+  const ids = Array.from(selected);
+  return {
+    scope,
+    state_ids: scope === 'state' ? ids : [],
+    city_ids: scope === 'city' ? ids : [],
+    centre_ids: scope === 'centre' ? ids : [],
+    batch_ids: scope === 'batch' ? ids : [],
+  };
+}
+
+function validateTargets(scope: QuizScope, selected: Set<string>): string | null {
+  if (scope !== 'national' && selected.size === 0) {
+    return `Select at least one ${scope}.`;
+  }
+  return null;
 }
 
 // ─── Reusable option editor (text_en + correct toggle) ──────────────────────
@@ -134,17 +296,26 @@ function validateDraft(d: DraftQ): string | null {
 
 // ─── Add question to bank ───────────────────────────────────────────────────
 function AddQuestionDialog({ onAdded }: { onAdded: () => void }) {
+  const { user } = useAuth();
+  const allowedScopes = allowedScopesForRole(user?.role);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [scope, setScope] = useState<string>('national');
+  const [scope, setScope] = useState<QuizScope>(defaultScopeForRole(user?.role));
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [topic, setTopic] = useState('');
   const [draft, setDraft] = useState<DraftQ>(emptyDraftQ());
+  const opts = useQuizTargetOptions(open);
 
-  function reset() { setScope('national'); setTopic(''); setDraft(emptyDraftQ()); }
+  function reset() {
+    setScope(defaultScopeForRole(user?.role));
+    setSelectedIds(new Set());
+    setTopic('');
+    setDraft(emptyDraftQ());
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    const err = validateDraft(draft);
+    const err = validateDraft(draft) ?? validateTargets(scope, selectedIds);
     if (err) { toast.error(err); return; }
     setBusy(true);
     try {
@@ -153,8 +324,8 @@ function AddQuestionDialog({ onAdded }: { onAdded: () => void }) {
         question_en: p.question_en,
         options: p.options,
         correct_indices: p.correct_indices,
-        scope,
         topic: topic.trim() || undefined,
+        ...targetsPayload(scope, selectedIds),
       });
       toast.success('Question added to bank.');
       setOpen(false);
@@ -172,22 +343,23 @@ function AddQuestionDialog({ onAdded }: { onAdded: () => void }) {
       <DialogTrigger asChild>
         <Button size="sm"><Plus className="mr-1 h-4 w-4" />Add question</Button>
       </DialogTrigger>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Add question to bank</DialogTitle></DialogHeader>
         <form className="space-y-4 pt-2" onSubmit={submit}>
-          <div className="grid grid-cols-2 gap-3">
-            <FormRow label="Scope">
-              <Select value={scope} onValueChange={setScope}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {QUIZ_SCOPES.map((s) => <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </FormRow>
-            <FormRow label="Topic">
-              <Input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="e.g. Ahimsa" />
-            </FormRow>
-          </div>
+          <QuizScopeTargets
+            scope={scope}
+            onScopeChange={setScope}
+            selectedIds={selectedIds}
+            onSelectedChange={setSelectedIds}
+            allowedScopes={allowedScopes}
+            states={opts.states}
+            cities={opts.cities}
+            centres={opts.centres}
+            batches={opts.batches}
+          />
+          <FormRow label="Topic">
+            <Input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="e.g. Ahimsa" />
+          </FormRow>
           <QuestionEditor draft={draft} onChange={setDraft} />
           <div className="flex justify-end gap-2 pt-2">
             <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
@@ -201,19 +373,29 @@ function AddQuestionDialog({ onAdded }: { onAdded: () => void }) {
 
 // ─── Create event (pick questions from the bank) ────────────────────────────
 function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; onAdded: () => void }) {
+  const { user } = useAuth();
+  const allowedScopes = allowedScopesForRole(user?.role);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState('');
-  const [scope, setScope] = useState<string>('city');
+  const [scope, setScope] = useState<QuizScope>(defaultScopeForRole(user?.role));
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [startAt, setStartAt] = useState('');
   const [endAt, setEndAt] = useState('');
   const [participation, setParticipation] = useState('5');
   const [win, setWin] = useState('10');
   const [picked, setPicked] = useState<Set<string>>(new Set());
+  const opts = useQuizTargetOptions(open);
 
   function reset() {
-    setTitle(''); setScope('city'); setStartAt(''); setEndAt('');
-    setParticipation('5'); setWin('10'); setPicked(new Set());
+    setTitle('');
+    setScope(defaultScopeForRole(user?.role));
+    setSelectedIds(new Set());
+    setStartAt('');
+    setEndAt('');
+    setParticipation('5');
+    setWin('10');
+    setPicked(new Set());
   }
 
   function togglePick(id: string) {
@@ -225,16 +407,18 @@ function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; o
     if (!title.trim()) { toast.error('Title is required.'); return; }
     if (!startAt || !endAt) { toast.error('Start and end times are required.'); return; }
     if (picked.size === 0) { toast.error('Select at least one question.'); return; }
+    const targetErr = validateTargets(scope, selectedIds);
+    if (targetErr) { toast.error(targetErr); return; }
     setBusy(true);
     try {
       await apiPost('/v1/quizzes/events', {
         title_en: title.trim(),
-        scope,
         start_at: new Date(startAt).toISOString(),
         end_at: new Date(endAt).toISOString(),
         participation_points: Number(participation) || 0,
         win_points: Number(win) || 0,
         question_ids: Array.from(picked),
+        ...targetsPayload(scope, selectedIds),
       });
       toast.success('Quiz event created.');
       setOpen(false);
@@ -252,21 +436,24 @@ function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; o
       <DialogTrigger asChild>
         <Button size="sm"><Plus className="mr-1 h-4 w-4" />New event</Button>
       </DialogTrigger>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Create quiz event</DialogTitle></DialogHeader>
         <form className="space-y-4 pt-2" onSubmit={submit}>
           <FormRow label="Title (English) *">
             <Input value={title} onChange={(e) => setTitle(e.target.value)} />
           </FormRow>
-          <div className="grid grid-cols-3 gap-3">
-            <FormRow label="Scope">
-              <Select value={scope} onValueChange={setScope}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {QUIZ_SCOPES.map((s) => <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </FormRow>
+          <QuizScopeTargets
+            scope={scope}
+            onScopeChange={setScope}
+            selectedIds={selectedIds}
+            onSelectedChange={setSelectedIds}
+            allowedScopes={allowedScopes}
+            states={opts.states}
+            cities={opts.cities}
+            centres={opts.centres}
+            batches={opts.batches}
+          />
+          <div className="grid grid-cols-2 gap-3">
             <FormRow label="Participation pts">
               <Input type="number" min={0} value={participation} onChange={(e) => setParticipation(e.target.value)} />
             </FormRow>
@@ -314,23 +501,25 @@ function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; o
 }
 
 // ─── Create push quiz (inline questions) ────────────────────────────────────
-interface BatchOption { id: string; name: string | null; centre_name: string; }
-
 function CreatePushDialog({ onAdded }: { onAdded: () => void }) {
+  const { user } = useAuth();
+  const allowedScopes = allowedScopesForRole(user?.role);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [batches, setBatches] = useState<BatchOption[]>([]);
-  const [batchId, setBatchId] = useState('');
+  const [scope, setScope] = useState<QuizScope>('batch');
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [minutes, setMinutes] = useState('15');
   const [points, setPoints] = useState('5');
   const [drafts, setDrafts] = useState<DraftQ[]>([emptyDraftQ()]);
+  const opts = useQuizTargetOptions(open);
 
-  useEffect(() => {
-    if (!open) return;
-    void apiGet<{ items: BatchOption[] }>('/v1/admin/batches').then((r) => setBatches(r?.items ?? []));
-  }, [open]);
-
-  function reset() { setBatchId(''); setMinutes('15'); setPoints('5'); setDrafts([emptyDraftQ()]); }
+  function reset() {
+    setScope('batch');
+    setSelectedIds(new Set());
+    setMinutes('15');
+    setPoints('5');
+    setDrafts([emptyDraftQ()]);
+  }
 
   function setDraft(i: number, d: DraftQ) {
     setDrafts((prev) => prev.map((x, idx) => (idx === i ? d : x)));
@@ -342,7 +531,8 @@ function CreatePushDialog({ onAdded }: { onAdded: () => void }) {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!batchId.trim()) { toast.error('A batch id is required.'); return; }
+    const targetErr = validateTargets(scope, selectedIds);
+    if (targetErr) { toast.error(targetErr); return; }
     for (const d of drafts) {
       const err = validateDraft(d);
       if (err) { toast.error(err); return; }
@@ -351,10 +541,10 @@ function CreatePushDialog({ onAdded }: { onAdded: () => void }) {
     try {
       const expires_at = new Date(Date.now() + (Number(minutes) || 15) * 60 * 1000).toISOString();
       await apiPost('/v1/quizzes/push', {
-        batch_id: batchId.trim(),
         expires_at,
         completion_points: Number(points) || 0,
         questions: drafts.map((d) => draftToPayload(d)),
+        ...targetsPayload(scope, selectedIds),
       });
       toast.success('Push quiz started.');
       setOpen(false);
@@ -372,20 +562,21 @@ function CreatePushDialog({ onAdded }: { onAdded: () => void }) {
       <DialogTrigger asChild>
         <Button size="sm" variant="outline"><Plus className="mr-1 h-4 w-4" />Start push quiz</Button>
       </DialogTrigger>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Start a live push quiz</DialogTitle></DialogHeader>
         <form className="space-y-4 pt-2" onSubmit={submit}>
-          <div className="grid grid-cols-3 gap-3">
-            <FormRow label="Batch *">
-              <Select value={batchId} onValueChange={setBatchId}>
-                <SelectTrigger><SelectValue placeholder="Select batch" /></SelectTrigger>
-                <SelectContent>
-                  {batches.map((b) => (
-                    <SelectItem key={b.id} value={b.id}>{b.name ?? 'Batch'} · {b.centre_name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </FormRow>
+          <QuizScopeTargets
+            scope={scope}
+            onScopeChange={setScope}
+            selectedIds={selectedIds}
+            onSelectedChange={setSelectedIds}
+            allowedScopes={allowedScopes}
+            states={opts.states}
+            cities={opts.cities}
+            centres={opts.centres}
+            batches={opts.batches}
+          />
+          <div className="grid grid-cols-2 gap-3">
             <FormRow label="Expires in (min)">
               <Input type="number" min={1} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
             </FormRow>

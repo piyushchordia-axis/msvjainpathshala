@@ -6,6 +6,7 @@ import { useSessionView } from "@/contexts/SessionViewContext";
 import { useOpenCompetitions, useRegisterCompetition } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/format";
+import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { Body, Button, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 export default function CompetitionsScreen() {
@@ -85,7 +86,10 @@ export default function CompetitionsScreen() {
               hi ? "आपकी विद्यार्थी प्रोफ़ाइल अभी तैयार नहीं है।" : "Your student profile isn't ready yet."
             }
           />
-        ) : competitions.isLoading ? (
+        ) : (
+          <>
+            <ChildSwitcher />
+            {competitions.isLoading ? (
           <StateView status="loading" emptyText="" />
         ) : competitions.isError ? (
           <StateView
@@ -174,6 +178,8 @@ export default function CompetitionsScreen() {
               </Card>
             );
           })
+        )}
+          </>
         )}
       </Screen>
     </View>

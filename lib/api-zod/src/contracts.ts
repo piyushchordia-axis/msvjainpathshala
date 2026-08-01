@@ -38,6 +38,32 @@ export type Role = z.infer<typeof roleSchema>;
 
 export const languageSchema = z.enum(["en", "hi"]);
 export const ageGroupSchema = z.enum(["bal", "kishor", "tarun", "yuva"]);
+export type AgeGroup = z.infer<typeof ageGroupSchema>;
+
+/** Display metadata for age groups (mirrors lib/db/src/schema/enums.ts). */
+export const AGE_GROUPS = ["bal", "kishor", "tarun", "yuva"] as const;
+export const AGE_GROUP_META = {
+  bal: { label_en: "Bal 5-8 years", label_hi: "बाल 5-8 वर्ष", min: 5, max: 8 },
+  kishor: { label_en: "Kishor 9-12 years", label_hi: "किशोर 9-12 वर्ष", min: 9, max: 12 },
+  tarun: { label_en: "Tarun 13-16 years", label_hi: "तरुण 13-16 वर्ष", min: 13, max: 16 },
+  yuva: { label_en: "Yuva 17-21 years", label_hi: "युवा 17-21 वर्ष", min: 17, max: 21 },
+} as const satisfies Record<AgeGroup, { label_en: string; label_hi: string; min: number; max: number }>;
+
+export function formatAgeGroup(code: string, lang: "en" | "hi" = "en"): string {
+  const meta = AGE_GROUP_META[code as AgeGroup];
+  if (!meta) return code;
+  return lang === "hi" ? meta.label_hi : meta.label_en;
+}
+
+/** Join labels; all four known groups → "All age groups" / "सभी आयु वर्ग". */
+export function formatAgeGroups(codes: string[] | null | undefined, lang: "en" | "hi" = "en"): string {
+  const list = (codes ?? []).filter(Boolean);
+  if (list.length === 0) return "—";
+  const allKnown = AGE_GROUPS.every((g) => list.includes(g)) && list.length >= AGE_GROUPS.length;
+  if (allKnown) return lang === "hi" ? "सभी आयु वर्ग" : "All age groups";
+  return list.map((c) => formatAgeGroup(c, lang)).join(" · ");
+}
+
 export const enrolmentStatusSchema = z.enum(["pending", "approved", "rejected", "waitlisted"]);
 export const studentStatusSchema = z.enum(["active", "inactive"]);
 export const libraryContentTypeSchema = z.enum(["pdf", "video", "audio", "image"]);
@@ -88,6 +114,8 @@ export const sessionUserSchema = z.object({
   role: roleSchema,
   full_name: z.string(),
   preferred_language: languageSchema,
+  state_id: z.string().nullable().optional(),
+  city_id: z.string().nullable().optional(),
 });
 export type SessionUser = z.infer<typeof sessionUserSchema>;
 
@@ -144,8 +172,9 @@ export type AdminStudentRow = z.infer<typeof adminStudentRowSchema>;
 export const adminBatchRowSchema = z.object({
   id: z.string(),
   name: z.string().nullable(),
+  centre_id: z.string().optional(),
   centre_name: z.string(),
-  age_group: z.string(),
+  age_groups: z.array(z.string()),
   shikshak_name: z.string().nullable(),
   day_of_week: z.array(z.number()),
   start_time: z.string(),
@@ -153,6 +182,56 @@ export const adminBatchRowSchema = z.object({
   status: studentStatusSchema,
 });
 export type AdminBatchRow = z.infer<typeof adminBatchRowSchema>;
+
+export const staffingAssignBodySchema = z.object({
+  user_id: z.string().uuid(),
+});
+
+export const staffingCentreShikshakRowSchema = z.object({
+  id: z.string(),
+  user_id: z.string(),
+  full_name: z.string().nullable(),
+  phone: z.string().nullable(),
+  gender: z.string().nullable().optional(),
+  is_active: z.boolean(),
+  batch_count: z.number().optional(),
+});
+
+export const staffingBatchShikshakRowSchema = z.object({
+  id: z.string(),
+  user_id: z.string(),
+  full_name: z.string().nullable(),
+  phone: z.string().nullable(),
+  gender: z.string().nullable().optional(),
+  is_primary: z.boolean(),
+});
+
+export const staffingMeSchema = z.object({
+  user_id: z.string(),
+  centres: z.array(
+    z.object({
+      centre_id: z.string(),
+      centre_name: z.string(),
+    }),
+  ),
+  batches: z.array(
+    z.object({
+      batch_id: z.string(),
+      batch_name: z.string().nullable(),
+      centre_id: z.string(),
+      is_primary: z.boolean(),
+    }),
+  ),
+  sanchalak_centres: z
+    .array(
+      z.object({
+        centre_id: z.string(),
+        centre_name: z.string(),
+      }),
+    )
+    .optional(),
+});
+export type StaffingMe = z.infer<typeof staffingMeSchema>;
 
 export const enrolmentActionSchema = z.object({
   reason: z.string().optional(),
@@ -192,7 +271,7 @@ export type CentreDetail = z.infer<typeof centreDetailSchema>;
 export const publicBatchRowSchema = z.object({
   id: z.string(),
   name: z.string(),
-  age_group: z.string(),
+  age_groups: z.array(z.string()),
   day_of_week: z.array(z.number()),
   start_time: z.string(),
   end_time: z.string(),
@@ -276,6 +355,7 @@ export const childRowSchema = z.object({
   status: studentStatusSchema,
   total_points: z.number(),
   tier: z.string(),
+  photo_url: z.string().nullable().optional(),
 });
 export type ChildRow = z.infer<typeof childRowSchema>;
 
@@ -323,10 +403,51 @@ export const niyamCatalogRowSchema = z.object({
   description_en: z.string().nullable(),
   description_hi: z.string().nullable(),
   niyam_type: z.string(),
+  proof_type: z.string(),
+  proof_required: z.boolean().optional(),
+  approval_mode: z.string().optional(),
+  max_uploads: z.number().optional(),
   points: z.number(),
+  scope: z.string().optional(),
+  msv_audience: z.string().optional(),
+  current_period_key: z.string().optional(),
+  period_label_en: z.string().optional(),
+  period_label_hi: z.string().optional(),
+  submitted_this_period: z.boolean().optional(),
+  submission_status: z.string().nullable().optional(),
+  submission_date: z.string().nullable().optional(),
+  period_status_tag_en: z.string().nullable().optional(),
+  period_status_tag_hi: z.string().nullable().optional(),
 });
 export type NiyamCatalogRow = z.infer<typeof niyamCatalogRowSchema>;
 
+/** Display helpers mirrored from api-server niyam-period.ts */
+export function niyamPeriodLabel(
+  niyamType: string,
+  periodKey: string,
+  lang: "en" | "hi" = "en",
+): string {
+  if (niyamType === "daily") {
+    return lang === "hi" ? `दिन ${periodKey}` : `Day ${periodKey}`;
+  }
+  if (niyamType === "weekly") {
+    return lang === "hi" ? `सप्ताह ${periodKey}` : `Week ${periodKey}`;
+  }
+  return lang === "hi" ? `माह ${periodKey}` : `Month ${periodKey}`;
+}
+
+export function niyamSubmittedPeriodTag(
+  niyamType: string,
+  lang: "en" | "hi" = "en",
+): string {
+  if (niyamType === "daily") {
+    return lang === "hi" ? "आज प्रस्तुत" : "Submitted today";
+  }
+  if (niyamType === "weekly") {
+    return lang === "hi" ? "इस सप्ताह प्रस्तुत" : "Submitted this week";
+  }
+  return lang === "hi" ? "इस माह प्रस्तुत" : "Submitted this month";
+}
 export const shikshakSessionRowSchema = z.object({
   id: z.string(),
   session_date: z.string(),

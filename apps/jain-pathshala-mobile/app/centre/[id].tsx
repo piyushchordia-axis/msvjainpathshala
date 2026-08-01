@@ -7,6 +7,7 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { apiGet } from "@/lib/api";
 import type { BatchItem, CentreDetail } from "@/lib/types";
 import { formatTimeRange } from "@/lib/format";
+import { formatAgeGroups } from "@workspace/api-zod";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 interface CentreDetailResponse {
@@ -78,7 +79,9 @@ export default function CentreDetailScreen() {
           <Card key={b.id}>
             <Row style={{ justifyContent: "space-between" }}>
               <Title style={{ fontSize: 17, flex: 1 }}>{b.name}</Title>
-              {b.age_group ? <Pill tone="primary" label={b.age_group} /> : null}
+              {b.age_groups?.length ? (
+                <Pill tone="primary" label={formatAgeGroups(b.age_groups, hi ? "hi" : "en")} />
+              ) : null}
             </Row>
             <Row style={{ gap: 8, marginTop: 10 }}>
               <Ionicons name="time-outline" size={15} color={c.mutedForeground} />

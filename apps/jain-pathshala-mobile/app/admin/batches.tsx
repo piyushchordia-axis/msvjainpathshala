@@ -3,6 +3,7 @@ import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAdminBatches, useBatchAction } from "@/lib/queries";
 import { formatTimeRange } from "@/lib/format";
+import { formatAgeGroups } from "@workspace/api-zod";
 import { AppHeader } from "@/components/AppHeader";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
@@ -52,7 +53,7 @@ export default function BatchesScreen() {
                   <View style={{ flex: 1, paddingRight: 8 }}>
                     <Title style={{ fontSize: 17 }}>{b.name ?? "—"}</Title>
                     <Body muted style={{ fontSize: 12, marginTop: 2 }}>
-                      {[b.centre_name, b.age_group].filter(Boolean).join(" · ") || "—"}
+                      {[b.centre_name, formatAgeGroups(b.age_groups, hi ? "hi" : "en")].filter(Boolean).join(" · ") || "—"}
                     </Body>
                   </View>
                   <Pill tone={active ? "success" : "neutral"} label={b.status} />

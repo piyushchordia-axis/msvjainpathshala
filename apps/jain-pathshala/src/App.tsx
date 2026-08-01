@@ -28,6 +28,7 @@ import DashboardPage from '@/pages/admin/DashboardPage';
 import StudentsPage from '@/pages/admin/StudentsPage';
 import EnrolmentsPage from '@/pages/admin/EnrolmentsPage';
 import BatchesPage from '@/pages/admin/BatchesPage';
+import CentreStaffPage from '@/pages/admin/CentreStaffPage';
 import AnalyticsPage from '@/pages/admin/AnalyticsPage';
 import AttendancePage from '@/pages/admin/AttendancePage';
 import NiyamReviewPage from '@/pages/admin/NiyamReviewPage';
@@ -130,6 +131,7 @@ function AdminRoutes() {
         <Route path="/admin/punya/manual-award" component={PunyaAwardPage} />
         <Route path="/admin/punya/configs" component={PunyaConfigsPage} />
         <Route path="/admin/punya/audit" component={PunyaAuditPage} />
+        <Route path="/admin/centres/:id" component={CentreStaffPage} />
         <Route path="/admin/centres" component={AdminCentresPage} />
         <Route path="/admin/id-cards" component={IdCardsAdminPage} />
         <Route path="/admin/holidays" component={HolidaysPage} />

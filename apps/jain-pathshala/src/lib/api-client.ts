@@ -75,6 +75,10 @@ export function post<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: 'POST', body: JSON.stringify(body) });
 }
 
+export function patch<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
+}
+
 export function del<T>(path: string, body?: unknown): Promise<T> {
   return request<T>(path, { method: 'DELETE', ...(body ? { body: JSON.stringify(body) } : {}) });
 }
@@ -88,6 +92,11 @@ function unwrap<T>(data: unknown): T {
 
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const res = await post<{ data: T } | T>(path, body);
+  return unwrap<T>(res);
+}
+
+export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
+  const res = await patch<{ data: T } | T>(path, body);
   return unwrap<T>(res);
 }
 

@@ -5,6 +5,7 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { AppHeader } from "@/components/AppHeader";
 import { Body, Button, Card, Kicker, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { formatAgeGroup } from "@workspace/api-zod";
 
 export default function ParentChildren() {
   const c = useColors();
@@ -62,7 +63,7 @@ export default function ParentChildren() {
                     <Pill label={hi ? "देख रहे हैं" : "Viewing"} tone="primary" />
                   ) : null}
                 </Row>
-                <Body muted style={{ marginTop: 6 }}>{child.age_group}</Body>
+                <Body muted style={{ marginTop: 6 }}>{formatAgeGroup(child.age_group, hi ? "hi" : "en")}</Body>
                 {child.centre_name ? (
                   <Body style={{ marginTop: 6 }}>{child.centre_name}</Body>
                 ) : null}

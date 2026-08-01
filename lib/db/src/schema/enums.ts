@@ -14,6 +14,35 @@ export const ROLES = [
 export const GENDERS = ["male", "female", "other"] as const;
 export const LANGUAGES = ["en", "hi"] as const;
 export const AGE_GROUPS = ["bal", "kishor", "tarun", "yuva"] as const;
+
+/** Display metadata for age groups (year ranges). Change here to update all UIs. */
+export const AGE_GROUP_META = {
+  bal: { label_en: "Bal 5-8 years", label_hi: "बाल 5-8 वर्ष", min: 5, max: 8 },
+  kishor: { label_en: "Kishor 9-12 years", label_hi: "किशोर 9-12 वर्ष", min: 9, max: 12 },
+  tarun: { label_en: "Tarun 13-16 years", label_hi: "तरुण 13-16 वर्ष", min: 13, max: 16 },
+  yuva: { label_en: "Yuva 17-21 years", label_hi: "युवा 17-21 वर्ष", min: 17, max: 21 },
+} as const satisfies Record<
+  (typeof AGE_GROUPS)[number],
+  { label_en: string; label_hi: string; min: number; max: number }
+>;
+
+export type AgeGroup = (typeof AGE_GROUPS)[number];
+
+export function formatAgeGroup(code: string, lang: "en" | "hi" = "en"): string {
+  const meta = AGE_GROUP_META[code as AgeGroup];
+  if (!meta) return code;
+  return lang === "hi" ? meta.label_hi : meta.label_en;
+}
+
+/** Join labels; all four known groups → "All age groups" / "सभी आयु वर्ग". */
+export function formatAgeGroups(codes: string[] | null | undefined, lang: "en" | "hi" = "en"): string {
+  const list = (codes ?? []).filter(Boolean);
+  if (list.length === 0) return lang === "hi" ? "—" : "—";
+  const allKnown = AGE_GROUPS.every((g) => list.includes(g)) && list.length >= AGE_GROUPS.length;
+  if (allKnown) return lang === "hi" ? "सभी आयु वर्ग" : "All age groups";
+  return list.map((c) => formatAgeGroup(c, lang)).join(" · ");
+}
+
 export const ATTENDANCE_STATUSES = ["present", "absent", "late", "excused"] as const;
 export const SESSION_STATUSES = ["scheduled", "in_progress", "completed", "cancelled"] as const;
 export const STUDENT_STATUSES = ["active", "inactive"] as const;
@@ -21,8 +50,15 @@ export const ENROLMENT_STATUSES = ["pending", "approved", "rejected", "waitliste
 export const MSV_STATUSES = ["none", "applied", "waitlisted", "approved", "rejected", "revoked"] as const;
 export const TIERS = ["jigyasu", "shravak", "sadhak", "shraman", "tirthankar"] as const;
 export const NIYAM_TYPES = ["daily", "weekly", "monthly"] as const;
-export const PROOF_TYPES = ["photo", "video", "either"] as const;
+/** Allowed media kinds. `either` = photo|video; `any` = photo|video|audio. */
+export const PROOF_TYPES = ["photo", "video", "audio", "either", "any"] as const;
+export const NIYAM_APPROVAL_MODES = ["auto", "review"] as const;
+export const NIYAM_MEDIA_KINDS = ["photo", "video", "audio"] as const;
 export const NIYAM_SUBMISSION_STATUSES = ["pending", "auto_approved", "approved", "rejected"] as const;
+/** Geographic reach of a niyam definition. */
+export const NIYAM_SCOPES = ["national", "state", "city"] as const;
+/** Which students a niyam is offered to, relative to MSV membership. */
+export const NIYAM_MSV_AUDIENCES = ["all", "msv", "non_msv"] as const;
 export const ATTENDANCE_METHODS = ["manual", "gps"] as const;
 export const EXAM_QUESTION_TYPES = ["single_choice", "multi_choice", "text"] as const;
 export const NOTICE_AUDIENCES = ["batch", "centre", "city", "state", "national", "msv"] as const;
@@ -80,7 +116,11 @@ export const msvStatusEnum = pgEnum("msv_status_enum", MSV_STATUSES);
 export const tierEnum = pgEnum("tier_enum", TIERS);
 export const niyamTypeEnum = pgEnum("niyam_type_enum", NIYAM_TYPES);
 export const proofTypeEnum = pgEnum("proof_type_enum", PROOF_TYPES);
+export const niyamApprovalModeEnum = pgEnum("niyam_approval_mode_enum", NIYAM_APPROVAL_MODES);
+export const niyamMediaKindEnum = pgEnum("niyam_media_kind_enum", NIYAM_MEDIA_KINDS);
 export const niyamSubmissionStatusEnum = pgEnum("niyam_submission_status_enum", NIYAM_SUBMISSION_STATUSES);
+export const niyamScopeEnum = pgEnum("niyam_scope_enum", NIYAM_SCOPES);
+export const niyamMsvAudienceEnum = pgEnum("niyam_msv_audience_enum", NIYAM_MSV_AUDIENCES);
 export const attendanceMethodEnum = pgEnum("attendance_method_enum", ATTENDANCE_METHODS);
 export const examQuestionTypeEnum = pgEnum("exam_question_type_enum", EXAM_QUESTION_TYPES);
 export const noticeAudienceEnum = pgEnum("notice_audience_enum", NOTICE_AUDIENCES);

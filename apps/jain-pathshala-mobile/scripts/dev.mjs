@@ -210,11 +210,25 @@ const expoCli = requireFromProject.resolve("@expo/cli");
 
 
 
+// Agent / CI shells have no TTY; Expo then tries to prompt for login and dies
+// with "Input is required, but 'npx expo' is in non-interactive mode".
+// --offline skips Expo account prompts. It cannot be combined with --lan/--tunnel,
+// so we drop --lan and rely on REACT_NATIVE_PACKAGER_HOSTNAME for the LAN URL.
+const offline =
+  !process.stdin.isTTY || process.env.EXPO_OFFLINE === "1";
+const expoArgs = [expoCli, "start", "--port", metroPort, "--clear"];
+if (offline) {
+  expoArgs.push("--offline");
+  console.log("Starting Expo offline (non-interactive shell / EXPO_OFFLINE=1).");
+} else {
+  expoArgs.push("--lan");
+}
+
 const child = spawn(
 
   process.execPath,
 
-  [expoCli, "start", "--port", metroPort, "--lan", "--clear"],
+  expoArgs,
 
   {
 

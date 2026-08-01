@@ -5,6 +5,7 @@ import { useSessionView } from "@/contexts/SessionViewContext";
 import { useNiyamCatalog, useStudentNiyams } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
+import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { Body, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 export default function StudentNiyams() {
@@ -13,7 +14,7 @@ export default function StudentNiyams() {
   const { activeStudentId, activeChild, loading, refetch } = useSessionView();
 
   const submissions = useStudentNiyams(activeStudentId ?? undefined);
-  const catalog = useNiyamCatalog(!!activeStudentId);
+  const catalog = useNiyamCatalog(!!activeStudentId, activeStudentId);
 
   const submissionRows = submissions.data?.items ?? [];
   const catalogRows = catalog.data?.items ?? [];
@@ -45,6 +46,7 @@ export default function StudentNiyams() {
           />
         ) : (
           <>
+            <ChildSwitcher />
             <Title style={{ fontSize: 17, marginLeft: 2 }}>{hi ? "मेरे नियम" : "My niyams"}</Title>
             {submissions.isLoading ? (
               <StateView status="loading" emptyText="" />

@@ -25,6 +25,7 @@ import {
   centre_holidays,
   settings,
   shikshak_batch_assignments,
+  shikshak_centre_assignments,
 } from "@workspace/db";
 import { and, asc, count, desc, eq, gte, inArray, isNull, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
@@ -34,6 +35,7 @@ import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { awardPunya } from "../../lib/punya";
+import { isClientSettingKey } from "../../lib/client-settings";
 
 const router: IRouter = Router();
 router.use(requireAuth, requireAdminPanel);
@@ -251,11 +253,25 @@ router.get("/niyams", async (_req: Request, res: Response) => {
       id: niyams.id,
       title_en: niyams.title_en,
       title_hi: niyams.title_hi,
+      description_en: niyams.description_en,
+      description_hi: niyams.description_hi,
       niyam_type: niyams.niyam_type,
+      proof_type: niyams.proof_type,
+      proof_required: niyams.proof_required,
+      approval_mode: niyams.approval_mode,
+      max_uploads: niyams.max_uploads,
       points: niyams.points,
       is_active: niyams.is_active,
+      scope: niyams.scope,
+      state_id: niyams.state_id,
+      city_id: niyams.city_id,
+      state_name: states.name,
+      city_name: cities.name,
+      msv_audience: niyams.msv_audience,
     })
     .from(niyams)
+    .leftJoin(states, eq(states.id, niyams.state_id))
+    .leftJoin(cities, eq(cities.id, niyams.city_id))
     .orderBy(desc(niyams.points));
   ok(res, { items: rows }, { count: rows.length });
 });
@@ -512,10 +528,142 @@ router.get("/geography", async (_req: Request, res: Response) => {
   ok(res, { states: stateRows, cities: cityRows });
 });
 
+// States and cities are national reference data that every scope resolves
+// against, so only super_admin may extend them — a state/city admin adding
+// geography outside their own scope would silently widen it.
+function requireNationalAdmin(req: Request, res: Response): boolean {
+  if (req.authUser!.role !== "super_admin") {
+    fail(res, 403, "ERR_FORBIDDEN", "Only national admins can manage geography.");
+    return false;
+  }
+  return true;
+}
+
+const createStateSchema = z.object({
+  name: z.string().min(1).max(100),
+  code: z.string().min(2).max(10).transform((s) => s.toUpperCase()),
+});
+
+/* POST /v1/admin/states */
+router.post("/states", async (req: Request, res: Response) => {
+  if (!requireNationalAdmin(req, res)) return;
+  let body: z.infer<typeof createStateSchema>;
+  try { body = createStateSchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid state data."); return; }
+
+  // No unique index on states — enforce it here so a duplicate name/code can't
+  // split one state's centres across two rows.
+  const [dupe] = await db
+    .select({ id: states.id })
+    .from(states)
+    .where(or(eq(states.code, body.code), eq(states.name, body.name)))
+    .limit(1);
+  if (dupe) { fail(res, 409, "ERR_ALREADY_EXISTS", "That state already exists."); return; }
+
+  const [row] = await db
+    .insert(states)
+    .values({ name: body.name, code: body.code })
+    .returning({ id: states.id, name: states.name, code: states.code });
+  await auditFromReq(req, {
+    action: "create",
+    entityKind: "state",
+    entityId: row.id,
+    summary: `State ${row.name} created.`,
+    metadata: { name: row.name, code: row.code },
+  });
+  ok(res, row, undefined, 201);
+});
+
+const createCitySchema = z.object({
+  state_id: z.string().uuid(),
+  name: z.string().min(1).max(100),
+  code: z.string().min(2).max(10).transform((s) => s.toUpperCase()),
+});
+
+/* POST /v1/admin/cities */
+router.post("/cities", async (req: Request, res: Response) => {
+  if (!requireNationalAdmin(req, res)) return;
+  let body: z.infer<typeof createCitySchema>;
+  try { body = createCitySchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid city data."); return; }
+
+  const [stateRow] = await db
+    .select({ id: states.id })
+    .from(states)
+    .where(eq(states.id, body.state_id))
+    .limit(1);
+  if (!stateRow) { fail(res, 404, "ERR_NOT_FOUND", "State not found."); return; }
+
+  // Same name twice within one state is a duplicate; the same name in another
+  // state is legitimate (e.g. Aurangabad exists in more than one state).
+  const [dupe] = await db
+    .select({ id: cities.id })
+    .from(cities)
+    .where(and(eq(cities.state_id, body.state_id), eq(cities.name, body.name)))
+    .limit(1);
+  if (dupe) { fail(res, 409, "ERR_ALREADY_EXISTS", "That city already exists in this state."); return; }
+
+  const [row] = await db
+    .insert(cities)
+    .values({ state_id: body.state_id, name: body.name, code: body.code })
+    .returning({ id: cities.id, name: cities.name, code: cities.code, state_id: cities.state_id });
+  await auditFromReq(req, {
+    action: "create",
+    entityKind: "city",
+    entityId: row.id,
+    summary: `City ${row.name} created.`,
+    metadata: { name: row.name, code: row.code, state_id: row.state_id },
+  });
+  ok(res, row, undefined, 201);
+});
+
 /* GET /v1/admin/settings */
 router.get("/settings", async (_req: Request, res: Response) => {
   const rows = await db.select().from(settings).orderBy(asc(settings.key));
   ok(res, { items: rows.map((r) => ({ ...r, updated_at: r.updated_at.toISOString() })) });
+});
+
+const patchSettingSchema = z.object({
+  key: z.string().min(1).max(128),
+  value: z.string().max(4000),
+});
+
+/* PATCH /v1/admin/settings — super_admin only; allowlisted client keys only */
+router.patch("/settings", async (req: Request, res: Response) => {
+  if (req.authUser!.role !== "super_admin") {
+    fail(res, 403, "ERR_FORBIDDEN", "Only super admins can update client settings.");
+    return;
+  }
+  let body: z.infer<typeof patchSettingSchema>;
+  try {
+    body = patchSettingSchema.parse(req.body);
+  } catch {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid settings payload.");
+    return;
+  }
+  if (!isClientSettingKey(body.key)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "That settings key is not writable via this endpoint.");
+    return;
+  }
+
+  const now = new Date();
+  await db
+    .insert(settings)
+    .values({ key: body.key, value: body.value, updated_at: now })
+    .onConflictDoUpdate({
+      target: settings.key,
+      set: { value: body.value, updated_at: now },
+    });
+
+  await auditFromReq(req, {
+    action: "config_change",
+    entityKind: "settings",
+    entityId: body.key,
+    summary: `Updated setting ${body.key}.`,
+    metadata: { key: body.key, value: body.value },
+  });
+
+  ok(res, { key: body.key, value: body.value, updated_at: now.toISOString() });
 });
 
 /* ═══════════════════════════ CREATE endpoints ═══════════════════════════ */
@@ -567,12 +715,22 @@ router.post("/centres", async (req: Request, res: Response) => {
 const createBatchSchema = z.object({
   centre_id: z.string().uuid(),
   name: z.string().min(1).max(200),
-  age_group: z.enum(["bal", "kishor", "tarun", "yuva"]),
+  age_groups: z.array(z.enum(["bal", "kishor", "tarun", "yuva"])).min(1).max(4).optional(),
+  /** @deprecated prefer age_groups */
+  age_group: z.enum(["bal", "kishor", "tarun", "yuva"]).optional(),
   start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
   end_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
   day_of_week: z.array(z.number().int().min(1).max(7)).default([]),
   capacity: z.coerce.number().int().min(1).max(500).default(30),
+  /** Primary shikshak — must already be tagged to the centre. */
+  primary_shikshak_id: z.string().uuid().optional(),
+  /** @deprecated use primary_shikshak_id */
   shikshak_id: z.string().uuid().optional(),
+}).superRefine((b, ctx) => {
+  const groups = b.age_groups?.length ? b.age_groups : b.age_group ? [b.age_group] : [];
+  if (groups.length === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: "age_groups is required", path: ["age_groups"] });
+  }
 });
 
 /* POST /v1/admin/batches */
@@ -584,15 +742,70 @@ router.post("/batches", async (req: Request, res: Response) => {
   if (!inScope(scope, body.centre_id)) {
     fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope."); return;
   }
+  const age_groups = body.age_groups?.length
+    ? Array.from(new Set(body.age_groups))
+    : body.age_group
+      ? [body.age_group]
+      : [];
+  if (age_groups.length === 0) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Select at least one age group."); return;
+  }
+
+  const primaryId = body.primary_shikshak_id ?? body.shikshak_id ?? null;
+  if (primaryId) {
+    const [u] = await db
+      .select({ id: users.id, role: users.role })
+      .from(users)
+      .where(and(eq(users.id, primaryId), eq(users.is_active, true), isNull(users.deleted_at)))
+      .limit(1);
+    if (!u || u.role !== "shikshak") {
+      fail(res, 422, "ERR_WRONG_ROLE", "primary_shikshak_id must be an active shikshak."); return;
+    }
+    const [tagged] = await db
+      .select({ id: shikshak_centre_assignments.id })
+      .from(shikshak_centre_assignments)
+      .where(
+        and(
+          eq(shikshak_centre_assignments.user_id, primaryId),
+          eq(shikshak_centre_assignments.centre_id, body.centre_id),
+          eq(shikshak_centre_assignments.is_active, true),
+        ),
+      )
+      .limit(1);
+    if (!tagged) {
+      fail(res, 422, "ERR_NOT_CENTRE_TAGGED", "Shikshak must be tagged to this centre first."); return;
+    }
+
+    const [row] = await db.transaction(async (tx) => {
+      const [batch] = await tx.insert(batches).values({
+        centre_id: body.centre_id,
+        name: body.name,
+        age_groups,
+        start_time: body.start_time,
+        end_time: body.end_time,
+        day_of_week: body.day_of_week,
+        capacity: body.capacity,
+      }).returning({ id: batches.id, name: batches.name });
+      await tx.insert(shikshak_batch_assignments).values({
+        user_id: primaryId,
+        batch_id: batch.id,
+        is_primary: true,
+        assigned_by: req.authUser!.id,
+      });
+      return [batch];
+    });
+    ok(res, row);
+    return;
+  }
+
   const [row] = await db.insert(batches).values({
     centre_id: body.centre_id,
     name: body.name,
-    age_group: body.age_group,
+    age_groups,
     start_time: body.start_time,
     end_time: body.end_time,
     day_of_week: body.day_of_week,
     capacity: body.capacity,
-    shikshak_id: body.shikshak_id ?? null,
   }).returning({ id: batches.id, name: batches.name });
   ok(res, row);
 });

@@ -32,6 +32,7 @@ import {
 } from "@/lib/queries";
 import { formatDateRange } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
+import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { QuizRunner } from "@/components/QuizRunner";
 import { Body, Button, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
@@ -85,13 +86,20 @@ function ResultCard({ result, hi, onDone, doneLabel }: { result: ResultView; hi:
           </View>
         </Row>
         <Row style={{ marginTop: 16, gap: 8, flexWrap: "wrap" }}>
-          {result.pointsAwarded > 0 ? (
-            <Pill label={`+${result.pointsAwarded} ${hi ? "पुण्य" : "punya"}`} tone="success" />
-          ) : (
-            <Pill label={hi ? "कोई पुण्य अर्जित नहीं" : "No punya awarded"} tone="neutral" />
-          )}
           {result.allCorrect ? (
-            <Pill label={hi ? "सभी सही!" : "All correct!"} tone="success" />
+            <Pill label={hi ? "विजेता" : "Winner"} tone="warning" />
+          ) : (
+            <Pill label={hi ? "पूर्ण" : "Completed"} tone="success" />
+          )}
+          {result.pointsAwarded > 0 ? (
+            <Pill
+              label={
+                hi
+                  ? `+${result.pointsAwarded} पुण्य अर्जित`
+                  : `+${result.pointsAwarded} punya earned`
+              }
+              tone="success"
+            />
           ) : null}
         </Row>
       </Card>
@@ -231,6 +239,7 @@ export default function Quizzes() {
           />
         ) : (
           <>
+            <ChildSwitcher />
             {/* ---- Live push quiz (if one is active for the batch) ------- */}
             {push && !push.already_submitted ? (
               <Card style={{ borderColor: c.primary }}>
@@ -287,6 +296,8 @@ export default function Quizzes() {
                 const done = quiz.already_attempted;
                 const isStarting = startQuiz.isPending && startQuiz.variables?.id === quiz.id;
                 const points = quiz.participation_points + quiz.win_points;
+                const isWinner = !!quiz.is_winner;
+                const pointsEarned = quiz.points_earned ?? 0;
                 return (
                   <Card key={quiz.id} style={done ? { opacity: 0.65 } : undefined}>
                     <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -297,20 +308,45 @@ export default function Quizzes() {
                         </Body>
                       </View>
                       {done ? (
-                        <Ionicons name="checkmark-circle" size={26} color={c.successText} />
+                        <Ionicons
+                          name={isWinner ? "trophy" : "checkmark-circle"}
+                          size={26}
+                          color={isWinner ? c.gold : c.successText}
+                        />
                       ) : null}
                     </Row>
                     <Row style={{ marginTop: 10, gap: 8, flexWrap: "wrap" }}>
-                      {quiz.win_points > 0 ? (
-                        <Pill label={`${hi ? "जीत" : "Win"} +${quiz.win_points}`} tone="warning" />
-                      ) : null}
-                      {quiz.participation_points > 0 ? (
-                        <Pill label={`${hi ? "भाग" : "Take"} +${quiz.participation_points}`} tone="info" />
-                      ) : null}
-                      {points === 0 ? (
-                        <Pill label={hi ? "अभ्यास" : "Practice"} tone="neutral" />
-                      ) : null}
-                      {done ? <Pill label={hi ? "पूर्ण" : "Completed"} tone="success" /> : null}
+                      {done ? (
+                        <>
+                          {isWinner ? (
+                            <Pill label={hi ? "विजेता" : "Winner"} tone="warning" />
+                          ) : (
+                            <Pill label={hi ? "पूर्ण" : "Completed"} tone="success" />
+                          )}
+                          {pointsEarned > 0 ? (
+                            <Pill
+                              label={
+                                hi
+                                  ? `+${pointsEarned} पुण्य अर्जित`
+                                  : `+${pointsEarned} punya earned`
+                              }
+                              tone="success"
+                            />
+                          ) : null}
+                        </>
+                      ) : (
+                        <>
+                          {quiz.win_points > 0 ? (
+                            <Pill label={`${hi ? "जीत" : "Win"} +${quiz.win_points}`} tone="warning" />
+                          ) : null}
+                          {quiz.participation_points > 0 ? (
+                            <Pill label={`${hi ? "भाग" : "Take"} +${quiz.participation_points}`} tone="info" />
+                          ) : null}
+                          {points === 0 ? (
+                            <Pill label={hi ? "अभ्यास" : "Practice"} tone="neutral" />
+                          ) : null}
+                        </>
+                      )}
                     </Row>
                     {done ? null : (
                       <View style={{ marginTop: 14 }}>

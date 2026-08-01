@@ -4,7 +4,7 @@ import { View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { AppHeader } from "@/components/AppHeader";
+import { AppHeader, LanguageToggle } from "@/components/AppHeader";
 import { DeleteAccountButton } from "@/components/DeleteAccountButton";
 import { Body, Button, Card, Row, Screen, StateView, Title } from "@/components/ui";
 
@@ -61,6 +61,35 @@ export default function StudentProfile() {
                   <Body style={{ fontSize: 14 }}>{hi ? "विद्यार्थी" : "Student"}</Body>
                 </Row>
               </View>
+            </Card>
+
+            <Card>
+              <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Title style={{ fontSize: 16 }}>{hi ? "भाषा" : "Language"}</Title>
+                  <Body muted style={{ marginTop: 4, fontSize: 13 }}>
+                    {hi ? "ऐप की भाषा चुनें" : "Choose the app language"}
+                  </Body>
+                </View>
+                <LanguageToggle />
+              </Row>
+            </Card>
+
+            <Card>
+              <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Title style={{ fontSize: 16 }}>{hi ? "सहायता" : "Support"}</Title>
+                  <Body muted style={{ marginTop: 4, fontSize: 13 }}>
+                    {hi ? "सेवा अनुरोध भेजें" : "Send a service request"}
+                  </Body>
+                </View>
+                <Button
+                  label={hi ? "खोलें" : "Open"}
+                  variant="outline"
+                  icon="chatbubbles-outline"
+                  onPress={() => router.push("/service-requests")}
+                />
+              </Row>
             </Card>
 
             <Button

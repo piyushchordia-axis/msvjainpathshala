@@ -387,26 +387,196 @@ const createNiyamSchema = z.object({
   title_en: z.string().min(1).max(300),
   title_hi: z.string().max(300).optional(),
   description_en: z.string().max(2000).optional(),
+  description_hi: z.string().max(2000).optional(),
   niyam_type: z.enum(["daily", "weekly", "monthly"]).default("daily"),
-  proof_type: z.enum(["photo", "video", "either"]).default("either"),
+  proof_type: z.enum(["photo", "video", "audio", "either", "any"]).default("either"),
+  proof_required: z.boolean().optional(),
+  approval_mode: z.enum(["auto", "review"]).default("auto"),
+  max_uploads: z.coerce.number().int().min(0).max(10).default(3),
   points: z.coerce.number().int().min(0).max(1000).default(10),
   is_active: z.boolean().default(true),
+  scope: z.enum(["national", "state", "city"]).default("national"),
+  state_id: z.string().uuid().optional(),
+  city_id: z.string().uuid().optional(),
+  msv_audience: z.enum(["all", "msv", "non_msv"]).default("all"),
 });
+
+function authorizeNiyamGeo(
+  role: string,
+  userStateId: string | null | undefined,
+  userCityId: string | null | undefined,
+  scope: "national" | "state" | "city",
+  stateId: string | null,
+  cityId: string | null,
+): string | null {
+  if (scope === "national") {
+    if (role !== "super_admin") return "Only national admins can create national niyams.";
+    return null;
+  }
+  if (scope === "state") {
+    if (!stateId) return "state_id is required for state-scoped niyams.";
+    if (role === "super_admin") return null;
+    if (role === "state_admin" && userStateId === stateId) return null;
+    return "You can only create state niyams for your own state.";
+  }
+  // city
+  if (!cityId) return "city_id is required for city-scoped niyams.";
+  if (role === "super_admin") return null;
+  if (role === "city_admin" && userCityId === cityId) return null;
+  if (role === "state_admin") return null; // city-in-state checked by caller via cityIdsForState
+  return "You can only create city niyams inside your scope.";
+}
 
 /* POST /v1/admin/niyams */
 router.post("/niyams", requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   let body: z.infer<typeof createNiyamSchema>;
   try { body = createNiyamSchema.parse(req.body); }
   catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid niyam data."); return; }
+
+  const role = req.authUser!.role;
+  let stateId = body.state_id ?? null;
+  let cityId = body.city_id ?? null;
+
+  // Fill geography from the caller's own assignment when omitted.
+  if (body.scope === "state" && !stateId && role === "state_admin") {
+    stateId = req.authUser!.state_id ?? null;
+  }
+  if (body.scope === "city" && !cityId && role === "city_admin") {
+    cityId = req.authUser!.city_id ?? null;
+  }
+
+  if (body.scope === "city" && cityId) {
+    const [cityRow] = await db.select({ id: cities.id, state_id: cities.state_id }).from(cities).where(eq(cities.id, cityId)).limit(1);
+    if (!cityRow) { fail(res, 404, "ERR_NOT_FOUND", "City not found."); return; }
+    stateId = cityRow.state_id;
+    if (role === "state_admin") {
+      const allowed = req.authUser!.state_id ? await cityIdsForState(req.authUser!.state_id) : [];
+      if (!allowed.includes(cityId)) {
+        fail(res, 403, "ERR_FORBIDDEN", "That city is outside your state."); return;
+      }
+    }
+  }
+  if (body.scope === "national") {
+    stateId = null;
+    cityId = null;
+  }
+
+  const geoErr = authorizeNiyamGeo(
+    role,
+    req.authUser!.state_id,
+    req.authUser!.city_id,
+    body.scope,
+    stateId,
+    cityId,
+  );
+  if (geoErr) { fail(res, 403, "ERR_FORBIDDEN", geoErr); return; }
+
+  const proofRequired =
+    body.proof_required ??
+    (body.proof_type === "photo" || body.proof_type === "video" || body.proof_type === "audio");
+
   const [row] = await db.insert(niyams).values({
     title_en: body.title_en,
     title_hi: body.title_hi ?? body.title_en,
     description_en: body.description_en ?? null,
+    description_hi: body.description_hi ?? null,
     niyam_type: body.niyam_type,
     proof_type: body.proof_type,
+    proof_required: proofRequired,
+    approval_mode: body.approval_mode,
+    max_uploads: body.max_uploads,
     points: body.points,
     is_active: body.is_active,
-  }).returning({ id: niyams.id, title_en: niyams.title_en });
+    scope: body.scope,
+    state_id: stateId,
+    city_id: cityId,
+    msv_audience: body.msv_audience,
+  }).returning({ id: niyams.id, title_en: niyams.title_en, is_active: niyams.is_active });
+  await auditFromReq(req, {
+    action: "create",
+    entityKind: "niyam",
+    entityId: row.id,
+    summary: `Niyam ${row.title_en} created.`,
+    metadata: { scope: body.scope, msv_audience: body.msv_audience },
+  });
+  ok(res, row, undefined, 201);
+});
+
+const patchNiyamSchema = z.object({
+  is_active: z.boolean().optional(),
+  title_en: z.string().min(1).max(300).optional(),
+  title_hi: z.string().max(300).optional(),
+  description_en: z.string().max(2000).nullable().optional(),
+  description_hi: z.string().max(2000).nullable().optional(),
+  points: z.coerce.number().int().min(0).max(1000).optional(),
+  proof_type: z.enum(["photo", "video", "audio", "either", "any"]).optional(),
+  proof_required: z.boolean().optional(),
+  approval_mode: z.enum(["auto", "review"]).optional(),
+  max_uploads: z.coerce.number().int().min(0).max(10).optional(),
+  msv_audience: z.enum(["all", "msv", "non_msv"]).optional(),
+});
+
+/* PATCH /v1/admin/niyams/:id — enable/disable + limited edits */
+router.patch("/niyams/:id", requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  if (!isUuid(id)) { fail(res, 404, "ERR_NOT_FOUND", "Niyam not found."); return; }
+  let body: z.infer<typeof patchNiyamSchema>;
+  try { body = patchNiyamSchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid niyam update."); return; }
+  if (Object.keys(body).length === 0) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "No fields to update."); return;
+  }
+
+  const [existing] = await db.select().from(niyams).where(eq(niyams.id, id)).limit(1);
+  if (!existing) { fail(res, 404, "ERR_NOT_FOUND", "Niyam not found."); return; }
+
+  // Scope-of-edit: city admins only touch city niyams in their city; state admins
+  // their state; super_admin anything.
+  const role = req.authUser!.role;
+  if (role === "city_admin") {
+    if (existing.scope !== "city" || existing.city_id !== req.authUser!.city_id) {
+      fail(res, 403, "ERR_FORBIDDEN", "You can only update city niyams in your city."); return;
+    }
+  } else if (role === "state_admin") {
+    if (existing.scope === "national") {
+      fail(res, 403, "ERR_FORBIDDEN", "You cannot update national niyams."); return;
+    }
+    if (existing.state_id !== req.authUser!.state_id) {
+      fail(res, 403, "ERR_FORBIDDEN", "That niyam is outside your state."); return;
+    }
+  }
+
+  const [row] = await db.update(niyams).set({
+    ...(body.is_active !== undefined ? { is_active: body.is_active } : {}),
+    ...(body.title_en !== undefined ? { title_en: body.title_en } : {}),
+    ...(body.title_hi !== undefined ? { title_hi: body.title_hi } : {}),
+    ...(body.description_en !== undefined ? { description_en: body.description_en } : {}),
+    ...(body.description_hi !== undefined ? { description_hi: body.description_hi } : {}),
+    ...(body.points !== undefined ? { points: body.points } : {}),
+    ...(body.proof_type !== undefined ? { proof_type: body.proof_type } : {}),
+    ...(body.proof_required !== undefined ? { proof_required: body.proof_required } : {}),
+    ...(body.approval_mode !== undefined ? { approval_mode: body.approval_mode } : {}),
+    ...(body.max_uploads !== undefined ? { max_uploads: body.max_uploads } : {}),
+    ...(body.msv_audience !== undefined ? { msv_audience: body.msv_audience } : {}),
+  }).where(eq(niyams.id, id)).returning({
+    id: niyams.id,
+    title_en: niyams.title_en,
+    is_active: niyams.is_active,
+    proof_type: niyams.proof_type,
+    proof_required: niyams.proof_required,
+    approval_mode: niyams.approval_mode,
+    max_uploads: niyams.max_uploads,
+    msv_audience: niyams.msv_audience,
+  });
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "niyam",
+    entityId: row.id,
+    summary: body.is_active === undefined
+      ? `Niyam ${row.title_en} updated.`
+      : `Niyam ${row.title_en} ${row.is_active ? "enabled" : "disabled"}.`,
+    metadata: body,
+  });
   ok(res, row);
 });
 

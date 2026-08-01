@@ -37,6 +37,8 @@ export interface SessionUser {
   role: Role;
   full_name: string;
   preferred_language: 'en' | 'hi';
+  state_id?: string | null;
+  city_id?: string | null;
 }
 
 export interface AuthTokens {

@@ -2,8 +2,9 @@ import { Pressable, Text, View } from "react-native";
 import { bodyFamily } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
-import { Body, Row, Title, useWebTopInset } from "@/components/ui";
+import { Body, Title, useWebTopInset } from "@/components/ui";
 
+/** EN / हिं switch — use on Profile (and auth/guest settings), not on every screen. */
 export function LanguageToggle() {
   const { locale, toggleLocale } = useLocale();
   const c = useColors();
@@ -39,13 +40,10 @@ export function AppHeader({ title, subtitle }: { title: string; subtitle?: strin
   const top = useWebTopInset();
   return (
     <View style={{ paddingTop: top + 10, paddingHorizontal: 18, paddingBottom: 12, backgroundColor: c.background }}>
-      <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-        <View style={{ flex: 1, paddingRight: 12 }}>
-          <Title>{title}</Title>
-          {subtitle ? <Body muted style={{ marginTop: 3 }}>{subtitle}</Body> : null}
-        </View>
-        <LanguageToggle />
-      </Row>
+      <View>
+        <Title>{title}</Title>
+        {subtitle ? <Body muted style={{ marginTop: 3 }}>{subtitle}</Body> : null}
+      </View>
     </View>
   );
 }

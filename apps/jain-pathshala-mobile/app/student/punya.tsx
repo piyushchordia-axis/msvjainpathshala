@@ -5,6 +5,7 @@ import { useSessionView } from "@/contexts/SessionViewContext";
 import { usePunya } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
+import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { Body, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 function humanize(key: string): string {
@@ -38,7 +39,10 @@ export default function StudentPunya() {
             status="empty"
             emptyText={hi ? "आपकी विद्यार्थी प्रोफ़ाइल अभी तैयार नहीं है।" : "Your student profile isn't ready yet."}
           />
-        ) : punya.isLoading ? (
+        ) : (
+          <>
+            <ChildSwitcher />
+            {punya.isLoading ? (
           <StateView status="loading" emptyText="" />
         ) : punya.isError || isError ? (
           <StateView
@@ -95,6 +99,8 @@ export default function StudentPunya() {
                 })}
               </Card>
             )}
+          </>
+        )}
           </>
         )}
       </Screen>

@@ -3,7 +3,7 @@ import { View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { AppHeader } from "@/components/AppHeader";
+import { AppHeader, LanguageToggle } from "@/components/AppHeader";
 import { DeleteAccountButton } from "@/components/DeleteAccountButton";
 import { Body, Button, Card, Kicker, Pill, Row, Screen, Title } from "@/components/ui";
 
@@ -51,12 +51,32 @@ export default function ParentProfile() {
         </Card>
 
         <Card>
-          <Title style={{ fontSize: 16 }}>{hi ? "भाषा" : "Language"}</Title>
-          <Body muted style={{ marginTop: 8 }}>
-            {hi
-              ? "ऊपर हेडर में EN/हिं टॉगल से भाषा बदलें।"
-              : "Switch between English and हिं using the EN/हिं toggle in the header above."}
-          </Body>
+          <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Title style={{ fontSize: 16 }}>{hi ? "भाषा" : "Language"}</Title>
+              <Body muted style={{ marginTop: 4, fontSize: 13 }}>
+                {hi ? "ऐप की भाषा चुनें" : "Choose the app language"}
+              </Body>
+            </View>
+            <LanguageToggle />
+          </Row>
+        </Card>
+
+        <Card>
+          <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Title style={{ fontSize: 16 }}>{hi ? "सहायता" : "Support"}</Title>
+              <Body muted style={{ marginTop: 4, fontSize: 13 }}>
+                {hi ? "सेवा अनुरोध भेजें" : "Send a service request"}
+              </Body>
+            </View>
+            <Button
+              label={hi ? "खोलें" : "Open"}
+              variant="outline"
+              icon="chatbubbles-outline"
+              onPress={() => router.push("/service-requests")}
+            />
+          </Row>
         </Card>
 
         <Button

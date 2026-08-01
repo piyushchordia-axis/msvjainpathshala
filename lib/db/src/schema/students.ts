@@ -23,6 +23,8 @@ export const students = pgTable(
     gender: genderEnum("gender"),
     dob: date("dob"),
     age_group: ageGroupEnum("age_group").notNull(),
+    /** Owner-uploaded headshot used on the digital ID card (signed /uploads URL). */
+    photo_url: text("photo_url"),
     centre_id: uuid("centre_id").references(() => centres.id, { onDelete: "set null" }),
     batch_id: uuid("batch_id").references(() => batches.id, { onDelete: "set null" }),
     msv_status: msvStatusEnum("msv_status").notNull().default("none"),

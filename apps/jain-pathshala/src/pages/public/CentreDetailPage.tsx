@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'wouter';
 import { Card } from '@/components/ui/card';
 import { useLocale } from '@/lib/locale-context';
+import { formatAgeGroups } from '@workspace/api-zod';
 
 interface CentreDetail {
   id: string;
@@ -17,7 +18,7 @@ interface CentreDetail {
 interface BatchRow {
   id: string;
   name: string;
-  age_group: string;
+  age_groups: string[];
   day_of_week: number[];
   start_time: string;
   end_time: string;
@@ -113,8 +114,8 @@ export default function CentreDetailPage() {
             <Card key={b.id} className="p-5">
               <div className="flex items-center justify-between">
                 <div className="font-display text-lg text-secondary">{b.name}</div>
-                <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-semibold capitalize text-muted-foreground">
-                  {b.age_group}
+                <span className="rounded-full bg-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground">
+                  {formatAgeGroups(b.age_groups, hi ? 'hi' : 'en')}
                 </span>
               </div>
               <div className="mt-2 text-sm text-muted-foreground">

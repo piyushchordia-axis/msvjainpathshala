@@ -12,6 +12,7 @@ import {
   msv_enrolments,
   donations,
   device_sessions,
+  shikshak_batch_assignments,
 } from "@workspace/db";
 import { and, asc, count, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
@@ -31,6 +32,7 @@ import { signAccessToken, generateRefreshToken, verifyAccessToken, hashSecret } 
 import { setAuthCookies, setImpersonationCookies, clearAuthCookies } from "../../lib/cookies";
 import adminResourcesRouter from "./admin-resources";
 import adminModulesRouter from "./admin-modules";
+import adminStaffingRouter from "./admin-staffing";
 import { canTransitionEnrolment } from "./enrolments";
 
 const router: IRouter = Router();
@@ -113,6 +115,7 @@ router.post("/impersonate/stop", async (req: Request, res: Response) => {
 router.use(requireAuth, requireAdminPanel);
 router.use(adminResourcesRouter);
 router.use(adminModulesRouter);
+router.use(adminStaffingRouter);
 
 /** Returns a Drizzle condition limiting `column` to the user's scope, or undefined for unrestricted. */
 function scopedCentreFilter(scope: AdminScope, column: PgColumn) {
@@ -134,6 +137,8 @@ function toSessionUser(u: typeof users.$inferSelect): SessionUser {
     role: u.role,
     full_name: u.full_name,
     preferred_language: u.preferred_language,
+    state_id: u.state_id ?? null,
+    city_id: u.city_id ?? null,
   };
 }
 
@@ -353,13 +358,15 @@ router.get("/batches", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
   const centreFilter = scopedCentreFilter(scope, batches.centre_id);
 
+  const primaryUser = users;
   const rows = await db
     .select({
       id: batches.id,
       name: batches.name,
+      centre_id: batches.centre_id,
       centre_name: centres.name,
-      age_group: batches.age_group,
-      shikshak_name: users.full_name,
+      age_groups: batches.age_groups,
+      shikshak_name: primaryUser.full_name,
       day_of_week: batches.day_of_week,
       start_time: batches.start_time,
       end_time: batches.end_time,
@@ -367,7 +374,15 @@ router.get("/batches", async (req: Request, res: Response) => {
     })
     .from(batches)
     .innerJoin(centres, eq(centres.id, batches.centre_id))
-    .leftJoin(users, eq(users.id, batches.shikshak_id))
+    .leftJoin(
+      shikshak_batch_assignments,
+      and(
+        eq(shikshak_batch_assignments.batch_id, batches.id),
+        eq(shikshak_batch_assignments.is_active, true),
+        eq(shikshak_batch_assignments.is_primary, true),
+      ),
+    )
+    .leftJoin(primaryUser, eq(primaryUser.id, shikshak_batch_assignments.user_id))
     .where(and(isNull(batches.deleted_at), centreFilter))
     .orderBy(asc(centres.name), asc(batches.name));
 
@@ -395,6 +410,23 @@ router.post("/batches/:id/:action", async (req: Request, res: Response) => {
   if (!batch || !inScope(scope, batch.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Batch not found in your scope.");
     return;
+  }
+  if (action === "activate") {
+    const [primary] = await db
+      .select({ id: shikshak_batch_assignments.id })
+      .from(shikshak_batch_assignments)
+      .where(
+        and(
+          eq(shikshak_batch_assignments.batch_id, batch.id),
+          eq(shikshak_batch_assignments.is_active, true),
+          eq(shikshak_batch_assignments.is_primary, true),
+        ),
+      )
+      .limit(1);
+    if (!primary) {
+      fail(res, 422, "ERR_NO_PRIMARY", "Assign a primary shikshak before activating this batch.");
+      return;
+    }
   }
   const nextStatus = action === "activate" ? "active" : "inactive";
   await db.update(batches).set({ status: nextStatus }).where(eq(batches.id, batch.id));

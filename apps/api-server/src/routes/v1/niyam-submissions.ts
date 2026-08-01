@@ -1,36 +1,41 @@
 /**
  * /v1/niyam-submissions — student niyam submission + shikshak review.
  *
- * A parent/student submits a niyam for one of their students. If the niyam's
- * proof_type allows proof-less completion ("either" with no proof_url) the
- * submission is auto-approved, points are granted immediately and the streak
- * is updated. Otherwise it lands as "pending" and a shikshak (admin-panel
- * role) in the student's centre scope approves or rejects it later.
- *
- * The submit route requires only authentication (parent/student). The review
- * routes additionally require admin-panel access, applied per-route below.
+ * Approval is driven by niyams.approval_mode (auto | review), not by proof
+ * presence. Period uniqueness uses period_key (daily/weekly/monthly IST).
  */
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, niyams, niyam_submissions, niyam_streaks, students } from "@workspace/db";
-import { and, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
+import {
+  db,
+  niyams,
+  niyam_submissions,
+  niyam_submission_media,
+  niyam_streaks,
+  students,
+  gallery_items,
+} from "@workspace/db";
+import { and, asc, desc, eq, inArray, ne, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 
-// Transaction handle drizzle hands a `db.transaction(cb)` callback; used so the
-// streak update can compose into the same tx as the status claim + award.
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
-import { signUploadUrl } from "../../lib/file-tokens";
+import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
-import { awardPunya } from "../../lib/punya";
+import { awardPunya, reversePunya } from "../../lib/punya";
 import { auditFromReq } from "../../lib/audit";
+import {
+  allowedMediaKinds,
+  periodKey,
+  previousPeriodKey,
+  type NiyamPeriodType,
+} from "../../lib/niyam-period";
 
 const router: IRouter = Router();
 router.use(requireAuth);
 
-/* ---- local helpers copy-pasted into every admin route file ---- */
 function scopedCentreFilter(scope: AdminScope, column: PgColumn) {
   if (scope.centreIds === null) return undefined;
   if (scope.centreIds.length === 0) return sql`false`;
@@ -47,7 +52,6 @@ function clampLimit(raw: unknown, fallback: number, max: number): number {
   return Math.min(Math.floor(n), max);
 }
 
-/** Resolve a student the caller owns (parent of, or is, that student). */
 async function ownedStudentId(req: Request, id: string): Promise<string | null> {
   const uid = req.authUser!.id;
   const [row] = await db
@@ -58,29 +62,36 @@ async function ownedStudentId(req: Request, id: string): Promise<string | null> 
   return row?.id ?? null;
 }
 
-/** Today's calendar date as YYYY-MM-DD in IST (Asia/Kolkata, UTC+5:30). */
 function todayIstDate(): string {
   const now = new Date();
   const ist = new Date(now.getTime() + 5.5 * 60 * 60 * 1000);
   return ist.toISOString().slice(0, 10);
 }
 
-/** Yesterday relative to a YYYY-MM-DD string, as YYYY-MM-DD. */
 function previousDate(ymd: string): string {
   const d = new Date(`${ymd}T00:00:00.000Z`);
   d.setUTCDate(d.getUTCDate() - 1);
   return d.toISOString().slice(0, 10);
 }
 
-/**
- * Update (or create) the student's streak for a niyam on a given submission
- * date: continue the run if the last submission was the previous day, else
- * restart at 1; always bump the longest-streak high-water mark.
- */
+function isNiyamProofUrl(url: string): boolean {
+  const key = uploadKeyFromUrl(url);
+  if (key) return key.startsWith("niyam-proof/");
+  // Allow unsigned local paths that still point at the folder.
+  try {
+    const u = new URL(url);
+    return u.pathname.includes("/uploads/niyam-proof/");
+  } catch {
+    return url.includes("/uploads/niyam-proof/");
+  }
+}
+
 async function bumpStreak(
   studentId: string,
   niyamId: string,
+  niyamType: NiyamPeriodType,
   submissionDate: string,
+  pKey: string,
   exec: Tx | typeof db = db,
 ): Promise<void> {
   const [row] = await exec
@@ -88,7 +99,7 @@ async function bumpStreak(
       id: niyam_streaks.id,
       current_streak: niyam_streaks.current_streak,
       longest_streak: niyam_streaks.longest_streak,
-      last_submission_date: niyam_streaks.last_submission_date,
+      last_period_key: niyam_streaks.last_period_key,
     })
     .from(niyam_streaks)
     .where(and(eq(niyam_streaks.student_id, studentId), eq(niyam_streaks.niyam_id, niyamId)))
@@ -101,30 +112,132 @@ async function bumpStreak(
       current_streak: 1,
       longest_streak: 1,
       last_submission_date: submissionDate,
+      last_period_key: pKey,
     });
     return;
   }
 
-  const continued = row.last_submission_date === previousDate(submissionDate);
-  const sameDay = row.last_submission_date === submissionDate;
-  const current = sameDay ? row.current_streak : continued ? row.current_streak + 1 : 1;
+  const prev = previousPeriodKey(niyamType, pKey);
+  const continued = row.last_period_key === prev;
+  const samePeriod = row.last_period_key === pKey;
+  const current = samePeriod ? row.current_streak : continued ? row.current_streak + 1 : 1;
   const longest = Math.max(row.longest_streak, current);
   await exec
     .update(niyam_streaks)
-    .set({ current_streak: current, longest_streak: longest, last_submission_date: submissionDate })
+    .set({
+      current_streak: current,
+      longest_streak: longest,
+      last_submission_date: submissionDate,
+      last_period_key: pKey,
+    })
     .where(eq(niyam_streaks.id, row.id));
 }
 
-/* ---- route-local create schema (inline, NOT in api-zod) ---- */
+/** Rebuild streak from remaining non-rejected submissions after a reject. */
+async function recomputeStreak(
+  studentId: string,
+  niyamId: string,
+  niyamType: NiyamPeriodType,
+  exec: Tx | typeof db = db,
+): Promise<void> {
+  const rows = await exec
+    .select({
+      period_key: niyam_submissions.period_key,
+      submission_date: niyam_submissions.submission_date,
+    })
+    .from(niyam_submissions)
+    .where(
+      and(
+        eq(niyam_submissions.student_id, studentId),
+        eq(niyam_submissions.niyam_id, niyamId),
+        ne(niyam_submissions.status, "rejected"),
+      ),
+    )
+    .orderBy(asc(niyam_submissions.submission_date));
+
+  const [existing] = await exec
+    .select({ id: niyam_streaks.id })
+    .from(niyam_streaks)
+    .where(and(eq(niyam_streaks.student_id, studentId), eq(niyam_streaks.niyam_id, niyamId)))
+    .limit(1);
+
+  if (rows.length === 0) {
+    if (existing) {
+      await exec
+        .update(niyam_streaks)
+        .set({
+          current_streak: 0,
+          last_submission_date: null,
+          last_period_key: null,
+        })
+        .where(eq(niyam_streaks.id, existing.id));
+    }
+    return;
+  }
+
+  // Unique period keys in chronological order
+  const seen = new Set<string>();
+  const ordered: { period_key: string; submission_date: string }[] = [];
+  for (const r of rows) {
+    if (!r.period_key || seen.has(r.period_key)) continue;
+    seen.add(r.period_key);
+    ordered.push({ period_key: r.period_key, submission_date: r.submission_date });
+  }
+
+  let current = 0;
+  let longest = 0;
+  let prevKey: string | null = null;
+  for (const r of ordered) {
+    if (prevKey && previousPeriodKey(niyamType, r.period_key) === prevKey) {
+      current += 1;
+    } else {
+      current = 1;
+    }
+    longest = Math.max(longest, current);
+    prevKey = r.period_key;
+  }
+  const last = ordered[ordered.length - 1]!;
+
+  if (existing) {
+    await exec
+      .update(niyam_streaks)
+      .set({
+        current_streak: current,
+        longest_streak: longest,
+        last_submission_date: last.submission_date,
+        last_period_key: last.period_key,
+      })
+      .where(eq(niyam_streaks.id, existing.id));
+  } else {
+    await exec.insert(niyam_streaks).values({
+      student_id: studentId,
+      niyam_id: niyamId,
+      current_streak: current,
+      longest_streak: longest,
+      last_submission_date: last.submission_date,
+      last_period_key: last.period_key,
+    });
+  }
+}
+
+const mediaItemSchema = z.object({
+  url: httpUrl(2000),
+  kind: z.enum(["photo", "video", "audio"]),
+  mime: z.string().max(100).optional(),
+  size_bytes: z.number().int().nonnegative().optional(),
+});
+
 const createSubmissionSchema = z.object({
   niyam_id: z.string().uuid(),
   student_id: z.string().uuid(),
   submission_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  /** @deprecated prefer media[] */
   proof_url: httpUrl(2000).optional(),
+  media: z.array(mediaItemSchema).max(10).optional(),
   notes: z.string().max(500).optional(),
 });
 
-/* POST /v1/niyam-submissions — student/parent submits a niyam */
+/* POST /v1/niyam-submissions */
 router.post("/", async (req: Request, res: Response) => {
   let body: z.infer<typeof createSubmissionSchema>;
   try { body = createSubmissionSchema.parse(req.body); }
@@ -135,7 +248,15 @@ router.post("/", async (req: Request, res: Response) => {
   }
 
   const [niyam] = await db
-    .select({ id: niyams.id, proof_type: niyams.proof_type, points: niyams.points })
+    .select({
+      id: niyams.id,
+      proof_type: niyams.proof_type,
+      proof_required: niyams.proof_required,
+      approval_mode: niyams.approval_mode,
+      max_uploads: niyams.max_uploads,
+      niyam_type: niyams.niyam_type,
+      points: niyams.points,
+    })
     .from(niyams)
     .where(and(eq(niyams.id, body.niyam_id), eq(niyams.is_active, true)))
     .limit(1);
@@ -145,9 +266,6 @@ router.post("/", async (req: Request, res: Response) => {
 
   const today = todayIstDate();
   const submissionDate = body.submission_date ?? today;
-
-  // submission_date is client-controlled: bound it server-side to prevent
-  // backdated/future point+streak farming. Allow only today or yesterday.
   if (submissionDate > today) {
     fail(res, 422, "ERR_VALIDATION_FAILED", "submission_date cannot be in the future."); return;
   }
@@ -155,22 +273,41 @@ router.post("/", async (req: Request, res: Response) => {
     fail(res, 422, "ERR_VALIDATION_FAILED", "submission_date too old."); return;
   }
 
-  const proofUrl = body.proof_url ?? null;
+  let media = body.media ?? [];
+  if (media.length === 0 && body.proof_url) {
+    const kind =
+      niyam.proof_type === "video" ? "video" :
+      niyam.proof_type === "audio" ? "audio" : "photo";
+    media = [{ url: body.proof_url, kind }];
+  }
 
-  if ((niyam.proof_type === "photo" || niyam.proof_type === "video") && !proofUrl) {
+  if (niyam.max_uploads === 0 && media.length > 0) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "This niyam does not accept media."); return;
+  }
+  if (media.length > niyam.max_uploads) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", `At most ${niyam.max_uploads} file(s) allowed.`); return;
+  }
+  if (niyam.proof_required && media.length === 0) {
     fail(res, 422, "ERR_VALIDATION_FAILED", "Proof required."); return;
   }
 
-  // With proof -> awaits shikshak review. Without proof (proof_type "either")
-  // -> auto-approved, points granted now and streak updated.
-  const autoApprove = !proofUrl;
+  const allowed = allowedMediaKinds(niyam.proof_type);
+  for (const m of media) {
+    if (!allowed.includes(m.kind)) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", `Media kind "${m.kind}" is not allowed for this niyam.`); return;
+    }
+    if (!isNiyamProofUrl(m.url)) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Media URL must be an uploaded niyam-proof file."); return;
+    }
+  }
+
+  const pKey = periodKey(niyam.niyam_type as NiyamPeriodType, submissionDate);
+  const autoApprove = niyam.approval_mode === "auto";
   const status = autoApprove ? "auto_approved" : "pending";
   const pointsAwarded = autoApprove ? niyam.points : 0;
+  const firstUrl = media[0]?.url ?? null;
 
-  // Serialize concurrent submits for the same (niyam, student, date) so the
-  // duplicate check + insert is atomic. Without this, parallel auto-approve
-  // submits each pass the check and farm points/streak repeatedly.
-  const lockKey = `niyam:${niyam.id}:${body.student_id}:${submissionDate}`;
+  const lockKey = `niyam:${niyam.id}:${body.student_id}:${pKey}`;
   const row = await db.transaction(async (tx) => {
     await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
     const [dup] = await tx
@@ -180,9 +317,7 @@ router.post("/", async (req: Request, res: Response) => {
         and(
           eq(niyam_submissions.niyam_id, niyam.id),
           eq(niyam_submissions.student_id, body.student_id),
-          eq(niyam_submissions.submission_date, submissionDate),
-          // Ignore rejected rows so a rejected submission can be re-submitted for
-          // this date; still blocks pending/approved/auto_approved duplicates.
+          eq(niyam_submissions.period_key, pKey),
           ne(niyam_submissions.status, "rejected"),
         ),
       )
@@ -194,17 +329,31 @@ router.post("/", async (req: Request, res: Response) => {
         niyam_id: niyam.id,
         student_id: body.student_id,
         submission_date: submissionDate,
+        period_key: pKey,
         status,
         points_awarded: pointsAwarded,
-        proof_url: proofUrl,
+        proof_url: firstUrl,
         notes: body.notes ?? null,
         submitted_by: req.authUser!.id,
       })
       .returning();
+    if (media.length > 0) {
+      await tx.insert(niyam_submission_media).values(
+        media.map((m, i) => ({
+          submission_id: created.id,
+          url: m.url,
+          kind: m.kind,
+          mime: m.mime ?? null,
+          size_bytes: m.size_bytes ?? null,
+          ordinal: i,
+        })),
+      );
+    }
     return created;
   });
   if (!row) {
-    fail(res, 409, "ERR_DUPLICATE", "Already submitted for this date."); return;
+    fail(res, 409, "ERR_NIYAM_PERIOD_DUPLICATE", `Already submitted for this ${niyam.niyam_type} period (${pKey}).`);
+    return;
   }
 
   if (autoApprove) {
@@ -214,34 +363,62 @@ router.post("/", async (req: Request, res: Response) => {
       points: niyam.points,
       note: body.notes ?? null,
       awardedBy: req.authUser!.id,
+      idempotencyKey: `submission:${row.id}`,
     });
-    await bumpStreak(body.student_id, niyam.id, submissionDate);
+    await bumpStreak(
+      body.student_id,
+      niyam.id,
+      niyam.niyam_type as NiyamPeriodType,
+      submissionDate,
+      pKey,
+    );
 
     await auditFromReq(req, {
       action: "award",
       entityKind: "niyam_submission",
       entityId: row.id,
       summary: `Auto-approved niyam submission (+${niyam.points}).`,
-      metadata: { niyam_id: niyam.id, student_id: body.student_id, points: niyam.points, submission_date: submissionDate },
+      metadata: {
+        niyam_id: niyam.id,
+        student_id: body.student_id,
+        points: niyam.points,
+        submission_date: submissionDate,
+        period_key: pKey,
+      },
     });
   }
+
+  const mediaRows = await db
+    .select()
+    .from(niyam_submission_media)
+    .where(eq(niyam_submission_media.submission_id, row.id))
+    .orderBy(asc(niyam_submission_media.ordinal));
 
   ok(res, {
     id: row.id,
     niyam_id: row.niyam_id,
     student_id: row.student_id,
     submission_date: row.submission_date,
+    period_key: row.period_key,
     status: row.status,
     points_awarded: row.points_awarded,
     is_featured: row.is_featured,
     proof_url: signUploadUrl(row.proof_url),
+    media: mediaRows.map((m) => ({
+      id: m.id,
+      url: signUploadUrl(m.url),
+      kind: m.kind,
+      mime: m.mime,
+      size_bytes: m.size_bytes,
+      ordinal: m.ordinal,
+    })),
     notes: row.notes,
     reviewed_at: row.reviewed_at ? row.reviewed_at.toISOString() : null,
     created_at: row.created_at.toISOString(),
   });
 });
 
-/* GET /v1/niyam-submissions/pending?limit= — pending submissions in scope */
+/* GET /v1/niyam-submissions/pending */
 router.get("/pending", requireAdminPanel, async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
   const limit = clampLimit(req.query.limit, 100, 300);
@@ -258,6 +435,7 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
       proof_url: niyam_submissions.proof_url,
       notes: niyam_submissions.notes,
       submission_date: niyam_submissions.submission_date,
+      period_key: niyam_submissions.period_key,
     })
     .from(niyam_submissions)
     .innerJoin(students, eq(students.id, niyam_submissions.student_id))
@@ -265,7 +443,34 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
     .where(and(eq(niyam_submissions.status, "pending"), centreFilter))
     .orderBy(desc(niyam_submissions.submission_date))
     .limit(limit);
-  const items = rows.map((r) => ({ ...r, proof_url: signUploadUrl(r.proof_url) }));
+
+  const ids = rows.map((r) => r.id);
+  const mediaAll = ids.length
+    ? await db
+        .select()
+        .from(niyam_submission_media)
+        .where(inArray(niyam_submission_media.submission_id, ids))
+        .orderBy(asc(niyam_submission_media.ordinal))
+    : [];
+  const bySub = new Map<string, typeof mediaAll>();
+  for (const m of mediaAll) {
+    const list = bySub.get(m.submission_id) ?? [];
+    list.push(m);
+    bySub.set(m.submission_id, list);
+  }
+
+  const items = rows.map((r) => ({
+    ...r,
+    proof_url: signUploadUrl(r.proof_url),
+    media: (bySub.get(r.id) ?? []).map((m) => ({
+      id: m.id,
+      url: signUploadUrl(m.url),
+      kind: m.kind,
+      mime: m.mime,
+      size_bytes: m.size_bytes,
+      ordinal: m.ordinal,
+    })),
+  }));
   ok(res, { items }, { count: items.length });
 });
 
@@ -273,7 +478,7 @@ const rejectSchema = z.object({
   reason: z.string().max(300).optional(),
 });
 
-/* POST /v1/niyam-submissions/:id/approve — shikshak approves a pending submission */
+/* POST /v1/niyam-submissions/:id/approve */
 router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
   const [sub] = await db
@@ -283,9 +488,11 @@ router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Respons
       student_id: niyam_submissions.student_id,
       niyam_id: niyam_submissions.niyam_id,
       submission_date: niyam_submissions.submission_date,
+      period_key: niyam_submissions.period_key,
       notes: niyam_submissions.notes,
       centre_id: students.centre_id,
       points: niyams.points,
+      niyam_type: niyams.niyam_type,
     })
     .from(niyam_submissions)
     .innerJoin(students, eq(students.id, niyam_submissions.student_id))
@@ -296,9 +503,6 @@ router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Respons
     fail(res, 404, "ERR_NOT_FOUND", "Submission not found."); return;
   }
 
-  // Atomic compare-and-set: only flip pending -> approved if it is STILL
-  // pending, so two concurrent approvals can't both award. The award + streak
-  // run only when this caller actually won the transition.
   const award = await db.transaction(async (tx) => {
     const updated = await tx
       .update(niyam_submissions)
@@ -312,12 +516,6 @@ router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Respons
       .returning({ id: niyam_submissions.id });
     if (updated.length === 0) return null;
 
-    // Compose the award + streak into the SAME transaction that claimed the
-    // row so the status flip, the ledger credit, and the streak all commit
-    // (or roll back) together — a transient failure can't leave an approved
-    // submission without its credit. The idempotencyKey (scoped to this
-    // submission) is defense-in-depth on top of the CAS above: a re-approve
-    // can never double-credit even if the status guard were ever bypassed.
     const result = await awardPunya(
       {
         studentId: sub.student_id,
@@ -329,7 +527,14 @@ router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Respons
       },
       tx,
     );
-    await bumpStreak(sub.student_id, sub.niyam_id, sub.submission_date, tx);
+    await bumpStreak(
+      sub.student_id,
+      sub.niyam_id,
+      sub.niyam_type as NiyamPeriodType,
+      sub.submission_date,
+      sub.period_key ?? periodKey(sub.niyam_type as NiyamPeriodType, sub.submission_date),
+      tx,
+    );
     return result;
   });
 
@@ -342,13 +547,18 @@ router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Respons
     entityKind: "niyam_submission",
     entityId: sub.id,
     summary: `Approved niyam submission (+${sub.points}).`,
-    metadata: { niyam_id: sub.niyam_id, student_id: sub.student_id, points: sub.points, submission_date: sub.submission_date },
+    metadata: {
+      niyam_id: sub.niyam_id,
+      student_id: sub.student_id,
+      points: sub.points,
+      submission_date: sub.submission_date,
+    },
   });
 
   ok(res, { id: sub.id, status: "approved", total_points: award.total_points, tier: award.tier });
 });
 
-/* POST /v1/niyam-submissions/:id/reject — shikshak rejects a pending submission */
+/* POST /v1/niyam-submissions/:id/reject — pending | auto_approved | approved */
 router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response) => {
   let body: z.infer<typeof rejectSchema>;
   try { body = rejectSchema.parse(req.body); }
@@ -359,29 +569,75 @@ router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response
     .select({
       id: niyam_submissions.id,
       status: niyam_submissions.status,
+      student_id: niyam_submissions.student_id,
+      niyam_id: niyam_submissions.niyam_id,
+      points_awarded: niyam_submissions.points_awarded,
+      notes: niyam_submissions.notes,
       centre_id: students.centre_id,
+      niyam_type: niyams.niyam_type,
     })
     .from(niyam_submissions)
     .innerJoin(students, eq(students.id, niyam_submissions.student_id))
+    .innerJoin(niyams, eq(niyams.id, niyam_submissions.niyam_id))
     .where(eq(niyam_submissions.id, String(req.params.id)))
     .limit(1);
   if (!sub || !inScope(scope, sub.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Submission not found."); return;
   }
 
-  // Atomic compare-and-set: reject only if it is still pending.
-  const rejected = await db
-    .update(niyam_submissions)
-    .set({
-      status: "rejected",
-      notes: body.reason ?? null,
-      reviewed_by: req.authUser!.id,
-      reviewed_at: new Date(),
-    })
-    .where(and(eq(niyam_submissions.id, sub.id), eq(niyam_submissions.status, "pending")))
-    .returning({ id: niyam_submissions.id });
-  if (rejected.length === 0) {
-    fail(res, 409, "ERR_INVALID_STATE", "Submission is not pending."); return;
+  const rejectable = ["pending", "auto_approved", "approved"] as const;
+  if (!rejectable.includes(sub.status as (typeof rejectable)[number])) {
+    fail(res, 409, "ERR_INVALID_STATE", "Submission cannot be rejected."); return;
+  }
+
+  const outcome = await db.transaction(async (tx) => {
+    const rejected = await tx
+      .update(niyam_submissions)
+      .set({
+        status: "rejected",
+        notes: body.reason
+          ? (sub.notes ? `${sub.notes}\n${body.reason}` : body.reason)
+          : sub.notes,
+        reviewed_by: req.authUser!.id,
+        reviewed_at: new Date(),
+        points_awarded: 0,
+      })
+      .where(
+        and(
+          eq(niyam_submissions.id, sub.id),
+          inArray(niyam_submissions.status, [...rejectable]),
+        ),
+      )
+      .returning({ id: niyam_submissions.id });
+    if (rejected.length === 0) return { ok: false as const };
+
+    let reverseResult: Awaited<ReturnType<typeof reversePunya>> | null = null;
+    if (sub.points_awarded > 0) {
+      reverseResult = await reversePunya(
+        {
+          studentId: sub.student_id,
+          featureKey: "niyam_submission",
+          points: sub.points_awarded,
+          note: body.reason ?? "Niyam submission rejected",
+          awardedBy: req.authUser!.id,
+          idempotencyKey: `submission:${sub.id}:reversal`,
+        },
+        tx,
+      );
+    }
+
+    await recomputeStreak(sub.student_id, sub.niyam_id, sub.niyam_type as NiyamPeriodType, tx);
+
+    await tx
+      .update(gallery_items)
+      .set({ is_public: false, deleted_at: new Date() })
+      .where(eq(gallery_items.submission_id, sub.id));
+
+    return { ok: true as const, reverseResult };
+  });
+
+  if (!outcome.ok) {
+    fail(res, 409, "ERR_INVALID_STATE", "Submission could not be rejected."); return;
   }
 
   await auditFromReq(req, {
@@ -389,10 +645,20 @@ router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response
     entityKind: "niyam_submission",
     entityId: sub.id,
     summary: "Rejected niyam submission.",
-    metadata: { reason: body.reason ?? null },
+    metadata: {
+      reason: body.reason ?? null,
+      points_reversed: outcome.reverseResult?.points_reversed ?? 0,
+      prior_status: sub.status,
+    },
   });
 
-  ok(res, { id: sub.id, status: "rejected" });
+  ok(res, {
+    id: sub.id,
+    status: "rejected",
+    points_reversed: outcome.reverseResult?.points_reversed ?? 0,
+    total_points: outcome.reverseResult?.total_points,
+    tier: outcome.reverseResult?.tier,
+  });
 });
 
 export default router;

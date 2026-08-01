@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, TextInput, View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
@@ -6,40 +6,95 @@ import { useSessionView } from "@/contexts/SessionViewContext";
 import { useNiyamCatalog, useSubmitNiyam } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
 import { bodyFamily } from "@/constants/typography";
+import { ChildSwitcher } from "@/components/ChildSwitcher";
+import {
+  NiyamProofPicker,
+  mediaReady,
+  toSubmitMedia,
+  type ProofMediaItem,
+} from "@/components/NiyamProofPicker";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 import type { NiyamCatalogRow } from "@/lib/types";
+
+function periodDupMessage(niyamType: string, hi: boolean): string {
+  if (niyamType === "weekly") {
+    return hi
+      ? "आप इस नियम को इस सप्ताह पहले ही प्रस्तुत कर चुके हैं।"
+      : "You have already submitted this niyam for this week.";
+  }
+  if (niyamType === "monthly") {
+    return hi
+      ? "आप इस नियम को इस माह पहले ही प्रस्तुत कर चुके हैं।"
+      : "You have already submitted this niyam for this month.";
+  }
+  return hi
+    ? "आप इस नियम को आज पहले ही प्रस्तुत कर चुके हैं।"
+    : "You have already submitted this niyam for today.";
+}
 
 export default function NiyamSubmit() {
   const c = useColors();
   const { hi } = useLocale();
   const { activeStudentId, activeChild, loading, refetch } = useSessionView();
 
-  const catalog = useNiyamCatalog(!!activeStudentId);
+  const catalog = useNiyamCatalog(!!activeStudentId, activeStudentId);
   const submit = useSubmitNiyam();
 
   const catalogRows = catalog.data?.items ?? [];
 
-  const [selected, setSelected] = useState<NiyamCatalogRow | null>(null);
-  const [proofUrl, setProofUrl] = useState("");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [media, setMedia] = useState<ProofMediaItem[]>([]);
   const [notes, setNotes] = useState("");
 
+  // Per-child period status — never reuse another child's selection / form.
+  useEffect(() => {
+    setSelectedId(null);
+    setMedia([]);
+    setNotes("");
+  }, [activeStudentId]);
+
   function resetForm() {
-    setSelected(null);
-    setProofUrl("");
+    setSelectedId(null);
+    setMedia([]);
     setNotes("");
   }
 
+  const selected: NiyamCatalogRow | null = selectedId
+    ? (catalogRows.find((r) => r.id === selectedId) ?? null)
+    : null;
+
   function onSubmit() {
     if (!selected || !activeStudentId) return;
-    const trimmedProof = proofUrl.trim();
-    const trimmedNotes = notes.trim();
+    if (selected.submitted_this_period) return;
+
+    const proofRequired = !!selected.proof_required;
+    const maxUploads = selected.max_uploads ?? 3;
+    const readyMedia = toSubmitMedia(media);
+
+    if (proofRequired && readyMedia.length === 0) {
+      Alert.alert(
+        hi ? "प्रमाण आवश्यक" : "Proof required",
+        hi ? "कृपया कम से कम एक प्रमाण मीडिया जोड़ें।" : "Please add at least one proof media file.",
+      );
+      return;
+    }
+    if (!mediaReady(media)) {
+      Alert.alert(
+        hi ? "अपलोड जारी" : "Uploads in progress",
+        hi
+          ? "सभी फाइलें अपलोड होने तक प्रतीक्षा करें।"
+          : "Wait until all files finish uploading.",
+      );
+      return;
+    }
+
     submit.mutate(
       {
         studentId: activeStudentId,
         niyam_id: selected.id,
         student_id: activeStudentId,
-        proof_url: trimmedProof ? trimmedProof : undefined,
-        notes: trimmedNotes ? trimmedNotes : undefined,
+        media: readyMedia.length ? readyMedia : undefined,
+        notes: notes.trim() ? notes.trim() : undefined,
       },
       {
         onSuccess: (res) => {
@@ -61,19 +116,26 @@ export default function NiyamSubmit() {
                 : "Your niyam was submitted for review.",
           );
           resetForm();
+          catalog.refetch();
         },
         onError: (err) => {
           const code = err instanceof ApiError ? err.code : "";
           const status = err instanceof ApiError ? err.statusCode : 0;
           let message: string;
-          if (status === 409 || code === "ERR_DUPLICATE" || code === "ERR_CONFLICT") {
-            message = hi
-              ? "आप इस नियम को आज पहले ही प्रस्तुत कर चुके हैं।"
-              : "You have already submitted this niyam for today.";
+          if (
+            status === 409 ||
+            code === "ERR_NIYAM_PERIOD_DUPLICATE" ||
+            code === "ERR_DUPLICATE" ||
+            code === "ERR_CONFLICT"
+          ) {
+            message = periodDupMessage(selected.niyam_type, hi);
           } else if (status === 422 || code === "ERR_VALIDATION_FAILED") {
-            message = hi
-              ? "इस नियम के लिए प्रमाण लिंक आवश्यक है। कृपया एक वैध प्रमाण URL जोड़ें।"
-              : "This niyam requires a proof link. Please add a valid proof URL.";
+            message =
+              err instanceof ApiError
+                ? err.message
+                : hi
+                  ? "प्रमाण अमान्य है। कृपया पुनः प्रयास करें।"
+                  : "Proof is invalid. Please try again.";
           } else {
             message =
               err instanceof ApiError
@@ -87,6 +149,14 @@ export default function NiyamSubmit() {
       },
     );
   }
+
+  const selectedDesc = selected
+    ? hi
+      ? selected.description_hi
+      : selected.description_en
+    : null;
+  const uploadsBusy = !mediaReady(media);
+  const alreadySubmitted = !!selected?.submitted_this_period;
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
@@ -110,12 +180,11 @@ export default function NiyamSubmit() {
           />
         ) : (
           <>
-            <Body muted style={{ marginLeft: 2 }}>
-              {activeChild.full_name}
-            </Body>
+            <ChildSwitcher />
 
-            {/* --- Selected niyam form --- */}
-            {selected ? (
+            {selectedId && !selected && catalog.isFetching ? (
+              <StateView status="loading" emptyText="" />
+            ) : selected ? (
               <Card>
                 <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
                   <View style={{ flex: 1, paddingRight: 10 }}>
@@ -125,33 +194,37 @@ export default function NiyamSubmit() {
                   </View>
                   <Pill label={`+${selected.points}`} tone="primary" />
                 </Row>
-                <Row style={{ marginTop: 8 }}>
+                <Row style={{ marginTop: 8, gap: 6, flexWrap: "wrap" }}>
                   <Pill label={selected.niyam_type} />
+                  {(hi ? selected.period_label_hi : selected.period_label_en) ? (
+                    <Pill label={(hi ? selected.period_label_hi : selected.period_label_en) ?? ""} />
+                  ) : null}
+                  {alreadySubmitted ? (
+                    <Pill
+                      label={
+                        (hi ? selected.period_status_tag_hi : selected.period_status_tag_en) ??
+                        (hi ? "प्रस्तुत" : "Submitted")
+                      }
+                      tone="primary"
+                    />
+                  ) : null}
                 </Row>
+                {selectedDesc ? (
+                  <Body muted style={{ marginTop: 12 }}>
+                    {selectedDesc}
+                  </Body>
+                ) : null}
 
-                <Body style={{ marginTop: 16, marginBottom: 6, fontSize: 13 }}>
-                  {hi ? "प्रमाण लिंक (वैकल्पिक)" : "Proof URL (optional)"}
-                </Body>
-                <TextInput
-                  value={proofUrl}
-                  onChangeText={setProofUrl}
-                  placeholder="https://"
-                  placeholderTextColor={c.mutedForeground}
-                  autoCapitalize="none"
-                  autoCorrect={false}
-                  keyboardType="url"
-                  style={{
-                    fontFamily: bodyFamily(hi),
-                    fontSize: 15,
-                    color: c.foreground,
-                    backgroundColor: c.background,
-                    borderWidth: 1,
-                    borderColor: c.border,
-                    borderRadius: c.radius,
-                    paddingHorizontal: 12,
-                    paddingVertical: 11,
-                  }}
-                />
+                {(selected.max_uploads ?? 3) > 0 ? (
+                  <NiyamProofPicker
+                    proofType={selected.proof_type}
+                    proofRequired={!!selected.proof_required}
+                    maxUploads={selected.max_uploads ?? 3}
+                    value={media}
+                    onChange={setMedia}
+                    disabled={alreadySubmitted}
+                  />
+                ) : null}
 
                 <Body style={{ marginTop: 14, marginBottom: 6, fontSize: 13 }}>
                   {hi ? "टिप्पणी (वैकल्पिक)" : "Notes (optional)"}
@@ -159,6 +232,7 @@ export default function NiyamSubmit() {
                 <TextInput
                   value={notes}
                   onChangeText={setNotes}
+                  editable={!alreadySubmitted}
                   placeholder={hi ? "कुछ लिखें…" : "Add a note…"}
                   placeholderTextColor={c.mutedForeground}
                   multiline
@@ -186,10 +260,19 @@ export default function NiyamSubmit() {
                     style={{ flex: 1 }}
                   />
                   <Button
-                    label={hi ? "प्रस्तुत करें" : "Submit"}
+                    label={
+                      alreadySubmitted
+                        ? hi
+                          ? "पहले से प्रस्तुत"
+                          : "Already submitted"
+                        : hi
+                          ? "प्रस्तुत करें"
+                          : "Submit"
+                    }
                     icon="checkmark"
                     onPress={onSubmit}
                     loading={submit.isPending}
+                    disabled={alreadySubmitted || uploadsBusy || submit.isPending}
                     style={{ flex: 1 }}
                   />
                 </Row>
@@ -218,6 +301,8 @@ export default function NiyamSubmit() {
                   catalogRows.map((row) => {
                     const title = hi ? row.title_hi : row.title_en;
                     const desc = hi ? row.description_hi : row.description_en;
+                    const submitted = !!row.submitted_this_period;
+                    const tag = hi ? row.period_status_tag_hi : row.period_status_tag_en;
                     return (
                       <Card key={row.id}>
                         <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -231,13 +316,31 @@ export default function NiyamSubmit() {
                             {desc}
                           </Body>
                         ) : null}
-                        <Row style={{ marginTop: 12, justifyContent: "space-between", alignItems: "center" }}>
+                        <Row style={{ marginTop: 12, gap: 6, flexWrap: "wrap", alignItems: "center" }}>
                           <Pill label={row.niyam_type} />
+                          {(hi ? row.period_label_hi : row.period_label_en) ? (
+                            <Pill label={(hi ? row.period_label_hi : row.period_label_en) ?? ""} />
+                          ) : null}
+                          {submitted && tag ? <Pill label={tag} tone="primary" /> : null}
+                        </Row>
+                        <Row style={{ marginTop: 12, justifyContent: "flex-end" }}>
                           <Button
-                            label={hi ? "चुनें" : "Select"}
+                            label={
+                              submitted
+                                ? hi
+                                  ? "देखें"
+                                  : "View"
+                                : hi
+                                  ? "चुनें"
+                                  : "Select"
+                            }
                             variant="outline"
                             icon="chevron-forward"
-                            onPress={() => setSelected(row)}
+                            onPress={() => {
+                              setSelectedId(row.id);
+                              setMedia([]);
+                              setNotes("");
+                            }}
                           />
                         </Row>
                       </Card>

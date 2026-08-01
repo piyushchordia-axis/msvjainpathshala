@@ -23,7 +23,7 @@ import { ok, fail } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
 import { signUploadUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
-import { resolveAdminScope, type AdminScope } from "../../lib/scope";
+import { resolveAdminScope, inBatchWriteScope, type AdminScope } from "../../lib/scope";
 import { awardPunya } from "../../lib/punya";
 import { auditFromReq } from "../../lib/audit";
 
@@ -95,7 +95,7 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
     fail(res, 404, "ERR_NOT_FOUND", "Batch not found.");
     return;
   }
-  if (!inScope(scope, batch.centre_id)) {
+  if (!inBatchWriteScope(scope, batch.id, batch.centre_id)) {
     fail(res, 403, "ERR_FORBIDDEN", "Batch not in your scope.");
     return;
   }
@@ -258,6 +258,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       id: homework_submissions.id,
       student_id: homework_submissions.student_id,
       status: homework_submissions.status,
+      batch_id: homework_assignments.batch_id,
       centre_id: batches.centre_id,
     })
     .from(homework_submissions)
@@ -265,7 +266,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     .innerJoin(batches, eq(batches.id, homework_assignments.batch_id))
     .where(and(eq(homework_submissions.id, id), isNull(homework_assignments.deleted_at)))
     .limit(1);
-  if (!sub || !inScope(scope, sub.centre_id)) {
+  if (!sub || !inBatchWriteScope(scope, sub.batch_id, sub.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Submission not found.");
     return;
   }

@@ -1,6 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
-import { type ReactNode } from "react";
+import { useEffect, useState } from "react";
+import type { ReactNode } from "react";
 import {
+  AccessibilityInfo,
   ActivityIndicator,
   Platform,
   Pressable,
@@ -13,6 +15,13 @@ import {
   type TextStyle,
   type ViewStyle,
 } from "react-native";
+import Animated, {
+  runOnJS,
+  useAnimatedReaction,
+  useAnimatedStyle,
+  useSharedValue,
+  withTiming,
+} from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { bodyFamily, displayFamily, fonts } from "@/constants/typography";
@@ -70,6 +79,7 @@ export function Screen({
           )
           : undefined
       }
+      keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
       {children}
@@ -118,17 +128,56 @@ export function Title({
   );
 }
 
-/** Amounts, stats, dates, OTP — DM Mono */
+/** Amounts, stats, dates, OTP — DM Mono. Optional count-up for home punya. */
 export function Numeric({
   children,
   style,
   medium,
+  countUp,
 }: {
   children: ReactNode;
   style?: StyleProp<TextStyle>;
   medium?: boolean;
+  /** When true and children is a finite number, animate via Reanimated. */
+  countUp?: boolean;
 }) {
   const c = useColors();
+  const target =
+    typeof children === "number"
+      ? children
+      : typeof children === "string" && Number.isFinite(Number(children))
+        ? Number(children)
+        : null;
+
+  const progress = useSharedValue(countUp && target !== null ? 0 : (target ?? 0));
+  const [display, setDisplay] = useState<ReactNode>(
+    countUp && target !== null ? 0 : children,
+  );
+  const [reduceMotion, setReduceMotion] = useState(false);
+
+  useEffect(() => {
+    void AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion);
+  }, []);
+
+  useEffect(() => {
+    if (!countUp || target === null || reduceMotion || Platform.OS === "web") {
+      setDisplay(children);
+      progress.value = target ?? 0;
+      return;
+    }
+    progress.value = withTiming(target, { duration: 700 });
+  }, [children, countUp, progress, reduceMotion, target]);
+
+  useAnimatedReaction(
+    () => Math.round(progress.value),
+    (current, previous) => {
+      if (current !== previous) {
+        runOnJS(setDisplay)(current);
+      }
+    },
+    [countUp],
+  );
+
   return (
     <Text
       style={[
@@ -140,7 +189,7 @@ export function Numeric({
         style,
       ]}
     >
-      {children}
+      {countUp && target !== null ? display : children}
     </Text>
   );
 }
@@ -252,39 +301,53 @@ export function Button({
   const p = palettes[variant];
   const isDisabled = disabled || loading;
   const { hi } = useLocale();
+  const scale = useSharedValue(1);
+  const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+
   return (
     <Pressable
+      onPressIn={() => {
+        if (isDisabled) return;
+        scale.value = withTiming(0.97, { duration: 90 });
+      }}
+      onPressOut={() => {
+        scale.value = withTiming(1, { duration: 120 });
+      }}
       onPress={() => {
         if (isDisabled) return;
-        if (Platform.OS !== "web") Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        if (Platform.OS !== "web") void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         onPress();
       }}
       disabled={isDisabled}
-      style={({ pressed }) => [
-        {
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "center",
-          gap: 8,
-          backgroundColor: p.bg,
-          borderColor: p.border ?? "transparent",
-          borderWidth: p.border ? 1 : 0,
-          borderRadius: c.radius,
-          paddingVertical: 13,
-          paddingHorizontal: 18,
-          opacity: isDisabled ? 0.5 : pressed ? 0.85 : 1,
-        },
-        style,
-      ]}
+      style={style}
     >
-      {loading ? (
-        <ActivityIndicator color={p.fg} size="small" />
-      ) : (
-        <>
-          {icon ? <Ionicons name={icon} size={18} color={p.fg} /> : null}
-          <Text style={{ fontFamily: bodyFamily(hi, "semibold"), fontSize: 15, color: p.fg }}>{label}</Text>
-        </>
-      )}
+      <Animated.View
+        style={[
+          {
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            backgroundColor: p.bg,
+            borderColor: p.border ?? "transparent",
+            borderWidth: p.border ? 1 : 0,
+            borderRadius: c.radius,
+            paddingVertical: 13,
+            paddingHorizontal: 18,
+            opacity: isDisabled ? 0.5 : 1,
+          },
+          animStyle,
+        ]}
+      >
+        {loading ? (
+          <ActivityIndicator color={p.fg} size="small" />
+        ) : (
+          <>
+            {icon ? <Ionicons name={icon} size={18} color={p.fg} /> : null}
+            <Text style={{ fontFamily: bodyFamily(hi, "semibold"), fontSize: 15, color: p.fg }}>{label}</Text>
+          </>
+        )}
+      </Animated.View>
     </Pressable>
   );
 }

@@ -76,7 +76,7 @@ router.get("/centres/:id", async (req: Request, res: Response) => {
     .select({
       id: batches.id,
       name: batches.name,
-      age_group: batches.age_group,
+      age_groups: batches.age_groups,
       day_of_week: batches.day_of_week,
       start_time: batches.start_time,
       end_time: batches.end_time,

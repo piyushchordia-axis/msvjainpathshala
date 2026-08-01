@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -9,12 +9,14 @@ import {
   AdminTable,
 } from '@/components/admin/AdminPageShell';
 import { useAdminList } from '@/hooks/useAdminList';
-import { apiGet, apiPost, ApiError } from '@/lib/api-client';
+import { useAuth } from '@/lib/auth-context';
+import { apiGet, apiPost, apiPatch, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
 } from '@/components/ui/dialog';
@@ -138,7 +140,11 @@ export function CentresPage() {
         {items.length === 0 && !loading ? <AdminEmptyRow colSpan={5} message="No centres in scope." /> : null}
         {items.map((c) => (
           <tr key={c.id} className="hover:bg-muted/30">
-            <td className="px-4 py-3 font-medium">{c.name}</td>
+            <td className="px-4 py-3 font-medium">
+              <a href={`/admin/centres/${c.id}`} className="text-primary underline-offset-2 hover:underline">
+                {c.name}
+              </a>
+            </td>
             <td className="px-4 py-3 text-xs text-muted-foreground">
               {[c.locality, c.city_name, c.state_name].filter(Boolean).join(', ')}
             </td>
@@ -572,12 +578,31 @@ export function ShivirsPage() {
 interface NiyamRow {
   id: string;
   title_en: string;
+  description_en: string | null;
   niyam_type: string;
+  proof_type: string;
+  proof_required: boolean;
+  approval_mode: string;
+  max_uploads: number;
   points: number;
   is_active: boolean;
+  scope: string;
+  state_id: string | null;
+  city_id: string | null;
+  state_name: string | null;
+  city_name: string | null;
+  msv_audience: string;
 }
 
+interface GeoStateOpt { id: string; name: string; }
+interface GeoCityOpt { id: string; name: string; state_id: string; state_name?: string; }
+
 function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
+  const { user } = useAuth();
+  const role = user?.role ?? '';
+  const defaultScope =
+    role === 'city_admin' ? 'city' : role === 'state_admin' ? 'state' : 'national';
+
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [titleEn, setTitleEn] = useState('');
@@ -585,12 +610,53 @@ function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
   const [descEn, setDescEn] = useState('');
   const [niyamType, setNiyamType] = useState('daily');
   const [proofType, setProofType] = useState('either');
+  const [proofRequired, setProofRequired] = useState(false);
+  const [approvalMode, setApprovalMode] = useState('auto');
+  const [maxUploads, setMaxUploads] = useState('3');
   const [points, setPoints] = useState('10');
   const [isActive, setIsActive] = useState(true);
+  const [scope, setScope] = useState(defaultScope);
+  const [msvAudience, setMsvAudience] = useState('all');
+  const [stateId, setStateId] = useState(user?.state_id ?? '');
+  const [cityId, setCityId] = useState(user?.city_id ?? '');
+  const [states, setStates] = useState<GeoStateOpt[]>([]);
+  const [cities, setCities] = useState<GeoCityOpt[]>([]);
+
+  const scopeOptions =
+    role === 'city_admin'
+      ? (['city'] as const)
+      : role === 'state_admin'
+        ? (['state', 'city'] as const)
+        : (['national', 'state', 'city'] as const);
+
+  useEffect(() => {
+    if (!open) return;
+    void apiGet<{ states: GeoStateOpt[]; cities: GeoCityOpt[] }>('/v1/admin/geography').then((r) => {
+      setStates(r?.states ?? []);
+      let cityList = r?.cities ?? [];
+      if (role === 'state_admin' && user?.state_id) {
+        cityList = cityList.filter((c) => c.state_id === user.state_id);
+      }
+      if (role === 'city_admin' && user?.city_id) {
+        cityList = cityList.filter((c) => c.id === user.city_id);
+      }
+      setCities(cityList);
+      if (user?.state_id) setStateId(user.state_id);
+      if (user?.city_id) setCityId(user.city_id);
+    });
+  }, [open, role, user?.state_id, user?.city_id]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!titleEn.trim()) return;
+    if (scope === 'state' && !stateId && role === 'super_admin') {
+      toast.error('Select a state.');
+      return;
+    }
+    if (scope === 'city' && !cityId && role !== 'city_admin') {
+      toast.error('Select a city.');
+      return;
+    }
     setBusy(true);
     try {
       await apiPost('/v1/admin/niyams', {
@@ -599,22 +665,36 @@ function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
         description_en: descEn.trim() || undefined,
         niyam_type: niyamType,
         proof_type: proofType,
+        proof_required: proofRequired,
+        approval_mode: approvalMode,
+        max_uploads: Number(maxUploads),
         points: Number(points),
         is_active: isActive,
+        scope,
+        msv_audience: msvAudience,
+        ...(scope === 'state' && stateId ? { state_id: stateId } : {}),
+        ...(scope === 'city' && cityId ? { city_id: cityId } : {}),
       });
       toast.success('Niyam created.');
       setOpen(false);
       setTitleEn(''); setTitleHi(''); setDescEn('');
+      setProofType('either'); setProofRequired(false); setApprovalMode('auto'); setMaxUploads('3');
+      setScope(defaultScope);
+      setMsvAudience('all');
       onAdded();
     } catch (err) {
       toast.error('Failed.', err instanceof ApiError ? err.message : undefined);
     } finally { setBusy(false); }
   }
 
+  const citiesForState = scope === 'city' && stateId
+    ? cities.filter((c) => c.state_id === stateId)
+    : cities;
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild><Button size="sm"><Plus className="mr-1 h-4 w-4" />New niyam</Button></DialogTrigger>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Create niyam</DialogTitle></DialogHeader>
         <form className="space-y-4 pt-2" onSubmit={submit}>
           <FormRow label="Title (English) *"><Input value={titleEn} onChange={(e) => setTitleEn(e.target.value)} required /></FormRow>
@@ -630,14 +710,94 @@ function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
               </Select>
             </FormRow>
             <FormRow label="Proof type">
-              <Select value={proofType} onValueChange={setProofType}>
+              <Select value={proofType} onValueChange={(v) => {
+                setProofType(v);
+                if (v === 'photo' || v === 'video' || v === 'audio') setProofRequired(true);
+                if (v === 'either' || v === 'any') setProofRequired(false);
+              }}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  {['photo', 'video', 'either'].map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                  <SelectItem value="either">Photo or video</SelectItem>
+                  <SelectItem value="photo">Photo only</SelectItem>
+                  <SelectItem value="video">Video only</SelectItem>
+                  <SelectItem value="audio">Audio only</SelectItem>
+                  <SelectItem value="any">Any media</SelectItem>
                 </SelectContent>
               </Select>
             </FormRow>
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <FormRow label="Approval">
+              <Select value={approvalMode} onValueChange={setApprovalMode}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Auto-approve</SelectItem>
+                  <SelectItem value="review">Review queue</SelectItem>
+                </SelectContent>
+              </Select>
+            </FormRow>
+            <FormRow label="Max uploads">
+              <Input type="number" min={0} max={10} value={maxUploads} onChange={(e) => setMaxUploads(e.target.value)} />
+            </FormRow>
+          </div>
+          <label className="flex items-center gap-2 text-sm cursor-pointer">
+            <input type="checkbox" checked={proofRequired} onChange={(e) => setProofRequired(e.target.checked)} className="rounded" />
+            Proof required
+          </label>
+          <div className="grid grid-cols-2 gap-3">
+            <FormRow label="Geography">
+              <Select value={scope} onValueChange={(v) => { setScope(v); if (v === 'national') { setStateId(''); setCityId(''); } }}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {scopeOptions.map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </FormRow>
+            <FormRow label="MSV audience">
+              <Select value={msvAudience} onValueChange={setMsvAudience}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All students</SelectItem>
+                  <SelectItem value="msv">MSV only</SelectItem>
+                  <SelectItem value="non_msv">Non-MSV only</SelectItem>
+                </SelectContent>
+              </Select>
+            </FormRow>
+          </div>
+          {scope === 'state' && role === 'super_admin' ? (
+            <FormRow label="State *">
+              <Select value={stateId} onValueChange={setStateId}>
+                <SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger>
+                <SelectContent>
+                  {states.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </FormRow>
+          ) : null}
+          {scope === 'city' && role !== 'city_admin' ? (
+            <>
+              {role === 'super_admin' ? (
+                <FormRow label="State">
+                  <Select value={stateId} onValueChange={(v) => { setStateId(v); setCityId(''); }}>
+                    <SelectTrigger><SelectValue placeholder="Filter by state" /></SelectTrigger>
+                    <SelectContent>
+                      {states.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </FormRow>
+              ) : null}
+              <FormRow label="City *">
+                <Select value={cityId} onValueChange={setCityId}>
+                  <SelectTrigger><SelectValue placeholder="Select city" /></SelectTrigger>
+                  <SelectContent>
+                    {(role === 'super_admin' ? citiesForState : cities).map((c) => (
+                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FormRow>
+            </>
+          ) : null}
           <FormRow label="Points"><Input type="number" min={0} value={points} onChange={(e) => setPoints(e.target.value)} /></FormRow>
           <label className="flex items-center gap-2 text-sm cursor-pointer">
             <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} className="rounded" />
@@ -653,21 +813,84 @@ function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
   );
 }
 
+function canToggleNiyam(role: string | undefined, n: NiyamRow, userStateId?: string | null, userCityId?: string | null): boolean {
+  if (role === 'super_admin') return true;
+  if (role === 'state_admin') {
+    if (n.scope === 'national') return false;
+    return n.state_id === userStateId;
+  }
+  if (role === 'city_admin') {
+    return n.scope === 'city' && n.city_id === userCityId;
+  }
+  return false;
+}
+
 export function NiyamsPage() {
+  const { user } = useAuth();
   const { items, loading, error, reload } = useAdminList<NiyamRow>('/v1/admin/niyams');
+  const [togglingId, setTogglingId] = useState<string | null>(null);
+
+  async function toggleActive(n: NiyamRow, next: boolean) {
+    setTogglingId(n.id);
+    try {
+      await apiPatch(`/v1/admin/niyams/${n.id}`, { is_active: next });
+      toast.success(next ? 'Niyam enabled.' : 'Niyam disabled.');
+      reload();
+    } catch (err) {
+      toast.error('Could not update niyam.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setTogglingId(null);
+    }
+  }
+
+  const audienceLabel = (a: string) =>
+    a === 'msv' ? 'MSV' : a === 'non_msv' ? 'Non-MSV' : 'All';
+
+  const scopeLabel = (n: NiyamRow) => {
+    if (n.scope === 'national') return 'National';
+    if (n.scope === 'state') return n.state_name ? `State · ${n.state_name}` : 'State';
+    return n.city_name ? `City · ${n.city_name}` : 'City';
+  };
+
   return (
     <AdminPageShell title="Niyams" subtitle="Spiritual commitments catalogue." actions={<AddNiyamDialog onAdded={reload} />}>
       {error ? <AdminError message={error} /> : null}
-      <AdminTable columns={['Title', 'Type', 'Points', 'Active']} loading={loading} empty="" colSpan={4}>
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={4} message="No niyams defined." /> : null}
-        {items.map((n) => (
-          <tr key={n.id} className="hover:bg-muted/30">
-            <td className="px-4 py-3 font-medium">{n.title_en}</td>
-            <td className="px-4 py-3 text-xs capitalize">{n.niyam_type}</td>
-            <td className="px-4 py-3">{n.points}</td>
-            <td className="px-4 py-3">{n.is_active ? 'Yes' : 'No'}</td>
-          </tr>
-        ))}
+      <AdminTable columns={['Title', 'Type', 'Proof', 'Approval', 'Uploads', 'Scope', 'Audience', 'Points', 'Active']} loading={loading} empty="" colSpan={9}>
+        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={9} message="No niyams defined." /> : null}
+        {items.map((n) => {
+          const canToggle = canToggleNiyam(user?.role, n, user?.state_id, user?.city_id);
+          return (
+            <tr key={n.id} className="hover:bg-muted/30">
+              <td className="px-4 py-3">
+                <div className="font-medium">{n.title_en}</div>
+                {n.description_en ? (
+                  <div className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{n.description_en}</div>
+                ) : null}
+              </td>
+              <td className="px-4 py-3 text-xs capitalize">{n.niyam_type}</td>
+              <td className="px-4 py-3 text-xs">
+                <span className="capitalize">{n.proof_type}</span>
+                {n.proof_required ? <span className="text-muted-foreground"> · req</span> : null}
+              </td>
+              <td className="px-4 py-3 text-xs capitalize">{n.approval_mode ?? 'auto'}</td>
+              <td className="px-4 py-3 text-xs">{n.max_uploads ?? 3}</td>
+              <td className="px-4 py-3 text-xs">{scopeLabel(n)}</td>
+              <td className="px-4 py-3 text-xs">{audienceLabel(n.msv_audience)}</td>
+              <td className="px-4 py-3">{n.points}</td>
+              <td className="px-4 py-3">
+                {canToggle ? (
+                  <Switch
+                    checked={n.is_active}
+                    disabled={togglingId === n.id}
+                    onCheckedChange={(v) => void toggleActive(n, v)}
+                  />
+                ) : (
+                  <span className="text-xs text-muted-foreground">{n.is_active ? 'Yes' : 'No'}</span>
+                )}
+              </td>
+            </tr>
+          );
+        })}
       </AdminTable>
     </AdminPageShell>
   );
@@ -1098,24 +1321,154 @@ export function AuditPage() {
 }
 
 /* ——— System ——— */
+interface GeoStateRow { id: string; name: string; code: string }
+interface GeoCityRow { id: string; name: string; state_name: string }
+
+function AddStateDialog({ onAdded }: { onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!name.trim() || !code.trim()) return;
+    setBusy(true);
+    try {
+      await apiPost('/v1/admin/states', { name: name.trim(), code: code.trim() });
+      toast.success('State added.');
+      setOpen(false);
+      setName(''); setCode('');
+      onAdded();
+    } catch (err) {
+      toast.error('Failed to add state.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="outline"><Plus className="mr-1 h-4 w-4" />Add state</Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Add state</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="State name *">
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Madhya Pradesh" required />
+          </FormRow>
+          <FormRow label="Code *">
+            <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. MP" required />
+          </FormRow>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !name.trim() || !code.trim()}>
+              {busy ? 'Saving…' : 'Add state'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AddCityDialog({ states, onAdded }: { states: GeoStateRow[]; onAdded: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [stateId, setStateId] = useState('');
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!stateId || !name.trim() || !code.trim()) return;
+    setBusy(true);
+    try {
+      await apiPost('/v1/admin/cities', { state_id: stateId, name: name.trim(), code: code.trim() });
+      toast.success('City added.');
+      setOpen(false);
+      setStateId(''); setName(''); setCode('');
+      onAdded();
+    } catch (err) {
+      toast.error('Failed to add city.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm"><Plus className="mr-1 h-4 w-4" />Add city</Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Add city</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="State *">
+            <Select value={stateId} onValueChange={setStateId}>
+              <SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger>
+              <SelectContent>
+                {states.map((s) => (
+                  <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FormRow>
+          <FormRow label="City name *">
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Indore" required />
+          </FormRow>
+          <FormRow label="Code *">
+            <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. IDR" required />
+          </FormRow>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !stateId || !name.trim() || !code.trim()}>
+              {busy ? 'Saving…' : 'Add city'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function GeographyPage() {
-  const [states, setStates] = useState<{ id: string; name: string; code: string }[]>([]);
-  const [cities, setCities] = useState<{ id: string; name: string; state_name: string }[]>([]);
+  const { user } = useAuth();
+  const [states, setStates] = useState<GeoStateRow[]>([]);
+  const [cities, setCities] = useState<GeoCityRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void apiGet<{ states: typeof states; cities: typeof cities }>('/v1/admin/geography')
+  const reload = useCallback(() => {
+    setLoading(true);
+    void apiGet<{ states: GeoStateRow[]; cities: GeoCityRow[] }>('/v1/admin/geography')
       .then((r) => {
         setStates(r?.states ?? []);
         setCities(r?.cities ?? []);
+        setError(null);
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'Failed'))
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => { reload(); }, [reload]);
+
+  // Geography is national reference data, so only super_admin may extend it —
+  // the same rule the API enforces. Everyone else keeps the read-only view.
+  const canEdit = user?.role === 'super_admin';
+
   return (
-    <AdminPageShell title="Geography" subtitle="States and cities in the network.">
+    <AdminPageShell
+      title="Geography"
+      subtitle="States and cities in the network."
+      actions={canEdit ? (
+        <div className="flex gap-2">
+          <AddStateDialog onAdded={reload} />
+          <AddCityDialog states={states} onAdded={reload} />
+        </div>
+      ) : undefined}
+    >
       {error ? <AdminError message={error} /> : null}
       <div className="grid gap-6 lg:grid-cols-2">
         <AdminTable columns={['State', 'Code']} loading={loading} empty="" colSpan={2}>

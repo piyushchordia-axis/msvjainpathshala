@@ -6,6 +6,8 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { useToday } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
+import { GalleryCarousel } from "@/components/GalleryCarousel";
+import { AnimatedMount } from "@/components/AnimatedMount";
 import { Body, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 export default function TodayScreen() {
@@ -18,6 +20,10 @@ export default function TodayScreen() {
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <AppHeader title={hi ? "आज के सत्र" : "Today's sessions"} />
       <Screen refreshing={isRefetching} onRefresh={refetch}>
+        <AnimatedMount delay={0}>
+          <GalleryCarousel />
+        </AnimatedMount>
+
         {isLoading ? (
           <StateView status="loading" emptyText="" />
         ) : isError ? (
@@ -31,8 +37,7 @@ export default function TodayScreen() {
         ) : items.length === 0 ? (
           <StateView status="empty" emptyText={hi ? "आज कोई सत्र नहीं है।" : "No sessions today."} />
         ) : (
-          items.map((s) => {
-            // A cancelled session can't be marked — leave it non-tappable.
+          items.map((s, idx) => {
             const cancelled = s.status === "cancelled";
             const card = (
               <Card style={cancelled ? { opacity: 0.7 } : undefined}>
@@ -67,11 +72,16 @@ export default function TodayScreen() {
                 </Row>
               </Card>
             );
-            if (cancelled) return <View key={s.id}>{card}</View>;
             return (
-              <Pressable key={s.id} onPress={() => router.push(`/attendance/${s.id}` as never)}>
-                {card}
-              </Pressable>
+              <AnimatedMount key={s.id} delay={60 + idx * 40}>
+                {cancelled ? (
+                  <View>{card}</View>
+                ) : (
+                  <Pressable onPress={() => router.push(`/attendance/${s.id}` as never)}>
+                    {card}
+                  </Pressable>
+                )}
+              </AnimatedMount>
             );
           })
         )}

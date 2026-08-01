@@ -63,6 +63,7 @@
     "@expo-google-fonts/mukta": "^0.4.1",
     "@expo-google-fonts/outfit": "^0.4.3",
     "@expo-google-fonts/tiro-devanagari-sanskrit": "^0.4.0",
+    "expo-audio": "~1.1.1",
     "expo-dev-client": "~6.0.21",
     "expo-device": "~8.0.10",
     "expo-notifications": "~0.32.17",

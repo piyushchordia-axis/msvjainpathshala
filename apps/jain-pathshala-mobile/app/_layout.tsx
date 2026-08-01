@@ -29,7 +29,6 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { LanguageToggle } from "@/components/AppHeader";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { LocaleProvider } from "@/contexts/LocaleContext";
 import { SessionViewProvider } from "@/contexts/SessionViewContext";
@@ -64,7 +63,6 @@ function RootLayoutNav() {
         headerTintColor: colors.light.secondary,
         headerTitleStyle: { fontFamily: fonts.display, color: colors.light.secondary },
         headerShadowVisible: false,
-        headerRight: () => <LanguageToggle />,
         contentStyle: { backgroundColor: colors.light.background },
       }}
     >

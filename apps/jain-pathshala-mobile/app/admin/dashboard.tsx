@@ -7,6 +7,8 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useOverview } from "@/lib/queries";
 import { formatPaise } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
+import { GalleryCarousel } from "@/components/GalleryCarousel";
+import { AnimatedMount } from "@/components/AnimatedMount";
 import { Body, Button, Card, Numeric, Row, Screen, StateView, Title } from "@/components/ui";
 
 export default function DashboardScreen() {
@@ -34,6 +36,10 @@ export default function DashboardScreen() {
         subtitle={hi ? "संगठन का अवलोकन" : "Organisation overview"}
       />
       <Screen refreshing={isRefetching} onRefresh={refetch}>
+        <AnimatedMount delay={0}>
+          <GalleryCarousel />
+        </AnimatedMount>
+
         {isLoading ? (
           <StateView status="loading" emptyText="" />
         ) : isError ? (
@@ -47,29 +53,33 @@ export default function DashboardScreen() {
         ) : (
           <>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
-              {stats.map((s) => (
-                <Card key={s.label} style={{ width: "47%" }}>
-                  <Ionicons name={s.icon} size={20} color={c.primary} />
-                  <Numeric style={{ fontSize: 24, marginTop: 8 }}>{s.value}</Numeric>
-                  <Body muted style={{ fontSize: 12, marginTop: 2 }}>{s.label}</Body>
-                </Card>
+              {stats.map((s, idx) => (
+                <AnimatedMount key={s.label} delay={40 + idx * 30} style={{ width: "47%" }}>
+                  <Card>
+                    <Ionicons name={s.icon} size={20} color={c.primary} />
+                    <Numeric style={{ fontSize: 24, marginTop: 8 }}>{s.value}</Numeric>
+                    <Body muted style={{ fontSize: 12, marginTop: 2 }}>{s.label}</Body>
+                  </Card>
+                </AnimatedMount>
               ))}
             </View>
 
-            <Card>
-              <Row style={{ justifyContent: "space-between" }}>
-                <Title style={{ fontSize: 17 }}>{hi ? "आपकी स्वीकृति की प्रतीक्षा" : "Awaiting your approval"}</Title>
-                <Ionicons name="clipboard-outline" size={20} color={c.primary} />
-              </Row>
-              <Body muted style={{ marginTop: 4, fontSize: 13 }}>{hi ? "लंबित नामांकनों की समीक्षा करें" : "Review pending enrolments"}</Body>
-              <Button
-                label={hi ? "नामांकन देखें" : "Review enrolments"}
-                variant="outline"
-                icon="arrow-forward"
-                onPress={() => router.push("/admin/enrolments")}
-                style={{ marginTop: 14 }}
-              />
-            </Card>
+            <AnimatedMount delay={220}>
+              <Card>
+                <Row style={{ justifyContent: "space-between" }}>
+                  <Title style={{ fontSize: 17 }}>{hi ? "आपकी स्वीकृति की प्रतीक्षा" : "Awaiting your approval"}</Title>
+                  <Ionicons name="clipboard-outline" size={20} color={c.primary} />
+                </Row>
+                <Body muted style={{ marginTop: 4, fontSize: 13 }}>{hi ? "लंबित नामांकनों की समीक्षा करें" : "Review pending enrolments"}</Body>
+                <Button
+                  label={hi ? "नामांकन देखें" : "Review enrolments"}
+                  variant="outline"
+                  icon="arrow-forward"
+                  onPress={() => router.push("/admin/enrolments")}
+                  style={{ marginTop: 14 }}
+                />
+              </Card>
+            </AnimatedMount>
           </>
         )}
       </Screen>

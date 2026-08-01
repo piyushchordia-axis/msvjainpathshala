@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   boolean,
   date,
@@ -7,6 +8,8 @@ import {
   pgTable,
   text,
   time,
+  timestamp,
+  uniqueIndex,
   uuid,
   varchar,
 } from "drizzle-orm/pg-core";
@@ -53,8 +56,7 @@ export const batches = pgTable(
       .notNull()
       .references(() => centres.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
-    age_group: ageGroupEnum("age_group").notNull(),
-    shikshak_id: uuid("shikshak_id").references(() => users.id, { onDelete: "set null" }),
+    age_groups: ageGroupEnum("age_groups").array().notNull().default([]),
     day_of_week: integer("day_of_week").array().notNull().default([]),
     start_time: time("start_time").notNull(),
     end_time: time("end_time").notNull(),
@@ -66,7 +68,6 @@ export const batches = pgTable(
   },
   (t) => ({
     centre_idx: index("idx_batches_centre").on(t.centre_id),
-    shikshak_idx: index("idx_batches_shikshak").on(t.shikshak_id),
   }),
 );
 
@@ -97,11 +98,41 @@ export const sanchalak_centre_assignments = pgTable(
       .notNull()
       .references(() => centres.id, { onDelete: "cascade" }),
     is_active: boolean("is_active").notNull().default(true),
+    assigned_by: uuid("assigned_by").references(() => users.id, { onDelete: "set null" }),
+    deactivated_at: timestamp("deactivated_at", { withTimezone: true }),
     ...timestamps(),
   },
   (t) => ({
     user_idx: index("idx_sanchalak_centre_assignments_user").on(t.user_id),
     centre_idx: index("idx_sanchalak_centre_assignments_centre").on(t.centre_id),
+    active_user_centre_uq: uniqueIndex("sanchalak_centre_assignments_active_user_centre_uq")
+      .on(t.user_id, t.centre_id)
+      .where(sql`is_active`),
+  }),
+);
+
+/** Coarse shikshak↔centre membership (required before any batch assignment). */
+export const shikshak_centre_assignments = pgTable(
+  "shikshak_centre_assignments",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    user_id: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    centre_id: uuid("centre_id")
+      .notNull()
+      .references(() => centres.id, { onDelete: "cascade" }),
+    is_active: boolean("is_active").notNull().default(true),
+    assigned_by: uuid("assigned_by").references(() => users.id, { onDelete: "set null" }),
+    deactivated_at: timestamp("deactivated_at", { withTimezone: true }),
+    ...timestamps(),
+  },
+  (t) => ({
+    user_idx: index("idx_shikshak_centre_assignments_user").on(t.user_id),
+    centre_idx: index("idx_shikshak_centre_assignments_centre").on(t.centre_id),
+    active_user_centre_uq: uniqueIndex("shikshak_centre_assignments_active_user_centre_uq")
+      .on(t.user_id, t.centre_id)
+      .where(sql`is_active`),
   }),
 );
 
@@ -116,11 +147,21 @@ export const shikshak_batch_assignments = pgTable(
       .notNull()
       .references(() => batches.id, { onDelete: "cascade" }),
     is_active: boolean("is_active").notNull().default(true),
+    /** Display / default assignee only — no extra permission. */
+    is_primary: boolean("is_primary").notNull().default(false),
+    assigned_by: uuid("assigned_by").references(() => users.id, { onDelete: "set null" }),
+    deactivated_at: timestamp("deactivated_at", { withTimezone: true }),
     ...timestamps(),
   },
   (t) => ({
     user_idx: index("idx_shikshak_batch_assignments_user").on(t.user_id),
     batch_idx: index("idx_shikshak_batch_assignments_batch").on(t.batch_id),
+    active_user_batch_uq: uniqueIndex("shikshak_batch_assignments_active_user_batch_uq")
+      .on(t.user_id, t.batch_id)
+      .where(sql`is_active`),
+    active_primary_per_batch_uq: uniqueIndex("shikshak_batch_assignments_active_primary_uq")
+      .on(t.batch_id)
+      .where(sql`is_active AND is_primary`),
   }),
 );
 
@@ -128,3 +169,6 @@ export type Centre = typeof centres.$inferSelect;
 export type NewCentre = typeof centres.$inferInsert;
 export type Batch = typeof batches.$inferSelect;
 export type NewBatch = typeof batches.$inferInsert;
+export type SanchalakCentreAssignment = typeof sanchalak_centre_assignments.$inferSelect;
+export type ShikshakCentreAssignment = typeof shikshak_centre_assignments.$inferSelect;
+export type ShikshakBatchAssignment = typeof shikshak_batch_assignments.$inferSelect;
