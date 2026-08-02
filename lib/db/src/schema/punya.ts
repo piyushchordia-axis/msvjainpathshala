@@ -1,6 +1,7 @@
 import {
   AnyPgColumn,
   boolean,
+  date,
   index,
   integer,
   pgTable,
@@ -75,12 +76,20 @@ export const punya_transactions = pgTable(
     }),
     source_entity_kind: text("source_entity_kind"),
     source_entity_id: uuid("source_entity_id"),
+    /** Attendance / streak ledger revision — orders reversals deterministically. */
+    source_revision: integer("source_revision"),
     ...timestamps(),
   },
   (t) => ({
     student_idx: index("idx_punya_transactions_student").on(t.student_id),
     student_created_idx: index("idx_punya_transactions_student_created").on(t.student_id, t.created_at),
     feature_idx: index("idx_punya_transactions_feature").on(t.feature_key),
+    source_revision_idx: index("idx_punya_tx_source_revision").on(
+      t.student_id,
+      t.source_entity_kind,
+      t.source_entity_id,
+      t.source_revision,
+    ),
     idempotency_uq: uniqueIndex("punya_transactions_idempotency_key_uq")
       .on(t.idempotency_key)
       .where(sql`${t.idempotency_key} is not null`),
@@ -103,7 +112,37 @@ export const punya_balances = pgTable("punya_balances", {
   ...timestamps(),
 });
 
+/**
+ * End-of-month Punya leaderboard snapshot (replaces mv_monthly_leaderboard_city).
+ * Written by punya.leaderboard.refresh for the month just ended; history is retained.
+ */
+export const monthly_leaderboard_snapshots = pgTable(
+  "monthly_leaderboard_snapshots",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    city_id: uuid("city_id").notNull(),
+    month: date("month").notNull(),
+    student_id: uuid("student_id")
+      .notNull()
+      .references(() => students.id, { onDelete: "cascade" }),
+    full_name: text("full_name").notNull(),
+    total_points: integer("total_points").notNull(),
+    tier: tierEnum("tier").notNull(),
+    rank: integer("rank").notNull(),
+    created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    city_month_student_uq: uniqueIndex("monthly_leaderboard_snapshots_city_month_student_uq").on(
+      t.city_id,
+      t.month,
+      t.student_id,
+    ),
+    month_idx: index("idx_monthly_leaderboard_snapshots_month").on(t.month),
+  }),
+);
+
 export type PunyaTransaction = typeof punya_transactions.$inferSelect;
 export type NewPunyaTransaction = typeof punya_transactions.$inferInsert;
 export type PunyaBalance = typeof punya_balances.$inferSelect;
 export type NewPunyaBalance = typeof punya_balances.$inferInsert;
+export type MonthlyLeaderboardSnapshot = typeof monthly_leaderboard_snapshots.$inferSelect;

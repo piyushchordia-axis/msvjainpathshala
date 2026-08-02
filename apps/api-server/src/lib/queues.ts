@@ -1,6 +1,7 @@
 /**
  * BullMQ wiring. When REDIS_URL is unset (dev/test), jobs run inline so
- * materialise/check-out crons still work without Redis.
+ * materialise/check-out crons still work without Redis. Debounced jobs
+ * require Redis for durable sliding windows — without it they run promptly.
  */
 import { Queue, Worker, type JobsOptions } from "bullmq";
 import IORedis from "ioredis";
@@ -40,6 +41,12 @@ function getQueue(name: QueueName): Queue | null {
   return q;
 }
 
+/** Default opts for ordinary (non-debounced) jobs. */
+const DEFAULT_JOB_OPTS: JobsOptions = {
+  removeOnComplete: 100,
+  removeOnFail: 50,
+};
+
 /** Enqueue a job, or run the registered handler inline when Redis is unavailable. */
 export async function enqueueJob(
   name: QueueName,
@@ -48,7 +55,7 @@ export async function enqueueJob(
 ): Promise<void> {
   const q = getQueue(name);
   if (q) {
-    await q.add(name, data, { removeOnComplete: 100, removeOnFail: 50, ...opts });
+    await q.add(name, data, { ...DEFAULT_JOB_OPTS, ...opts });
     return;
   }
   const handler = handlers.get(name);
@@ -59,6 +66,76 @@ export async function enqueueJob(
   await handler(data);
 }
 
+export type DebouncedJobOpts = {
+  /** Stable BullMQ jobId — one logical job per key. */
+  jobId: string;
+  /** Sliding delay in ms. */
+  delayMs: number;
+};
+
+/**
+ * Sliding-window debounce via stable jobId: remove any existing delayed/waiting
+ * job with that id, then re-add with a fresh delay. Survives process restart
+ * when Redis is up. Without Redis, runs the handler promptly (no durable window).
+ */
+export async function enqueueDebouncedJob(
+  name: QueueName,
+  data: Record<string, unknown>,
+  debounce: DebouncedJobOpts,
+): Promise<void> {
+  const q = getQueue(name);
+  if (!q) {
+    const handler = handlers.get(name);
+    if (!handler) {
+      logger.warn({ name }, "No queue handler registered; dropping inline debounced job");
+      return;
+    }
+    await handler(data);
+    return;
+  }
+
+  const existing = await q.getJob(debounce.jobId);
+  if (existing) {
+    const state = await existing.getState();
+    if (state === "delayed" || state === "waiting" || state === "prioritized") {
+      await existing.remove();
+    } else if (state === "completed" || state === "failed") {
+      await existing.remove().catch(() => undefined);
+    }
+    // active: leave it; add below may fail on jobId clash — fall back to a follow-up id
+  }
+
+  const opts: JobsOptions = {
+    jobId: debounce.jobId,
+    delay: debounce.delayMs,
+    attempts: 3,
+    backoff: { type: "exponential", delay: 5_000 },
+    removeOnComplete: true,
+    // Keep failed jobs for inspection (do not auto-prune).
+    removeOnFail: false,
+  };
+
+  try {
+    await q.add(name, data, opts);
+  } catch (err) {
+    // Active job still owns the id — schedule a follow-up that slides after it finishes.
+    const followId = `${debounce.jobId}:next`;
+    const follow = await q.getJob(followId);
+    if (follow) {
+      const st = await follow.getState();
+      if (st === "delayed" || st === "waiting" || st === "prioritized") {
+        await follow.remove();
+      }
+    }
+    try {
+      await q.add(name, data, { ...opts, jobId: followId });
+    } catch (err2) {
+      logger.warn({ err: err2, name, jobId: debounce.jobId }, "debounced enqueue failed");
+      void err;
+    }
+  }
+}
+
 /** Start BullMQ workers for every registered handler (no-op without Redis). */
 export function startQueueWorkers(): void {
   const redis = getRedis();
@@ -67,6 +144,8 @@ export function startQueueWorkers(): void {
     return;
   }
   for (const [name, handler] of handlers) {
+    // Avoid double-starting the same queue name across restarts in one process.
+    if (workers.some((w) => w.name === name)) continue;
     const worker = new Worker(
       name,
       async (job) => {
@@ -82,8 +161,38 @@ export function startQueueWorkers(): void {
   }
 }
 
+/** @internal test helper — start an extra worker on one queue (multi-worker tests). */
+export function startExtraWorker(name: QueueName): Worker | null {
+  const redis = getRedis();
+  const handler = handlers.get(name);
+  if (!redis || !handler) return null;
+  const worker = new Worker(
+    name,
+    async (job) => {
+      await handler((job.data ?? {}) as Record<string, unknown>);
+    },
+    { connection: redis, concurrency: 1 },
+  );
+  workers.push(worker);
+  return worker;
+}
+
 export async function shutdownQueues(): Promise<void> {
   await Promise.all(workers.map((w) => w.close()));
+  workers.length = 0;
   await Promise.all([...queues.values()].map((q) => q.close()));
-  if (connection) await connection.quit();
+  queues.clear();
+  if (connection) {
+    await connection.quit();
+    connection = null;
+  }
+}
+
+/** @internal — inspect delayed/waiting counts in tests. */
+export async function getQueueJobCounts(
+  name: QueueName,
+): Promise<Record<string, number> | null> {
+  const q = getQueue(name);
+  if (!q) return null;
+  return q.getJobCounts("delayed", "waiting", "active", "completed", "failed");
 }

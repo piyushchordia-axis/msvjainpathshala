@@ -67,8 +67,8 @@ export function formatAgeGroups(codes: string[] | null | undefined, lang: "en" |
 /** AT1 — present | absent | late | excused */
 export const ATTENDANCE_STATUSES = ["present", "absent", "late", "excused"] as const;
 export const SESSION_STATUSES = ["scheduled", "in_progress", "completed", "cancelled"] as const;
-/** Offline sync_operations.status (CLAUDE.md Offline sync §4). */
-export const SYNC_OP_STATUSES = ["success", "duplicate", "conflict", "failed"] as const;
+/** Offline sync_operations.status (CLAUDE.md Offline sync §4 + claim 'processing'). */
+export const SYNC_OP_STATUSES = ["success", "duplicate", "conflict", "failed", "processing"] as const;
 export const STUDENT_STATUSES = ["active", "inactive"] as const;
 export const ENROLMENT_STATUSES = ["pending", "approved", "rejected", "waitlisted"] as const;
 export const MSV_STATUSES = ["none", "applied", "waitlisted", "approved", "rejected", "revoked"] as const;

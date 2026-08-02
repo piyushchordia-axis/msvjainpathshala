@@ -1,7 +1,8 @@
 /**
- * Append-only audit trail writer. Best-effort: never throws, never blocks the
- * request path. Call on sensitive mutations (approvals, rejections, awards,
- * assignments, config changes, etc.).
+ * Append-only audit trail writer.
+ * When called with a transaction handle, failures abort that transaction so
+ * marks and audit commit together. Without a tx, best-effort (log + swallow)
+ * so unrelated callers keep their prior behaviour.
  */
 import type { Request } from "express";
 import { db, audit_logs } from "@workspace/db";
@@ -22,9 +23,13 @@ export interface AuditInput {
   ip?: string | null;
 }
 
-export async function writeAudit(input: AuditInput): Promise<void> {
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type DbOrTx = typeof db | Tx;
+
+export async function writeAudit(input: AuditInput, tx?: Tx): Promise<void> {
+  const client: DbOrTx = tx ?? db;
   try {
-    await db.insert(audit_logs).values({
+    await client.insert(audit_logs).values({
       actor_user_id: input.actorId ?? null,
       actor_role: input.actorRole ?? null,
       action: input.action,
@@ -35,6 +40,7 @@ export async function writeAudit(input: AuditInput): Promise<void> {
       ip: input.ip ?? null,
     });
   } catch (err) {
+    if (tx) throw err;
     logger.warn({ err, action: input.action, entityKind: input.entityKind }, "audit write failed");
   }
 }

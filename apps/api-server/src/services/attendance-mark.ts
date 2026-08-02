@@ -14,18 +14,23 @@ import {
   absence_notifications,
   type User,
 } from "@workspace/db";
-import { and, eq, isNull, lte, gte, sql } from "drizzle-orm";
-import { EventEmitter } from "node:events";
+import { and, eq, inArray, isNull, lte, gte, or, sql } from "drizzle-orm";
 import {
   ATTENDANCE_FEATURE_KEY,
   awardValueForStatus,
   resolveAttendanceAwardPointsForBatch,
 } from "../lib/attendance-points";
-import { tierForPoints } from "@workspace/db/enums";
+import { creditBalance } from "../lib/punya";
+import { reverseStreakBonusForSession } from "../lib/punya-streak";
 import { inBatchWriteScope, resolveAdminScope } from "../lib/scope";
 import { writeAudit } from "../lib/audit";
+import { enqueueDebouncedJob } from "../lib/queues";
+import { QUEUE_NAMES } from "@jp/shared/constants";
 
-export const attendanceEvents = new EventEmitter();
+/** @internal test-only — force a throw after streak reversal to prove txn rollback. */
+export const __attendanceMarkTestHooks = {
+  throwAfterStreakReversal: false,
+};
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -103,22 +108,41 @@ export function assertEditWindow(scheduledDate: string, clientMarkedAt: Date): v
 }
 
 /* ------------------------------------------------------------------ */
-/* Post-process debounce (AT31) — once per session, never per item     */
+/* Post-process debounce (AT31) — BullMQ, once per session             */
 /* ------------------------------------------------------------------ */
 
-const postProcessTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const POST_PROCESS_DEBOUNCE_MS = 5_000;
 
-export function enqueueAttendancePostProcess(sessionId: string): void {
-  const prev = postProcessTimers.get(sessionId);
-  if (prev) clearTimeout(prev);
-  const t = setTimeout(() => {
-    postProcessTimers.delete(sessionId);
-    attendanceEvents.emit("attendance.post_process", { session_id: sessionId });
-  }, POST_PROCESS_DEBOUNCE_MS);
-  // Don't keep the process alive solely for debounce in tests.
-  if (typeof t === "object" && "unref" in t) (t as NodeJS.Timeout).unref();
-  postProcessTimers.set(sessionId, t);
+/** Sliding 5s debounce on QUEUE_NAMES.ATTENDANCE_POST_PROCESS. */
+export async function enqueueAttendancePostProcess(sessionId: string): Promise<void> {
+  await enqueueDebouncedJob(
+    QUEUE_NAMES.ATTENDANCE_POST_PROCESS,
+    { session_id: sessionId },
+    { jobId: `attn-pp:${sessionId}`, delayMs: POST_PROCESS_DEBOUNCE_MS },
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Payload guards                                                      */
+/* ------------------------------------------------------------------ */
+
+/** Reject whole submission when the same student_id appears more than once. */
+export function assertNoDuplicateStudents(
+  marks: Array<{ student_id: string }>,
+): void {
+  const seen = new Set<string>();
+  const dupes = new Set<string>();
+  for (const m of marks) {
+    if (seen.has(m.student_id)) dupes.add(m.student_id);
+    else seen.add(m.student_id);
+  }
+  if (dupes.size === 0) return;
+  const listed = [...dupes].join(", ");
+  throw new AttendanceMarkError(
+    400,
+    "ERR_VALIDATION_FAILED",
+    `Duplicate student_id in marks: ${listed}`,
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -131,25 +155,6 @@ function awardIdempotencyKey(sessionId: string, studentId: string, revision: num
 
 function reversalIdempotencyKey(sessionId: string, studentId: string, revision: number): string {
   return `attendance:${sessionId}:${studentId}:${revision}:rev`;
-}
-
-async function creditBalance(tx: Tx, studentId: string, delta: number): Promise<void> {
-  if (delta === 0) return;
-  const result = await tx.execute(sql`
-    insert into punya_balances (student_id, total_points)
-    values (${studentId}, ${delta})
-    on conflict (student_id) do update
-      set total_points = punya_balances.total_points + ${delta},
-          updated_at = now()
-    returning total_points
-  `);
-  const rows = (result as unknown as { rows?: Array<{ total_points: number }> }).rows ?? [];
-  const total = Number(rows[0]?.total_points ?? delta);
-  await tx.execute(sql`
-    update punya_balances
-    set tier = ${tierForPoints(total)}::tier_enum
-    where student_id = ${studentId}
-  `);
 }
 
 /** Most recent UNREVERSED attendance award for (session, student) — AT18. */
@@ -172,7 +177,7 @@ async function findLatestUnreversedAward(
         select 1 from punya_transactions r
         where r.reversal_of = t.id
       )
-    order by t.created_at desc, t.id desc
+    order by t.source_revision desc nulls last, t.created_at desc, t.id desc
     limit 1
   `);
   const rows =
@@ -205,11 +210,13 @@ export async function reverseAttendanceAward(
   const insertResult = await tx.execute(sql`
     insert into punya_transactions (
       student_id, feature_key, points, note, awarded_by,
-      idempotency_key, reversal_of, source_entity_kind, source_entity_id
+      idempotency_key, reversal_of, source_entity_kind, source_entity_id,
+      source_revision
     ) values (
       ${opts.studentId}, ${ATTENDANCE_FEATURE_KEY}, ${debit},
       ${"attendance reversal"}, ${opts.awardedBy ?? null},
-      ${key}, ${prior.id}::uuid, ${"attendance"}, ${opts.sessionId}::uuid
+      ${key}, ${prior.id}::uuid, ${"attendance"}, ${opts.sessionId}::uuid,
+      ${opts.newRevision}
     )
     on conflict (idempotency_key) where idempotency_key is not null
     do nothing
@@ -238,11 +245,11 @@ async function awardAttendancePunya(
   const insertResult = await tx.execute(sql`
     insert into punya_transactions (
       student_id, feature_key, points, note, awarded_by,
-      idempotency_key, source_entity_kind, source_entity_id
+      idempotency_key, source_entity_kind, source_entity_id, source_revision
     ) values (
       ${opts.studentId}, ${ATTENDANCE_FEATURE_KEY}, ${opts.amount},
       ${"attendance award"}, ${opts.awardedBy ?? null},
-      ${key}, ${"attendance"}, ${opts.sessionId}::uuid
+      ${key}, ${"attendance"}, ${opts.sessionId}::uuid, ${opts.newRevision}
     )
     on conflict (idempotency_key) where idempotency_key is not null
     do nothing
@@ -256,38 +263,110 @@ async function awardAttendancePunya(
 }
 
 /* ------------------------------------------------------------------ */
-/* Enrolment (per item)                                                */
+/* Enrolment — one query for the whole roster                          */
 /* ------------------------------------------------------------------ */
 
-async function isActivelyEnrolled(
-  tx: Tx,
-  studentId: string,
+/** Active on-batch or approved enrolment for any of the given students. */
+export async function resolveEligibleStudentIds(
+  studentIds: string[],
   batchId: string,
-): Promise<boolean> {
-  const [stu] = await tx
-    .select({
-      batch_id: students.batch_id,
-      status: students.status,
-    })
+): Promise<Set<string>> {
+  if (studentIds.length === 0) return new Set();
+  const unique = [...new Set(studentIds)];
+  const rows = await db
+    .select({ id: students.id })
     .from(students)
-    .where(eq(students.id, studentId))
-    .limit(1);
-  if (!stu) return false;
-  if (stu.status !== "active") return false;
-  if (stu.batch_id === batchId) return true;
-
-  const [enr] = await tx
-    .select({ id: enrolments.id })
-    .from(enrolments)
-    .where(
+    .leftJoin(
+      enrolments,
       and(
-        eq(enrolments.student_id, studentId),
+        eq(enrolments.student_id, students.id),
         eq(enrolments.requested_batch_id, batchId),
         eq(enrolments.status, "approved"),
       ),
     )
+    .where(
+      and(
+        inArray(students.id, unique),
+        eq(students.status, "active"),
+        or(eq(students.batch_id, batchId), sql`${enrolments.id} is not null`),
+      ),
+    );
+  return new Set(rows.map((r) => r.id));
+}
+
+/* ------------------------------------------------------------------ */
+/* Sync claim (online path; sync/batch owns its own ledger)            */
+/* ------------------------------------------------------------------ */
+
+type ClaimOutcome =
+  | { kind: "claimed" }
+  | { kind: "replay"; response: MarkResponse }
+  | { kind: "busy" };
+
+async function claimSyncOperation(
+  tx: Tx,
+  opts: {
+    userId: string;
+    submissionOpId: string;
+    requestPayload: Record<string, unknown>;
+  },
+): Promise<ClaimOutcome> {
+  const insertResult = await tx.execute(sql`
+    insert into sync_operations (
+      user_id, submission_op_id, op_kind, request_payload, status
+    ) values (
+      ${opts.userId}::uuid,
+      ${opts.submissionOpId},
+      ${"attendance"},
+      ${JSON.stringify(opts.requestPayload)}::jsonb,
+      ${"processing"}::sync_op_status_enum
+    )
+    on conflict (user_id, submission_op_id) do nothing
+    returning id
+  `);
+  const inserted =
+    (insertResult as unknown as { rows?: Array<{ id: string }> }).rows ?? [];
+  if (inserted.length > 0) return { kind: "claimed" };
+
+  const [existing] = await tx
+    .select({
+      status: sync_operations.status,
+      response_payload: sync_operations.response_payload,
+    })
+    .from(sync_operations)
+    .where(
+      and(
+        eq(sync_operations.user_id, opts.userId),
+        eq(sync_operations.submission_op_id, opts.submissionOpId),
+      ),
+    )
     .limit(1);
-  return !!enr;
+
+  if (existing?.status === "success" && existing.response_payload) {
+    return { kind: "replay", response: existing.response_payload as MarkResponse };
+  }
+  return { kind: "busy" };
+}
+
+async function completeSyncOperation(
+  tx: Tx,
+  opts: { userId: string; submissionOpId: string; response: MarkResponse },
+): Promise<void> {
+  await tx
+    .update(sync_operations)
+    .set({
+      status: "success",
+      response_payload: opts.response,
+      error: null,
+      applied_at: new Date(),
+      updated_at: new Date(),
+    })
+    .where(
+      and(
+        eq(sync_operations.user_id, opts.userId),
+        eq(sync_operations.submission_op_id, opts.submissionOpId),
+      ),
+    );
 }
 
 /* ------------------------------------------------------------------ */
@@ -303,12 +382,13 @@ async function applyOneMark(
     userId: string;
     markedAt: Date;
     configuredPoints: number;
+    enrolledIds: Set<string>;
     mark: MarkInput["marks"][number];
   },
 ): Promise<MarkItemResult> {
   const { mark } = opts;
 
-  if (!(await isActivelyEnrolled(tx, mark.student_id, opts.batchId))) {
+  if (!opts.enrolledIds.has(mark.student_id)) {
     return {
       student_id: mark.student_id,
       result: "rejected",
@@ -395,12 +475,18 @@ async function applyOneMark(
     });
   }
 
-  // AT22 — if a mark that completed a streak is corrected away from attended, reverse the bonus.
+  // AT22 — if a mark that completed a streak is corrected away from attended, reverse.
   const wasAttended = oldStatus === "present" || oldStatus === "late";
   const nowAttended = mark.status === "present" || mark.status === "late";
   if (wasAttended && !nowAttended) {
-    const { reverseStreakBonusForSession } = await import("./attendance-post-process");
-    await reverseStreakBonusForSession(mark.student_id, opts.sessionId, newRevision);
+    await reverseStreakBonusForSession(tx, {
+      studentId: mark.student_id,
+      sessionId: opts.sessionId,
+      newRevision,
+    });
+    if (__attendanceMarkTestHooks.throwAfterStreakReversal) {
+      throw new Error("test-forced rollback after streak reversal");
+    }
   }
 
   // AT4 — marking a session covered by an advance absence consumes the notification.
@@ -447,36 +533,13 @@ async function loadSessionOrThrow(sessionId: string) {
   return row;
 }
 
-async function maybeReplaySubmission(
-  userId: string,
-  submissionOpId: string,
-): Promise<MarkResponse | null> {
-  const [existing] = await db
-    .select({
-      status: sync_operations.status,
-      response_payload: sync_operations.response_payload,
-    })
-    .from(sync_operations)
-    .where(
-      and(eq(sync_operations.user_id, userId), eq(sync_operations.submission_op_id, submissionOpId)),
-    )
-    .limit(1);
-  if (existing?.status === "success" && existing.response_payload) {
-    return existing.response_payload as MarkResponse;
-  }
-  return null;
-}
-
 /**
- * Mark attendance for one or many students. Pre-conditions (sync replay,
- * cancelled, edit window) run BEFORE the transaction. Per-item enrolment
- * failures are reported without aborting siblings.
+ * Mark attendance for one or many students. Pre-conditions (cancelled, edit
+ * window, duplicate students, enrolment) run before / at the start of the
+ * transaction. Per-item enrolment failures do not abort siblings.
  */
 export async function markAttendance(input: MarkInput): Promise<MarkResponse> {
-  if (input.submissionOpId) {
-    const replay = await maybeReplaySubmission(input.userId, input.submissionOpId);
-    if (replay) return replay;
-  }
+  assertNoDuplicateStudents(input.marks);
 
   const session = await loadSessionOrThrow(input.sessionId);
 
@@ -501,8 +564,34 @@ export async function markAttendance(input: MarkInput): Promise<MarkResponse> {
   assertEditWindow(session.scheduled_date, input.markedAt);
 
   const { points: configuredPoints } = await resolveAttendanceAwardPointsForBatch(session.batch_id);
+  const enrolledIds = await resolveEligibleStudentIds(
+    input.marks.map((m) => m.student_id),
+    session.batch_id,
+  );
 
-  const items = await db.transaction(async (tx) => {
+  const ownSync = Boolean(input.submissionOpId) && input.recordSync !== false;
+
+  const outcome = await db.transaction(async (tx) => {
+    if (ownSync && input.submissionOpId) {
+      const claim = await claimSyncOperation(tx, {
+        userId: input.userId,
+        submissionOpId: input.submissionOpId,
+        requestPayload: {
+          session_id: input.sessionId,
+          marked_at: input.markedAt.toISOString(),
+          marks: input.marks,
+        },
+      });
+      if (claim.kind === "replay") return { fresh: false as const, response: claim.response };
+      if (claim.kind === "busy") {
+        throw new AttendanceMarkError(
+          409,
+          "ERR_SYNC_IN_PROGRESS",
+          "This submission is already being processed. Retry shortly.",
+        );
+      }
+    }
+
     const results: MarkItemResult[] = [];
     for (const mark of input.marks) {
       results.push(
@@ -513,6 +602,7 @@ export async function markAttendance(input: MarkInput): Promise<MarkResponse> {
           userId: input.userId,
           markedAt: input.markedAt,
           configuredPoints,
+          enrolledIds,
           mark,
         }),
       );
@@ -520,63 +610,51 @@ export async function markAttendance(input: MarkInput): Promise<MarkResponse> {
 
     // Do NOT flip status to completed here — check-out / auto-checkout own that
     // transition so offline order checkin → mark → checkout stays valid.
-    return results;
-  });
+    const built: MarkResponse = {
+      session_id: session.id,
+      items: results,
+      applied: results.filter((i) => i.result === "applied").length,
+      duplicate: results.filter((i) => i.result === "duplicate").length,
+      rejected: results.filter((i) => i.result === "rejected").length,
+    };
 
-  const response: MarkResponse = {
-    session_id: session.id,
-    items,
-    applied: items.filter((i) => i.result === "applied").length,
-    duplicate: items.filter((i) => i.result === "duplicate").length,
-    rejected: items.filter((i) => i.result === "rejected").length,
-  };
-
-  // Emit AFTER commit (never inside the txn).
-  attendanceEvents.emit("attendance.marked", {
-    session_id: session.id,
-    user_id: input.userId,
-    items,
-  });
-  enqueueAttendancePostProcess(session.id);
-
-  if (response.applied > 0) {
-    await writeAudit({
-      actorId: input.userId,
-      actorRole: input.actor?.role ?? null,
-      action: "update",
-      entityKind: "attendance",
-      entityId: session.id,
-      summary: `Attendance marked (${response.applied} applied)`,
-      metadata: {
-        applied: response.applied,
-        duplicate: response.duplicate,
-        rejected: response.rejected,
-        submission_op_id: input.submissionOpId ?? null,
-      },
-    });
-  }
-
-  // Online path may still record sync_operations; sync/batch owns writes when
-  // recordSync=false so the two paths never double-insert.
-  if (input.submissionOpId && input.recordSync !== false) {
-    await db
-      .insert(sync_operations)
-      .values({
-        user_id: input.userId,
-        submission_op_id: input.submissionOpId,
-        op_kind: "attendance",
-        request_payload: {
-          session_id: input.sessionId,
-          marked_at: input.markedAt.toISOString(),
-          marks: input.marks,
+    if (built.applied > 0) {
+      await writeAudit(
+        {
+          actorId: input.userId,
+          actorRole: input.actor?.role ?? null,
+          action: "update",
+          entityKind: "attendance",
+          entityId: session.id,
+          summary: `Attendance marked (${built.applied} applied)`,
+          metadata: {
+            applied: built.applied,
+            duplicate: built.duplicate,
+            rejected: built.rejected,
+            submission_op_id: input.submissionOpId ?? null,
+          },
         },
-        response_payload: response,
-        status: "success",
-      })
-      .onConflictDoNothing();
+        tx,
+      );
+    }
+
+    if (ownSync && input.submissionOpId) {
+      await completeSyncOperation(tx, {
+        userId: input.userId,
+        submissionOpId: input.submissionOpId,
+        response: built,
+      });
+    }
+
+    return { fresh: true as const, response: built };
+  });
+
+  // Enqueue AFTER commit (never inside the txn); skip on idempotent replay.
+  if (outcome.fresh) {
+    await enqueueAttendancePostProcess(session.id);
   }
 
-  return response;
+  return outcome.response;
 }
 
 /** PATCH single-student — same transition + guards. */

@@ -113,6 +113,20 @@
       "when": 1786963200000,
       "tag": "0015_niyam_badge_kind",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1787049600000,
+      "tag": "0016_punya_source_revision",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1787136000000,
+      "tag": "0017_derived_attendance_fix",
+      "breakpoints": true
     }
   ]
 }

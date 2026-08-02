@@ -1,5 +1,6 @@
 /**
  * attendance.post_process — AT22 streaks, AT31 parent push debounce + admin feed.
+ * Delivery is via BullMQ (QUEUE_NAMES.ATTENDANCE_POST_PROCESS / PARENT_NOTIFY).
  */
 import {
   db,
@@ -11,39 +12,20 @@ import {
   centre_holidays,
   users,
 } from "@workspace/db";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq } from "drizzle-orm";
 import { awardPunya } from "../lib/punya";
+import { STREAK_FEATURE_KEY } from "../lib/punya-streak";
 import { notifyUsers } from "../lib/notify";
-import { logger } from "../lib/logger";
 import { recordAdminAttendanceMark } from "../lib/admin-dashboard-feed";
-import { attendanceEvents } from "./attendance-mark";
+import { enqueueDebouncedJob } from "../lib/queues";
+import { QUEUE_NAMES } from "@jp/shared/constants";
 
-export const STREAK_FEATURE_KEY = "attendance_streak";
+export { STREAK_FEATURE_KEY };
 export const STREAK_BONUS_POINTS = 20;
 const STREAK_EVERY = 4;
 
 /** AT31 — parent "attendance marked" settles for 5 minutes per (student, session). */
-const PARENT_PUSH_DEBOUNCE_MS = 5 * 60 * 1000;
-
-const parentNotifyTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-function parentNotifyKey(studentId: string, sessionId: string): string {
-  return `${studentId}:${sessionId}`;
-}
-
-export function enqueueParentAttendanceNotify(studentId: string, sessionId: string): void {
-  const key = parentNotifyKey(studentId, sessionId);
-  const prev = parentNotifyTimers.get(key);
-  if (prev) clearTimeout(prev);
-  const t = setTimeout(() => {
-    parentNotifyTimers.delete(key);
-    void sendParentAttendancePush(studentId, sessionId).catch((err) =>
-      logger.warn({ err, studentId, sessionId }, "parent attendance push failed"),
-    );
-  }, PARENT_PUSH_DEBOUNCE_MS);
-  if (typeof t === "object" && "unref" in t) (t as NodeJS.Timeout).unref();
-  parentNotifyTimers.set(key, t);
-}
+export const PARENT_PUSH_DEBOUNCE_MS = 5 * 60 * 1000;
 
 function prefsAllowAttendance(prefs: unknown): boolean {
   if (!prefs || typeof prefs !== "object") return true;
@@ -53,7 +35,11 @@ function prefsAllowAttendance(prefs: unknown): boolean {
   return true;
 }
 
-async function sendParentAttendancePush(studentId: string, sessionId: string): Promise<void> {
+/** Deliver the debounced parent push (queue handler entry point). */
+export async function sendParentAttendancePush(
+  studentId: string,
+  sessionId: string,
+): Promise<void> {
   const [row] = await db
     .select({
       parent_id: students.parent_id,
@@ -63,7 +49,10 @@ async function sendParentAttendancePush(studentId: string, sessionId: string): P
       status: attendance.status,
     })
     .from(students)
-    .innerJoin(attendance, and(eq(attendance.student_id, students.id), eq(attendance.session_id, sessionId)))
+    .innerJoin(
+      attendance,
+      and(eq(attendance.student_id, students.id), eq(attendance.session_id, sessionId)),
+    )
     .innerJoin(sessions, eq(sessions.id, sessionId))
     .leftJoin(users, eq(users.id, students.parent_id))
     .limit(1);
@@ -80,6 +69,25 @@ async function sendParentAttendancePush(studentId: string, sessionId: string): P
     body_hi: `${row.full_name}: ${row.session_date} को ${row.status}`,
     push: true,
   });
+}
+
+/** Sliding 5-minute debounce on QUEUE_NAMES.PARENT_NOTIFY. */
+export async function enqueueParentAttendanceNotify(
+  studentId: string,
+  sessionId: string,
+): Promise<void> {
+  await enqueueDebouncedJob(
+    QUEUE_NAMES.PARENT_NOTIFY,
+    {
+      kind: "attendance_marked",
+      student_id: studentId,
+      session_id: sessionId,
+    },
+    {
+      jobId: `attn-parent:${studentId}:${sessionId}`,
+      delayMs: PARENT_PUSH_DEBOUNCE_MS,
+    },
+  );
 }
 
 type StreakSession = {
@@ -184,56 +192,10 @@ export async function recomputeAndAwardStreak(studentId: string): Promise<number
   return streak;
 }
 
-/** Reverse streak bonus tied to a session (correction / force_cancel). */
-export async function reverseStreakBonusForSession(
-  studentId: string,
-  sessionId: string,
-  revision: number,
-): Promise<void> {
-  const awardKey = `attendance_streak:${studentId}:${sessionId}`;
-  const revKey = `attendance_streak:${studentId}:${sessionId}:rev:${revision}`;
-
-  const result = await db.execute(sql`
-    with prior as (
-      select t.id, t.points
-      from punya_transactions t
-      where t.student_id = ${studentId}::uuid
-        and t.source_entity_kind = 'attendance_streak'
-        and t.source_entity_id = ${sessionId}::uuid
-        and t.points > 0
-        and t.idempotency_key = ${awardKey}
-        and not exists (select 1 from punya_transactions r where r.reversal_of = t.id)
-      limit 1
-    ),
-    ins as (
-      insert into punya_transactions (
-        student_id, feature_key, points, note,
-        idempotency_key, reversal_of, source_entity_kind, source_entity_id
-      )
-      select
-        ${studentId}::uuid, ${STREAK_FEATURE_KEY}, -prior.points,
-        'attendance streak reversal',
-        ${revKey}, prior.id, 'attendance_streak', ${sessionId}::uuid
-      from prior
-      on conflict (idempotency_key) where idempotency_key is not null
-      do nothing
-      returning points
-    )
-    select coalesce((select points from ins), 0) as points
-  `);
-  const rows = (result as unknown as { rows?: Array<{ points: number }> }).rows ?? [];
-  const delta = Number(rows[0]?.points ?? 0);
-  if (delta !== 0) {
-    await db.execute(sql`
-      insert into punya_balances (student_id, total_points)
-      values (${studentId}::uuid, ${delta})
-      on conflict (student_id) do update
-        set total_points = punya_balances.total_points + ${delta},
-            updated_at = now()
-    `);
-  }
-}
-
+/**
+ * Session-level post-process: streak recompute (throws on failure so BullMQ
+ * retries) + parent-notify enqueue + admin aggregate tick.
+ */
 export async function runAttendancePostProcess(sessionId: string): Promise<void> {
   const marked = await db
     .select({
@@ -249,27 +211,11 @@ export async function runAttendancePostProcess(sessionId: string): Promise<void>
     .where(eq(attendance.session_id, sessionId));
 
   for (const row of marked) {
-    try {
-      await recomputeAndAwardStreak(row.student_id);
-    } catch (err) {
-      logger.warn({ err, studentId: row.student_id }, "streak recompute failed");
-    }
-    enqueueParentAttendanceNotify(row.student_id, sessionId);
+    // Do not swallow — failed streak must surface on the queue job.
+    await recomputeAndAwardStreak(row.student_id);
+    await enqueueParentAttendanceNotify(row.student_id, sessionId);
     if (row.city_id) {
       recordAdminAttendanceMark(row.city_id);
     }
   }
-}
-
-let listenersBound = false;
-
-/** Wire EventEmitter → post-process (idempotent). */
-export function bindAttendancePostProcessListeners(): void {
-  if (listenersBound) return;
-  listenersBound = true;
-  attendanceEvents.on("attendance.post_process", (payload: { session_id: string }) => {
-    void runAttendancePostProcess(payload.session_id).catch((err) =>
-      logger.warn({ err, sessionId: payload.session_id }, "attendance.post_process failed"),
-    );
-  });
 }

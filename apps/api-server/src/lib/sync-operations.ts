@@ -5,7 +5,7 @@
 import { db, sync_operations } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 
-export type SyncOpStatus = "success" | "duplicate" | "conflict" | "failed";
+export type SyncOpStatus = "success" | "duplicate" | "conflict" | "failed" | "processing";
 
 export type SyncResult = {
   submission_op_id: string;

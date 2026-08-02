@@ -38,7 +38,21 @@ const markBodySchema = z.object({
         client_op_id: ulidSchema,
       }),
     )
-    .min(1),
+    .min(1)
+    .superRefine((marks, ctx) => {
+      const seen = new Set<string>();
+      const dupes = new Set<string>();
+      for (const m of marks) {
+        if (seen.has(m.student_id)) dupes.add(m.student_id);
+        else seen.add(m.student_id);
+      }
+      if (dupes.size > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Duplicate student_id in marks: ${[...dupes].join(", ")}`,
+        });
+      }
+    }),
 });
 
 const patchBodySchema = z.object({

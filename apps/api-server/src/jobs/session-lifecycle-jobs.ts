@@ -10,7 +10,6 @@ import {
   autoCheckoutStaleSessions,
   flagNoShowSessions,
 } from "../services/session-lifecycle";
-import { logger } from "../lib/logger";
 
 let registered = false;
 
@@ -30,9 +29,7 @@ export function registerSessionLifecycleJobs(): void {
     await flagNoShowSessions();
   });
 
-  registerQueueHandler(QUEUE_NAMES.PARENT_NOTIFY, async (data) => {
-    logger.debug({ data }, "parent notify job (inline no-op; push already sent)");
-  });
+  // PARENT_NOTIFY handler lives in derived-data-jobs (attendance debounce + misc).
 
   // Cron → enqueue (or inline when Redis absent).
   registerCron(QUEUE_NAMES.SESSION_MATERIALISE, CRON_EXPRESSIONS.SESSION_MATERIALISE, async () => {

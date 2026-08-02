@@ -5,13 +5,18 @@ import { QUEUE_NAMES, CRON_EXPRESSIONS } from "@jp/shared/constants";
 import { registerQueueHandler, enqueueJob } from "../lib/queues";
 import { registerCron } from "../lib/scheduler";
 import { runConsecutiveAbsenceCheck } from "../services/consecutive-absence";
-import { bindAttendancePostProcessListeners, runAttendancePostProcess } from "../services/attendance-post-process";
+import {
+  runAttendancePostProcess,
+  sendParentAttendancePush,
+} from "../services/attendance-post-process";
+import { snapshotMonthlyLeaderboard } from "../services/monthly-leaderboard-snapshot";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../lib/logger";
 
 let registered = false;
 
+/** Canonical materialised views only — leaderboard is a TABLE now. */
 const CANONICAL_MVS = [
   "mv_centre_engagement",
   "mv_city_attendance_monthly",
@@ -19,7 +24,6 @@ const CANONICAL_MVS = [
   "mv_msv_funnel",
   "mv_punya_distribution",
   "mv_niyam_completion",
-  "mv_monthly_leaderboard_city",
 ] as const;
 
 export async function refreshAnalyticsViews(): Promise<void> {
@@ -42,11 +46,27 @@ export function registerDerivedDataJobs(): void {
   if (registered) return;
   registered = true;
 
-  bindAttendancePostProcessListeners();
-
   registerQueueHandler(QUEUE_NAMES.ATTENDANCE_POST_PROCESS, async (data) => {
     const sessionId = String((data as { session_id?: string }).session_id ?? "");
-    if (sessionId) await runAttendancePostProcess(sessionId);
+    if (!sessionId) {
+      throw new Error("attendance.post_process missing session_id");
+    }
+    await runAttendancePostProcess(sessionId);
+  });
+
+  registerQueueHandler(QUEUE_NAMES.PARENT_NOTIFY, async (data) => {
+    const kind = String((data as { kind?: string }).kind ?? "");
+    if (kind === "attendance_marked") {
+      const studentId = String((data as { student_id?: string }).student_id ?? "");
+      const sessionId = String((data as { session_id?: string }).session_id ?? "");
+      if (!studentId || !sessionId) {
+        throw new Error("notifications.parent attendance_marked missing ids");
+      }
+      await sendParentAttendancePush(studentId, sessionId);
+      return;
+    }
+    // timetable_change etc. — push already sent inline by the producer.
+    logger.debug({ data }, "parent notify job acknowledged");
   });
 
   registerQueueHandler(QUEUE_NAMES.ATTENDANCE_CONSECUTIVE_CHECK, async () => {
@@ -54,11 +74,9 @@ export function registerDerivedDataJobs(): void {
   });
 
   registerQueueHandler(QUEUE_NAMES.PUNYA_LEADERBOARD_REFRESH, async () => {
-    try {
-      await db.execute(sql.raw(`REFRESH MATERIALIZED VIEW CONCURRENTLY mv_monthly_leaderboard_city`));
-    } catch {
-      await db.execute(sql.raw(`REFRESH MATERIALIZED VIEW mv_monthly_leaderboard_city`));
-    }
+    // Snapshots the month just ended (idempotent). Not a materialised-view refresh.
+    const result = await snapshotMonthlyLeaderboard();
+    logger.info(result, "monthly_leaderboard_snapshots upsert");
   });
 
   registerQueueHandler(QUEUE_NAMES.PUNYA_RECONCILE, async () => {

@@ -22,6 +22,7 @@ import {
   cityAdminUserIdsForCentre,
   parentUserIdsForBatch,
 } from "../lib/notify";
+import { reverseStreakBonusForSession } from "../lib/punya-streak";
 import { reverseAttendanceAward } from "./attendance-mark";
 import { todayIst } from "./session-materialise";
 import { resolveAdminScope, inBatchWriteScope } from "../lib/scope";
@@ -477,8 +478,11 @@ export async function cancelSession(input: CancelInput): Promise<SessionRow> {
           awardedBy: input.actor.id,
         });
         // AT22 — session cancel removes the mark from streak eligibility; reverse bonus.
-        const { reverseStreakBonusForSession } = await import("./attendance-post-process");
-        await reverseStreakBonusForSession(mark.student_id, session.id, newRevision);
+        await reverseStreakBonusForSession(tx, {
+          studentId: mark.student_id,
+          sessionId: session.id,
+          newRevision,
+        });
         await tx
           .update(attendance)
           .set({ revision: newRevision })

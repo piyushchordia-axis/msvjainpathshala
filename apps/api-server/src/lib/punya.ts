@@ -28,6 +28,8 @@ export interface AwardPunyaInput {
   /** Override derived source fields (AT22 streak uses kind='attendance_streak'). */
   sourceEntityKind?: string | null;
   sourceEntityId?: string | null;
+  /** Attendance / streak revision for deterministic reversal ordering. */
+  sourceRevision?: number | null;
 }
 
 export interface AwardPunyaResult {
@@ -71,12 +73,21 @@ async function readBalance(tx: Tx | Db, studentId: string, fallbackPoints: numbe
   return total;
 }
 
-async function creditBalance(tx: Tx | Db, studentId: string, delta: number): Promise<number> {
+/** Single balance-mutation path — always use RETURNING; skip no-ops. */
+export async function creditBalance(
+  tx: Tx | Db,
+  studentId: string,
+  delta: number,
+): Promise<number> {
+  if (delta === 0) {
+    return readBalance(tx, studentId, 0);
+  }
   const result = await tx.execute(
     sql`insert into punya_balances (student_id, total_points)
         values (${studentId}, ${delta})
         on conflict (student_id) do update
-          set total_points = punya_balances.total_points + ${delta}
+          set total_points = punya_balances.total_points + ${delta},
+              updated_at = now()
         returning total_points`,
   );
   const rows = (result as unknown as { rows?: Array<{ total_points: number }> }).rows ?? [];
@@ -101,16 +112,18 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
 
   let transactionId: string | null = null;
 
+  const sourceRevision = input.sourceRevision ?? null;
+
   if (key) {
     // Partial unique index on idempotency_key — ON CONFLICT DO NOTHING.
     const insertResult = await tx.execute(sql`
       insert into punya_transactions (
         student_id, feature_key, points, note, awarded_by,
-        idempotency_key, source_entity_kind, source_entity_id
+        idempotency_key, source_entity_kind, source_entity_id, source_revision
       ) values (
         ${input.studentId}, ${input.featureKey}, ${input.points},
         ${input.note ?? null}, ${input.awardedBy ?? null},
-        ${key}, ${sourceKind}, ${sourceId}
+        ${key}, ${sourceKind}, ${sourceId}, ${sourceRevision}
       )
       on conflict (idempotency_key) where idempotency_key is not null
       do nothing
@@ -146,6 +159,7 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
         awarded_by: input.awardedBy ?? null,
         source_entity_kind: sourceKind,
         source_entity_id: sourceId,
+        source_revision: sourceRevision,
       })
       .returning({ id: punya_transactions.id });
     transactionId = row?.id ?? null;

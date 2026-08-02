@@ -102,6 +102,31 @@ describe("attendance mark transaction (AT3/AT17–AT21/AT24/AT26)", () => {
     expect(ledger).toBe(expected);
   }
 
+  it("0. duplicate student_id in one submission → 400 ERR_VALIDATION_FAILED", async () => {
+    await resetSessionState();
+    const { sessionId, studentIds, userId, scheduledDate } = h.fixtures;
+    const sid = studentIds[0]!;
+    const p = newSubmission([
+      { student_id: sid, status: "present" },
+      { student_id: sid, status: "absent" },
+    ]);
+    await expect(
+      markAttendance({
+        sessionId,
+        userId,
+        markedAt: new Date(markedAtOnSessionDay(scheduledDate)),
+        submissionOpId: p.submission_op_id,
+        marks: p.marks as never,
+      }),
+    ).rejects.toMatchObject({
+      code: "ERR_VALIDATION_FAILED",
+      httpStatus: 400,
+      message: expect.stringContaining(sid),
+    });
+    const rows = await db.select().from(attendance).where(eq(attendance.session_id, sessionId));
+    expect(rows).toHaveLength(0);
+  });
+
   it("1. 20 students present → 20 rows, 20 txns, correct balances", async () => {
     await resetSessionState();
     const { sessionId, studentIds, userId, scheduledDate, attendancePoints } = h.fixtures;
@@ -383,4 +408,180 @@ describe("attendance mark transaction (AT3/AT17–AT21/AT24/AT26)", () => {
     }
     await assertInvariant(sid);
   });
+
+  async function sumAllLedger(studentId: string): Promise<number> {
+    const [row] = await db
+      .select({
+        sum: sql<number>`coalesce(sum(${punya_transactions.points}), 0)::int`,
+      })
+      .from(punya_transactions)
+      .where(eq(punya_transactions.student_id, studentId));
+    return Number(row?.sum ?? 0);
+  }
+
+  /**
+   * Seed 4 attended sessions for one student so recomputeAndAwardStreak awards
+   * the 20-pt bonus on the 4th. Returns the 4th session id.
+   */
+  async function seedStreakBonusStudent(studentId: string): Promise<string> {
+    const { batchId, userId, sessionId, scheduledDate } = h.fixtures;
+    const dates = ["2026-03-11", "2026-03-12", "2026-03-13", scheduledDate];
+    const sessionIds: string[] = [];
+
+    for (const d of dates) {
+      if (d === scheduledDate) {
+        sessionIds.push(sessionId);
+        continue;
+      }
+      const [existing] = await db
+        .select({ id: sessions.id })
+        .from(sessions)
+        .where(and(eq(sessions.batch_id, batchId), eq(sessions.scheduled_date, d)))
+        .limit(1);
+      if (existing) {
+        sessionIds.push(existing.id);
+        continue;
+      }
+      const inserted = await db
+        .insert(sessions)
+        .values({
+          batch_id: batchId,
+          scheduled_date: d,
+          status: "scheduled",
+          topic: `Streak seed ${d}`,
+        })
+        .returning({ id: sessions.id });
+      sessionIds.push(inserted[0]!.id);
+    }
+
+    for (const sid of sessionIds) {
+      const [s] = await db
+        .select({ scheduled_date: sessions.scheduled_date })
+        .from(sessions)
+        .where(eq(sessions.id, sid))
+        .limit(1);
+      const p = newSubmission([{ student_id: studentId, status: "present" }]);
+      await markAttendance({
+        sessionId: sid,
+        userId,
+        markedAt: new Date(markedAtOnSessionDay(s!.scheduled_date, 10)),
+        submissionOpId: p.submission_op_id,
+        marks: p.marks as never,
+      });
+    }
+
+    const post = await import("../../src/services/attendance-post-process");
+    await post.recomputeAndAwardStreak(studentId);
+
+    const session4 = sessionIds[3]!;
+    const awardKey = `attendance_streak:${studentId}:${session4}`;
+    const bonus = await db
+      .select()
+      .from(punya_transactions)
+      .where(
+        and(
+          eq(punya_transactions.student_id, studentId),
+          eq(punya_transactions.source_entity_kind, "attendance_streak"),
+          eq(punya_transactions.idempotency_key, awardKey),
+        ),
+      );
+    expect(bonus).toHaveLength(1);
+    expect(bonus[0]!.points).toBe(20);
+    expect(await balanceOf(studentId)).toBe(await sumAllLedger(studentId));
+    return session4;
+  }
+
+  it(
+    "12. streak reversal participates in the marking transaction",
+    async () => {
+      await resetSessionState();
+      const { studentIds, userId, scheduledDate } = h.fixtures;
+      const sid = studentIds[6]!;
+      const session4 = await seedStreakBonusStudent(sid);
+
+      const p = newSubmission([{ student_id: sid, status: "absent" }]);
+      // Today this self-deadlocks; 15s timeout surfaces it instead of hanging the suite.
+      await markAttendance({
+        sessionId: session4,
+        userId,
+        markedAt: new Date(markedAtOnSessionDay(scheduledDate, 14)),
+        submissionOpId: p.submission_op_id,
+        marks: p.marks as never,
+      });
+
+      const reversals = await db
+        .select()
+        .from(punya_transactions)
+        .where(
+          and(
+            eq(punya_transactions.student_id, sid),
+            eq(punya_transactions.source_entity_kind, "attendance_streak"),
+            sql`${punya_transactions.points} < 0`,
+          ),
+        );
+      expect(reversals).toHaveLength(1);
+      expect(reversals[0]!.reversal_of).toBeTruthy();
+
+      const bonus = await db
+        .select()
+        .from(punya_transactions)
+        .where(
+          and(
+            eq(punya_transactions.student_id, sid),
+            eq(punya_transactions.source_entity_kind, "attendance_streak"),
+            sql`${punya_transactions.points} > 0`,
+          ),
+        );
+      expect(reversals[0]!.reversal_of).toBe(bonus[0]!.id);
+      expect(await balanceOf(sid)).toBe(await sumAllLedger(sid));
+    },
+    15_000,
+  );
+
+  it(
+    "13. a rolled-back mark leaves no streak reversal",
+    async () => {
+      await resetSessionState();
+      const { studentIds, userId, scheduledDate } = h.fixtures;
+      const sid = studentIds[7]!;
+      const session4 = await seedStreakBonusStudent(sid);
+
+      const markMod = await import("../../src/services/attendance-mark");
+      markMod.__attendanceMarkTestHooks.throwAfterStreakReversal = true;
+      try {
+        const p = newSubmission([{ student_id: sid, status: "absent" }]);
+        await expect(
+          markAttendance({
+            sessionId: session4,
+            userId,
+            markedAt: new Date(markedAtOnSessionDay(scheduledDate, 14)),
+            submissionOpId: p.submission_op_id,
+            marks: p.marks as never,
+          }),
+        ).rejects.toThrow(/test-forced rollback/);
+      } finally {
+        markMod.__attendanceMarkTestHooks.throwAfterStreakReversal = false;
+      }
+
+      const reversals = await db
+        .select()
+        .from(punya_transactions)
+        .where(
+          and(
+            eq(punya_transactions.student_id, sid),
+            eq(punya_transactions.source_entity_kind, "attendance_streak"),
+            sql`${punya_transactions.points} < 0`,
+          ),
+        );
+      expect(reversals).toHaveLength(0);
+      // Bonus still present; attendance still present (txn rolled back).
+      const [att] = await db
+        .select({ status: attendance.status })
+        .from(attendance)
+        .where(and(eq(attendance.session_id, session4), eq(attendance.student_id, sid)));
+      expect(att?.status).toBe("present");
+      expect(await balanceOf(sid)).toBe(await sumAllLedger(sid));
+    },
+    15_000,
+  );
 });
