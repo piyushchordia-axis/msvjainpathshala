@@ -3,6 +3,18 @@ import request from "supertest";
 import app from "../src/app";
 import { pool } from "@workspace/db";
 import { loginAs, auth } from "./helpers";
+import { ulid } from "../src/lib/ulid";
+
+function markBody(
+  records: Array<{ student_id: string; status: "present" | "absent" | "late" | "excused" }>,
+  markedAt = new Date().toISOString(),
+) {
+  return {
+    submission_op_id: ulid(),
+    marked_at: markedAt,
+    marks: records.map((r) => ({ ...r, client_op_id: ulid() })),
+  };
+}
 
 afterAll(async () => {
   await pool.end(); // close the shared pg pool so vitest exits cleanly
@@ -13,11 +25,6 @@ interface BatchRow {
   name: string | null;
   centre_name: string;
 }
-
-// The seeded GPS centre (see lib/db/src/seed.ts: "Ghatkopar Jain Pathshala").
-const GPS_CENTRE_NAME = "Ghatkopar Jain Pathshala";
-const GPS_CENTRE_LAT = 19.0861;
-const GPS_CENTRE_LNG = 72.9081;
 
 async function listBatches(token: string): Promise<BatchRow[]> {
   const res = await request(app).get("/v1/admin/batches").set(auth(token));
@@ -63,12 +70,11 @@ describe("attendance", () => {
       status: i === 0 ? ("absent" as const) : ("present" as const),
     }));
     const marked = await request(app)
-      .post(`/v1/attendance/sessions/${sessionId}/mark`)
+      .post(`/v1/sessions/${sessionId}/attendance`)
       .set(auth(token))
-      .send({ records });
+      .send(markBody(records, "2026-01-15T10:00:00.000+05:30"));
     expect(marked.status).toBe(200);
-    expect(marked.body.data.marked).toBe(records.length);
-    expect(marked.body.data.method).toBe("manual");
+    expect(marked.body.data.applied).toBe(records.length);
 
     // Re-fetch the roster and assert statuses persisted.
     const reRes = await request(app).get(`/v1/attendance/sessions/${sessionId}`).set(auth(token));
@@ -114,47 +120,16 @@ describe("attendance", () => {
     if (!foreignStudentId) return; // no foreign student available to assert with
 
     const res = await request(app)
-      .post(`/v1/attendance/sessions/${sessionId}/mark`)
+      .post(`/v1/sessions/${sessionId}/attendance`)
       .set(auth(token))
-      .send({ records: [{ student_id: foreignStudentId, status: "present" }] });
-    expect(res.status).toBe(422);
+      .send(markBody([{ student_id: foreignStudentId, status: "present" }], "2026-01-16T10:00:00.000+05:30"));
+    expect(res.status).toBe(200);
+    expect(res.body.data.rejected).toBe(1);
+    expect(res.body.data.items[0].code).toBe("ERR_STUDENT_NOT_ENROLLED");
   });
 
-  it("enforces the GPS geofence for gps_required sessions", async () => {
-    const { token } = await loginAs("super_admin");
-    const batches = await listBatches(token);
-    const gpsBatch = batches.find((b) => b.centre_name === GPS_CENTRE_NAME);
-    expect(gpsBatch, "expected a seeded batch at the GPS centre").toBeTruthy();
-
-    // Create a gps_required session for the GPS centre's batch.
-    const session = await request(app)
-      .post("/v1/attendance/sessions")
-      .set(auth(token))
-      .send({ batch_id: gpsBatch!.id, session_date: "2026-01-17", gps_required: true });
-    expect(session.status).toBe(200);
-    const sessionId: string = session.body.data.id;
-
-    const rosterRes = await request(app).get(`/v1/attendance/sessions/${sessionId}`).set(auth(token));
-    expect(rosterRes.status).toBe(200);
-    expect(rosterRes.body.data.session.has_gps).toBe(true);
-    const roster = rosterRes.body.data.roster as Array<{ student_id: string }>;
-    if (roster.length === 0) return;
-    const records = [{ student_id: roster[0].student_id, status: "present" as const }];
-
-    // Far-away coordinates -> 403 (outside geofence).
-    const far = await request(app)
-      .post(`/v1/attendance/sessions/${sessionId}/mark`)
-      .set(auth(token))
-      .send({ records, lat: 28.6139, lng: 77.209 }); // New Delhi, hundreds of km away
-    expect(far.status).toBe(403);
-
-    // Near coordinates (at the centre) -> 200.
-    const near = await request(app)
-      .post(`/v1/attendance/sessions/${sessionId}/mark`)
-      .set(auth(token))
-      .send({ records, lat: GPS_CENTRE_LAT, lng: GPS_CENTRE_LNG });
-    expect(near.status).toBe(200);
-    expect(near.body.data.method).toBe("gps");
+  it.skip("GPS geofence moves to check-in (AT14); not on attendance mark", async () => {
+    // Covered by future POST /v1/sessions/:id/check-in tests.
   });
 
   it("cancels a session", async () => {
@@ -206,12 +181,11 @@ describe("attendance", () => {
           [{ student_id: "00000000-0000-0000-0000-000000000001", status: "present" as const }];
 
     const marked = await request(app)
-      .post(`/v1/attendance/sessions/${sessionId}/mark`)
+      .post(`/v1/sessions/${sessionId}/attendance`)
       .set(auth(token))
-      .send({ records });
-    // Marking a cancelled session is a client error (>=400), specifically 422.
-    expect(marked.status).toBeGreaterThanOrEqual(400);
-    expect(marked.status).toBe(422);
+      .send(markBody(records, "2026-01-19T10:00:00.000+05:30"));
+    expect(marked.status).toBe(409);
+    expect(marked.body.error.code).toBe("ERR_SESSION_CANCELLED");
 
     // The session must STILL be cancelled (not flipped to completed).
     const after = await request(app).get(`/v1/attendance/sessions/${sessionId}`).set(auth(token));
@@ -219,13 +193,12 @@ describe("attendance", () => {
     expect(after.body.data.session.status).toBe("cancelled");
   });
 
-  it("stores manual method and no coords for a non-geofenced session even when coords are sent", async () => {
+  it("marks via POST /v1/sessions/:id/attendance and persists status", async () => {
     const { token } = await loginAs("super_admin");
     const batches = await listBatches(token);
     const session = await request(app)
       .post("/v1/attendance/sessions")
       .set(auth(token))
-      // gps_required omitted -> defaults to false (non-geofenced).
       .send({ batch_id: batches[0].id, session_date: "2026-01-20" });
     expect(session.status).toBe(200);
     const sessionId: string = session.body.data.id;
@@ -233,27 +206,24 @@ describe("attendance", () => {
     const rosterRes = await request(app).get(`/v1/attendance/sessions/${sessionId}`).set(auth(token));
     expect(rosterRes.status).toBe(200);
     const roster = rosterRes.body.data.roster as Array<{ student_id: string }>;
-    if (roster.length === 0) return; // nothing to mark
+    if (roster.length === 0) return;
     const records = [{ student_id: roster[0].student_id, status: "present" as const }];
 
-    // Client sends coords, but since the session is NOT gps_required they must
-    // be ignored: method stays "manual" (not "gps") and is not labelled gps.
     const marked = await request(app)
-      .post(`/v1/attendance/sessions/${sessionId}/mark`)
+      .post(`/v1/sessions/${sessionId}/attendance`)
       .set(auth(token))
-      .send({ records, lat: 19.0861, lng: 72.9081 });
+      .send(markBody(records, "2026-01-20T10:00:00.000+05:30"));
     expect(marked.status).toBe(200);
-    expect(marked.body.data.method).toBe("manual");
+    expect(marked.body.data.applied).toBe(1);
 
-    // The persisted roster row must report manual marking, not gps.
     const reRes = await request(app).get(`/v1/attendance/sessions/${sessionId}`).set(auth(token));
     expect(reRes.status).toBe(200);
     const reRoster = reRes.body.data.roster as Array<{
       student_id: string;
-      marked_method: string | null;
+      status: string | null;
     }>;
     const row = reRoster.find((r) => r.student_id === records[0].student_id);
-    expect(row?.marked_method).toBe("manual");
+    expect(row?.status).toBe("present");
   });
 
   it("returns 404 when city_admin reads an out-of-scope session", async () => {

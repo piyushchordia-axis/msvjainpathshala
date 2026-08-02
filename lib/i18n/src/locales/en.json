@@ -1,0 +1,9 @@
+{
+  "errors": {
+    "ERR_SESSION_CANCELLED": "This session was cancelled. Open today's sessions and pick an active class, or ask your Sanchalak to uncancel it.",
+    "ERR_SESSION_NOT_SCHEDULED": "No scheduled session matches this batch and date. Check in again after the timetable refreshes, or ask your Sanchalak if the class should be materialised.",
+    "ERR_ALREADY_CHECKED_IN_BY_OTHER": "Another Guruji already checked in to this session. Contact your Sanchalak if you need to take over.",
+    "ERR_ATTENDANCE_EDIT_WINDOW_EXPIRED": "The same-day edit window for this mark has closed (Asia/Kolkata). Ask your Sanchalak if a correction is still needed.",
+    "ERR_STUDENT_NOT_ENROLLED": "That student is not on this batch roster. Refresh the roster or ask your Sanchalak to fix the enrolment."
+  }
+}

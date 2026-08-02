@@ -64,8 +64,11 @@ export function formatAgeGroups(codes: string[] | null | undefined, lang: "en" |
   return list.map((c) => formatAgeGroup(c, lang)).join(" · ");
 }
 
+/** AT1 — present | absent | late | excused */
 export const ATTENDANCE_STATUSES = ["present", "absent", "late", "excused"] as const;
 export const SESSION_STATUSES = ["scheduled", "in_progress", "completed", "cancelled"] as const;
+/** Offline sync_operations.status (CLAUDE.md Offline sync §4). */
+export const SYNC_OP_STATUSES = ["success", "duplicate", "conflict", "failed"] as const;
 export const STUDENT_STATUSES = ["active", "inactive"] as const;
 export const ENROLMENT_STATUSES = ["pending", "approved", "rejected", "waitlisted"] as const;
 export const MSV_STATUSES = ["none", "applied", "waitlisted", "approved", "rejected", "revoked"] as const;
@@ -141,6 +144,7 @@ export const languageEnum = pgEnum("language_enum", LANGUAGES);
 export const ageGroupEnum = pgEnum("age_group_enum", AGE_GROUPS);
 export const attendanceStatusEnum = pgEnum("attendance_status_enum", ATTENDANCE_STATUSES);
 export const sessionStatusEnum = pgEnum("session_status_enum", SESSION_STATUSES);
+export const syncOpStatusEnum = pgEnum("sync_op_status_enum", SYNC_OP_STATUSES);
 export const studentStatusEnum = pgEnum("student_status_enum", STUDENT_STATUSES);
 export const enrolmentStatusEnum = pgEnum("enrolment_status_enum", ENROLMENT_STATUSES);
 export const msvStatusEnum = pgEnum("msv_status_enum", MSV_STATUSES);

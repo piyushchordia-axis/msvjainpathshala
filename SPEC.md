@@ -208,33 +208,9 @@ AuthService.verifyOtp()
       └─► Return { access, refresh, role, user, msv_flag, student_view_eligible }
 ```
 
-### 2.4 Offline Sync Flow (Attendance Example)
+### 2.4 Offline Sync Flow
 
-```
-Shikshak marks attendance offline
-      │
-      ▼
-MMKV writes to local table: pending_attendance
-   { submission_op_id (char26 ULID), marks: [{ student_id, status, client_op_id (char26) }], marked_at, created_at }
-      │
-      ▼
-Device comes online → SyncEngine wakes up
-      │
-      ├─► POST /v1/sync/batch  { ops: [pending_attendance...] }
-      │   (idempotent — server keyed on submission_op_id; AT19)
-      │
-      ▼
-SyncController → SyncService.applyOps()
-      │
-      ├─► For each op: lookup submission_op_id in sync_operations table
-      │       └─ if exists → return its prior result (idempotent replay)
-      │       └─ if new → execute in DB transaction; persist result
-      │
-      └─► Returns per-op { submission_op_id, status, server_id, error? }
-      │
-      ▼
-Client clears successful ops from MMKV pending queue
-```
+Canonical offline sync model: **CLAUDE.md → Offline sync — canonical model**. Do not restate queue names, drain order, retry, or conflict rules here.
 
 ### 2.5 Notification Fanout Flow
 
@@ -1215,7 +1191,7 @@ Indexes: `(niyam_id, student_id, submission_date)`, `(student_id, submitted_at d
 | volunteer_user_id | fk |
 | scan_kind | shivir_scan_kind_enum |
 | scanned_at | timestamptz |
-| client_op_id | uuid unique (offline idempotency) |
+| client_op_id | char(26) ULID unique (AT19) |
 | device_offline boolean |
 
 Indexes: `(shivir_session_id, student_id)`, `(shivir_event_id, scanned_at desc)`, unique `client_op_id`. For `in_out` mode, app logic toggles next scan to check_out if last was check_in.
@@ -1651,10 +1627,12 @@ Frozen route table — see CLAUDE.md. Use only the routes listed below.
 
 ### 6.23 Sync (Offline)
 
-| Method | Route | Roles |
-|---|---|---|
-| POST | `/v1/sync/batch` | jwt | Body `{ ops: [{ submission_op_id, op_kind, payload }] }`. Returns per-op result. Per-item `client_op_id`s live inside payloads (AT19). |
-| GET | `/v1/sync/bootstrap` | jwt | Returns initial offline-cache payload for caller's role (batches, students, niyams, last 50 notices, current punya balance). |
+Canonical offline sync model: **CLAUDE.md → Offline sync — canonical model**. Do not restate queue names, drain order, retry, or conflict rules here.
+
+| Method | Route | Roles | Notes |
+|---|---|---|---|
+| POST | `/v1/sync/batch` | jwt | Single transport — request/response shapes in CLAUDE.md §4. |
+| GET | `/v1/sync/bootstrap` | jwt | Initial offline-cache payload for caller's role. |
 
 ### 6.24 Media
 
@@ -1840,8 +1818,8 @@ Binding: CLAUDE.md AT2–AT6, AT17–AT26, AT31.
 2. Client either calls `/v1/batches/:id/students` (online) or reads cached roster from MMKV (offline).
 3. Marks each student; generate `submission_op_id` once per submission and a `client_op_id` per mark (AT19, both char(26) ULID).
 4. Online: POST `/v1/sessions/:id/attendance { marks, submission_op_id, marked_at }` immediately.
-5. Offline: write to MMKV `pending_attendance`; drain via `POST /v1/sync/batch`.
-6. **Idempotency:** `sync_operations` keyed on `submission_op_id`. Cancelled session → 409 `ERR_SESSION_CANCELLED` inside the marking transaction (AT24).
+5. Offline: enqueue `jp.queue.attendance` per CLAUDE.md Offline sync canonical model; drain via `POST /v1/sync/batch` only.
+6. **Idempotency:** see CLAUDE.md Offline sync §§3–5. Cancelled session → 409 `ERR_SESSION_CANCELLED` (AT24).
 7. Transactional logic (AT17–AT22):
    ```
    BEGIN;
@@ -1911,7 +1889,7 @@ Binding: CLAUDE.md AT2–AT6, AT17–AT26, AT31.
 5. **Present-Only mode:** insert `present` if no prior scan for same session; else 409.
 6. Push notification to parent emitted immediately.
 7. WebSocket emits to `shivir:{event_id}` channel with delta — admin dashboard updates live.
-8. **Offline:** volunteer's app queues scans in MMKV. On sync, `client_op_id` provides idempotency.
+8. **Offline:** queue `jp.queue.shivir_scans`; drain per CLAUDE.md Offline sync canonical model.
 
 ### 8.7 Notice Critical SMS Fallback
 - City admin posts notice with `is_critical=true, send_sms=true`.
@@ -1944,9 +1922,8 @@ Binding: CLAUDE.md AT2–AT6, AT17–AT26, AT31.
 - Repeating the same key returns the original response.
 
 ### 8.11 Conflict Resolution (Offline Sync)
-- `sync_operations.submission_op_id` is the batch replay key (AT19); per-row `client_op_id` is for item repair only.
-- For attendance: cancelled session → 409 `ERR_SESSION_CANCELLED` (AT24). Same-day edits use client `marked_at` IST (AT26). Corrections use reverse-then-award (AT18).
-- For Niyam submissions: each upload generates new op IDs; multiple submissions allowed.
+
+Canonical offline sync model: **CLAUDE.md → Offline sync — canonical model**. Do not restate queue names, drain order, retry, or conflict rules here.
 
 ### 8.12 Soft-Delete Strategy
 - Tables with `deleted_at` excluded from default queries via Drizzle's `withDeleted: false` pattern.
@@ -2148,48 +2125,15 @@ All clients send `auth { token }` on connect; server validates JWT before joinin
 
 # 11. OFFLINE-FIRST ARCHITECTURE
 
-### 11.1 Local Storage Layout (MMKV)
+Queues, drain order, identifiers, transport, replay, conflict, retry, and failure-state UI: **Canonical offline sync model: **CLAUDE.md → Offline sync — canonical model**. Do not restate queue names, drain order, retry, or conflict rules here.**
+
+Non-queue MMKV cache keys (auth/cache/bootstrap) remain local concerns:
 
 ```
-MMKV instances:
-  jp.auth                   → access_token, refresh_token, user, view
-  jp.queue.attendance       → array<PendingAttendanceOp>
-  jp.queue.checkin          → array<PendingCheckInOp>
-  jp.queue.checkout         → array<PendingCheckOutOp>
-  jp.queue.shivir_scans     → array<PendingShivirScanOp>
-  jp.queue.niyam_uploads    → array<PendingNiyamUploadOp>
-  jp.cache.batches          → batch roster snapshots
-  jp.cache.students         → student roster per batch
-  jp.cache.niyams           → active niyams for student
-  jp.cache.notices          → last 50 notices
-  jp.cache.id_card          → png base64 + meta
-  jp.cache.punya_balance    → last seen balance
-  jp.bootstrap.version      → last bootstrap epoch
+jp.auth, jp.cache.*, jp.bootstrap.version
 ```
 
-### 11.2 Sync Engine
-- Singleton: `apps/mobile/src/sync/sync-engine.ts`.
-- Triggered on:
-  - App foreground (NetInfo listener)
-  - Connectivity change (offline → online)
-  - Background timer every 30s when online
-- Flow per cycle:
-  1. Collect all pending ops from all queues.
-  2. Group into a single `POST /v1/sync/batch { ops }` request (max 100 ops per batch).
-  3. Process per-op result:
-     - `success` → remove from MMKV; update local cache.
-     - `duplicate` → remove from MMKV; treat as success.
-     - `failed` (retryable) → keep in queue; increment local attempt counter; on counter > 5 → move to `dead_letter` MMKV; surface in "Sync Issues" screen.
-- Optimistic UI: mutations write to MMKV + update Zustand store immediately; UI shows green checkmark with cloud-with-arrow icon → green-only on confirmed sync.
-
-### 11.3 Retry Policy
-- Local exponential backoff: 5s, 15s, 60s, 5min, 30min.
-- Network errors trigger retry; HTTP 4xx (except 409/429) move to dead-letter immediately.
-
-### 11.4 Conflict Resolution
-- Idempotent operations on server via `submission_op_id` / per-row `client_op_id` (AT19, Section 8.10).
-- Server may return `duplicate` → client treats as success.
-- For data freshness (e.g. notices), server returns `etag` per resource; client refetches if stale.
+Queue keys are only those listed in CLAUDE.md (`jp.queue.checkin` … `jp.queue.acknowledgements`). Use `jp.queue.niyam_submissions` (never a separate uploads queue name).
 
 ### 11.5 Bootstrap Hydration
 - On first login or major version upgrade: `GET /v1/sync/bootstrap` returns:
@@ -2209,9 +2153,8 @@ MMKV instances:
 - Critical reads (homework deadlines, niyam end_date) always fetch live when online.
 
 ### 11.7 Offline UI Indicators
-- Top banner when offline: "Offline — changes will sync when you're back online."
-- Sync Issues drawer accessible from any screen — lists dead-letter ops with retry/discard.
-- Attendance roster shows "pending sync" badge per submission.
+
+Canonical offline sync model: **CLAUDE.md → Offline sync — canonical model**. Do not restate queue names, drain order, retry, or conflict rules here. (failure-state table). Top banner when offline remains: "Offline — changes will sync when you're back online."
 
 ---
 
@@ -2573,9 +2516,10 @@ GITHUB_OIDC_ROLE_ARN=arn:aws:iam::****:role/GitHubActionsDeploy
 - Assert: retries, DLQ routing, idempotency, ordering where required.
 
 ### 15.5 Offline Sync Tests
-- Mobile Detox scenario:
-  - Toggle airplane mode → mark attendance → toggle off → verify server-side persistence + UI sync indicator.
-  - Same `client_op_id` submitted twice → only one persistence.
+- Mobile Detox scenario per CLAUDE.md Offline sync canonical model:
+  - Airplane mode → checkin + attendance + checkout → online → server persistence + queued/syncing/synced UI.
+  - Same `submission_op_id` twice → `duplicate` / replayed `response_payload`, one domain effect.
+  - Same `(session_id, student_id)` with older `marked_at` → `duplicate`, not applied.
 
 ### 15.6 Performance / Load
 - k6 scripts in `infra/load-tests/`:
@@ -3444,15 +3388,9 @@ The project is non-phased per product spec (Section 1), but the build is necessa
 
 **Dependencies:** Step 13.
 
-**Build:**
-- `POST /v1/sync/batch` accepts an array of client-generated operations, each with `submission_op_id`, `op_type`, `payload`, `client_timestamp`. Server processes idempotently using `sync_operations` unique `(user_id, submission_op_id)` (AT19).
-- Conflict policy: last-write-wins by `client_timestamp` for non-critical fields; server-authoritative for state-machine transitions; explicit error returned for unresolvable conflicts (e.g. attendance for a cancelled session).
-- `GET /v1/sync/bootstrap` returns user's full working set (their batches, current students, active niyams, recent notices) for first-launch hydration.
-- Mobile sync engine (`apps/mobile/src/sync/`): triggered on network restore, app foreground, and every 60s while online. Drains queues in priority order: attendance > scans > niyam-submissions > acknowledgements.
-- Retry policy: exponential backoff capped at 5 minutes; after 5 failed attempts, surface to UI as "Sync issue — tap to retry".
-- UI indicators: top banner when offline, queued-count badge on tabs with pending operations, success toast after sync drain.
+**Build:** Implement **CLAUDE.md → Offline sync — canonical model** in full (queues, causal drain + escape hatch, identifiers, `/v1/sync/batch`, writable `sync_operations` replay, conflict rules, retry with jitter, failure-state UI). Also implement `GET /v1/sync/bootstrap` for first-launch hydration (SPEC §11.5).
 
-**Exit criteria:** Detox test passes the scenario: shikshak goes offline, marks attendance for 30 students across 2 sessions, submits a niyam rejection, comes back online, and within 30s all operations sync to the server with no duplicates and no losses.
+**Exit criteria:** Detox: shikshak goes offline, checks in, marks 30 students across 2 sessions, checks out, comes online; within 30s all ops sync with no duplicates/losses; UI shows queued→syncing→synced (and conflict/failed when forced).
 
 ---
 

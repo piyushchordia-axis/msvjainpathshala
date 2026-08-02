@@ -175,7 +175,7 @@ export async function seedIndoreNetwork(opts: {
         contact_email: c.email,
         lat: c.lat,
         lng: c.lng,
-        gps_radius_m: 250,
+        gps_radius_meters: 250,
         status: "active" as const,
       })),
     )

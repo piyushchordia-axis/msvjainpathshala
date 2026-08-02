@@ -23,6 +23,8 @@ import {
   msv_enrolments,
   sessions,
   attendance,
+  absence_notifications,
+  sync_operations,
   punya_transactions,
   punya_balances,
   niyams,
@@ -131,7 +133,7 @@ async function main(): Promise<void> {
       gallery_items, library_items, shivir_events, notices,
       niyam_streaks, niyam_submission_media, niyam_submissions, niyams,
       punya_balances, punya_transactions, punya_configs, punya_features,
-      session_cancellations, attendance, sessions,
+      attendance, sessions, absence_notifications, sync_operations,
       digital_id_cards, msv_enrolments, enrolments, students,
       shikshak_batch_assignments, shikshak_centre_assignments, sanchalak_centre_assignments,
       centre_holidays, batches, centres,
@@ -338,7 +340,7 @@ async function main(): Promise<void> {
       contact_email: "ghatkopar@example.org",
       lat: "19.0861000",
       lng: "72.9081000",
-      gps_radius_m: 200,
+      gps_radius_meters: 250,
       status: "active",
     })
     .returning();
@@ -641,7 +643,7 @@ async function main(): Promise<void> {
         .insert(sessions)
         .values({
           batch_id: batch.id,
-          session_date: isoDate(daysAgo(w * 7)),
+          scheduled_date: isoDate(daysAgo(w * 7)),
           status: "completed",
           topic: `Week ${5 - w} — Navkar Mantra & stavan`,
           conducted_by: teacherId,
@@ -655,6 +657,7 @@ async function main(): Promise<void> {
         await db.insert(attendance).values({
           session_id: session.id,
           student_id: studentId,
+          session_date: session.scheduled_date,
           status,
           marked_by: teacherId,
         });

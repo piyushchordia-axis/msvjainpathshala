@@ -257,7 +257,7 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
     .from(attendance)
     .innerJoin(sessions, eq(sessions.id, attendance.session_id))
     .innerJoin(batches, eq(batches.id, sessions.batch_id))
-    .where(and(gte(sessions.session_date, since.toISOString().slice(0, 10)), attendanceCentreFilter));
+    .where(and(gte(sessions.scheduled_date, since.toISOString().slice(0, 10)), attendanceCentreFilter));
   const attendanceRate =
     attRow && attRow.total > 0 ? Math.round((Number(attRow.present) / attRow.total) * 1000) / 10 : 0;
 

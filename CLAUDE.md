@@ -507,15 +507,201 @@ Error codes are defined in `@jp/shared/errors`. Always use the enum — never re
 
 ---
 
-## Offline sync rules
+## Offline sync — canonical model
 
-- **Two-level op IDs (AT19):** `submission_op_id` (one per submission → `sync_operations`, batch replay-safety) and `client_op_id` (one per item → e.g. `attendance.client_op_id`, per-row repair). Both are ULIDs stored as `char(26)` with a format CHECK — not `uuid`. Duplicate `submission_op_id` on sync is a no-op returning the cached result.
-- **MMKV queue priority:** `attendance` → `shivir_scans` → `niyam_submissions` → `homework_submissions` → `acknowledgements`
-- **Retry policy:** exponential backoff 5s → 15s → 45s → 2min → 5min cap, max 10 attempts
-- **Conflict resolution:** server is authoritative for state-machine transitions (e.g. marking attendance on a cancelled session returns 409). Last-write-wins by `client_timestamp` for metadata fields.
+This is the only offline sync specification. Implementers build from this section without asking. Conflicting informal descriptions elsewhere are deleted or reduced to a pointer here.
+
+### 1. Queue definitions (MMKV keys)
+
+Exact keys. Payload shapes below are TypeScript-facing contracts (stored as JSON in MMKV arrays).
+
+```ts
+// jp.queue.checkin
+type PendingCheckInOp = {
+  submission_op_id: string; // ULID char(26)
+  batch_id: string;         // uuid
+  session_date: string;     // YYYY-MM-DD
+  lat: number;
+  lng: number;
+  accuracy_m: number;
+  client_timestamp: string; // ISO-8601
+};
+
+// jp.queue.attendance
+type PendingAttendanceOp = {
+  submission_op_id: string;
+  batch_id: string;
+  session_date: string;     // YYYY-MM-DD — NEVER a client-minted session_id
+  marks: Array<{
+    student_id: string;
+    status: 'present' | 'absent' | 'late' | 'excused';
+    notes?: string;
+    client_op_id: string;   // ULID char(26) — per item (AT19)
+  }>;
+  marked_at: string;        // ISO-8601 — client clock; same-day window uses this (AT26)
+  client_timestamp: string;
+};
+
+// jp.queue.checkout
+type PendingCheckOutOp = {
+  submission_op_id: string;
+  batch_id: string;
+  session_date: string;
+  lat: number;
+  lng: number;
+  accuracy_m: number;
+  client_timestamp: string;
+};
+
+// jp.queue.shivir_scans
+type PendingShivirScanOp = {
+  submission_op_id: string;
+  shivir_session_id: string;
+  qr_payload: string;
+  scanned_at: string;
+  client_timestamp: string;
+};
+
+// jp.queue.niyam_submissions  — canonical name; never jp.queue.niyam_uploads
+type PendingNiyamSubmissionOp = {
+  submission_op_id: string;
+  niyam_id: string;
+  student_id: string;
+  proof_asset_id?: string;
+  client_timestamp: string;
+};
+
+// jp.queue.homework_submissions
+type PendingHomeworkSubmissionOp = {
+  submission_op_id: string;
+  assignment_id: string;
+  student_id: string;
+  payload: Record<string, unknown>;
+  client_timestamp: string;
+};
+
+// jp.queue.acknowledgements
+type PendingAcknowledgementOp = {
+  submission_op_id: string;
+  kind: string;
+  entity_id: string;
+  client_timestamp: string;
+};
+```
+
+**Session resolution key:** `jp.queue.checkin` and `jp.queue.attendance` (and checkout) key on `(batch_id, session_date)` only. The client never mints a `session_id`. The server resolves the existing materialised session (AT7) or soft-creates under AT8. Any doc that says "group by `session_id`" for offline attendance is wrong.
+
+### 2. Drain order — causal, not priority
+
+```
+checkin → attendance → checkout → shivir_scans → niyam_submissions
+→ homework_submissions → acknowledgements
+```
+
+A session must be `in_progress` before marks land against it, and check-out must not close a session before its marks arrive. `jp.queue.checkin` is part of this chain; omitting it lets marks race a session that does not yet exist on the server.
+
+**Ordering guard + escape hatch:** If the attendance queue holds an op for `(batch_id, session_date)` and the checkin queue holds a **PENDING** op for the same key, drain checkin first. If that check-in op is in the **FAILED** terminal state (attempts exhausted), do **not** block — release the attendance op. The server resolves or creates the session under AT8. Without this escape hatch, one permanently-failed check-in blocks that batch's attendance forever; strict sequential draining without the hatch would also stall homework and acknowledgements behind it.
+
+Within a single queue, drain by `submission_op_id` ascending (ULID lexicographic order = creation order).
+
+### 3. Identifiers (AT19)
+
+| ID | Scope | Stored on | Purpose |
+|---|---|---|---|
+| `submission_op_id` | one per submission | `sync_operations` | Batch replay-safety |
+| `client_op_id` | one per item | `attendance.client_op_id` (and analogous item columns) | Per-row repair |
+
+Both are **ULIDs** stored as `char(26)` with a format CHECK constraint — **not** the Postgres `uuid` type. A ULID will not insert into a `uuid` column. ULID is required because it sorts lexicographically, so the queue drains in creation order for free.
+
+**True idempotency anchor for attendance rows:** `UNIQUE (session_id, student_id)` with `ON CONFLICT DO UPDATE`. That is the only guarantee that holds however many times the client retries. `submission_op_id` makes the sync *transport* idempotent; the unique constraint makes the *domain row* idempotent.
+
+### 4. Transport — single path
+
+`POST /v1/sync/batch` is the **only** transport for all offline operations. The client must not have two sync code paths (no parallel "online-shaped" retry that bypasses `/v1/sync/batch` for queued ops).
+
+**Request:**
+```ts
+{
+  ops: Array<{
+    submission_op_id: string; // char(26) ULID
+    op_type:
+      | 'checkin'
+      | 'attendance'
+      | 'checkout'
+      | 'shivir_scan'
+      | 'niyam_submission'
+      | 'homework_submission'
+      | 'acknowledgement';
+    payload: unknown;         // typed by op_type — see §1
+    client_timestamp: string; // ISO-8601
+  }>;
+}
+```
+
+**Response:**
+```ts
+{
+  results: Array<{
+    submission_op_id: string;
+    status: 'success' | 'duplicate' | 'conflict' | 'failed';
+    server_id?: string;
+    error?: { code: string; message: string; details?: unknown };
+  }>;
+}
+```
+
+One failed op must not fail the batch — process every op independently and return a per-op result. Each `op_type` handler calls the **same** service method as its direct online endpoint (check-in service, attendance mark service, etc.). Never a parallel offline-only implementation.
+
+### 5. Server-side replay record (`sync_operations`)
+
+For every op, the handler **must write** a `sync_operations` row (not a read-only lookup table):
+
+| Column | Notes |
+|---|---|
+| `submission_op_id` | char(26) ULID |
+| `user_id` | actor |
+| `op_kind` | same vocabulary as `op_type` |
+| `request_payload` | jsonb |
+| `response_payload` | jsonb — what the client should receive on replay |
+| `status` | `success` \| `duplicate` \| `conflict` \| `failed` |
+| `applied_at` | timestamptz |
+
+Uniqueness: `UNIQUE (user_id, submission_op_id)`.
+
+**Replay:** look up `(user_id, submission_op_id)`. If a row exists with `status='success'`, return the stored `response_payload` without re-executing. `client_op_id` does **not** belong on `sync_operations` — it is per-item and lives on `attendance` (and peers).
+
+### 6. Conflict resolution
+
+Restated unambiguously (replaces SPEC §8.11):
+
+- **Attendance status:** newest `marked_at` wins; ties broken by server receipt order. If the stored row already has a newer `marked_at`, return `status='duplicate'` and do not apply. This comparison lives in the **shared service method**, not the sync layer — the online path is governed by it too.
+- **Metadata (notes):** last-write-wins by `client_timestamp`.
+- **State-machine violations** (e.g. marking a cancelled session): HTTP 409 / result `conflict` — never silently accepted (AT24).
+
+### 7. Retry
+
+Exponential backoff with jitter: **5s → 15s → 45s → 2min → 5min cap**, **max 10 attempts**.
+
+A 30-minute backoff on a Saturday-morning burst means marks land after the Guruji has gone home — that policy is deleted. Jitter is required: thirty devices reconnect together when a centre's wifi returns.
+
+- Network / 5xx / 429 → retry with backoff.
+- HTTP 4xx other than 409/429 → terminal `failed` (no further auto-retry); surface for manual retry.
+- `conflict` (409) → terminal for that op; show conflict UI (do not auto-retry as if transient).
+
+### 8. Failure states (mobile UI)
+
+Every queued op carries a local state. Only `queued` is insufficient — a mark that will never sync must not look like success.
+
+| State | UI |
+|---|---|
+| `queued` | "Saved offline — will sync" |
+| `syncing` | Progress indicator |
+| `synced` | Confirmation, auto-dismiss |
+| `duplicate` | Silently dequeue (server already had a newer mark) |
+| `conflict` | 409 — explain what happened and what to do, per the error voice rule (state the problem AND the fix) |
+| `failed` | Attempts exhausted — offer manual retry; **never** silently discard |
 
 ---
-
 ## Build process rules
 
 ### Before writing any code in a session
@@ -629,4 +815,4 @@ SMS_MONTHLY_CAP_INR             # daily SMS spend cap
 
 ---
 
-*Last updated: August 2026 — Attendance binding decisions AT1–AT31; authority precedence CLAUDE.md > SPEC.md*
+*Last updated: August 2026 — Offline sync canonical model; AT1–AT31; CLAUDE.md > SPEC.md*

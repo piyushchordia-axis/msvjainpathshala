@@ -37,7 +37,8 @@ export const centres = pgTable(
     // GPS geofence for attendance marking (nullable until configured).
     lat: numeric("lat", { precision: 10, scale: 7 }),
     lng: numeric("lng", { precision: 10, scale: 7 }),
-    gps_radius_m: integer("gps_radius_m").notNull().default(200),
+    /** Geofence radius in metres (AT13). Default 250. */
+    gps_radius_meters: integer("gps_radius_meters").notNull().default(250),
     status: studentStatusEnum("status").notNull().default("active"),
     ...softDelete(),
     ...timestamps(),

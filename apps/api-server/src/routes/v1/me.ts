@@ -193,7 +193,7 @@ router.get("/students/:id/attendance", async (req: Request, res: Response) => {
   const rows = await db
     .select({
       id: attendance.id,
-      session_date: sessions.session_date,
+      session_date: sessions.scheduled_date,
       status: attendance.status,
       topic: sessions.topic,
       batch_name: batches.name,
@@ -202,7 +202,7 @@ router.get("/students/:id/attendance", async (req: Request, res: Response) => {
     .innerJoin(sessions, eq(sessions.id, attendance.session_id))
     .leftJoin(batches, eq(batches.id, sessions.batch_id))
     .where(eq(attendance.student_id, id))
-    .orderBy(desc(sessions.session_date))
+    .orderBy(desc(sessions.scheduled_date))
     .limit(limit);
 
   ok(res, { items: rows }, { count: rows.length });
@@ -470,7 +470,7 @@ router.get("/today", async (req: Request, res: Response) => {
   const rows = await db
     .select({
       id: sessions.id,
-      session_date: sessions.session_date,
+      session_date: sessions.scheduled_date,
       status: sessions.status,
       topic: sessions.topic,
       batch_name: batches.name,
@@ -491,7 +491,7 @@ router.get("/today", async (req: Request, res: Response) => {
     .leftJoin(centres, eq(centres.id, batches.centre_id))
     .leftJoin(attendance, eq(attendance.session_id, sessions.id))
     .groupBy(sessions.id, batches.name, centres.name)
-    .orderBy(desc(sessions.session_date))
+    .orderBy(desc(sessions.scheduled_date))
     .limit(limit);
 
   ok(res, { items: rows }, { count: rows.length });

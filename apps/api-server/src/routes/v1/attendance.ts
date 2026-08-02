@@ -7,7 +7,7 @@
  * before any attendance row is written.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, sessions, attendance, session_cancellations, batches, centres, students } from "@workspace/db";
+import { db, sessions, attendance, batches, centres, students } from "@workspace/db";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
@@ -26,19 +26,6 @@ function scopedBatchFilter(scope: AdminScope, column: PgColumn) {
   return inArray(column, scope.batchIds);
 }
 
-/* Great-circle distance between two WGS84 points, in metres. */
-function haversine(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371000; // earth radius in metres
-  const toRad = (d: number) => (d * Math.PI) / 180;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-}
-
 /* GET /v1/attendance/sessions?batch_id=&limit= — scoped list with present/total counts */
 router.get("/sessions", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
@@ -53,7 +40,7 @@ router.get("/sessions", async (req: Request, res: Response) => {
   const rows = await db
     .select({
       id: sessions.id,
-      session_date: sessions.session_date,
+      session_date: sessions.scheduled_date,
       status: sessions.status,
       topic: sessions.topic,
       gps_required: sessions.gps_required,
@@ -69,7 +56,7 @@ router.get("/sessions", async (req: Request, res: Response) => {
     .leftJoin(attendance, eq(attendance.session_id, sessions.id))
     .where(and(centreFilter, batchScopeFilter, batchFilter))
     .groupBy(sessions.id, batches.name, centres.name)
-    .orderBy(desc(sessions.session_date))
+    .orderBy(desc(sessions.scheduled_date))
     .limit(limit);
   ok(res, { items: rows }, { count: rows.length });
 });
@@ -99,12 +86,16 @@ router.post("/sessions", async (req: Request, res: Response) => {
 
   const [row] = await db.insert(sessions).values({
     batch_id: batch.id,
-    session_date: body.session_date,
+    scheduled_date: body.session_date,
     topic: body.topic ?? null,
     gps_required: body.gps_required ?? false,
     status: "scheduled",
     conducted_by: req.authUser!.id,
-  }).returning({ id: sessions.id, batch_id: sessions.batch_id, session_date: sessions.session_date });
+  }).returning({
+    id: sessions.id,
+    batch_id: sessions.batch_id,
+    session_date: sessions.scheduled_date,
+  });
 
   await auditFromReq(req, {
     action: "create",
@@ -125,7 +116,7 @@ router.get("/sessions/:id", async (req: Request, res: Response) => {
     .select({
       id: sessions.id,
       batch_id: sessions.batch_id,
-      session_date: sessions.session_date,
+      session_date: sessions.scheduled_date,
       status: sessions.status,
       topic: sessions.topic,
       gps_required: sessions.gps_required,
@@ -176,131 +167,7 @@ router.get("/sessions/:id", async (req: Request, res: Response) => {
   });
 });
 
-const markSchema = z.object({
-  records: z
-    .array(
-      z.object({
-        student_id: z.string().uuid(),
-        status: z.enum(["present", "absent", "late", "excused"]),
-      }),
-    )
-    .min(1),
-  lat: z.number().min(-90).max(90).optional(),
-  lng: z.number().min(-180).max(180).optional(),
-});
-
-/* POST /v1/attendance/sessions/:id/mark — upsert attendance rows, geofence-checked */
-router.post("/sessions/:id/mark", async (req: Request, res: Response) => {
-  let body: z.infer<typeof markSchema>;
-  try { body = markSchema.parse(req.body); }
-  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid attendance data."); return; }
-
-  const scope = await resolveAdminScope(req.authUser!);
-  const id = String(req.params.id);
-  const [session] = await db
-    .select({
-      id: sessions.id,
-      batch_id: sessions.batch_id,
-      status: sessions.status,
-      gps_required: sessions.gps_required,
-      centre_id: batches.centre_id,
-      centre_lat: centres.lat,
-      centre_lng: centres.lng,
-      gps_radius_m: centres.gps_radius_m,
-    })
-    .from(sessions)
-    .innerJoin(batches, eq(batches.id, sessions.batch_id))
-    .innerJoin(centres, eq(centres.id, batches.centre_id))
-    .where(eq(sessions.id, id))
-    .limit(1);
-  if (!session || !inBatchWriteScope(scope, session.batch_id, session.centre_id)) {
-    fail(res, 404, "ERR_NOT_FOUND", "Session not found."); return;
-  }
-  // A cancelled session must not be marked (doing so would un-cancel it).
-  if (session.status === "cancelled") {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Session is cancelled."); return;
-  }
-
-  const hasCoords = body.lat !== undefined && body.lng !== undefined;
-  let distance: number | null = null;
-
-  // The method reflects whether a geofence was actually ENFORCED. Only a
-  // gps_required session validates client coords against the centre; for a
-  // non-geofenced session client coords are untrusted and ignored entirely.
-  if (session.gps_required) {
-    const cLat = session.centre_lat !== null ? Number(session.centre_lat) : null;
-    const cLng = session.centre_lng !== null ? Number(session.centre_lng) : null;
-    if (!hasCoords || cLat === null || cLng === null || !Number.isFinite(cLat) || !Number.isFinite(cLng)) {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "GPS location is required for this session."); return;
-    }
-    distance = haversine(cLat, cLng, body.lat!, body.lng!);
-    if (distance > session.gps_radius_m) {
-      fail(res, 403, "ERR_FORBIDDEN", "Outside centre geofence."); return;
-    }
-  }
-
-  // Every record's student must belong to this session's batch.
-  const studentIds = [...new Set(body.records.map((r) => r.student_id))];
-  const validRows = await db
-    .select({ id: students.id })
-    .from(students)
-    .where(and(eq(students.batch_id, session.batch_id), inArray(students.id, studentIds)));
-  const validSet = new Set(validRows.map((r) => r.id));
-  if (studentIds.some((sid) => !validSet.has(sid))) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "One or more students do not belong to this session's batch."); return;
-  }
-
-  // gps only when a geofence was enforced; otherwise manual with no coords stored.
-  const method = session.gps_required ? "gps" : "manual";
-  const markedLat = session.gps_required ? String(body.lat) : null;
-  const markedLng = session.gps_required ? String(body.lng) : null;
-  const markedDistance = session.gps_required && distance !== null ? Math.round(distance) : null;
-  const now = new Date();
-
-  // Atomic: all attendance upserts AND the status flip succeed or none do.
-  await db.transaction(async (tx) => {
-    for (const rec of body.records) {
-      await tx
-        .insert(attendance)
-        .values({
-          session_id: session.id,
-          student_id: rec.student_id,
-          status: rec.status,
-          marked_by: req.authUser!.id,
-          marked_at: now,
-          marked_method: method,
-          marked_lat: markedLat,
-          marked_lng: markedLng,
-          marked_distance_m: markedDistance,
-        })
-        .onConflictDoUpdate({
-          target: [attendance.session_id, attendance.student_id],
-          set: {
-            status: rec.status,
-            marked_by: req.authUser!.id,
-            marked_at: now,
-            marked_method: method,
-            marked_lat: markedLat,
-            marked_lng: markedLng,
-            marked_distance_m: markedDistance,
-          },
-        });
-    }
-
-    // Guaranteed non-cancelled by the guard above, so completing is safe.
-    await tx.update(sessions).set({ status: "completed" }).where(eq(sessions.id, session.id));
-  });
-
-  await auditFromReq(req, {
-    action: "update",
-    entityKind: "attendance_session",
-    entityId: session.id,
-    summary: `Marked attendance for ${body.records.length} student(s) (${method}).`,
-    metadata: { batch_id: session.batch_id, marked: body.records.length, method },
-  });
-
-  ok(res, { session_id: session.id, marked: body.records.length, method });
-});
+/* Legacy POST /v1/attendance/sessions/:id/mark removed — use POST /v1/sessions/:id/attendance. */
 
 const cancelSchema = z.object({
   reason: z.string().max(300).optional(),
@@ -324,12 +191,15 @@ router.post("/sessions/:id/cancel", async (req: Request, res: Response) => {
     fail(res, 404, "ERR_NOT_FOUND", "Session not found."); return;
   }
 
-  await db.insert(session_cancellations).values({
-    session_id: session.id,
-    reason: body.reason ?? null,
-    cancelled_by: req.authUser!.id,
-  });
-  await db.update(sessions).set({ status: "cancelled" }).where(eq(sessions.id, session.id));
+  await db
+    .update(sessions)
+    .set({
+      status: "cancelled",
+      cancelled_at: new Date(),
+      cancellation_reason: body.reason ?? null,
+      cancellation_by: req.authUser!.id,
+    })
+    .where(eq(sessions.id, session.id));
 
   ok(res, { id: session.id, status: "cancelled" });
 });

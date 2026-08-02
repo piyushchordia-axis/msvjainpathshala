@@ -1,0 +1,8 @@
+{
+  "name": "@jp/api",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "test:integration": "pnpm --filter @workspace/api-server run test:integration"
+  }
+}

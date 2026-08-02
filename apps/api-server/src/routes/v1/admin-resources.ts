@@ -592,7 +592,7 @@ router.get("/sessions", async (req: Request, res: Response) => {
   const rows = await db
     .select({
       id: sessions.id,
-      session_date: sessions.session_date,
+      session_date: sessions.scheduled_date,
       status: sessions.status,
       topic: sessions.topic,
       batch_name: batches.name,
@@ -606,7 +606,7 @@ router.get("/sessions", async (req: Request, res: Response) => {
     .leftJoin(attendance, eq(attendance.session_id, sessions.id))
     .where(and(isNull(batches.deleted_at), isNull(centres.deleted_at), centreFilter))
     .groupBy(sessions.id, batches.name, centres.name)
-    .orderBy(desc(sessions.session_date))
+    .orderBy(desc(sessions.scheduled_date))
     .limit(limit);
   ok(res, { items: rows }, { count: rows.length });
 });

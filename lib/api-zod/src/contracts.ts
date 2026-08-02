@@ -40,6 +40,46 @@ export const languageSchema = z.enum(["en", "hi"]);
 export const ageGroupSchema = z.enum(["bal", "kishor", "tarun", "yuva"]);
 export type AgeGroup = z.infer<typeof ageGroupSchema>;
 
+/** AT1 — attendance mark status. */
+export const attendanceStatusSchema = z.enum(["present", "absent", "late", "excused"]);
+export type AttendanceStatus = z.infer<typeof attendanceStatusSchema>;
+
+export const sessionStatusSchema = z.enum(["scheduled", "in_progress", "completed", "cancelled"]);
+export type SessionStatus = z.infer<typeof sessionStatusSchema>;
+
+/** Crockford Base32 ULID (26 chars) — AT19 / offline sync ids. */
+export const ulidSchema = z
+  .string()
+  .length(26)
+  .regex(/^[0-9A-HJKMNP-TV-Z]{26}$/, "Must be a Crockford Base32 ULID");
+
+/**
+ * Two-level offline id scheme (AT19):
+ * - submission_op_id: one per sync batch / HTTP submission (sync_operations)
+ * - client_op_id: one per attendance item (attendance.client_op_id)
+ */
+export const syncSubmissionSchema = z.object({
+  submission_op_id: ulidSchema,
+  items: z
+    .array(
+      z.object({
+        client_op_id: ulidSchema,
+        session_id: z.string().uuid(),
+        student_id: z.string().uuid(),
+        status: attendanceStatusSchema,
+      }),
+    )
+    .min(1),
+});
+export type SyncSubmission = z.infer<typeof syncSubmissionSchema>;
+
+export const markAttendanceRecordSchema = z.object({
+  student_id: z.string().uuid(),
+  status: attendanceStatusSchema,
+  client_op_id: ulidSchema.optional(),
+});
+export type MarkAttendanceRecord = z.infer<typeof markAttendanceRecordSchema>;
+
 /** Display metadata for age groups (mirrors lib/db/src/schema/enums.ts). */
 export const AGE_GROUPS = ["bal", "kishor", "tarun", "yuva"] as const;
 export const AGE_GROUP_META = {
@@ -412,11 +452,23 @@ export type ChildRow = z.infer<typeof childRowSchema>;
 export const attendanceRowSchema = z.object({
   id: z.string(),
   session_date: z.string(),
-  status: z.string(),
+  status: attendanceStatusSchema.or(z.string()),
   topic: z.string().nullable(),
   batch_name: z.string().nullable(),
+  revision: z.number().int().positive().optional(),
+  client_op_id: ulidSchema.nullable().optional(),
 });
 export type AttendanceRow = z.infer<typeof attendanceRowSchema>;
+
+export const createSessionBodySchema = z.object({
+  batch_id: z.string().uuid(),
+  /** API field name kept as session_date; persists as sessions.scheduled_date. */
+  session_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  topic: z.string().max(200).optional(),
+  gps_required: z.boolean().optional(),
+  unscheduled: z.boolean().optional(),
+});
+export type CreateSessionBody = z.infer<typeof createSessionBodySchema>;
 
 export const punyaTransactionSchema = z.object({
   id: z.string(),

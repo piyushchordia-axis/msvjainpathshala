@@ -33,6 +33,9 @@ export const students = pgTable(
     batch_id: uuid("batch_id").references(() => batches.id, { onDelete: "set null" }),
     msv_status: msvStatusEnum("msv_status").notNull().default("none"),
     status: studentStatusEnum("status").notNull().default("active"),
+    /** Consecutive attended sessions streak (AT22); excused skips, absent resets. */
+    attendance_streak: integer("attendance_streak").notNull().default(0),
+    attendance_streak_updated_at: timestamp("attendance_streak_updated_at", { withTimezone: true }),
     ...softDelete(),
     ...timestamps(),
   },
