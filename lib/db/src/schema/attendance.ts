@@ -61,9 +61,14 @@ export const sessions = pgTable(
     check_out_lng: numeric("check_out_lng", { precision: 10, scale: 7 }),
     check_out_distance_m: integer("check_out_distance_m"),
     check_out_accuracy_m: integer("check_out_accuracy_m"),
+    /** Check-in→check-out haversine (informational only; not a compliance signal). */
+    gps_haversine_m: integer("gps_haversine_m"),
+    duration_minutes: integer("duration_minutes"),
     cancelled_at: timestamp("cancelled_at", { withTimezone: true }),
     cancellation_reason: text("cancellation_reason"),
     cancellation_by: uuid("cancellation_by").references(() => users.id, { onDelete: "set null" }),
+    /** Check-in idempotency (AT16) — ULID char(26). */
+    submission_op_id: char("submission_op_id", { length: 26 }),
     conducted_by: uuid("conducted_by").references(() => users.id, { onDelete: "set null" }),
     ...timestamps(),
   },
@@ -72,6 +77,12 @@ export const sessions = pgTable(
     batch_scheduled_unique: uniqueIndex("sessions_batch_id_scheduled_date_unique").on(
       t.batch_id,
       t.scheduled_date,
+    ),
+    shikshak_date_idx: index("idx_sessions_shikshak_date").on(t.shikshak_user_id, t.scheduled_date),
+    date_status_idx: index("idx_sessions_date_status").on(t.scheduled_date, t.status),
+    submission_op_ulid_check: check(
+      "sessions_submission_op_id_ulid_check",
+      sql`${t.submission_op_id} is null or ${t.submission_op_id} ~ ${sql.raw(`'${ULID_RE}'`)}`,
     ),
   }),
 );

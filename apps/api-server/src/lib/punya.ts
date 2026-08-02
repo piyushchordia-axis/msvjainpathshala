@@ -25,6 +25,9 @@ export interface AwardPunyaInput {
    * to claim, e.g. the manual admin award.
    */
   idempotencyKey?: string | null;
+  /** Override derived source fields (AT22 streak uses kind='attendance_streak'). */
+  sourceEntityKind?: string | null;
+  sourceEntityId?: string | null;
 }
 
 export interface AwardPunyaResult {
@@ -92,7 +95,9 @@ async function creditBalance(tx: Tx | Db, studentId: string, delta: number): Pro
  */
 async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunyaResult> {
   const key = input.idempotencyKey?.trim() || null;
-  const source = sourceFromKey(input.featureKey, key);
+  const derived = sourceFromKey(input.featureKey, key);
+  const sourceKind = input.sourceEntityKind ?? derived.kind;
+  const sourceId = input.sourceEntityId ?? derived.id;
 
   let transactionId: string | null = null;
 
@@ -105,7 +110,7 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
       ) values (
         ${input.studentId}, ${input.featureKey}, ${input.points},
         ${input.note ?? null}, ${input.awardedBy ?? null},
-        ${key}, ${source.kind}, ${source.id}
+        ${key}, ${sourceKind}, ${sourceId}
       )
       on conflict (idempotency_key) where idempotency_key is not null
       do nothing
@@ -139,8 +144,8 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
         points: input.points,
         note: input.note ?? null,
         awarded_by: input.awardedBy ?? null,
-        source_entity_kind: source.kind,
-        source_entity_id: source.id,
+        source_entity_kind: sourceKind,
+        source_entity_id: sourceId,
       })
       .returning({ id: punya_transactions.id });
     transactionId = row?.id ?? null;

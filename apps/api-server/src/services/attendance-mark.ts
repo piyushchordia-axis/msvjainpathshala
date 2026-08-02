@@ -11,8 +11,10 @@ import {
   sync_operations,
   punya_transactions,
   batches,
+  absence_notifications,
+  type User,
 } from "@workspace/db";
-import { and, eq, ne, sql } from "drizzle-orm";
+import { and, eq, isNull, lte, gte, sql } from "drizzle-orm";
 import { EventEmitter } from "node:events";
 import {
   ATTENDANCE_FEATURE_KEY,
@@ -20,6 +22,8 @@ import {
   resolveAttendanceAwardPointsForBatch,
 } from "../lib/attendance-points";
 import { tierForPoints } from "@workspace/db/enums";
+import { inBatchWriteScope, resolveAdminScope } from "../lib/scope";
+import { writeAudit } from "../lib/audit";
 
 export const attendanceEvents = new EventEmitter();
 
@@ -46,6 +50,8 @@ export class AttendanceMarkError extends Error {
 export interface MarkInput {
   sessionId: string;
   userId: string;
+  /** Service-layer scope (Q2/MSV) — required for write paths including sync/batch. */
+  actor?: User;
   markedAt: Date;
   marks: Array<{
     student_id: string;
@@ -55,6 +61,8 @@ export interface MarkInput {
   }>;
   /** Bulk route only — drives sync_operations replay. */
   submissionOpId?: string;
+  /** When false, caller (sync/batch) owns the sync_operations write. Default true. */
+  recordSync?: boolean;
 }
 
 export interface MarkResponse {
@@ -387,6 +395,27 @@ async function applyOneMark(
     });
   }
 
+  // AT22 — if a mark that completed a streak is corrected away from attended, reverse the bonus.
+  const wasAttended = oldStatus === "present" || oldStatus === "late";
+  const nowAttended = mark.status === "present" || mark.status === "late";
+  if (wasAttended && !nowAttended) {
+    const { reverseStreakBonusForSession } = await import("./attendance-post-process");
+    await reverseStreakBonusForSession(mark.student_id, opts.sessionId, newRevision);
+  }
+
+  // AT4 — marking a session covered by an advance absence consumes the notification.
+  await tx
+    .update(absence_notifications)
+    .set({ resolved_at: new Date() })
+    .where(
+      and(
+        eq(absence_notifications.student_id, mark.student_id),
+        isNull(absence_notifications.resolved_at),
+        lte(absence_notifications.start_date, opts.scheduledDate),
+        gte(absence_notifications.end_date, opts.scheduledDate),
+      ),
+    );
+
   return {
     student_id: mark.student_id,
     result: "applied",
@@ -451,6 +480,14 @@ export async function markAttendance(input: MarkInput): Promise<MarkResponse> {
 
   const session = await loadSessionOrThrow(input.sessionId);
 
+  // Scope in the SERVICE layer (not only a route guard) — sync/batch shares this path.
+  if (input.actor) {
+    const scope = await resolveAdminScope(input.actor);
+    if (!inBatchWriteScope(scope, session.batch_id, session.centre_id)) {
+      throw new AttendanceMarkError(403, "ERR_FORBIDDEN", "Session is outside your scope.");
+    }
+  }
+
   // AT24 — cancelled guard (before txn).
   if (session.status === "cancelled") {
     throw new AttendanceMarkError(
@@ -481,14 +518,8 @@ export async function markAttendance(input: MarkInput): Promise<MarkResponse> {
       );
     }
 
-    // Flip session to completed when any mark applied (non-cancelled already).
-    if (results.some((r) => r.result === "applied")) {
-      await tx
-        .update(sessions)
-        .set({ status: "completed", updated_at: new Date() })
-        .where(and(eq(sessions.id, session.id), ne(sessions.status, "cancelled")));
-    }
-
+    // Do NOT flip status to completed here — check-out / auto-checkout own that
+    // transition so offline order checkin → mark → checkout stays valid.
     return results;
   });
 
@@ -508,13 +539,32 @@ export async function markAttendance(input: MarkInput): Promise<MarkResponse> {
   });
   enqueueAttendancePostProcess(session.id);
 
-  if (input.submissionOpId) {
+  if (response.applied > 0) {
+    await writeAudit({
+      actorId: input.userId,
+      actorRole: input.actor?.role ?? null,
+      action: "update",
+      entityKind: "attendance",
+      entityId: session.id,
+      summary: `Attendance marked (${response.applied} applied)`,
+      metadata: {
+        applied: response.applied,
+        duplicate: response.duplicate,
+        rejected: response.rejected,
+        submission_op_id: input.submissionOpId ?? null,
+      },
+    });
+  }
+
+  // Online path may still record sync_operations; sync/batch owns writes when
+  // recordSync=false so the two paths never double-insert.
+  if (input.submissionOpId && input.recordSync !== false) {
     await db
       .insert(sync_operations)
       .values({
         user_id: input.userId,
         submission_op_id: input.submissionOpId,
-        op_kind: "attendance.mark",
+        op_kind: "attendance",
         request_payload: {
           session_id: input.sessionId,
           marked_at: input.markedAt.toISOString(),
@@ -534,6 +584,7 @@ export async function patchAttendanceMark(opts: {
   sessionId: string;
   studentId: string;
   userId: string;
+  actor?: User;
   markedAt: Date;
   status: AttendanceStatus;
   notes?: string | null;
@@ -543,6 +594,7 @@ export async function patchAttendanceMark(opts: {
   return markAttendance({
     sessionId: opts.sessionId,
     userId: opts.userId,
+    actor: opts.actor,
     markedAt: opts.markedAt,
     submissionOpId: opts.submissionOpId,
     marks: [

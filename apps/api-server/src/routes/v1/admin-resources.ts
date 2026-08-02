@@ -564,22 +564,78 @@ router.get("/msv-enrolments", async (req: Request, res: Response) => {
   ok(res, { items }, { count: items.length });
 });
 
-/* GET /v1/admin/holidays */
-router.get("/holidays", async (req: Request, res: Response) => {
+/* GET /v1/admin/centres/:id/holidays — sanchalak+ scoped (AT30) */
+router.get(
+  "/centres/:id/holidays",
+  async (req: Request, res: Response) => {
+    const role = req.authUser!.role;
+    if (!["super_admin", "state_admin", "city_admin", "sanchalak"].includes(role)) {
+      fail(res, 403, "ERR_FORBIDDEN", "Sanchalak or higher required.");
+      return;
+    }
+    const centreId = String(req.params.id);
+    const scope = await resolveAdminScope(req.authUser!);
+    if (scope.centreIds !== null && !scope.centreIds.includes(centreId)) {
+      fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope.");
+      return;
+    }
+    const rows = await db
+      .select({
+        id: centre_holidays.id,
+        holiday_date: centre_holidays.holiday_date,
+        reason: centre_holidays.reason,
+        is_published: centre_holidays.is_published,
+      })
+      .from(centre_holidays)
+      .where(eq(centre_holidays.centre_id, centreId))
+      .orderBy(desc(centre_holidays.holiday_date));
+    ok(res, { items: rows }, { count: rows.length });
+  },
+);
+
+/* GET /v1/admin/attendance/centres/:id/log — centre attendance log (frozen) */
+router.get("/attendance/centres/:id/log", async (req: Request, res: Response) => {
+  const centreId = String(req.params.id);
   const scope = await resolveAdminScope(req.authUser!);
-  const limit = clampLimit(req.query.limit, 100, 300);
-  const centreFilter = scopedCentreFilter(scope, centre_holidays.centre_id);
+  if (scope.centreIds !== null && !scope.centreIds.includes(centreId)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope.");
+    return;
+  }
+  const limit = clampLimit(req.query.limit, 50, 200);
+  const sessionId =
+    typeof req.query.session_id === "string" ? String(req.query.session_id) : null;
+
+  if (sessionId) {
+    const { loadSessionDetail } = await import("../../lib/session-roster");
+    const detail = await loadSessionDetail(sessionId);
+    if (!detail || detail.session.centre_id !== centreId) {
+      fail(res, 404, "ERR_NOT_FOUND", "Session not found.");
+      return;
+    }
+    ok(res, detail);
+    return;
+  }
+
   const rows = await db
     .select({
-      id: centre_holidays.id,
+      id: sessions.id,
+      session_date: sessions.scheduled_date,
+      status: sessions.status,
+      topic: sessions.topic,
+      gps_required: sessions.gps_required,
+      batch_id: sessions.batch_id,
+      batch_name: batches.name,
       centre_name: centres.name,
-      holiday_date: centre_holidays.holiday_date,
-      reason: centre_holidays.reason,
+      present_count: sql<number>`count(${attendance.id}) filter (where ${attendance.status} in ('present','late'))::int`,
+      total_count: sql<number>`count(${attendance.id})::int`,
     })
-    .from(centre_holidays)
-    .innerJoin(centres, eq(centres.id, centre_holidays.centre_id))
-    .where(and(isNull(centres.deleted_at), centreFilter))
-    .orderBy(desc(centre_holidays.holiday_date))
+    .from(sessions)
+    .innerJoin(batches, eq(batches.id, sessions.batch_id))
+    .innerJoin(centres, eq(centres.id, batches.centre_id))
+    .leftJoin(attendance, eq(attendance.session_id, sessions.id))
+    .where(and(eq(batches.centre_id, centreId), isNull(batches.deleted_at)))
+    .groupBy(sessions.id, batches.name, centres.name)
+    .orderBy(desc(sessions.scheduled_date))
     .limit(limit);
   ok(res, { items: rows }, { count: rows.length });
 });

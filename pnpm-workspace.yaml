@@ -7,6 +7,7 @@ packages:
 allowBuilds:
   cpu-features: true
   esbuild: set this to true or false
+  msgpackr-extract: true
   protobufjs: true
   sharp: set this to true or false
   ssh2: true
@@ -47,6 +48,7 @@ onlyBuiltDependencies:
   - '@swc/core'
   - esbuild
   - msw
+  - msgpackr-extract
   - sharp
   - unrs-resolver
 

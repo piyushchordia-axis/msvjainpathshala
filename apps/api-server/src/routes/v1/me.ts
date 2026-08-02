@@ -1,9 +1,11 @@
 /**
  * /v1/me — persona-scoped reads for the mobile app.
  *
- * parent  : their own children + each child's attendance / punya / niyams
+ * parent  : their own children + each child's punya / niyams / id-card
  * student : their own student record (same shapes, scoped to self)
- * shikshak: recent sessions for the batches they teach
+ *
+ * Attendance / today sessions use frozen routes under /v1/students and
+ * /v1/sessions — no /me aliases.
  *
  * All routes require authentication. Student-scoped routes verify ownership
  * (the student belongs to the caller via parent_id or user_id) so a parent
@@ -15,15 +17,12 @@ import {
   students,
   centres,
   batches,
-  sessions,
-  attendance,
   punya_balances,
   punya_transactions,
   niyams,
   niyam_submissions,
   niyam_streaks,
   niyam_badges,
-  shikshak_batch_assignments,
 } from "@workspace/db";
 import { and, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -182,31 +181,7 @@ router.put("/students/:id/photo", async (req: Request, res: Response) => {
   });
 });
 
-/* GET /v1/me/students/:id/attendance?limit= */
-router.get("/students/:id/attendance", async (req: Request, res: Response) => {
-  const id = String(req.params.id);
-  if (!UUID_RE.test(id) || !(await ownedStudentId(req, id))) {
-    fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
-    return;
-  }
-  const limit = clampLimit(req.query.limit, 40, 120);
-  const rows = await db
-    .select({
-      id: attendance.id,
-      session_date: sessions.scheduled_date,
-      status: attendance.status,
-      topic: sessions.topic,
-      batch_name: batches.name,
-    })
-    .from(attendance)
-    .innerJoin(sessions, eq(sessions.id, attendance.session_id))
-    .leftJoin(batches, eq(batches.id, sessions.batch_id))
-    .where(eq(attendance.student_id, id))
-    .orderBy(desc(sessions.scheduled_date))
-    .limit(limit);
-
-  ok(res, { items: rows }, { count: rows.length });
-});
+/* Attendance history: use frozen GET /v1/students/:id/attendance (no /me alias). */
 
 /* GET /v1/me/students/:id/punya — balance + recent transactions */
 router.get("/students/:id/punya", async (req: Request, res: Response) => {
@@ -463,38 +438,6 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
   ok(res, { items }, { count: items.length });
 });
 
-/* GET /v1/me/today — recent sessions for the batches a shikshak teaches */
-router.get("/today", async (req: Request, res: Response) => {
-  const uid = req.authUser!.id;
-  const limit = clampLimit(req.query.limit, 30, 90);
-  const rows = await db
-    .select({
-      id: sessions.id,
-      session_date: sessions.scheduled_date,
-      status: sessions.status,
-      topic: sessions.topic,
-      batch_name: batches.name,
-      centre_name: centres.name,
-      present_count: sql<number>`count(${attendance.id}) filter (where ${attendance.status} in ('present','late'))::int`,
-      total_count: sql<number>`count(${attendance.id})::int`,
-    })
-    .from(sessions)
-    .innerJoin(batches, eq(batches.id, sessions.batch_id))
-    .innerJoin(
-      shikshak_batch_assignments,
-      and(
-        eq(shikshak_batch_assignments.batch_id, batches.id),
-        eq(shikshak_batch_assignments.user_id, uid),
-        eq(shikshak_batch_assignments.is_active, true),
-      ),
-    )
-    .leftJoin(centres, eq(centres.id, batches.centre_id))
-    .leftJoin(attendance, eq(attendance.session_id, sessions.id))
-    .groupBy(sessions.id, batches.name, centres.name)
-    .orderBy(desc(sessions.scheduled_date))
-    .limit(limit);
-
-  ok(res, { items: rows }, { count: rows.length });
-});
+/* Shikshak today: use frozen GET /v1/sessions/today (no /me alias). */
 
 export default router;

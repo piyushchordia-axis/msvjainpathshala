@@ -1,6 +1,10 @@
 /**
  * /v1/shivir-scanner — QR-driven shivir attendance + a live attendance dashboard.
  *
+ * AT28 — shivir_attendance_scans is a SEPARATE ledger. It must NEVER join into
+ * Pathshala attendance_percentage, attendance streaks, or automatic attendance
+ * Punya. Shivir Punya is awarded only via the manual `msv_shivir` feature.
+ *
  * Shivirs are CITY-scoped. Admin-panel routes (session create/list + dashboard)
  * verify the shivir's city is in the caller's city scope (404 out of scope).
  *

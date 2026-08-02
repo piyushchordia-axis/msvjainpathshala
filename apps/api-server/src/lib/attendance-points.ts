@@ -123,7 +123,8 @@ export async function resolveAttendanceAwardPoints(centreId: string | null): Pro
     .where(and(eq(punya_features.key, ATTENDANCE_FEATURE_KEY), eq(punya_features.is_active, true)))
     .limit(1);
   const points = feat?.max_points ?? feat?.min_points ?? 0;
-  await cacheSet(cacheKey, points);
+  // Do not cache a zero miss — seed/config may land after the first cold resolve.
+  if (points > 0) await cacheSet(cacheKey, points);
   return points;
 }
 

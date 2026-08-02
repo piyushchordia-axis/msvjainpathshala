@@ -460,6 +460,14 @@ export const attendanceRowSchema = z.object({
 });
 export type AttendanceRow = z.infer<typeof attendanceRowSchema>;
 
+/** AT5 — percentage comes from SQL only; clients never recompute from items. */
+export const studentAttendancePayloadSchema = z.object({
+  items: z.array(attendanceRowSchema),
+  attendance_rate: z.number().nullable().optional(),
+  attendance_percent: z.number().nullable().optional(),
+});
+export type StudentAttendancePayload = z.infer<typeof studentAttendancePayloadSchema>;
+
 export const createSessionBodySchema = z.object({
   batch_id: z.string().uuid(),
   /** API field name kept as session_date; persists as sessions.scheduled_date. */

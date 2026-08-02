@@ -27,13 +27,12 @@ export default function StudentHome() {
   const attendanceRows = attendance.data?.items ?? [];
   const recentRows = attendanceRows.slice(0, 2);
   const hasMoreAttendance = attendanceRows.length > 2;
-  const presentCount = attendanceRows.filter(
-    (r) => r.status.toLowerCase() === "present",
-  ).length;
+  // AT5 — server SQL only.
   const presentRate =
-    attendanceRows.length > 0
-      ? Math.round((presentCount / attendanceRows.length) * 100)
-      : null;
+    attendance.data?.attendance_percent ??
+    (attendance.data?.attendance_rate != null
+      ? Math.round(attendance.data.attendance_rate * 100)
+      : null);
 
   const statusTone = (status: string): "success" | "warning" | "error" | "neutral" => {
     const s = status.toLowerCase();

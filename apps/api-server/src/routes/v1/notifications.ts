@@ -14,6 +14,7 @@ import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
 import { sendPush } from "../../lib/push";
+import { QUEUE_NAMES, CRON_EXPRESSIONS } from "@jp/shared/constants";
 import { registerCron } from "../../lib/scheduler";
 import { clampLimit } from "../../lib/route-helpers";
 
@@ -267,8 +268,8 @@ export async function runBirthdayWishes(today?: Date): Promise<{ students: numbe
   return { students: birthdayStudents.length, notifications: toInsert.length };
 }
 
-// Register the daily job at module load (06:00 IST). Never starts a timer in tests.
-registerCron("birthday-wishes", "0 6 * * *", async () => {
+// Frozen cron: notifications.birthday @ 06:00 IST. Never starts a timer in tests.
+registerCron(QUEUE_NAMES.NOTIFICATIONS_BIRTHDAY, CRON_EXPRESSIONS.NOTIFICATIONS_BIRTHDAY, async () => {
   await runBirthdayWishes();
 });
 

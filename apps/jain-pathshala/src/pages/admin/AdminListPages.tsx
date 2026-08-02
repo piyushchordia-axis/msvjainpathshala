@@ -1190,10 +1190,10 @@ function AddHolidayDialog({ onAdded }: { onAdded: () => void }) {
     if (!centreId || !date) return;
     setBusy(true);
     try {
-      await apiPost('/v1/admin/holidays', {
-        centre_id: centreId,
+      await apiPost(`/v1/admin/centres/${centreId}/holidays`, {
         holiday_date: date,
         reason: reason.trim() || undefined,
+        is_published: true,
       });
       toast.success('Holiday added.');
       setOpen(false);
@@ -1231,9 +1231,56 @@ function AddHolidayDialog({ onAdded }: { onAdded: () => void }) {
 }
 
 export function HolidaysPage() {
-  const { items, loading, error, reload } = useAdminList<HolidayRow>('/v1/admin/holidays?limit=100');
+  const [centres, setCentres] = useState<GeoOption[]>([]);
+  const [centreId, setCentreId] = useState('');
+  const [items, setItems] = useState<HolidayRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void apiGet<{ items: GeoOption[] }>('/v1/admin/centres').then((r) => {
+      const list = r?.items ?? [];
+      setCentres(list);
+      if (list[0]) setCentreId(list[0].id);
+    });
+  }, []);
+
+  function reload() {
+    if (!centreId) return;
+    setLoading(true);
+    setError(null);
+    apiGet<{ items: Array<HolidayRow & { is_published?: boolean }> }>(
+      `/v1/admin/centres/${centreId}/holidays`,
+    )
+      .then((r) => {
+        const centreName = centres.find((c) => c.id === centreId)?.name ?? '';
+        setItems((r?.items ?? []).map((h) => ({ ...h, centre_name: centreName })));
+      })
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load holidays.'))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [centreId, centres]);
+
   return (
-    <AdminPageShell title="Holiday calendar" subtitle="Scheduled centre holidays." actions={<AddHolidayDialog onAdded={reload} />}>
+    <AdminPageShell
+      title="Holiday calendar"
+      subtitle="AT30 — admin holidays nested under centre; public GET /v1/centres/:id/holidays is published-only."
+      actions={
+        <div className="flex items-center gap-2">
+          <Select value={centreId} onValueChange={setCentreId}>
+            <SelectTrigger className="w-48"><SelectValue placeholder="Centre" /></SelectTrigger>
+            <SelectContent>
+              {centres.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <AddHolidayDialog onAdded={reload} />
+        </div>
+      }
+    >
       {error ? <AdminError message={error} /> : null}
       <AdminTable columns={['Centre', 'Date', 'Reason']} loading={loading} empty="" colSpan={3}>
         {items.length === 0 && !loading ? <AdminEmptyRow colSpan={3} message="No holidays scheduled." /> : null}

@@ -8,9 +8,11 @@
     "qr": "node ./scripts/show-qr.mjs",
     "build": "node scripts/build.js",
     "serve": "node server/serve.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --config vitest.config.ts"
   },
   "devDependencies": {
+    "vitest": "^3.2.4",
     "@babel/core": "^7.25.2",
     "@expo/cli": "54.0.23",
     "@expo/ngrok": "^4.1.0",

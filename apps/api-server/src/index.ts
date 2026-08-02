@@ -4,6 +4,15 @@ import { logger } from "./lib/logger";
 import { startScheduler } from "./lib/scheduler";
 import { getSmsProvider } from "./lib/sms";
 import { warmTestOtpNumbers } from "./lib/otp-test-numbers";
+import { registerSessionLifecycleJobs } from "./jobs/session-lifecycle-jobs";
+import { registerDerivedDataJobs } from "./jobs/derived-data-jobs";
+import { attachAdminDashboardFeed } from "./lib/admin-dashboard-feed";
+import { startQueueWorkers } from "./lib/queues";
+
+// Register queue handlers + cron enqueuers before the scheduler starts.
+registerSessionLifecycleJobs();
+registerDerivedDataJobs();
+startQueueWorkers();
 
 const rawPort = process.env["PORT"];
 
@@ -42,6 +51,7 @@ process.on("uncaughtException", (err) => {
 const host = process.env["HOST"] || "0.0.0.0";
 const server = app.listen(port, host, () => {
   logger.info({ port, host }, "Server listening");
+  attachAdminDashboardFeed(server);
   // Start cron jobs (birthday wishes, etc.) only in the running server process.
   startScheduler();
 

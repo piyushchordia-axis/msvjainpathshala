@@ -6,7 +6,10 @@ export default defineConfig({
   },
   test: {
     environment: "node",
-    include: ["test/integration/**/*.integration.test.ts"],
+    include: [
+      "test/integration/**/*.integration.test.ts",
+      "test/integration/**/*.e2e.ts",
+    ],
     fileParallelism: false,
     pool: "forks",
     testTimeout: 120_000,

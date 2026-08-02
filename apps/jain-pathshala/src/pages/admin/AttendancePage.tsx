@@ -1,19 +1,18 @@
 import { useEffect, useState } from 'react';
-import { Plus, MapPin } from 'lucide-react';
+import { MapPin } from 'lucide-react';
+import { ulid } from 'ulid';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
-import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow } from '@/components/admin/AdminPageShell';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
 } from '@/components/ui/dialog';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+
+interface CentreOption { id: string; name: string }
 
 interface SessionRow {
   id: string;
@@ -28,8 +27,6 @@ interface SessionRow {
   total_count: number;
 }
 
-interface BatchOption { id: string; name: string | null; centre_name: string; }
-
 type AttStatus = 'present' | 'absent' | 'late' | 'excused';
 const ATT_STATUSES: AttStatus[] = ['present', 'absent', 'late', 'excused'];
 
@@ -38,6 +35,7 @@ interface RosterRow {
   full_name: string;
   student_code: string;
   status: AttStatus | null;
+  suggested_status?: AttStatus | null;
   marked_method: 'manual' | 'gps' | null;
 }
 
@@ -56,148 +54,54 @@ interface SessionDetail {
   roster: RosterRow[];
 }
 
-function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return <div className="space-y-1"><Label className="text-xs font-medium">{label}</Label>{children}</div>;
-}
-
-function todayStr(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function NewSessionDialog({ onAdded }: { onAdded: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [batches, setBatches] = useState<BatchOption[]>([]);
-  const [batchId, setBatchId] = useState('');
-  const [date, setDate] = useState(todayStr());
-  const [topic, setTopic] = useState('');
-  const [gpsRequired, setGpsRequired] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    void apiGet<{ items: BatchOption[] }>('/v1/admin/batches').then((r) => setBatches(r?.items ?? []));
-  }, [open]);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!batchId || !date) return;
-    setBusy(true);
-    try {
-      await apiPost('/v1/attendance/sessions', {
-        batch_id: batchId,
-        session_date: date,
-        topic: topic.trim() || undefined,
-        gps_required: gpsRequired,
-      });
-      toast.success('Session created.');
-      setOpen(false);
-      setBatchId(''); setDate(todayStr()); setTopic(''); setGpsRequired(false);
-      onAdded();
-    } catch (err) {
-      toast.error('Failed to create session.', err instanceof ApiError ? err.message : undefined);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button size="sm"><Plus className="mr-1 h-4 w-4" />New session</Button>
-      </DialogTrigger>
-      <DialogContent className="max-w-md">
-        <DialogHeader><DialogTitle>Create session</DialogTitle></DialogHeader>
-        <form className="space-y-4 pt-2" onSubmit={submit}>
-          <FormRow label="Batch *">
-            <Select value={batchId} onValueChange={setBatchId}>
-              <SelectTrigger><SelectValue placeholder="Select batch" /></SelectTrigger>
-              <SelectContent>
-                {batches.map((b) => (
-                  <SelectItem key={b.id} value={b.id}>
-                    {(b.name || 'Unnamed batch')} — {b.centre_name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FormRow>
-          <FormRow label="Session date *">
-            <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} required />
-          </FormRow>
-          <FormRow label="Topic">
-            <Input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="Optional topic" maxLength={200} />
-          </FormRow>
-          <label className="flex items-center gap-2 text-sm">
-            <Checkbox checked={gpsRequired} onCheckedChange={(v) => setGpsRequired(v === true)} />
-            <span>Require GPS geofence when marking</span>
-          </label>
-          <div className="flex justify-end gap-2 pt-2">
-            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
-            <Button type="submit" disabled={busy || !batchId || !date}>{busy ? 'Saving…' : 'Create session'}</Button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-function MarkDialog({ sessionId, gpsRequired, onMarked }: { sessionId: string; gpsRequired: boolean; onMarked: () => void }) {
+function MarkDialog({
+  centreId,
+  sessionId,
+  onMarked,
+}: {
+  centreId: string;
+  sessionId: string;
+  onMarked: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [statuses, setStatuses] = useState<Record<string, AttStatus>>({});
-  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
-  const [locating, setLocating] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setLoading(true);
     setError(null);
-    setCoords(null);
-    apiGet<SessionDetail>(`/v1/attendance/sessions/${sessionId}`)
+    apiGet<SessionDetail>(
+      `/v1/admin/attendance/centres/${centreId}/log?session_id=${encodeURIComponent(sessionId)}`,
+    )
       .then((d) => {
         setDetail(d);
         const init: Record<string, AttStatus> = {};
-        for (const r of d.roster) init[r.student_id] = r.status ?? 'present';
+        for (const r of d.roster) {
+          init[r.student_id] = r.status ?? r.suggested_status ?? 'present';
+        }
         setStatuses(init);
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load roster.'))
       .finally(() => setLoading(false));
-  }, [open, sessionId]);
-
-  function useMyLocation() {
-    if (!navigator.geolocation) {
-      toast.error('Geolocation is not available in this browser.');
-      return;
-    }
-    setLocating(true);
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-        setLocating(false);
-        toast.success('Location captured.');
-      },
-      (err) => {
-        setLocating(false);
-        toast.error('Could not get location.', err?.message);
-      },
-      { enableHighAccuracy: true, timeout: 10000 },
-    );
-  }
+  }, [open, sessionId, centreId]);
 
   async function submit() {
     if (!detail) return;
-    if (gpsRequired && !coords) {
-      toast.warning('This session requires your location. Tap “Use my location” first.');
-      return;
-    }
     setBusy(true);
     try {
-      const records = detail.roster.map((r) => ({ student_id: r.student_id, status: statuses[r.student_id] ?? 'present' }));
-      await apiPost(`/v1/attendance/sessions/${sessionId}/mark`, {
-        records,
-        ...(coords ? { lat: coords.lat, lng: coords.lng } : {}),
+      const markedAt = new Date().toISOString();
+      await apiPost(`/v1/sessions/${sessionId}/attendance`, {
+        submission_op_id: ulid(),
+        marked_at: markedAt,
+        marks: detail.roster.map((r) => ({
+          student_id: r.student_id,
+          status: statuses[r.student_id] ?? 'present',
+          client_op_id: ulid(),
+        })),
       });
       toast.success('Attendance saved.');
       setOpen(false);
@@ -225,20 +129,6 @@ function MarkDialog({ sessionId, gpsRequired, onMarked }: { sessionId: string; g
           <div className="py-8 text-center text-sm text-muted-foreground">Loading roster…</div>
         ) : detail ? (
           <div className="space-y-4 pt-1">
-            {(detail.session.gps_required || detail.session.has_gps) ? (
-              <div className="flex items-center justify-between rounded-md border border-border bg-muted/30 px-3 py-2">
-                <div className="text-xs text-muted-foreground">
-                  {detail.session.gps_required
-                    ? 'GPS is required to mark this session.'
-                    : 'GPS is optional for this session.'}
-                  {coords ? <span className="ml-2 text-emerald-700">Location captured.</span> : null}
-                </div>
-                <Button type="button" size="sm" variant="outline" disabled={locating} onClick={useMyLocation}>
-                  <MapPin className="mr-1 h-4 w-4" />{locating ? 'Locating…' : 'Use my location'}
-                </Button>
-              </div>
-            ) : null}
-
             <div className="max-h-72 overflow-y-auto rounded-md border border-border">
               <table className="w-full text-sm">
                 <thead className="bg-muted/40 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -274,7 +164,6 @@ function MarkDialog({ sessionId, gpsRequired, onMarked }: { sessionId: string; g
                 </tbody>
               </table>
             </div>
-
             <div className="flex justify-end gap-2">
               <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
               <Button type="button" disabled={busy || detail.roster.length === 0} onClick={submit}>
@@ -298,13 +187,51 @@ function statusBadgeClass(status: SessionRow['status']): string {
 }
 
 export default function AttendancePage() {
-  const { items, loading, error, reload } = useAdminList<SessionRow>('/v1/attendance/sessions?limit=100');
+  const [centres, setCentres] = useState<CentreOption[]>([]);
+  const [centreId, setCentreId] = useState('');
+  const [items, setItems] = useState<SessionRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    void apiGet<{ items: CentreOption[] }>('/v1/admin/centres')
+      .then((r) => {
+        const list = r?.items ?? [];
+        setCentres(list);
+        if (list[0]) setCentreId(list[0].id);
+      })
+      .catch(() => setError('Could not load centres.'));
+  }, []);
+
+  function reload() {
+    if (!centreId) return;
+    setLoading(true);
+    setError(null);
+    apiGet<{ items: SessionRow[] }>(`/v1/admin/attendance/centres/${centreId}/log?limit=100`)
+      .then((r) => setItems(r?.items ?? []))
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load log.'))
+      .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [centreId]);
 
   return (
     <AdminPageShell
       title="Attendance"
-      subtitle="Sessions and attendance across your centres, with optional GPS geofencing."
-      actions={<NewSessionDialog onAdded={reload} />}
+      subtitle="Centre attendance log from materialised sessions (AT7). Mark via frozen POST /v1/sessions/:id/attendance."
+      actions={
+        <Select value={centreId} onValueChange={setCentreId}>
+          <SelectTrigger className="w-56"><SelectValue placeholder="Select centre" /></SelectTrigger>
+          <SelectContent>
+            {centres.map((c) => (
+              <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      }
     >
       {error ? <AdminError message={error} /> : null}
       <AdminTable
@@ -314,7 +241,7 @@ export default function AttendancePage() {
         colSpan={7}
       >
         {items.length === 0 && !loading ? (
-          <AdminEmptyRow colSpan={7} message="No sessions yet." />
+          <AdminEmptyRow colSpan={7} message="No sessions for this centre." />
         ) : null}
         {items.map((s) => (
           <tr key={s.id} className="hover:bg-muted/30">
@@ -336,7 +263,9 @@ export default function AttendancePage() {
               ) : <span className="text-xs text-muted-foreground">—</span>}
             </td>
             <td className="px-4 py-3">
-              <MarkDialog sessionId={s.id} gpsRequired={s.gps_required} onMarked={reload} />
+              {centreId ? (
+                <MarkDialog centreId={centreId} sessionId={s.id} onMarked={reload} />
+              ) : null}
             </td>
           </tr>
         ))}

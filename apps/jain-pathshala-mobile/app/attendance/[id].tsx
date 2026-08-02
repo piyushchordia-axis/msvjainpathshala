@@ -1,9 +1,9 @@
 /**
  * Shikshak attendance-marking screen.
  *
- * Flow: load today's session roster (GET /v1/attendance/sessions/:id), toggle
- * each student present / absent / late / excused, then submit
- * (POST /v1/attendance/sessions/:id/mark). For a gps_required session the
+ * Flow: load today's session roster (GET /v1/sessions/today?session_id=),
+ * toggle each student present / absent / late / excused, then enqueue
+ * POST /v1/sync/batch. For a gps_required session the
  * device's GPS is captured via expo-location (permission flow + graceful
  * denial) and sent so the server can haversine-check it against the centre
  * geofence; the screen surfaces the success + the enforced method (gps vs
@@ -63,10 +63,13 @@ export default function AttendanceMarkScreen() {
   const session = detail.data?.session ?? null;
   const roster = useMemo(() => detail.data?.roster ?? [], [detail.data]);
 
-  // One-time seed of any pre-existing marks from the roster.
+  // One-time seed: existing marks win; else AT4 suggested excused from absences.
   if (!seeded && detail.data) {
     const initial: Record<string, AttendanceMark> = {};
-    for (const r of roster) if (r.status) initial[r.student_id] = r.status;
+    for (const r of roster) {
+      if (r.status) initial[r.student_id] = r.status;
+      else if (r.suggested_status === "excused") initial[r.student_id] = "excused";
+    }
     setMarks(initial);
     setSeeded(true);
   }
@@ -147,21 +150,23 @@ export default function AttendanceMarkScreen() {
     }));
 
     mark.mutate(
-      { sessionId: session.id, records, lat: coords?.lat, lng: coords?.lng },
+      {
+        sessionId: session.id,
+        batchId: session.batch_id,
+        sessionDate: session.session_date,
+        records,
+        lat: coords?.lat,
+        lng: coords?.lng,
+      },
       {
         onSuccess: (res) => {
           if (Platform.OS !== "web") void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
           setFeedback({
             tone: "success",
-            title: hi ? "उपस्थिति दर्ज हुई" : "Attendance saved",
-            detail:
-              res.method === "gps"
-                ? hi
-                  ? `${res.marked} विद्यार्थी दर्ज — केंद्र की सीमा के भीतर सत्यापित (GPS)।`
-                  : `${res.marked} student(s) marked — verified inside the centre geofence (GPS).`
-                : hi
-                  ? `${res.marked} विद्यार्थी दर्ज (मैन्युअल)।`
-                  : `${res.marked} student(s) marked (manual).`,
+            title: hi ? "ऑफ़लाइन कतार में" : "Saved — will sync",
+            detail: hi
+              ? `${res.marked} विद्यार्थी सहेजे गए। नेटवर्क पर सिंक होगा।`
+              : `${res.marked} student(s) queued. Syncs when online.`,
           });
         },
         onError: (err) => {

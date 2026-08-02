@@ -1,4 +1,16 @@
-import { boolean, date, index, integer, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import {
+  boolean,
+  date,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+  varchar,
+} from "drizzle-orm/pg-core";
 import { sql } from "drizzle-orm";
 
 import { softDelete, timestamps } from "./_helpers";
@@ -33,6 +45,8 @@ export const students = pgTable(
     batch_id: uuid("batch_id").references(() => batches.id, { onDelete: "set null" }),
     msv_status: msvStatusEnum("msv_status").notNull().default("none"),
     status: studentStatusEnum("status").notNull().default("active"),
+    /** Set when status → inactive; AT5 excludes sessions on/after this Kolkata date. */
+    deactivated_at: timestamp("deactivated_at", { withTimezone: true }),
     /** Consecutive attended sessions streak (AT22); excused skips, absent resets. */
     attendance_streak: integer("attendance_streak").notNull().default(0),
     attendance_streak_updated_at: timestamp("attendance_streak_updated_at", { withTimezone: true }),
@@ -124,7 +138,48 @@ export const digital_id_cards = pgTable(
   }),
 );
 
+/** Pastoral / system notes on a student (AT27 alerts use note_type='alert'). */
+export const student_notes = pgTable(
+  "student_notes",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    student_id: uuid("student_id")
+      .notNull()
+      .references(() => students.id, { onDelete: "cascade" }),
+    author_user_id: uuid("author_user_id").references(() => users.id, { onDelete: "set null" }),
+    note_type: text("note_type").notNull().default("general"),
+    body_en: text("body_en").notNull(),
+    body_hi: text("body_hi"),
+    metadata: jsonb("metadata").notNull().default({}),
+    ...timestamps(),
+  },
+  (t) => ({
+    student_idx: index("idx_student_notes_student").on(t.student_id),
+    type_idx: index("idx_student_notes_type").on(t.note_type),
+  }),
+);
+
+export const consecutive_absence_alerts = pgTable(
+  "consecutive_absence_alerts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    student_id: uuid("student_id")
+      .notNull()
+      .references(() => students.id, { onDelete: "cascade" }),
+    end_session_id: uuid("end_session_id").notNull(),
+    alerted_at: timestamp("alerted_at", { withTimezone: true }).notNull().defaultNow(),
+    ...timestamps(),
+  },
+  (t) => ({
+    student_end_uq: uniqueIndex("consecutive_absence_alerts_student_end_uq").on(
+      t.student_id,
+      t.end_session_id,
+    ),
+  }),
+);
+
 export type Student = typeof students.$inferSelect;
 export type NewStudent = typeof students.$inferInsert;
 export type Enrolment = typeof enrolments.$inferSelect;
 export type NewEnrolment = typeof enrolments.$inferInsert;
+export type StudentNote = typeof student_notes.$inferSelect;

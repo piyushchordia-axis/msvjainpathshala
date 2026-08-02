@@ -6,8 +6,6 @@ import {
   batches,
   centres,
   users,
-  sessions,
-  attendance,
   punya_transactions,
   msv_enrolments,
   donations,
@@ -35,6 +33,7 @@ import adminModulesRouter from "./admin-modules";
 import adminStaffingRouter from "./admin-staffing";
 import { canTransitionEnrolment } from "./enrolments";
 import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
+import { getCentresAttendanceRate, rateToPercent1 } from "../../lib/attendance-rate";
 
 const router: IRouter = Router();
 
@@ -242,24 +241,14 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
     .from(students)
     .where(and(eq(students.msv_status, "approved"), isNull(students.deleted_at), centreFilter));
 
-  // Attendance rate over last 30 days (within scoped batches via session->batch->centre).
-  const attendanceCentreFilter =
-    scope.centreIds === null
-      ? undefined
-      : scope.centreIds.length === 0
-        ? sql`false`
-        : inArray(batches.centre_id, scope.centreIds);
-  const [attRow] = await db
-    .select({
-      total: count(),
-      present: sql<number>`count(*) filter (where ${attendance.status} in ('present','late'))::int`,
-    })
-    .from(attendance)
-    .innerJoin(sessions, eq(sessions.id, attendance.session_id))
-    .innerJoin(batches, eq(batches.id, sessions.batch_id))
-    .where(and(gte(sessions.scheduled_date, since.toISOString().slice(0, 10)), attendanceCentreFilter));
+  // AT5 — canonical SQL function only (never inline FILTER arithmetic here).
+  const sinceDate = since.toISOString().slice(0, 10);
+  const centreIdsForRate =
+    scope.centreIds === null ? null : scope.centreIds.length === 0 ? [] : scope.centreIds;
   const attendanceRate =
-    attRow && attRow.total > 0 ? Math.round((Number(attRow.present) / attRow.total) * 1000) / 10 : 0;
+    centreIdsForRate && centreIdsForRate.length === 0
+      ? 0
+      : rateToPercent1(await getCentresAttendanceRate(centreIdsForRate, sinceDate, null));
 
   // Punya awarded in last 30 days within scope.
   const punyaCentreFilter = scopedCentreFilter(scope, students.centre_id);
@@ -340,7 +329,13 @@ router.post("/students/:id/status", async (req: Request, res: Response) => {
     return;
   }
   const nextStatus = body.action === "deactivate" ? "inactive" : "active";
-  await db.update(students).set({ status: nextStatus }).where(eq(students.id, student.id));
+  await db
+    .update(students)
+    .set({
+      status: nextStatus,
+      deactivated_at: body.action === "deactivate" ? new Date() : null,
+    })
+    .where(eq(students.id, student.id));
   ok(res, { id: student.id, status: nextStatus });
 });
 
@@ -378,6 +373,62 @@ router.get("/batches", async (req: Request, res: Response) => {
     .orderBy(asc(centres.name), asc(batches.name));
 
   ok(res, { items: rows }, { count: rows.length });
+});
+
+const patchTimetableSchema = z.object({
+  day_of_week: z.array(z.number().int().min(1).max(7)).optional(),
+  start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
+  end_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
+});
+
+/* PATCH /v1/admin/batches/:id/timetable — AT9 rematerialise */
+router.patch("/batches/:id/timetable", async (req: Request, res: Response) => {
+  let body: z.infer<typeof patchTimetableSchema>;
+  try {
+    body = patchTimetableSchema.parse(req.body);
+  } catch {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid timetable payload.");
+    return;
+  }
+  if (!body.day_of_week && !body.start_time && !body.end_time) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Provide day_of_week and/or times.");
+    return;
+  }
+  const batchId = String(req.params.id);
+  const scope = await resolveAdminScope(req.authUser!);
+  const [batch] = await db
+    .select()
+    .from(batches)
+    .where(and(eq(batches.id, batchId), isNull(batches.deleted_at)))
+    .limit(1);
+  if (!batch || !inScope(scope, batch.centre_id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Batch not found in your scope.");
+    return;
+  }
+  await db
+    .update(batches)
+    .set({
+      ...(body.day_of_week ? { day_of_week: body.day_of_week } : {}),
+      ...(body.start_time ? { start_time: body.start_time } : {}),
+      ...(body.end_time ? { end_time: body.end_time } : {}),
+    })
+    .where(eq(batches.id, batch.id));
+
+  const { rematerialiseBatch } = await import("../../services/session-materialise");
+  const result = await rematerialiseBatch(batch.id);
+  ok(res, { batch_id: batch.id, ...result });
+});
+
+/* POST /v1/admin/sessions/materialise — manual trigger (ops / demos) */
+router.post("/sessions/materialise", async (req: Request, res: Response) => {
+  const role = req.authUser!.role;
+  if (!["super_admin", "state_admin", "city_admin", "sanchalak"].includes(role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Not allowed to trigger materialise.");
+    return;
+  }
+  const { materialiseAllActiveBatches } = await import("../../services/session-materialise");
+  const result = await materialiseAllActiveBatches();
+  ok(res, result);
 });
 
 /* POST /v1/admin/batches/:id/:action */

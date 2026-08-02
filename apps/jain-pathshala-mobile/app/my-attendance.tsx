@@ -22,10 +22,12 @@ export default function MyAttendanceScreen() {
   const { activeStudentId, activeChild, loading, refetch } = useSessionView();
   const attendance = useAttendance(activeStudentId ?? undefined);
   const rows = attendance.data?.items ?? [];
-
-  const presentCount = rows.filter((r) => r.status.toLowerCase() === "present").length;
+  // AT5 — server SQL only; never derive % from items (excused/late/holiday drift).
   const presentRate =
-    rows.length > 0 ? Math.round((presentCount / rows.length) * 100) : null;
+    attendance.data?.attendance_percent ??
+    (attendance.data?.attendance_rate != null
+      ? Math.round(attendance.data.attendance_rate * 100)
+      : null);
 
   return (
     <Screen

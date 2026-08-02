@@ -27,6 +27,7 @@ import {
   sync_operations,
   punya_transactions,
   punya_balances,
+  punya_features,
   niyams,
   niyam_submissions,
   niyam_submission_media,
@@ -142,6 +143,12 @@ async function main(): Promise<void> {
       cities, states
     restart identity cascade
   `);
+
+  /* ---------------- Punya feature catalogue (AT21) ---------------- */
+  await db.insert(punya_features).values([
+    { key: "attendance", label: "Attendance", is_active: true, min_points: 0, max_points: 10 },
+    { key: "niyam_completion", label: "Niyam completion", is_active: true, min_points: 0, max_points: 1000 },
+  ]);
 
   /* ---------------- Geography ---------------- */
   const [maharashtra] = await db

@@ -88,6 +88,11 @@ export const shivir_sessions = pgTable(
 );
 
 // One QR scan event (check_in / check_out / present) by a volunteer.
+/**
+ * AT28 — Shivir scans are isolated from Pathshala attendance.
+ * Do not join this table into attendance_percentage, streak recompute, or
+ * automatic attendance Punya awards.
+ */
 export const shivir_attendance_scans = pgTable(
   "shivir_attendance_scans",
   {

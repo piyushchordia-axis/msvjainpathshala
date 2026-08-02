@@ -127,6 +127,15 @@ export default function RootLayout() {
     }
   }, []);
 
+  // Offline sync drain loop — sole transport POST /v1/sync/batch.
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    void import("@/lib/offline/sync-engine").then(({ startSyncLoop }) => {
+      stop = startSyncLoop(5_000);
+    });
+    return () => stop?.();
+  }, []);
+
   // Configure the foreground handler and deep-link into the relevant screen
   // when a push notification is tapped (including the cold-start case where the
   // tap launched the app). expo-notifications is imported lazily and only on

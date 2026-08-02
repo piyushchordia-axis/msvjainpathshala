@@ -41,8 +41,12 @@ export default function ParentHome() {
   const rows = attendance.data?.items ?? [];
   const recent = rows.slice(0, 2);
   const hasMoreAttendance = rows.length > 2;
-  const presentCount = rows.filter((r) => r.status.toLowerCase() === "present").length;
-  const presentRate = rows.length > 0 ? Math.round((presentCount / rows.length) * 100) : 0;
+  // AT5 — server SQL only.
+  const presentRate =
+    attendance.data?.attendance_percent ??
+    (attendance.data?.attendance_rate != null
+      ? Math.round(attendance.data.attendance_rate * 100)
+      : 0);
 
   function attendanceTone(status: string): "success" | "warning" | "neutral" {
     const s = status.toLowerCase();

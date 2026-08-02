@@ -78,6 +78,34 @@
       "when": 1786531200000,
       "tag": "0010_attendance_notes",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786617600000,
+      "tag": "0011_session_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786704000000,
+      "tag": "0012_derived_attendance",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786790400000,
+      "tag": "0013_holidays_published",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1786876800000,
+      "tag": "0014_staffing_schema_align",
+      "breakpoints": true
     }
   ]
 }

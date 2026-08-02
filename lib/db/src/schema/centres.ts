@@ -81,6 +81,8 @@ export const centre_holidays = pgTable(
       .references(() => centres.id, { onDelete: "cascade" }),
     holiday_date: date("holiday_date").notNull(),
     reason: text("reason"),
+    /** AT30 — public GET /v1/centres/:id/holidays returns published rows only. */
+    is_published: boolean("is_published").notNull().default(true),
     ...timestamps(),
   },
   (t) => ({

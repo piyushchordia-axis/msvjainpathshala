@@ -153,11 +153,18 @@ export function useChildren(enabled = true) {
   });
 }
 
+export type StudentAttendancePayload = List<AttendanceRow> & {
+  /** AT5 SQL ratio 0–1 (null when no countable marks). */
+  attendance_rate?: number | null;
+  /** Whole-number percent from AT5 — never recompute client-side. */
+  attendance_percent?: number | null;
+};
+
 export function useAttendance(studentId?: string) {
   return useQuery({
     queryKey: qk.attendance(studentId ?? ""),
     queryFn: () =>
-      apiGet<List<AttendanceRow>>(`/v1/me/students/${studentId}/attendance`),
+      apiGet<StudentAttendancePayload>(`/v1/students/${studentId}/attendance`),
     enabled: !!studentId,
   });
 }
@@ -196,7 +203,7 @@ export function useNiyamCatalog(enabled = true, studentId?: string | null) {
 export function useToday(enabled = true) {
   return useQuery({
     queryKey: qk.today,
-    queryFn: () => apiGet<List<ShikshakSessionRow>>("/v1/me/today"),
+    queryFn: () => apiGet<List<ShikshakSessionRow>>("/v1/sessions/today"),
     enabled,
   });
 }
@@ -210,6 +217,9 @@ export interface AttendanceRosterRow {
   student_code: string;
   status: "present" | "absent" | "late" | "excused" | null;
   marked_method: string | null;
+  /** AT4 — pre-fill from unresolved absence_notifications when status is null. */
+  suggested_status?: "excused" | null;
+  absence_reason?: string | null;
 }
 export interface AttendanceSessionDetail {
   session: {
@@ -227,15 +237,50 @@ export interface AttendanceSessionDetail {
   roster: AttendanceRosterRow[];
 }
 
+type TodaySessionRow = {
+  id: string;
+  batch_id: string;
+  scheduled_date: string;
+  session_date?: string;
+  status: string;
+  topic: string | null;
+  gps_required: boolean;
+  batch_name: string | null;
+  centre_name: string | null;
+  has_gps: boolean;
+  roster: AttendanceRosterRow[];
+};
+
 /**
- * Session detail + roster for the attendance-marking screen. Scoped + 404'd
- * server-side, so an out-of-scope session surfaces as a not-found state.
+ * Session detail + roster via frozen GET /v1/sessions/today?session_id=
+ * (roster embedded; no legacy /v1/attendance/* routes).
  */
 export function useAttendanceSession(sessionId?: string) {
   return useQuery({
     queryKey: qk.attendanceSession(sessionId ?? ""),
-    queryFn: () =>
-      apiGet<AttendanceSessionDetail>(`/v1/attendance/sessions/${sessionId}`),
+    queryFn: async () => {
+      const res = await apiGet<{ items: TodaySessionRow[] }>(
+        `/v1/sessions/today?session_id=${encodeURIComponent(sessionId!)}`,
+      );
+      const row = res.items?.[0];
+      if (!row) {
+        throw new ApiError("ERR_NOT_FOUND", "Session not found for today.", 404);
+      }
+      return {
+        session: {
+          id: row.id,
+          batch_id: row.batch_id,
+          session_date: row.scheduled_date ?? row.session_date ?? "",
+          status: row.status,
+          topic: row.topic ?? null,
+          gps_required: !!row.gps_required,
+          batch_name: row.batch_name,
+          centre_name: row.centre_name,
+          has_gps: !!row.has_gps,
+        },
+        roster: row.roster ?? [],
+      } satisfies AttendanceSessionDetail;
+    },
     enabled: !!sessionId,
   });
 }
@@ -248,31 +293,51 @@ export interface MarkAttendanceResult {
   method: "gps" | "manual";
 }
 /**
- * Upsert attendance rows for a session. For a gps_required session the caller
- * must pass lat/lng (captured via expo-location); the server haversine-checks
- * them against the centre geofence and 403s when outside. Invalidates both the
- * session detail and the shikshak "today" counts on success.
+ * Queue attendance for offline sync. Payload keys on (batch_id, session_date)
+ * — NEVER a client-minted session_id. Transport is POST /v1/sync/batch only.
  */
 export function useMarkAttendance() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      sessionId: _sessionId,
+    mutationFn: async ({
+      batchId,
+      sessionDate,
       records,
-      lat,
-      lng,
     }: {
-      sessionId: string;
-      records: { student_id: string; status: AttendanceMark }[];
+      /** @deprecated ignored — kept for call-site migration */
+      sessionId?: string;
+      batchId: string;
+      sessionDate: string;
+      records: { student_id: string; status: AttendanceMark; notes?: string }[];
       lat?: number;
       lng?: number;
-    }) =>
-      apiPost<MarkAttendanceResult>(`/v1/attendance/sessions/${_sessionId}/mark`, {
-        records,
-        ...(lat !== undefined && lng !== undefined ? { lat, lng } : {}),
-      }),
+    }) => {
+      const { enqueueAttendance, drainQueues } = await import("@/lib/offline/sync-engine");
+      const { ulid } = await import("@/lib/offline/ulid");
+      const submission_op_id = await enqueueAttendance({
+        batch_id: batchId,
+        session_date: sessionDate,
+        marks: records.map((r) => ({
+          student_id: r.student_id,
+          status: r.status,
+          notes: r.notes,
+          client_op_id: ulid(),
+        })),
+      });
+      // Best-effort immediate drain when online.
+      await drainQueues();
+      return {
+        session_id: "",
+        marked: records.length,
+        method: "manual" as const,
+        submission_op_id,
+        queued: true,
+      };
+    },
     onSuccess: (_res, vars) => {
-      qc.invalidateQueries({ queryKey: qk.attendanceSession(vars.sessionId) });
+      if (vars.sessionId) {
+        qc.invalidateQueries({ queryKey: qk.attendanceSession(vars.sessionId) });
+      }
       qc.invalidateQueries({ queryKey: qk.today });
     },
   });

@@ -618,29 +618,58 @@ router.post("/punya/configs", requireRole("super_admin", "state_admin", "city_ad
   ok(res, row);
 });
 
-const createHolidaySchema = z.object({
-  centre_id: z.string().uuid(),
+const createCentreHolidaySchema = z.object({
   holiday_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   reason: z.string().max(500).optional(),
+  is_published: z.boolean().optional(),
 });
 
-/* POST /v1/admin/holidays */
-router.post("/holidays", async (req: Request, res: Response) => {
-  let body: z.infer<typeof createHolidaySchema>;
-  try { body = createHolidaySchema.parse(req.body); }
-  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid holiday data."); return; }
-  const scope = await resolveAdminScope(req.authUser!);
-  const centreIds = scope.centreIds;
-  if (centreIds !== null && !centreIds.includes(body.centre_id)) {
-    fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope."); return;
-  }
-  const [row] = await db.insert(centre_holidays).values({
-    centre_id: body.centre_id,
-    holiday_date: body.holiday_date,
-    reason: body.reason ?? null,
-  }).returning({ id: centre_holidays.id, holiday_date: centre_holidays.holiday_date });
-  ok(res, row);
-});
+/* POST /v1/admin/centres/:id/holidays — sanchalak+ scoped (AT30 nested write) */
+router.post(
+  "/centres/:id/holidays",
+  requireRole("super_admin", "state_admin", "city_admin", "sanchalak"),
+  async (req: Request, res: Response) => {
+    const centreId = String(req.params.id);
+    let body: z.infer<typeof createCentreHolidaySchema>;
+    try {
+      body = createCentreHolidaySchema.parse(req.body);
+    } catch {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid holiday data.");
+      return;
+    }
+    const scope = await resolveAdminScope(req.authUser!);
+    if (scope.centreIds !== null && !scope.centreIds.includes(centreId)) {
+      fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope.");
+      return;
+    }
+    const [row] = await db
+      .insert(centre_holidays)
+      .values({
+        centre_id: centreId,
+        holiday_date: body.holiday_date,
+        reason: body.reason ?? null,
+        is_published: body.is_published ?? true,
+      })
+      .returning({
+        id: centre_holidays.id,
+        holiday_date: centre_holidays.holiday_date,
+        is_published: centre_holidays.is_published,
+      });
+
+    const { applyHolidayToSessions } = await import("../../services/session-materialise");
+    await applyHolidayToSessions(centreId, body.holiday_date, body.holiday_date);
+
+    await auditFromReq(req, {
+      action: "create",
+      entityKind: "centre_holiday",
+      entityId: row.id,
+      summary: `Holiday created for ${body.holiday_date}`,
+      metadata: { centre_id: centreId, holiday_date: body.holiday_date },
+    });
+
+    ok(res, row);
+  },
+);
 
 const createLibrarySchema = z.object({
   title_en: z.string().min(1).max(500),
