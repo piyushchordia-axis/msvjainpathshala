@@ -9,7 +9,9 @@ import legalRouter from "./routes/legal";
 import { logger } from "./lib/logger";
 import { storage } from "./lib/storage";
 import { verifyUploadAccess } from "./lib/file-tokens";
+import { MIME_BY_EXT } from "./lib/upload";
 import { fail } from "./lib/envelope";
+import { handleMulterError } from "./middlewares/multer-error";
 
 const isProd = process.env.NODE_ENV === "production";
 // In production, restrict CORS to an explicit allow-list (comma-separated
@@ -97,17 +99,7 @@ app.use(express.urlencoded({ extended: true }));
 // Serve uploaded files ONLY with a valid short-lived signature (see
 // lib/file-tokens.ts). Sensitive artifacts (progress PDFs, ID cards, proofs)
 // are no longer world-readable by URL. API responses mint signed URLs.
-const UPLOAD_MIME: Record<string, string> = {
-  ".pdf": "application/pdf",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".mp4": "video/mp4",
-  ".mp3": "audio/mpeg",
-  ".txt": "text/plain; charset=utf-8",
-};
+// Content-Type comes from MIME_BY_EXT (same table as the upload allowlist).
 app.get(/^\/uploads\/.+/, (req: Request, res) => {
   let key: string;
   try {
@@ -122,8 +114,9 @@ app.get(/^\/uploads\/.+/, (req: Request, res) => {
     fail(res, 403, "ERR_FORBIDDEN", "Invalid or expired file link.");
     return;
   }
-  const ext = key.slice(key.lastIndexOf(".")).toLowerCase();
-  res.setHeader("Content-Type", UPLOAD_MIME[ext] ?? "application/octet-stream");
+  const dot = key.lastIndexOf(".");
+  const ext = dot >= 0 ? key.slice(dot + 1).toLowerCase() : "";
+  res.setHeader("Content-Type", MIME_BY_EXT[ext] ?? "application/octet-stream");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Cache-Control", "private, max-age=3600");
   let stream;
@@ -155,6 +148,9 @@ app.use("/api", router);
 app.use("/v1", v1Router);
 // Public legal pages (privacy policy / terms) — required live URLs for the app stores.
 app.use(legalRouter);
+
+// Multer LIMIT_* → typed envelope (413/422) before the generic 500 handler.
+app.use(handleMulterError);
 
 // Terminal error handler: never leak stack traces / internal errors to clients.
 // Express 5 forwards rejected async handlers here. Logs the full error, returns

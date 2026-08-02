@@ -59,8 +59,12 @@ async function parentScope(
 
   const batchesRes = await request(app).get("/v1/admin/batches?limit=300").set(auth(adminToken));
   expect(batchesRes.status).toBe(200);
-  const batch = batchesRes.body.data.items.find((b: { name: string }) => b.name === child.batch_name);
-  expect(batch, `batch named ${child.batch_name}`).toBeTruthy();
+  // Batch names repeat across cities — pin to the child's centre.
+  const batch = batchesRes.body.data.items.find(
+    (b: { name: string; centre_id: string }) =>
+      b.name === child.batch_name && b.centre_id === centre.id,
+  );
+  expect(batch, `batch named ${child.batch_name} at ${child.centre_name}`).toBeTruthy();
 
   return { studentId: child.id, centreId: centre.id, batchId: batch.id };
 }

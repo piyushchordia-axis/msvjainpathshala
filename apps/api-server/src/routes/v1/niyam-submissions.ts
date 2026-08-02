@@ -44,6 +44,7 @@ import { resolveNiyamAwardPoints } from "../../lib/niyam-points";
 import { rateLimit } from "../../lib/ratelimit";
 import { registerCron } from "../../lib/scheduler";
 import { logger } from "../../lib/logger";
+import { MIME_BY_EXT } from "../../lib/upload";
 import {
   allowedMediaKinds,
   addCalendarDays,
@@ -80,43 +81,147 @@ function isNiyamProofUrl(url: string): boolean {
   }
 }
 
-/**
- * Caller must own the upload_objects row, or the key is unclaimed (legacy /
- * seed URLs with no registry entry). Stolen claimed keys → reject.
- */
-async function callerOwnsProofUrl(userId: string, url: string): Promise<boolean> {
-  const key = uploadKeyFromUrl(url);
-  if (!key || !key.startsWith("niyam-proof/")) return false;
-  const [row] = await db
-    .select({ uploaded_by: upload_objects.uploaded_by })
-    .from(upload_objects)
-    .where(eq(upload_objects.key, key))
-    .limit(1);
-  if (!row) return true;
-  return row.uploaded_by === userId;
+type ProofMediaKind = "photo" | "video" | "audio";
+
+type ClientMediaItem = {
+  url: string;
+  /** Ignored — kept on the wire for clients; kind is derived server-side. */
+  kind: ProofMediaKind;
+  mime?: string;
+  size_bytes?: number;
+};
+
+type ResolvedMediaItem = {
+  url: string;
+  kind: ProofMediaKind;
+  mime: string | null;
+  size_bytes: number | null;
+};
+
+/** Derive photo/video/audio from stored content_type (or key extension fallback). */
+export function kindFromUploadContentType(
+  contentType: string | null | undefined,
+  key: string,
+): ProofMediaKind | null {
+  let mime = (contentType ?? "").split(";")[0]!.trim().toLowerCase();
+  if (!mime) {
+    const dot = key.lastIndexOf(".");
+    if (dot >= 0) {
+      mime = (MIME_BY_EXT[key.slice(dot + 1).toLowerCase()] ?? "").toLowerCase();
+    }
+  }
+  if (mime.startsWith("image/")) return "photo";
+  if (mime.startsWith("video/")) return "video";
+  if (mime.startsWith("audio/")) return "audio";
+  return null;
 }
 
-/** Insert a gallery row from the first photo media; skip if none. Consent is query-time. */
+/**
+ * Resolve each media URL against upload_objects owned by this user.
+ * Client-supplied `kind` is ignored — kind comes from stored content_type.
+ */
+async function resolveSubmissionMedia(
+  userId: string,
+  items: ClientMediaItem[],
+  allowed: ProofMediaKind[],
+): Promise<{ ok: true; items: ResolvedMediaItem[] } | { ok: false; message: string }> {
+  const resolved: ResolvedMediaItem[] = [];
+  for (const item of items) {
+    if (!isNiyamProofUrl(item.url)) {
+      return { ok: false, message: "Media URL must be an uploaded niyam-proof file." };
+    }
+    const key = uploadKeyFromUrl(item.url);
+    if (!key || !key.startsWith("niyam-proof/")) {
+      return { ok: false, message: "Media URL must be an uploaded niyam-proof file." };
+    }
+    const [row] = await db
+      .select({
+        uploaded_by: upload_objects.uploaded_by,
+        content_type: upload_objects.content_type,
+      })
+      .from(upload_objects)
+      .where(eq(upload_objects.key, key))
+      .limit(1);
+    if (!row || row.uploaded_by !== userId) {
+      return {
+        ok: false,
+        message: "Media URL is not an upload owned by you. Re-upload the proof and try again.",
+      };
+    }
+    const kind = kindFromUploadContentType(row.content_type, key);
+    if (!kind) {
+      return {
+        ok: false,
+        message: "Uploaded file type cannot be used as niyam proof.",
+      };
+    }
+    if (!allowed.includes(kind)) {
+      return {
+        ok: false,
+        message: `Media kind "${kind}" is not allowed for this niyam.`,
+      };
+    }
+    resolved.push({
+      url: item.url,
+      kind,
+      mime: row.content_type ?? item.mime ?? null,
+      size_bytes: item.size_bytes ?? null,
+    });
+  }
+  return { ok: true, items: resolved };
+}
+
+/**
+ * Insert a gallery row from the first *image* proof only.
+ *
+ * Videos are a KNOWN REMAINING GAP: QuickTime embeds
+ * com.apple.quicktime.location.ISO6709 and we do not strip it yet (no ffmpeg).
+ * TODO(ffmpeg-video-exif): once ffmpeg is a dependency, strip video location
+ * metadata on upload — until then never publish video to the public gallery.
+ * Consent for gallery visibility remains a query-time join.
+ */
 async function maybeInsertGalleryFromSubmission(
   tx: Tx,
   opts: {
     submissionId: string;
     studentId: string;
     niyamId: string;
-    media: Array<{ url: string; kind: string }>;
+    media: Array<{ url: string; kind: string; mime?: string | null }>;
   },
 ): Promise<void> {
-  const photo = opts.media.find((m) => m.kind === "photo");
+  const photo = opts.media.find((m) => m.kind === "photo" && mediaLooksLikeImage(m));
   if (!photo) return;
+
+  const [centreRow] = await tx
+    .select({ city_id: centres.city_id })
+    .from(students)
+    .innerJoin(centres, eq(centres.id, students.centre_id))
+    .where(eq(students.id, opts.studentId))
+    .limit(1);
+
   await tx.insert(gallery_items).values({
     submission_id: opts.submissionId,
     student_id: opts.studentId,
     niyam_id: opts.niyamId,
+    city_id: centreRow?.city_id ?? null,
     image_url: photo.url,
     is_public: true,
-    is_featured: false,
+    featured_gallery: false,
+    featured_home: false,
     created_by: null,
   });
+}
+
+/** kind === photo is necessary but not sufficient — also require image/* type. */
+function mediaLooksLikeImage(m: { url: string; kind: string; mime?: string | null }): boolean {
+  const declared = (m.mime ?? "").split(";")[0]!.trim().toLowerCase();
+  if (declared.startsWith("image/")) return true;
+  const key = uploadKeyFromUrl(m.url);
+  if (!key) return false;
+  const dot = key.lastIndexOf(".");
+  if (dot < 0) return false;
+  const fromExt = MIME_BY_EXT[key.slice(dot + 1).toLowerCase()];
+  return !!fromExt?.startsWith("image/");
 }
 
 /**
@@ -388,6 +493,7 @@ function cursorWhere(cursor: { date: string; id: string }) {
 
 const mediaItemSchema = z.object({
   url: httpUrl(2000),
+  /** Accepted for wire compatibility; server derives kind from upload_objects.content_type. */
   kind: z.enum(["photo", "video", "audio"]),
   mime: z.string().max(100).optional(),
   size_bytes: z.number().int().nonnegative().optional(),
@@ -500,8 +606,8 @@ router.post("/", async (req: Request, res: Response) => {
 
   let media = body.media ?? [];
   if (media.length === 0 && body.proof_url) {
-    const kinds = allowedMediaKinds(niyam.proof_type);
-    media = [{ url: body.proof_url, kind: kinds[0] ?? "photo" }];
+    // kind is a wire placeholder — resolveSubmissionMedia derives the real kind.
+    media = [{ url: body.proof_url, kind: "photo" }];
   }
 
   if (niyam.max_uploads === 0 && media.length > 0) {
@@ -515,17 +621,12 @@ router.post("/", async (req: Request, res: Response) => {
   }
 
   const allowed = allowedMediaKinds(niyam.proof_type);
-  for (const m of media) {
-    if (!allowed.includes(m.kind)) {
-      fail(res, 422, "ERR_VALIDATION_FAILED", `Media kind "${m.kind}" is not allowed for this niyam.`); return;
-    }
-    if (!isNiyamProofUrl(m.url)) {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Media URL must be an uploaded niyam-proof file."); return;
-    }
-    if (!(await callerOwnsProofUrl(uid, m.url))) {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Media URL is not owned by the caller."); return;
-    }
+  const resolved = await resolveSubmissionMedia(uid, media, allowed);
+  if (!resolved.ok) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", resolved.message);
+    return;
   }
+  const verifiedMedia = resolved.items;
 
   const pKey = periodKey(niyam.niyam_type as NiyamPeriodType, submissionDate);
   const autoApprove = niyam.approval_mode === "auto";
@@ -534,7 +635,7 @@ router.post("/", async (req: Request, res: Response) => {
     : 0;
   const status = autoApprove ? "auto_approved" : "pending";
   const pointsAwarded = autoApprove ? awardPoints : 0;
-  const firstUrl = media[0]?.url ?? null;
+  const firstUrl = verifiedMedia[0]?.url ?? null;
 
   const lockKey = `niyam:${niyam.id}:${body.student_id}:${pKey}`;
   type TxResult = {
@@ -570,9 +671,9 @@ router.post("/", async (req: Request, res: Response) => {
         submitted_by: uid,
       })
       .returning();
-    if (media.length > 0) {
+    if (verifiedMedia.length > 0) {
       await tx.insert(niyam_submission_media).values(
-        media.map((m, i) => ({
+        verifiedMedia.map((m, i) => ({
           submission_id: created.id,
           url: m.url,
           kind: m.kind,
@@ -613,7 +714,7 @@ router.post("/", async (req: Request, res: Response) => {
         submissionId: created.id,
         studentId: body.student_id,
         niyamId: niyam.id,
-        media,
+        media: verifiedMedia,
       });
 
       const streak = await recomputeStreak(
@@ -851,7 +952,11 @@ router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Respons
     }
 
     const mediaRows = await tx
-      .select({ url: niyam_submission_media.url, kind: niyam_submission_media.kind })
+      .select({
+        url: niyam_submission_media.url,
+        kind: niyam_submission_media.kind,
+        mime: niyam_submission_media.mime,
+      })
       .from(niyam_submission_media)
       .where(eq(niyam_submission_media.submission_id, sub.id))
       .orderBy(asc(niyam_submission_media.ordinal));
@@ -1036,7 +1141,14 @@ router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response
 
     await tx
       .update(gallery_items)
-      .set({ is_public: false, deleted_at: new Date() })
+      .set({
+        is_public: false,
+        featured_gallery: false,
+        featured_home: false,
+        featured_at: null,
+        featured_by: null,
+        deleted_at: new Date(),
+      })
       .where(eq(gallery_items.submission_id, sub.id));
 
     return { ok: true as const, reverseResult };

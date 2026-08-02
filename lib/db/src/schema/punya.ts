@@ -52,6 +52,8 @@ export const upload_objects = pgTable(
     uploaded_by: uuid("uploaded_by")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
+    /** Canonical MIME at upload time — audit / media-kind; not used on the serve path. */
+    content_type: text("content_type"),
     created_at: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({

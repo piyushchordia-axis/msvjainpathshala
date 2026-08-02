@@ -22,7 +22,7 @@ import { resolveUploadUrl } from "@/lib/api";
 import {
   carouselIntervalMs,
   useClientSettings,
-  useGallery,
+  useHomeGallery,
   type GalleryMediaItem,
 } from "@/lib/queries";
 import { Body } from "@/components/ui";
@@ -40,7 +40,7 @@ export function GalleryCarousel() {
   const { width: windowWidth } = useWindowDimensions();
   const pageWidth = Math.max(240, windowWidth - 32);
 
-  const gallery = useGallery(12);
+  const gallery = useHomeGallery(12);
   const settings = useClientSettings();
   const intervalMs = carouselIntervalMs(settings.data);
 

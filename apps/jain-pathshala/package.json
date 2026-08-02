@@ -76,6 +76,7 @@
     "zod": "catalog:"
   },
   "dependencies": {
+    "@workspace/i18n": "workspace:*",
     "ulid": "^3.0.2"
   }
 }

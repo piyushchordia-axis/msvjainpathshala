@@ -66,7 +66,7 @@ import {
   enquiries,
 } from "./schema";
 import { tierForPoints } from "./schema/enums";
-import { sql } from "drizzle-orm";
+import { sql, eq } from "drizzle-orm";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -753,13 +753,25 @@ async function main(): Promise<void> {
       });
       punyaByStudent[student.id] = (punyaByStudent[student.id] ?? 0) + niyam.points;
 
-      // Feature approved students' first submission in the public gallery.
+      // Feature approved students' first submission in the public gallery
+      // (unfeatured — city_admin+ must curate onto the wall / home carousel).
       if (submission.is_featured) {
+        let cityId: string | null = null;
+        if (student.centre_id) {
+          const [centreRow] = await db
+            .select({ city_id: centres.city_id })
+            .from(centres)
+            .where(eq(centres.id, student.centre_id))
+            .limit(1);
+          cityId = centreRow?.city_id ?? null;
+        }
         await db.insert(gallery_items).values({
           student_id: student.id,
           niyam_id: niyam.id,
           submission_id: submission.id,
-          is_featured: true,
+          city_id: cityId,
+          featured_gallery: false,
+          featured_home: false,
           is_public: true,
         });
       }

@@ -277,3 +277,36 @@ Report on all seven items by number, including anything you chose not to do and 
 
 Commit: fix(niyam): streak lapse job, bilingual badge notifications, review follow-ups
 ````
+
+---
+
+## Round 2 verification — N1 to N7
+
+**Reviewed:** `2096ac3` and `c72ba3d` against `ae10b1a`. Attendance commits (`553d0a1`, `96e3a49`, `9df00e5`) are out of scope; checked only for regression against the Niyam work.
+
+**All seven closed. Verdict: Approve.**
+
+| # | Issue | Status | Evidence |
+|---|---|---|---|
+| N1a | Streak lapse logic | ✅ | `niyam-submissions.ts:205-212` — after the walk, `current = 0` unless the last `period_key` is `todayKey` or `alivePrevKey`. The "still alive at 9am if yesterday was submitted" rationale is in the comment, as asked. `longest` untouched; `last_submission_date` / `last_period_key` preserved as history. |
+| N1b | Daily lapse cron | ✅ | `runNiyamStreakLapse` at `:245-288`, registered at `:291` on the frozen `NIYAM_STREAK_LAPSE` expression. Cursor-batched by id at 200/page with a set-based `UPDATE … WHERE id IN (…)` — no per-row `recomputeStreak`. Exported for direct test invocation. `last_period_key IS NOT NULL` guard is correct: SQL `<>` against NULL yields NULL and would silently drop those rows. |
+| N2 | Bilingual badge push | ✅ | Ladder and labels moved to `lib/api-zod/src/contracts.ts:606-618`; api-server imports `niyamBadgeLabel`, mobile re-exports rather than duplicating. Both `notifyBadgesPush` and `notifyParentOfRejection` now read `users.preferred_language` and push in that language. |
+| N3 | Badge inbox row | ✅ | `niyam-badges.ts:113-125` inserts the bilingual `notifications` row first and bails if it returns nothing, gating the push exactly as the rejection path does. Enum value added to `NOTIFICATION_KINDS`; migration `0015_niyam_badge_kind.sql` isolates the `ALTER TYPE`, matching `0006`. |
+| N4 | Lookback cap documented | ✅ | `niyam-period.ts` — explains the bound sits beyond `daily_100` and that `longest_streak` is protected. |
+| N5 | Reversal amount inside tx | ✅ | `:960-981` re-reads `status`, `created_at`, `points_awarded` inside the transaction; `pointsToReverse` comes from the fresh row. |
+| N6 | Window check inside tx | ✅ | Same fresh read; `canRejectSubmission` now evaluated at `:974-979` inside the transaction, returning `windowExpired` which surfaces as the 409 at `:1044`. Went further than the "or document why not" option. |
+| N7 | Silent catches | ✅ | `logger.warn` with `{ err, userId, kind }` in both helpers, and the `try` correctly narrowed to just the `device_push_tokens` SELECT — `sendPush` documents that it never throws. |
+
+**Tests:** all five specified cases present (`niyam-submissions.test.ts:914, 973, 1004, 1043, 1090`), including direct invocation of `runNiyamStreakLapse` without starting the scheduler.
+
+**Migration journal:** tags `0000`–`0017` match the `.sql` files exactly, with no gaps or duplicates across the interleaved niyam and attendance work. The `0015` header notes why it skipped `0008`.
+
+**No regression from the attendance work.** `0016_punya_source_revision.sql` extends the idempotency foundation with `source_revision` rather than reverting it; `punya.ts` still uses `ON CONFLICT (idempotency_key) … DO NOTHING`.
+
+**Edge case checked and already safe:** editing a niyam's `niyam_type` after submissions exist would invalidate every stored `period_key` and break both the streak walk and the lapse job. `niyam_type` is deliberately absent from `patchNiyamSchema` (`admin-modules.ts:513-526`), so it cannot be changed post-creation. Worth keeping that way — add a comment if anyone is tempted to open it up.
+
+### Minor observations (no action required)
+
+1. **Two extra round trips per notification.** Both notify helpers issue a separate `users` SELECT for `preferred_language` after the token query. Could be one join. Negligible at current volume; matters if notification fan-out grows.
+2. **Three near-identical notify blocks now exist** — rejection, badges, birthday — each doing insert row → load tokens → load language → push. A shared `notifyUser({ userId, kind, titleEn, titleHi, bodyEn, bodyHi, data })` would collapse them, and would be the natural place for the join in (1).
+3. **`0016` mixes `ALTER TYPE … ADD VALUE` with DML in one file**, unlike `0006` and `0015` which isolate it. Safe on PostgreSQL 16 because the new value isn't used in the same transaction — but the isolated pattern is the safer habit. Attendance scope, noted for consistency.

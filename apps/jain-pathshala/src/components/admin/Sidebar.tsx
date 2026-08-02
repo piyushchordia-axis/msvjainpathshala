@@ -2,6 +2,8 @@ import { LogOut } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth-context';
+import { useLocale } from '@/lib/locale-context';
+import { t, type Locale } from '@workspace/i18n';
 import { filterNavForRole, type NavGroup } from './sidebar-nav';
 import type { SessionUser } from '@/lib/auth';
 
@@ -13,7 +15,20 @@ function initials(name: string, phone: string): string {
   return phone.slice(-2);
 }
 
-function NavBlock({ groups, pathname }: { groups: NavGroup[]; pathname: string }) {
+function navLabel(href: string, fallback: string, locale: Locale): string {
+  if (href === '/admin/media-curation') return t('mediaCuration.navLabel', locale);
+  return fallback;
+}
+
+function NavBlock({
+  groups,
+  pathname,
+  locale,
+}: {
+  groups: NavGroup[];
+  pathname: string;
+  locale: Locale;
+}) {
   return (
     <nav aria-label="Admin" className="flex-1 space-y-6 overflow-y-auto px-3 py-4">
       {groups.map((group) => (
@@ -37,7 +52,9 @@ function NavBlock({ groups, pathname }: { groups: NavGroup[]; pathname: string }
                     )}
                   >
                     <Icon className="size-4 shrink-0" />
-                    <span className="truncate">{item.label}</span>
+                    <span className="truncate leading-snug">
+                      {navLabel(item.href, item.label, locale)}
+                    </span>
                   </Link>
                 </li>
               );
@@ -51,6 +68,7 @@ function NavBlock({ groups, pathname }: { groups: NavGroup[]; pathname: string }
 
 export function Sidebar({ user }: { user: SessionUser }) {
   const [pathname] = useLocation();
+  const locale = useLocale() as Locale;
   const groups = filterNavForRole(user.role);
   const { logout } = useAuth();
 
@@ -64,7 +82,7 @@ export function Sidebar({ user }: { user: SessionUser }) {
         </div>
       </div>
 
-      <NavBlock groups={groups} pathname={pathname} />
+      <NavBlock groups={groups} pathname={pathname} locale={locale} />
 
       <div className="border-t border-maroon-700/40 p-3">
         <div className="flex items-center gap-3 rounded-md bg-maroon-700/40 px-3 py-2">

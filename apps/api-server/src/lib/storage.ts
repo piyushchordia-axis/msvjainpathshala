@@ -10,7 +10,7 @@
  */
 import { createReadStream, type ReadStream } from "node:fs";
 import { Readable } from "node:stream";
-import { mkdir, writeFile, stat, unlink } from "node:fs/promises";
+import { mkdir, writeFile, copyFile, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
@@ -22,8 +22,11 @@ export interface StoredObject {
 }
 
 export interface StorageProvider {
-  /** Persist bytes and return its key + publicly-resolvable URL. */
-  put(key: string, bytes: Buffer, contentType: string): Promise<StoredObject>;
+  /**
+   * Persist bytes (Buffer) or stream from a filesystem path, and return key + URL.
+   * Path form is preferred for large uploads so the heap never holds the whole file.
+   */
+  put(key: string, body: Buffer | string, contentType: string): Promise<StoredObject>;
   /** Absolute URL for a stored key. */
   url(key: string): string;
   /** Open a read stream for a stored key (used for streaming downloads). */
@@ -57,10 +60,14 @@ class LocalDiskProvider implements StorageProvider {
     return target;
   }
 
-  async put(key: string, bytes: Buffer, contentType: string): Promise<StoredObject> {
+  async put(key: string, body: Buffer | string, contentType: string): Promise<StoredObject> {
     const target = this.resolve(key);
     await mkdir(path.dirname(target), { recursive: true });
-    await writeFile(target, bytes);
+    if (typeof body === "string") {
+      await copyFile(body, target);
+    } else {
+      await writeFile(target, body);
+    }
     const info = await stat(target);
     return { key, url: this.url(key), content_type: contentType, size: info.size };
   }
@@ -140,13 +147,27 @@ class S3StorageProvider implements StorageProvider {
     return this.client;
   }
 
-  async put(key: string, bytes: Buffer, contentType: string): Promise<StoredObject> {
+  async put(key: string, body: Buffer | string, contentType: string): Promise<StoredObject> {
     const client = await this.getClient();
     const { PutObjectCommand } = await this.getSdk();
+    if (typeof body === "string") {
+      const info = await stat(body);
+      const stream = createReadStream(body);
+      await client.send(
+        new PutObjectCommand({
+          Bucket: this.bucket,
+          Key: key,
+          Body: stream,
+          ContentType: contentType,
+          ContentLength: info.size,
+        }),
+      );
+      return { key, url: this.url(key), content_type: contentType, size: info.size };
+    }
     await client.send(
-      new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: bytes, ContentType: contentType }),
+      new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: body, ContentType: contentType }),
     );
-    return { key, url: this.url(key), content_type: contentType, size: bytes.length };
+    return { key, url: this.url(key), content_type: contentType, size: body.length };
   }
 
   /**

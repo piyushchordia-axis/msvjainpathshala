@@ -47,14 +47,18 @@ describe("attendance (frozen routes)", () => {
     const items = today.body.data.items as Array<{
       id: string;
       scheduled_date: string;
+      status: string;
       roster: Array<{ student_id: string; status: string | null }>;
     }>;
-    if (items.length === 0) return;
+    // Prefer a live session — prior runs may leave cancelled rows first in the list.
+    const session = items.find(
+      (s) =>
+        (s.status === "scheduled" || s.status === "in_progress") &&
+        (s.roster?.length ?? 0) > 0,
+    );
+    if (!session) return;
 
-    const session = items[0]!;
     const roster = session.roster ?? [];
-    if (roster.length === 0) return;
-
     const markedAt = `${session.scheduled_date}T10:00:00.000+05:30`;
     const records = roster.slice(0, Math.min(5, roster.length)).map((r, i) => ({
       student_id: r.student_id,

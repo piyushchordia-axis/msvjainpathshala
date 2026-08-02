@@ -105,14 +105,14 @@ describe("gallery", () => {
     expect(listed.consent_opt_in).toBeNull();
     expect(listed.caption).toBe(caption);
 
-    // Update visibility: hide it.
+    // Update visibility: hide it (featuring is a separate endpoint).
     const patch = await request(app)
       .patch(`${MOUNT}/admin/${id}/visibility`)
       .set(auth(token))
-      .send({ is_public: false, is_featured: true });
+      .send({ is_public: false });
     expect(patch.status).toBe(200);
     expect(patch.body.data.is_public).toBe(false);
-    expect(patch.body.data.is_featured).toBe(true);
+    expect(patch.body.data.featured_gallery).toBe(false);
 
     // Delete (soft takedown).
     const del = await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(token));
@@ -136,8 +136,6 @@ describe("gallery", () => {
     const parent = await loginAs("parent");
     const studentId = await aaravId(parent.token);
 
-    // Owning user = parent (parent_id is set for Aarav). Read its current opt-in
-    // so we can restore it; the seed sets it true.
     const [owner] = await db
       .select({ id: users.id, optIn: users.gallery_visibility_opt_in })
       .from(students)
@@ -153,7 +151,6 @@ describe("gallery", () => {
     let itemId = "";
 
     try {
-      // Create a student-tied, public item with a real image.
       const create = await request(app)
         .post(`${MOUNT}/admin`)
         .set(auth(admin.token))
@@ -161,18 +158,23 @@ describe("gallery", () => {
       expect(create.status).toBe(201);
       itemId = create.body.data.id;
 
-      // Turn consent OFF → item must be EXCLUDED from the public feed.
+      // Must feature onto the wall — unfeatured items never appear publicly.
+      const feature = await request(app)
+        .patch(`${MOUNT}/admin/${itemId}/featured`)
+        .set(auth(admin.token))
+        .send({ featured_gallery: true });
+      expect(feature.status).toBe(200);
+
       await db
         .update(users)
         .set({ gallery_visibility_opt_in: false })
         .where(eq(users.id, ownerId));
 
-      const feedOff = await request(app).get(`${MOUNT}?limit=200`);
+      const feedOff = await request(app).get(`${MOUNT}?surface=wall&limit=200`);
       expect(feedOff.status).toBe(200);
       const whenOff = feedOff.body.data.items.find((r: { id: string }) => r.id === itemId);
       expect(whenOff, "non-consented student media must NOT appear publicly").toBeUndefined();
 
-      // The admin listing still shows it, flagged consent_opt_in: false.
       const adminList = await request(app)
         .get(`${MOUNT}/admin?limit=500`)
         .set(auth(admin.token));
@@ -180,21 +182,18 @@ describe("gallery", () => {
       expect(adminRow).toBeTruthy();
       expect(adminRow.consent_opt_in).toBe(false);
 
-      // Turn consent ON → item is now INCLUDED in the public feed.
       await db
         .update(users)
         .set({ gallery_visibility_opt_in: true })
         .where(eq(users.id, ownerId));
 
-      const feedOn = await request(app).get(`${MOUNT}?limit=200`);
+      const feedOn = await request(app).get(`${MOUNT}?surface=wall&limit=200`);
       expect(feedOn.status).toBe(200);
       const whenOn = feedOn.body.data.items.find((r: { id: string }) => r.id === itemId);
       expect(whenOn, "consented student media must appear publicly").toBeTruthy();
-      // Public read exposes only a first name, never the full name, for minors.
       expect(whenOn.first_name).toBe("Aarav");
       expect(whenOn.caption).toBe(caption);
     } finally {
-      // Restore opt-in to the seeded value and clean up the created item.
       await db
         .update(users)
         .set({ gallery_visibility_opt_in: seededOptIn })
@@ -202,6 +201,117 @@ describe("gallery", () => {
       if (itemId) {
         await request(app).delete(`${MOUNT}/admin/${itemId}`).set(auth(admin.token));
       }
+    }
+  });
+
+  it("featuring never overrides parent opt-out on wall or home surfaces", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await aaravId(parent.token);
+
+    const [owner] = await db
+      .select({ id: users.id, optIn: users.gallery_visibility_opt_in })
+      .from(students)
+      .innerJoin(users, eq(users.id, students.parent_id))
+      .where(eq(students.id, studentId))
+      .limit(1);
+    expect(owner).toBeTruthy();
+    const ownerId = owner.id;
+    const seededOptIn = owner.optIn;
+
+    const tag = uniqueTag("feature-consent");
+    let itemId = "";
+
+    try {
+      const create = await request(app)
+        .post(`${MOUNT}/admin`)
+        .set(auth(admin.token))
+        .send({ image_url: uploadUrl(tag), student_id: studentId, is_public: true });
+      expect(create.status).toBe(201);
+      itemId = create.body.data.id;
+
+      await db
+        .update(users)
+        .set({ gallery_visibility_opt_in: true })
+        .where(eq(users.id, ownerId));
+
+      const feature = await request(app)
+        .patch(`${MOUNT}/admin/${itemId}/featured`)
+        .set(auth(admin.token))
+        .send({ featured_gallery: true, featured_home: true });
+      expect(feature.status).toBe(200);
+
+      const wallOn = await request(app).get(`${MOUNT}?surface=wall&limit=200`);
+      const homeOn = await request(app).get(`${MOUNT}?surface=home&limit=200`);
+      expect(wallOn.body.data.items.some((r: { id: string }) => r.id === itemId)).toBe(true);
+      expect(homeOn.body.data.items.some((r: { id: string }) => r.id === itemId)).toBe(true);
+
+      await db
+        .update(users)
+        .set({ gallery_visibility_opt_in: false })
+        .where(eq(users.id, ownerId));
+
+      const wallOff = await request(app).get(`${MOUNT}?surface=wall&limit=200`);
+      const homeOff = await request(app).get(`${MOUNT}?surface=home&limit=200`);
+      expect(wallOff.body.data.items.some((r: { id: string }) => r.id === itemId)).toBe(false);
+      expect(homeOff.body.data.items.some((r: { id: string }) => r.id === itemId)).toBe(false);
+    } finally {
+      await db
+        .update(users)
+        .set({ gallery_visibility_opt_in: seededOptIn })
+        .where(eq(users.id, ownerId));
+      if (itemId) {
+        await request(app).delete(`${MOUNT}/admin/${itemId}`).set(auth(admin.token));
+      }
+    }
+  });
+
+  it("forbids shikshak from featuring; city_admin can feature in-city items", async () => {
+    const admin = await loginAs("super_admin");
+    const cityAdmin = await loginAs("city_admin");
+    const shikshak = await loginAs("shikshak");
+    const parent = await loginAs("parent");
+    const studentId = await aaravId(parent.token);
+
+    const tag = uniqueTag("rbac-feature");
+    const create = await request(app)
+      .post(`${MOUNT}/admin`)
+      .set(auth(admin.token))
+      .send({ image_url: uploadUrl(tag), student_id: studentId });
+    expect(create.status).toBe(201);
+    const id: string = create.body.data.id;
+
+    try {
+      const denied = await request(app)
+        .patch(`${MOUNT}/admin/${id}/featured`)
+        .set(auth(shikshak.token))
+        .send({ featured_gallery: true });
+      expect(denied.status).toBe(403);
+
+      const allowed = await request(app)
+        .patch(`${MOUNT}/admin/${id}/featured`)
+        .set(auth(cityAdmin.token))
+        .send({ featured_gallery: true });
+      expect(allowed.status).toBe(200);
+      expect(allowed.body.data.featured_gallery).toBe(true);
+
+      const bulk = await request(app)
+        .patch(`${MOUNT}/admin/featured`)
+        .set(auth(cityAdmin.token))
+        .send({ ids: [id], featured_home: true });
+      expect(bulk.status).toBe(200);
+      expect(bulk.body.data.results[0]).toEqual({ id, result: "applied" });
+
+      const queue = await request(app)
+        .get(`${MOUNT}/admin/queue?featured=wall&limit=50`)
+        .set(auth(cityAdmin.token));
+      expect(queue.status).toBe(200);
+      const row = queue.body.data.items.find((r: { id: string }) => r.id === id);
+      expect(row).toBeTruthy();
+      expect(row).toHaveProperty("consent_opt_in");
+      expect(row).toHaveProperty("can_publish");
+    } finally {
+      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(admin.token));
     }
   });
 
@@ -387,5 +497,221 @@ describe("gallery", () => {
 
     const del = await request(app).delete(`${MOUNT}/admin/${ghost}`).set(auth(token));
     expect(del.status).toBe(404);
+  });
+
+  /* ────────────────── 5. Surface curation (home / wall) ────────────────── */
+
+  it("unfeatured student item appears on neither home nor wall surface", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await aaravId(parent.token);
+    const tag = uniqueTag("unfeatured-surfaces");
+
+    const create = await request(app)
+      .post(`${MOUNT}/admin`)
+      .set(auth(admin.token))
+      .send({ image_url: uploadUrl(tag), student_id: studentId, is_public: true });
+    expect(create.status).toBe(201);
+    const id: string = create.body.data.id;
+    expect(create.body.data.featured_gallery).toBe(false);
+    expect(create.body.data.featured_home).toBe(false);
+
+    try {
+      const wall = await request(app).get(`${MOUNT}?surface=wall&limit=200`);
+      const home = await request(app).get(`${MOUNT}?surface=home&limit=200`);
+      expect(wall.body.data.items.some((r: { id: string }) => r.id === id)).toBe(false);
+      expect(home.body.data.items.some((r: { id: string }) => r.id === id)).toBe(false);
+    } finally {
+      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(admin.token));
+    }
+  });
+
+  it("city_admin featuring for home only appears on home, not wall", async () => {
+    const admin = await loginAs("super_admin");
+    const cityAdmin = await loginAs("city_admin");
+    const parent = await loginAs("parent");
+    const studentId = await aaravId(parent.token);
+    const tag = uniqueTag("home-only");
+
+    const create = await request(app)
+      .post(`${MOUNT}/admin`)
+      .set(auth(admin.token))
+      .send({ image_url: uploadUrl(tag), student_id: studentId, is_public: true });
+    expect(create.status).toBe(201);
+    const id: string = create.body.data.id;
+
+    try {
+      const feature = await request(app)
+        .patch(`${MOUNT}/admin/${id}/featured`)
+        .set(auth(cityAdmin.token))
+        .send({ featured_home: true });
+      expect(feature.status).toBe(200);
+      expect(feature.body.data.featured_home).toBe(true);
+      expect(feature.body.data.featured_gallery).toBe(false);
+
+      const home = await request(app).get(`${MOUNT}?surface=home&limit=200`);
+      const wall = await request(app).get(`${MOUNT}?surface=wall&limit=200`);
+      expect(home.body.data.items.some((r: { id: string }) => r.id === id)).toBe(true);
+      expect(wall.body.data.items.some((r: { id: string }) => r.id === id)).toBe(false);
+    } finally {
+      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(admin.token));
+    }
+  });
+
+  it("forbids sanchalak and shikshak from featuring despite canAccessAdminPanel", async () => {
+    const admin = await loginAs("super_admin");
+    const sanchalak = await loginAs("sanchalak");
+    const shikshak = await loginAs("shikshak");
+    const parent = await loginAs("parent");
+    const studentId = await aaravId(parent.token);
+    const tag = uniqueTag("panel-but-no-feature");
+
+    const create = await request(app)
+      .post(`${MOUNT}/admin`)
+      .set(auth(admin.token))
+      .send({ image_url: uploadUrl(tag), student_id: studentId });
+    expect(create.status).toBe(201);
+    const id: string = create.body.data.id;
+
+    try {
+      // Both roles can open the admin panel (list) but must not feature.
+      const sanchList = await request(app).get(`${MOUNT}/admin?limit=5`).set(auth(sanchalak.token));
+      expect(sanchList.status).toBe(200);
+      const shikList = await request(app).get(`${MOUNT}/admin?limit=5`).set(auth(shikshak.token));
+      expect(shikList.status).toBe(200);
+
+      for (const token of [sanchalak.token, shikshak.token]) {
+        const single = await request(app)
+          .patch(`${MOUNT}/admin/${id}/featured`)
+          .set(auth(token))
+          .send({ featured_gallery: true });
+        expect(single.status).toBe(403);
+
+        const bulk = await request(app)
+          .patch(`${MOUNT}/admin/featured`)
+          .set(auth(token))
+          .send({ ids: [id], featured_gallery: true });
+        expect(bulk.status).toBe(403);
+      }
+    } finally {
+      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(admin.token));
+    }
+  });
+
+  it("forbids city_admin from featuring an item in a different city", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const cityAdmin = await loginAs("city_admin"); // Mumbai
+    const puneId = await puneStudentId(superAdmin.token);
+    const tag = uniqueTag("cross-city-feature");
+
+    const create = await request(app)
+      .post(`${MOUNT}/admin`)
+      .set(auth(superAdmin.token))
+      .send({ image_url: uploadUrl(tag), student_id: puneId });
+    expect(create.status).toBe(201);
+    const id: string = create.body.data.id;
+
+    try {
+      const feature = await request(app)
+        .patch(`${MOUNT}/admin/${id}/featured`)
+        .set(auth(cityAdmin.token))
+        .send({ featured_gallery: true });
+      expect(feature.status).toBe(403);
+      expect(feature.body.error.code).toBe("ERR_FORBIDDEN");
+    } finally {
+      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(superAdmin.token));
+    }
+  });
+
+  it("bulk featuring returns per-item results for mixed in-scope and out-of-scope ids", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const cityAdmin = await loginAs("city_admin");
+    const parent = await loginAs("parent");
+    const mumbaiId = await aaravId(parent.token);
+    const puneId = await puneStudentId(superAdmin.token);
+
+    const inScopeIds: string[] = [];
+    let outScopeId = "";
+
+    try {
+      for (let i = 0; i < 3; i++) {
+        const create = await request(app)
+          .post(`${MOUNT}/admin`)
+          .set(auth(superAdmin.token))
+          .send({
+            image_url: uploadUrl(uniqueTag(`bulk-in-${i}`)),
+            student_id: mumbaiId,
+          });
+        expect(create.status).toBe(201);
+        inScopeIds.push(create.body.data.id);
+      }
+
+      const outCreate = await request(app)
+        .post(`${MOUNT}/admin`)
+        .set(auth(superAdmin.token))
+        .send({
+          image_url: uploadUrl(uniqueTag("bulk-out")),
+          student_id: puneId,
+        });
+      expect(outCreate.status).toBe(201);
+      outScopeId = outCreate.body.data.id;
+
+      const bulk = await request(app)
+        .patch(`${MOUNT}/admin/featured`)
+        .set(auth(cityAdmin.token))
+        .send({
+          ids: [...inScopeIds, outScopeId],
+          featured_home: true,
+        });
+      expect(bulk.status).toBe(200);
+      expect(bulk.body.data.results).toHaveLength(4);
+
+      for (const id of inScopeIds) {
+        const row = bulk.body.data.results.find((r: { id: string }) => r.id === id);
+        expect(row).toEqual({ id, result: "applied" });
+      }
+      const forbidden = bulk.body.data.results.find(
+        (r: { id: string }) => r.id === outScopeId,
+      );
+      expect(forbidden).toEqual({ id: outScopeId, result: "forbidden" });
+    } finally {
+      for (const id of [...inScopeIds, outScopeId].filter(Boolean)) {
+        await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(superAdmin.token));
+      }
+    }
+  });
+
+  it("city_admin cannot feature city_id-null items; super_admin can", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const cityAdmin = await loginAs("city_admin");
+    const tag = uniqueTag("null-city");
+
+    // Non-student create → city_id stays null.
+    const create = await request(app)
+      .post(`${MOUNT}/admin`)
+      .set(auth(superAdmin.token))
+      .send({ image_url: uploadUrl(tag), caption: `cap-${tag}`, is_public: true });
+    expect(create.status).toBe(201);
+    const id: string = create.body.data.id;
+
+    try {
+      const denied = await request(app)
+        .patch(`${MOUNT}/admin/${id}/featured`)
+        .set(auth(cityAdmin.token))
+        .send({ featured_gallery: true });
+      expect(denied.status).toBe(403);
+
+      const allowed = await request(app)
+        .patch(`${MOUNT}/admin/${id}/featured`)
+        .set(auth(superAdmin.token))
+        .send({ featured_gallery: true });
+      expect(allowed.status).toBe(200);
+      expect(allowed.body.data.featured_gallery).toBe(true);
+
+      const wall = await request(app).get(`${MOUNT}?surface=wall&limit=200`);
+      expect(wall.body.data.items.some((r: { id: string }) => r.id === id)).toBe(true);
+    } finally {
+      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(superAdmin.token));
+    }
   });
 });

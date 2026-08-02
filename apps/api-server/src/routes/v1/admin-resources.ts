@@ -127,7 +127,8 @@ router.get("/gallery", async (req: Request, res: Response) => {
       id: gallery_items.id,
       student_name: students.full_name,
       niyam_title_en: niyams.title_en,
-      is_featured: gallery_items.is_featured,
+      featured_gallery: gallery_items.featured_gallery,
+      featured_home: gallery_items.featured_home,
       is_public: gallery_items.is_public,
       created_at: gallery_items.created_at,
     })
@@ -135,13 +136,17 @@ router.get("/gallery", async (req: Request, res: Response) => {
     .innerJoin(students, eq(students.id, gallery_items.student_id))
     .innerJoin(niyams, eq(niyams.id, gallery_items.niyam_id))
     .where(and(isNull(students.deleted_at), centreFilter))
-    .orderBy(desc(gallery_items.is_featured), desc(gallery_items.created_at))
+    .orderBy(desc(gallery_items.featured_gallery), desc(gallery_items.created_at))
     .limit(limit);
-  const items = rows.map((r) => ({ ...r, created_at: r.created_at.toISOString() }));
+  const items = rows.map((r) => ({
+    ...r,
+    is_featured: r.featured_gallery,
+    created_at: r.created_at.toISOString(),
+  }));
   ok(res, { items }, { count: items.length });
 });
 
-/* POST /v1/admin/gallery/:id/feature */
+/* POST /v1/admin/gallery/:id/feature — legacy; prefer PATCH /v1/gallery/admin/:id/featured */
 router.post("/gallery/:id/feature", async (req: Request, res: Response) => {
   const id = String(req.params.id);
   if (!UUID_RE.test(id)) {
@@ -159,18 +164,26 @@ router.post("/gallery/:id/feature", async (req: Request, res: Response) => {
     fail(res, 404, "ERR_NOT_FOUND", "Gallery item not found.");
     return;
   }
-  await db.update(gallery_items).set({ is_featured: true }).where(eq(gallery_items.id, item.id));
+  await db
+    .update(gallery_items)
+    .set({
+      featured_gallery: true,
+      featured_at: new Date(),
+      featured_by: req.authUser!.id,
+      updated_at: new Date(),
+    })
+    .where(eq(gallery_items.id, item.id));
   await auditFromReq(req, {
     action: "update",
     entityKind: "gallery_item",
     entityId: item.id,
     summary: "Gallery item featured.",
-    metadata: { is_featured: true },
+    metadata: { featured_gallery: true },
   });
-  ok(res, { id: item.id, is_featured: true });
+  ok(res, { id: item.id, featured_gallery: true, is_featured: true });
 });
 
-/* POST /v1/admin/gallery/:id/unfeature */
+/* POST /v1/admin/gallery/:id/unfeature — legacy */
 router.post("/gallery/:id/unfeature", async (req: Request, res: Response) => {
   const id = String(req.params.id);
   if (!UUID_RE.test(id)) {
@@ -188,15 +201,24 @@ router.post("/gallery/:id/unfeature", async (req: Request, res: Response) => {
     fail(res, 404, "ERR_NOT_FOUND", "Gallery item not found.");
     return;
   }
-  await db.update(gallery_items).set({ is_featured: false }).where(eq(gallery_items.id, item.id));
+  await db
+    .update(gallery_items)
+    .set({
+      featured_gallery: false,
+      featured_home: false,
+      featured_at: null,
+      featured_by: null,
+      updated_at: new Date(),
+    })
+    .where(eq(gallery_items.id, item.id));
   await auditFromReq(req, {
     action: "update",
     entityKind: "gallery_item",
     entityId: item.id,
     summary: "Gallery item unfeatured.",
-    metadata: { is_featured: false },
+    metadata: { featured_gallery: false, featured_home: false },
   });
-  ok(res, { id: item.id, is_featured: false });
+  ok(res, { id: item.id, featured_gallery: false, is_featured: false });
 });
 
 /* GET /v1/admin/library */

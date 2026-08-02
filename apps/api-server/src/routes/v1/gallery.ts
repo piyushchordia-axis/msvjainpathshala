@@ -1,54 +1,82 @@
 /**
- * /v1/gallery — public gallery + admin management.
+ * /v1/gallery — public gallery + admin management + curation queue.
  *
  * Public (anonymous):
- *  - GET / — published items. Student-tied media is only ever returned when the
- *    owning user (parent_id, else student.user_id) has opted in to gallery
- *    visibility (users.gallery_visibility_opt_in). Non-student media (student_id
- *    null) is always allowed. This is the minors-privacy consent gate.
+ *  - GET /?surface=wall|home — published + featured for that surface. Student-
+ *    tied media also requires the owning user's gallery_visibility_opt_in (Q6).
+ *    Featuring NEVER overrides consent.
  *
- * Admin panel (requireAuth + requireAdminPanel, centre-scoped via
- * resolveAdminScope):
- *  - POST /admin — create an item from an already-uploaded media URL
- *    (folder "gallery"); may attach a student (must be in scope) + niyam.
- *  - GET /admin — list items in scope (includes hidden + non-opted-in, with a
- *    consent flag so admins see why something isn't public).
- *  - PATCH /admin/:id/visibility — toggle is_public / is_featured.
- *  - DELETE /admin/:id — soft-delete takedown; best-effort removes the stored
- *    media object.
+ * Admin panel (requireAuth + requireAdminPanel, centre-scoped):
+ *  - POST /admin — create from uploaded gallery URL
+ *  - GET /admin — list in scope (incl. hidden + non-opted-in)
+ *  - PATCH /admin/:id/visibility — soft-hide (is_public only)
+ *  - DELETE /admin/:id — soft-delete takedown
  *
- * Scope: a student-tied item belongs to that student's centre; non-student
- * items are global (only super_admin / state / city see/manage them broadly —
- * see listing rules below). Mutations are audited.
+ * Curation (requireAuth + canFeatureMedia — city_admin+, NOT sanchalak/shikshak):
+ *  - PATCH /admin/:id/featured
+ *  - PATCH /admin/featured (bulk, per-item results)
+ *  - GET /admin/queue — moderation queue with explicit consent state
  */
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, gallery_items, students, niyams, users, centres } from "@workspace/db";
-import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import {
+  db,
+  gallery_items,
+  students,
+  niyams,
+  users,
+  centres,
+  type User,
+} from "@workspace/db";
+import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
+import { canFeatureMedia } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
 import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
-import { resolveAdminScope, type AdminScope } from "../../lib/scope";
+import { resolveAdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { storage } from "../../lib/storage";
 import { clampLimit, firstName, inScope } from "../../lib/route-helpers";
+import { applyGalleryFeatureFlags } from "../../lib/gallery-feature";
+import {
+  enqueueGalleryWallFeatureNotifies,
+  isGalleryWallFeatureTransition,
+  notifyGalleryWallFeatureInline,
+} from "../../lib/gallery-wall-notify";
 
 const router: IRouter = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function requireFeatureMedia(req: Request, res: Response): boolean {
+  if (!canFeatureMedia(req.authUser?.role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Only city admins and above can feature gallery media.");
+    return false;
+  }
+  return true;
+}
 
+async function cityIdForStudent(studentId: string): Promise<string | null> {
+  const [row] = await db
+    .select({ city_id: centres.city_id })
+    .from(students)
+    .innerJoin(centres, eq(centres.id, students.centre_id))
+    .where(and(eq(students.id, studentId), isNull(students.deleted_at)))
+    .limit(1);
+  return row?.city_id ?? null;
+}
 
 /* ═══════════════════════════════ Public ═══════════════════════════════ */
 
-/* GET /v1/gallery?limit= — published gallery, consent-gated for student media */
+/* GET /v1/gallery?surface=wall|home&limit= — featured + consent-gated */
 router.get("/", async (req: Request, res: Response) => {
   const limit = clampLimit(req.query.limit, 60, 200);
+  const surfaceRaw = String(req.query.surface ?? "wall").toLowerCase();
+  const surface = surfaceRaw === "home" ? "home" : "wall";
+  const featuredCol =
+    surface === "home" ? gallery_items.featured_home : gallery_items.featured_gallery;
 
-  // The owning user is the student's parent, or the student's own user when no
-  // parent. Consent is that user's gallery_visibility_opt_in. Resolve it with a
-  // correlated COALESCE so a single query covers both cases.
   const owner = users;
   const rows = await db
     .select({
@@ -63,36 +91,32 @@ router.get("/", async (req: Request, res: Response) => {
       thumbnail_url: gallery_items.thumbnail_url,
       caption: gallery_items.caption,
       caption_hi: gallery_items.caption_hi,
-      is_featured: gallery_items.is_featured,
+      featured_gallery: gallery_items.featured_gallery,
+      featured_home: gallery_items.featured_home,
       created_at: gallery_items.created_at,
-      opt_in: owner.gallery_visibility_opt_in,
     })
     .from(gallery_items)
     .leftJoin(students, eq(students.id, gallery_items.student_id))
     .leftJoin(niyams, eq(niyams.id, gallery_items.niyam_id))
-    // Owning user = parent_id if present, else the student's own user_id.
     .leftJoin(owner, eq(owner.id, sql`coalesce(${students.parent_id}, ${students.user_id})`))
     .where(
       and(
         eq(gallery_items.is_public, true),
+        eq(featuredCol, true),
         isNull(gallery_items.deleted_at),
-        // Must carry a real image.
         sql`${gallery_items.image_url} is not null`,
-        // Consent gate: either non-student media (student_id null) OR the owning
-        // user has opted in. A student row whose owner is unresolved/!opted-in
-        // is excluded.
+        // Q6 consent gate — featuring never overrides opt-out.
         or(
           isNull(gallery_items.student_id),
           eq(owner.gallery_visibility_opt_in, true),
         ),
       ),
     )
-    .orderBy(desc(gallery_items.is_featured), desc(gallery_items.created_at))
+    .orderBy(desc(featuredCol), desc(gallery_items.created_at))
     .limit(limit);
 
   const items = rows.map((r) => ({
     id: r.id,
-    // Only expose a first name for student media; non-student media has none.
     first_name: r.student_id ? firstName(r.full_name) : "",
     age_group: r.age_group ?? "",
     niyam_title_en: r.niyam_title_en ?? "",
@@ -102,10 +126,13 @@ router.get("/", async (req: Request, res: Response) => {
     thumbnail_url: signUploadUrl(r.thumbnail_url ?? r.image_url),
     caption: r.caption ?? null,
     caption_hi: r.caption_hi ?? null,
-    is_featured: r.is_featured,
+    featured_gallery: r.featured_gallery,
+    featured_home: r.featured_home,
+    /** @deprecated Wire alias of featured_gallery. */
+    is_featured: r.featured_gallery,
     created_at: r.created_at.toISOString(),
   }));
-  ok(res, { items }, { count: items.length });
+  ok(res, { items }, { count: items.length, surface });
 });
 
 /* ═══════════════════════════════ Admin ═══════════════════════════════ */
@@ -118,10 +145,9 @@ const createSchema = z.object({
   student_id: z.string().uuid().optional(),
   niyam_id: z.string().uuid().optional(),
   is_public: z.boolean().optional(),
-  is_featured: z.boolean().optional(),
 });
 
-/* POST /v1/gallery/admin — create an item from an uploaded media URL (scoped) */
+/* POST /v1/gallery/admin — create (never auto-features) */
 router.post("/admin", requireAuth, requireAdminPanel, async (req: Request, res: Response) => {
   let body: z.infer<typeof createSchema>;
   try {
@@ -131,16 +157,14 @@ router.post("/admin", requireAuth, requireAdminPanel, async (req: Request, res: 
     return;
   }
 
-  // Reject media URLs that aren't ours (must come from /v1/uploads → gallery
-  // folder); prevents linking arbitrary external/host content into the gallery.
   if (uploadKeyFromUrl(body.image_url) === null) {
     fail(res, 422, "ERR_VALIDATION_FAILED", "image_url must be an uploaded file URL.");
     return;
   }
 
   const scope = await resolveAdminScope(req.authUser!);
+  let cityId: string | null = null;
 
-  // Student-tied media: the student must exist and be in the caller's scope.
   if (body.student_id) {
     const [student] = await db
       .select({ id: students.id, centre_id: students.centre_id })
@@ -155,14 +179,12 @@ router.post("/admin", requireAuth, requireAdminPanel, async (req: Request, res: 
       fail(res, 403, "ERR_FORBIDDEN", "Student is outside your scope.");
       return;
     }
+    cityId = await cityIdForStudent(body.student_id);
   } else if (scope.centreIds !== null && scope.centreIds.length === 0) {
-    // Non-student (global) media can only be created by broad admins. A user
-    // with an empty centre scope and no student attachment has nothing to act on.
     fail(res, 403, "ERR_FORBIDDEN", "You cannot publish non-student media.");
     return;
   }
 
-  // A niyam reference is only meaningful for student media.
   if (body.niyam_id) {
     if (!body.student_id) {
       fail(res, 422, "ERR_VALIDATION_FAILED", "niyam_id requires a student_id.");
@@ -184,18 +206,21 @@ router.post("/admin", requireAuth, requireAdminPanel, async (req: Request, res: 
     .values({
       student_id: body.student_id ?? null,
       niyam_id: body.niyam_id ?? null,
+      city_id: cityId,
       image_url: body.image_url,
       thumbnail_url: body.thumbnail_url ?? null,
       caption: body.caption ?? null,
       caption_hi: body.caption_hi ?? null,
       is_public: body.is_public ?? true,
-      is_featured: body.is_featured ?? false,
+      featured_gallery: false,
+      featured_home: false,
       created_by: req.authUser!.id,
     })
     .returning({
       id: gallery_items.id,
       is_public: gallery_items.is_public,
-      is_featured: gallery_items.is_featured,
+      featured_gallery: gallery_items.featured_gallery,
+      featured_home: gallery_items.featured_home,
     });
 
   await auditFromReq(req, {
@@ -208,17 +233,26 @@ router.post("/admin", requireAuth, requireAdminPanel, async (req: Request, res: 
     metadata: { student_id: body.student_id ?? null, niyam_id: body.niyam_id ?? null },
   });
 
-  ok(res, { id: row.id, is_public: row.is_public, is_featured: row.is_featured }, undefined, 201);
+  ok(
+    res,
+    {
+      id: row.id,
+      is_public: row.is_public,
+      featured_gallery: row.featured_gallery,
+      featured_home: row.featured_home,
+      is_featured: row.featured_gallery,
+    },
+    undefined,
+    201,
+  );
 });
 
-/* GET /v1/gallery/admin?limit= — admin listing (incl. hidden + non-opted-in) */
+/* GET /v1/gallery/admin?limit= — admin listing */
 router.get("/admin", requireAuth, requireAdminPanel, async (req: Request, res: Response) => {
   const limit = clampLimit(req.query.limit, 100, 500);
   const scope = await resolveAdminScope(req.authUser!);
 
   const owner = users;
-  // Scope rule for the listing: rows whose student's centre is in scope, OR
-  // non-student (global) rows. super_admin (centreIds null) sees everything.
   let scopeWhere;
   if (scope.centreIds === null) {
     scopeWhere = undefined;
@@ -243,7 +277,8 @@ router.get("/admin", requireAuth, requireAdminPanel, async (req: Request, res: R
       thumbnail_url: gallery_items.thumbnail_url,
       caption: gallery_items.caption,
       caption_hi: gallery_items.caption_hi,
-      is_featured: gallery_items.is_featured,
+      featured_gallery: gallery_items.featured_gallery,
+      featured_home: gallery_items.featured_home,
       is_public: gallery_items.is_public,
       created_at: gallery_items.created_at,
       opt_in: owner.gallery_visibility_opt_in,
@@ -268,10 +303,10 @@ router.get("/admin", requireAuth, requireAdminPanel, async (req: Request, res: R
     thumbnail_url: signUploadUrl(r.thumbnail_url ?? r.image_url),
     caption: r.caption ?? null,
     caption_hi: r.caption_hi ?? null,
-    is_featured: r.is_featured,
+    featured_gallery: r.featured_gallery,
+    featured_home: r.featured_home,
+    is_featured: r.featured_gallery,
     is_public: r.is_public,
-    // Whether this row's owner has consented (null for non-student media). The
-    // UI shows a "consent pending" badge when a student row is not opted in.
     consent_opt_in: r.student_id ? Boolean(r.opt_in) : null,
     created_at: r.created_at.toISOString(),
   }));
@@ -297,7 +332,6 @@ async function loadScopedItem(
     .where(and(eq(gallery_items.id, id), isNull(gallery_items.deleted_at)))
     .limit(1);
   if (!row) return null;
-  // Non-student media: only broad admins (non-empty/null scope) may manage.
   if (row.student_id === null) {
     if (scope.centreIds !== null && scope.centreIds.length === 0) return null;
   } else if (!inScope(scope, row.centre_id)) {
@@ -311,16 +345,11 @@ async function loadScopedItem(
   };
 }
 
-const visibilitySchema = z
-  .object({
-    is_public: z.boolean().optional(),
-    is_featured: z.boolean().optional(),
-  })
-  .refine((v) => v.is_public !== undefined || v.is_featured !== undefined, {
-    message: "Provide is_public and/or is_featured.",
-  });
+const visibilitySchema = z.object({
+  is_public: z.boolean(),
+});
 
-/* PATCH /v1/gallery/admin/:id/visibility — toggle is_public / is_featured */
+/* PATCH /v1/gallery/admin/:id/visibility — soft-hide only (is_public) */
 router.patch(
   "/admin/:id/visibility",
   requireAuth,
@@ -335,7 +364,7 @@ router.patch(
     try {
       body = visibilitySchema.parse(req.body);
     } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Provide is_public and/or is_featured.");
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Provide is_public.");
       return;
     }
     const item = await loadScopedItem(req, id);
@@ -344,18 +373,15 @@ router.patch(
       return;
     }
 
-    const set: Record<string, unknown> = { updated_at: new Date() };
-    if (body.is_public !== undefined) set.is_public = body.is_public;
-    if (body.is_featured !== undefined) set.is_featured = body.is_featured;
-
     const [row] = await db
       .update(gallery_items)
-      .set(set)
+      .set({ is_public: body.is_public, updated_at: new Date() })
       .where(and(eq(gallery_items.id, id), isNull(gallery_items.deleted_at)))
       .returning({
         id: gallery_items.id,
         is_public: gallery_items.is_public,
-        is_featured: gallery_items.is_featured,
+        featured_gallery: gallery_items.featured_gallery,
+        featured_home: gallery_items.featured_home,
       });
     if (!row) {
       fail(res, 404, "ERR_NOT_FOUND", "Gallery item not found.");
@@ -367,12 +393,264 @@ router.patch(
       entityKind: "gallery_item",
       entityId: id,
       summary: "Updated gallery item visibility.",
-      metadata: { is_public: row.is_public, is_featured: row.is_featured },
+      metadata: { is_public: row.is_public },
     });
 
-    ok(res, { id: row.id, is_public: row.is_public, is_featured: row.is_featured });
+    ok(res, {
+      id: row.id,
+      is_public: row.is_public,
+      featured_gallery: row.featured_gallery,
+      featured_home: row.featured_home,
+      is_featured: row.featured_gallery,
+    });
   },
 );
+
+const featureSchema = z
+  .object({
+    featured_home: z.boolean().optional(),
+    featured_gallery: z.boolean().optional(),
+  })
+  .refine((v) => v.featured_home !== undefined || v.featured_gallery !== undefined, {
+    message: "Provide featured_home and/or featured_gallery.",
+  });
+
+/* PATCH /v1/gallery/admin/:id/featured — city_admin+ curation */
+router.patch(
+  "/admin/:id/featured",
+  requireAuth,
+  async (req: Request, res: Response) => {
+    if (!requireFeatureMedia(req, res)) return;
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Gallery item not found.");
+      return;
+    }
+    let body: z.infer<typeof featureSchema>;
+    try {
+      body = featureSchema.parse(req.body);
+    } catch {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Provide featured_home and/or featured_gallery.");
+      return;
+    }
+
+    const outcome = await applyGalleryFeatureFlags(req.authUser as User, id, body);
+    if (outcome.result === "not_found") {
+      fail(res, 404, "ERR_NOT_FOUND", "Gallery item not found.");
+      return;
+    }
+    if (outcome.result === "forbidden") {
+      fail(res, 403, "ERR_FORBIDDEN", "You may not feature this gallery item.");
+      return;
+    }
+
+    await auditFromReq(req, {
+      action: "update",
+      entityKind: "gallery_item",
+      entityId: id,
+      summary: "Updated gallery item featuring.",
+      metadata: {
+        old: outcome.old,
+        new: {
+          featured_home: outcome.row!.featured_home,
+          featured_gallery: outcome.row!.featured_gallery,
+        },
+      },
+    });
+
+    if (isGalleryWallFeatureTransition(outcome.old, outcome.row)) {
+      // Single-item: notify inline (prefs-gated inside notifyUsers).
+      void notifyGalleryWallFeatureInline(id);
+    }
+
+    ok(res, {
+      id: outcome.row!.id,
+      featured_home: outcome.row!.featured_home,
+      featured_gallery: outcome.row!.featured_gallery,
+      featured_at: outcome.row!.featured_at?.toISOString() ?? null,
+      featured_by: outcome.row!.featured_by,
+    });
+  },
+);
+
+const bulkFeatureSchema = z
+  .object({
+    ids: z.array(z.string().uuid()).min(1).max(100),
+    featured_home: z.boolean().optional(),
+    featured_gallery: z.boolean().optional(),
+  })
+  .refine((v) => v.featured_home !== undefined || v.featured_gallery !== undefined, {
+    message: "Provide featured_home and/or featured_gallery.",
+  });
+
+/* PATCH /v1/gallery/admin/featured — bulk; per-item results (like attendance) */
+router.patch("/admin/featured", requireAuth, async (req: Request, res: Response) => {
+  if (!requireFeatureMedia(req, res)) return;
+  let body: z.infer<typeof bulkFeatureSchema>;
+  try {
+    body = bulkFeatureSchema.parse(req.body);
+  } catch {
+    fail(
+      res,
+      422,
+      "ERR_VALIDATION_FAILED",
+      "Provide ids (1–100) and featured_home and/or featured_gallery.",
+    );
+    return;
+  }
+
+  const actor = req.authUser as User;
+  const results: Array<{ id: string; result: "applied" | "forbidden" | "not_found" }> = [];
+  const wallFeaturedIds: string[] = [];
+  for (const id of body.ids) {
+    const outcome = await applyGalleryFeatureFlags(actor, id, {
+      featured_home: body.featured_home,
+      featured_gallery: body.featured_gallery,
+    });
+    results.push({ id, result: outcome.result });
+    if (outcome.result === "applied" && outcome.row && outcome.old) {
+      await auditFromReq(req, {
+        action: "update",
+        entityKind: "gallery_item",
+        entityId: id,
+        summary: "Bulk-updated gallery item featuring.",
+        metadata: {
+          old: outcome.old,
+          new: {
+            featured_home: outcome.row.featured_home,
+            featured_gallery: outcome.row.featured_gallery,
+          },
+        },
+      });
+      if (isGalleryWallFeatureTransition(outcome.old, outcome.row)) {
+        wallFeaturedIds.push(id);
+      }
+    }
+  }
+
+  // Bulk: enqueue so N featuring transitions do not send N pushes inline.
+  if (wallFeaturedIds.length > 0) {
+    void enqueueGalleryWallFeatureNotifies(wallFeaturedIds);
+  }
+
+  ok(res, { results });
+});
+
+/* GET /v1/gallery/admin/queue — curation queue with consent state */
+router.get("/admin/queue", requireAuth, async (req: Request, res: Response) => {
+  if (!requireFeatureMedia(req, res)) return;
+
+  const limit = clampLimit(req.query.limit, 50, 200);
+  const featuredFilter = String(req.query.featured ?? "none").toLowerCase();
+  const cityFilter =
+    typeof req.query.city_id === "string" && UUID_RE.test(req.query.city_id)
+      ? req.query.city_id
+      : null;
+  const cursor =
+    typeof req.query.cursor === "string" && req.query.cursor.length > 0
+      ? new Date(req.query.cursor)
+      : null;
+
+  const actor = req.authUser as User;
+  const owner = users;
+
+  const conditions = [isNull(gallery_items.deleted_at)];
+
+  if (featuredFilter === "none") {
+    conditions.push(eq(gallery_items.featured_gallery, false));
+    conditions.push(eq(gallery_items.featured_home, false));
+  } else if (featuredFilter === "home") {
+    conditions.push(eq(gallery_items.featured_home, true));
+  } else if (featuredFilter === "wall") {
+    conditions.push(eq(gallery_items.featured_gallery, true));
+  }
+  // 'any' → no flag filter
+
+  if (cityFilter) {
+    conditions.push(eq(gallery_items.city_id, cityFilter));
+  }
+
+  // Geographic scope via denormalised city_id.
+  if (actor.role === "city_admin") {
+    if (!actor.city_id) {
+      ok(res, { items: [] }, { count: 0 });
+      return;
+    }
+    conditions.push(eq(gallery_items.city_id, actor.city_id));
+  } else if (actor.role === "state_admin") {
+    if (!actor.state_id) {
+      ok(res, { items: [] }, { count: 0 });
+      return;
+    }
+    const cityRows = await db
+      .select({ id: centres.city_id })
+      .from(centres)
+      .where(eq(centres.state_id, actor.state_id));
+    const cityIds = [...new Set(cityRows.map((r) => r.id).filter(Boolean))] as string[];
+    if (cityIds.length === 0) {
+      ok(res, { items: [] }, { count: 0 });
+      return;
+    }
+    conditions.push(inArray(gallery_items.city_id, cityIds));
+  }
+  // super_admin: unrestricted
+
+  if (cursor && !Number.isNaN(cursor.getTime())) {
+    conditions.push(gt(gallery_items.created_at, cursor));
+  }
+
+  const rows = await db
+    .select({
+      id: gallery_items.id,
+      student_id: gallery_items.student_id,
+      full_name: students.full_name,
+      age_group: students.age_group,
+      centre_name: centres.name,
+      niyam_title_en: niyams.title_en,
+      niyam_title_hi: niyams.title_hi,
+      image_url: gallery_items.image_url,
+      thumbnail_url: gallery_items.thumbnail_url,
+      featured_gallery: gallery_items.featured_gallery,
+      featured_home: gallery_items.featured_home,
+      is_public: gallery_items.is_public,
+      city_id: gallery_items.city_id,
+      created_at: gallery_items.created_at,
+      submission_id: gallery_items.submission_id,
+      opt_in: owner.gallery_visibility_opt_in,
+    })
+    .from(gallery_items)
+    .leftJoin(students, eq(students.id, gallery_items.student_id))
+    .leftJoin(centres, eq(centres.id, students.centre_id))
+    .leftJoin(niyams, eq(niyams.id, gallery_items.niyam_id))
+    .leftJoin(owner, eq(owner.id, sql`coalesce(${students.parent_id}, ${students.user_id})`))
+    .where(and(...conditions))
+    .orderBy(asc(gallery_items.created_at), asc(gallery_items.id))
+    .limit(limit);
+
+  const items = rows.map((r) => ({
+    id: r.id,
+    student_id: r.student_id,
+    first_name: r.student_id ? firstName(r.full_name) : "",
+    age_group: r.age_group ?? "",
+    centre_name: r.centre_name ?? null,
+    niyam_title_en: r.niyam_title_en ?? null,
+    niyam_title_hi: r.niyam_title_hi ?? null,
+    image_url: signUploadUrl(r.image_url),
+    thumbnail_url: signUploadUrl(r.thumbnail_url ?? r.image_url),
+    featured_gallery: r.featured_gallery,
+    featured_home: r.featured_home,
+    is_public: r.is_public,
+    city_id: r.city_id,
+    submitted_at: r.created_at.toISOString(),
+    // Explicit so admins see why featuring would not publish.
+    consent_opt_in: r.student_id ? Boolean(r.opt_in) : null,
+    can_publish: r.student_id == null || Boolean(r.opt_in),
+  }));
+
+  const nextCursor =
+    items.length > 0 ? items[items.length - 1]!.submitted_at : null;
+  ok(res, { items }, { count: items.length, next_cursor: nextCursor });
+});
 
 /* DELETE /v1/gallery/admin/:id — soft-delete takedown (scoped) */
 router.delete("/admin/:id", requireAuth, requireAdminPanel, async (req: Request, res: Response) => {
@@ -389,7 +667,15 @@ router.delete("/admin/:id", requireAuth, requireAdminPanel, async (req: Request,
 
   const [row] = await db
     .update(gallery_items)
-    .set({ deleted_at: new Date(), is_public: false, is_featured: false, updated_at: new Date() })
+    .set({
+      deleted_at: new Date(),
+      is_public: false,
+      featured_gallery: false,
+      featured_home: false,
+      featured_at: null,
+      featured_by: null,
+      updated_at: new Date(),
+    })
     .where(and(eq(gallery_items.id, id), isNull(gallery_items.deleted_at)))
     .returning({ id: gallery_items.id });
   if (!row) {
@@ -397,7 +683,6 @@ router.delete("/admin/:id", requireAuth, requireAdminPanel, async (req: Request,
     return;
   }
 
-  // Best-effort: remove the stored media so a taken-down image leaves no orphan.
   for (const url of [item.image_url, item.thumbnail_url]) {
     if (!url) continue;
     const key = uploadKeyFromUrl(url);

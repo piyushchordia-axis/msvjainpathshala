@@ -305,11 +305,20 @@ function GalleryActions({ id, featured, onChanged }: { id: string; featured: boo
   async function toggle() {
     setBusy(true);
     try {
-      await apiPost(`/v1/admin/gallery/${id}/${featured ? 'unfeature' : 'feature'}`, {});
-      toast.success(featured ? 'Removed from featured.' : 'Marked as featured.');
+      const res = await fetch(
+        `${(import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''}/v1/gallery/admin/${id}/featured`,
+        {
+          method: 'PATCH',
+          credentials: 'include',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ featured_gallery: !featured }),
+        },
+      );
+      if (!res.ok) throw new Error('feature');
+      toast.success(featured ? 'Removed from Punya Wall.' : 'Featured on Punya Wall.');
       onChanged();
     } catch (err) {
-      toast.error('Action failed.', err instanceof ApiError ? err.message : undefined);
+      toast.error('Action failed.', err instanceof Error ? err.message : undefined);
     } finally {
       setBusy(false);
     }

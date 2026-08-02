@@ -47,6 +47,7 @@ import {
   SettingsPage,
 } from '@/pages/admin/AdminListPages';
 import GalleryAdminPage from '@/pages/admin/GalleryAdminPage';
+import MediaCurationPage from '@/pages/admin/MediaCurationPage';
 import NoticesAdminPage from '@/pages/admin/NoticesAdminPage';
 import AdminLibraryPage from '@/pages/admin/LibraryAdminPage';
 import {
@@ -138,6 +139,7 @@ function AdminRoutes() {
         <Route path="/admin/attendance" component={AttendancePage} />
         <Route path="/admin/notices" component={NoticesAdminPage} />
         <Route path="/admin/gallery" component={GalleryAdminPage} />
+        <Route path="/admin/media-curation" component={MediaCurationPage} />
         <Route path="/admin/library" component={AdminLibraryPage} />
         <Route path="/admin/donations" component={DonationsPage} />
         <Route path="/admin/service-requests" component={ServiceRequestsAdminPage} />

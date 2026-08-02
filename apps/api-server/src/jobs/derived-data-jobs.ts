@@ -9,6 +9,7 @@ import {
   runAttendancePostProcess,
   sendParentAttendancePush,
 } from "../services/attendance-post-process";
+import { notifyParentsOfGalleryWallFeature } from "../lib/gallery-wall-notify";
 import { snapshotMonthlyLeaderboard } from "../services/monthly-leaderboard-snapshot";
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
@@ -63,6 +64,14 @@ export function registerDerivedDataJobs(): void {
         throw new Error("notifications.parent attendance_marked missing ids");
       }
       await sendParentAttendancePush(studentId, sessionId);
+      return;
+    }
+    if (kind === "gallery_wall_featured") {
+      const raw = (data as { gallery_item_ids?: unknown }).gallery_item_ids;
+      const ids = Array.isArray(raw)
+        ? raw.map((id) => String(id)).filter(Boolean)
+        : [];
+      await notifyParentsOfGalleryWallFeature(ids);
       return;
     }
     // timetable_change etc. — push already sent inline by the producer.

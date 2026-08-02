@@ -17,6 +17,7 @@ export const ERROR_CODES = [
   "ERR_ATTENDANCE_EDIT_WINDOW_EXPIRED",
   "ERR_STUDENT_NOT_ENROLLED",
   "ERR_NIYAM_REVERSAL_WINDOW_EXPIRED",
+  "ERR_FILE_TOO_LARGE",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -36,4 +37,19 @@ export const ErrorCode = {
   ATTENDANCE_EDIT_WINDOW_EXPIRED: "ERR_ATTENDANCE_EDIT_WINDOW_EXPIRED",
   STUDENT_NOT_ENROLLED: "ERR_STUDENT_NOT_ENROLLED",
   NIYAM_REVERSAL_WINDOW_EXPIRED: "ERR_NIYAM_REVERSAL_WINDOW_EXPIRED",
+  FILE_TOO_LARGE: "ERR_FILE_TOO_LARGE",
 } as const satisfies Record<string, ErrorCode>;
+
+/** Server + client upload size cap (multer + pre-upload guard). */
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Bilingual copy for known error codes.
+ * Voice: state the problem AND the fix (see error-voice rule).
+ */
+export const ERROR_MESSAGES = {
+  ERR_FILE_TOO_LARGE: {
+    en: "That video is too large (max 50 MB). Record a shorter clip and try again.",
+    hi: "यह वीडियो बहुत बड़ा है (अधिकतम 50 MB)। छोटा क्लिप रिकॉर्ड करके फिर कोशिश करें।",
+  },
+} as const satisfies Partial<Record<ErrorCode, { en: string; hi: string }>>;

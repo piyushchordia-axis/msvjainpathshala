@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import request from "supertest";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import app from "../src/app";
 import {
   pool,
@@ -13,6 +16,7 @@ import {
   users,
   students,
   device_push_tokens,
+  upload_objects,
 } from "@workspace/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { loginAs, auth, type Session } from "./helpers";
@@ -27,6 +31,9 @@ import * as pushModule from "../src/lib/push";
 /** Valid reject reason (≥20 chars) used across N2a reject tests. */
 const REJECT_REASON =
   "Proof is unclear; please resubmit with a clearer photo.";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const fixturesDir = path.join(__dirname, "fixtures");
 
 afterAll(async () => {
   await pool.end();
@@ -48,7 +55,8 @@ function daysAgoIst(n: number): string {
   return d.toISOString().slice(0, 10);
 }
 
-const PROOF = "http://localhost:8080/uploads/niyam-proof/test-proof.jpg";
+const PROOF_KEY = "niyam-proof/test-proof.jpg";
+const PROOF = `http://localhost:8080/uploads/${PROOF_KEY}`;
 const BAD_PROOF = "http://localhost:8080/uploads/homework/not-allowed.jpg";
 
 let admin: Session;
@@ -56,6 +64,20 @@ let parent: Session;
 let shikshak: Session;
 let child0: string;
 let child1: string;
+
+async function ensureOwnedProof(
+  userId: string,
+  key: string,
+  contentType: string,
+): Promise<void> {
+  await db
+    .insert(upload_objects)
+    .values({ key, uploaded_by: userId, content_type: contentType })
+    .onConflictDoUpdate({
+      target: upload_objects.key,
+      set: { uploaded_by: userId, content_type: contentType },
+    });
+}
 
 async function createNiyam(label: string, extra: Record<string, unknown> = {}): Promise<string> {
   const res = await request(app)
@@ -86,6 +108,8 @@ describe("niyam-submissions", () => {
     expect(children.status).toBe(200);
     child0 = children.body.data.items[0].id;
     child1 = children.body.data.items[1].id;
+    // Existing tests use a fixed PROOF URL — register it as owned by the parent.
+    await ensureOwnedProof(parent.user.id, PROOF_KEY, "image/jpeg");
   });
 
   it("requires auth on submit", async () => {
@@ -569,7 +593,7 @@ describe("niyam-submissions", () => {
     expect(subRow.rejected_at).toBeTruthy();
   });
 
-  it("auto-approved photo submission creates exactly one gallery_items row; invisible until opt-in", async () => {
+  it("auto-approved photo submission creates an unfeatured gallery row; wall needs curation + opt-in", async () => {
     const niyamId = await createNiyam(`gallery-${Date.now()}`, {
       approval_mode: "auto",
       proof_type: "photo",
@@ -588,7 +612,7 @@ describe("niyam-submissions", () => {
     try {
       await db
         .update(users)
-        .set({ gallery_visibility_opt_in: false })
+        .set({ gallery_visibility_opt_in: true })
         .where(eq(users.id, owner.id));
 
       const submit = await request(app)
@@ -605,30 +629,137 @@ describe("niyam-submissions", () => {
       const submissionId: string = submit.body.data.id;
 
       const galleryRows = await db
-        .select({ id: gallery_items.id, submission_id: gallery_items.submission_id })
+        .select({
+          id: gallery_items.id,
+          submission_id: gallery_items.submission_id,
+          featured_gallery: gallery_items.featured_gallery,
+          featured_home: gallery_items.featured_home,
+          city_id: gallery_items.city_id,
+        })
         .from(gallery_items)
         .where(eq(gallery_items.submission_id, submissionId));
       expect(galleryRows).toHaveLength(1);
-      expect(galleryRows[0]!.submission_id).toBe(submissionId);
+      expect(galleryRows[0]!.featured_gallery).toBe(false);
+      expect(galleryRows[0]!.featured_home).toBe(false);
+      expect(galleryRows[0]!.city_id).toBeTruthy();
 
-      const feedOff = await request(app).get("/v1/gallery?limit=200");
-      expect(feedOff.status).toBe(200);
-      const whenOff = feedOff.body.data.items.find(
-        (r: { id: string }) => r.id === galleryRows[0]!.id,
-      );
-      expect(whenOff).toBeUndefined();
+      // Unfeatured → absent from wall even with consent.
+      const feedUnfeatured = await request(app).get("/v1/gallery?surface=wall&limit=200");
+      expect(
+        feedUnfeatured.body.data.items.find((r: { id: string }) => r.id === galleryRows[0]!.id),
+      ).toBeUndefined();
+      const homeUnfeatured = await request(app).get("/v1/gallery?surface=home&limit=200");
+      expect(
+        homeUnfeatured.body.data.items.find((r: { id: string }) => r.id === galleryRows[0]!.id),
+      ).toBeUndefined();
 
+      const feature = await request(app)
+        .patch(`/v1/gallery/admin/${galleryRows[0]!.id}/featured`)
+        .set(auth(admin.token))
+        .send({ featured_gallery: true });
+      expect(feature.status).toBe(200);
+
+      const feedOn = await request(app).get("/v1/gallery?surface=wall&limit=200");
+      expect(
+        feedOn.body.data.items.find((r: { id: string }) => r.id === galleryRows[0]!.id),
+      ).toBeTruthy();
+
+      await db
+        .update(users)
+        .set({ gallery_visibility_opt_in: false })
+        .where(eq(users.id, owner.id));
+
+      const feedOff = await request(app).get("/v1/gallery?surface=wall&limit=200");
+      expect(
+        feedOff.body.data.items.find((r: { id: string }) => r.id === galleryRows[0]!.id),
+      ).toBeUndefined();
+    } finally {
+      await db
+        .update(users)
+        .set({ gallery_visibility_opt_in: seededOptIn })
+        .where(eq(users.id, owner.id));
+    }
+  });
+
+  it("Q5: reject within window clears gallery featured flags and removes from both surfaces", async () => {
+    const niyamId = await createNiyam(`q5-gallery-${Date.now()}`, {
+      approval_mode: "auto",
+      requires_proof: true,
+      allowed_media_kinds: ["photo"],
+      max_uploads: 2,
+    });
+
+    const [owner] = await db
+      .select({ id: users.id, optIn: users.gallery_visibility_opt_in })
+      .from(students)
+      .innerJoin(users, eq(users.id, students.parent_id))
+      .where(eq(students.id, child0))
+      .limit(1);
+    expect(owner).toBeTruthy();
+    const seededOptIn = owner.optIn;
+
+    try {
       await db
         .update(users)
         .set({ gallery_visibility_opt_in: true })
         .where(eq(users.id, owner.id));
 
-      const feedOn = await request(app).get("/v1/gallery?limit=200");
-      expect(feedOn.status).toBe(200);
-      const whenOn = feedOn.body.data.items.find(
-        (r: { id: string }) => r.id === galleryRows[0]!.id,
-      );
-      expect(whenOn).toBeTruthy();
+      const submit = await request(app)
+        .post("/v1/niyam-submissions")
+        .set(auth(parent.token))
+        .send({
+          niyam_id: niyamId,
+          student_id: child0,
+          submission_date: todayIst(),
+          media: [{ url: PROOF, kind: "photo" }],
+        });
+      expect(submit.status).toBe(200);
+      const submissionId: string = submit.body.data.id;
+
+      const [galleryRow] = await db
+        .select({ id: gallery_items.id })
+        .from(gallery_items)
+        .where(eq(gallery_items.submission_id, submissionId))
+        .limit(1);
+      expect(galleryRow).toBeTruthy();
+
+      const feature = await request(app)
+        .patch(`/v1/gallery/admin/${galleryRow!.id}/featured`)
+        .set(auth(admin.token))
+        .send({ featured_gallery: true, featured_home: true });
+      expect(feature.status).toBe(200);
+
+      const wallOn = await request(app).get("/v1/gallery?surface=wall&limit=200");
+      const homeOn = await request(app).get("/v1/gallery?surface=home&limit=200");
+      expect(wallOn.body.data.items.some((r: { id: string }) => r.id === galleryRow!.id)).toBe(true);
+      expect(homeOn.body.data.items.some((r: { id: string }) => r.id === galleryRow!.id)).toBe(true);
+
+      const reject = await request(app)
+        .post(`/v1/niyam-submissions/${submissionId}/reject`)
+        .set(auth(admin.token))
+        .send({ reason: REJECT_REASON });
+      expect(reject.status).toBe(200);
+
+      const [after] = await db
+        .select({
+          featured_gallery: gallery_items.featured_gallery,
+          featured_home: gallery_items.featured_home,
+          is_public: gallery_items.is_public,
+          deleted_at: gallery_items.deleted_at,
+        })
+        .from(gallery_items)
+        .where(eq(gallery_items.id, galleryRow!.id))
+        .limit(1);
+      expect(after).toBeTruthy();
+      expect(after!.featured_gallery).toBe(false);
+      expect(after!.featured_home).toBe(false);
+      expect(after!.is_public).toBe(false);
+      expect(after!.deleted_at).toBeTruthy();
+
+      const wallOff = await request(app).get("/v1/gallery?surface=wall&limit=200");
+      const homeOff = await request(app).get("/v1/gallery?surface=home&limit=200");
+      expect(wallOff.body.data.items.some((r: { id: string }) => r.id === galleryRow!.id)).toBe(false);
+      expect(homeOff.body.data.items.some((r: { id: string }) => r.id === galleryRow!.id)).toBe(false);
     } finally {
       await db
         .update(users)
@@ -1143,5 +1274,70 @@ describe("niyam-submissions", () => {
         .where(eq(users.id, parent.user.id));
       await db.delete(device_push_tokens).where(eq(device_push_tokens.expo_token, token));
     }
+  });
+
+  it("rejects kind:photo pointing at an uploaded MP4 (derived kind) and creates no gallery row", async () => {
+    const mp4 = fs.readFileSync(path.join(fixturesDir, "sample.mp4"));
+    const up = await request(app)
+      .post("/v1/uploads")
+      .set(auth(parent.token))
+      .field("folder", "niyam-proof")
+      .attach("file", mp4, { filename: "clip.mp4", contentType: "video/mp4" });
+    expect(up.status).toBe(200);
+    const url = up.body.data.url as string;
+
+    const niyamId = await createNiyam(`mislabel-video-${Date.now()}`, {
+      approval_mode: "auto",
+      proof_type: "photo",
+      max_uploads: 2,
+      proof_required: true,
+    });
+
+    const submit = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({
+        niyam_id: niyamId,
+        student_id: child0,
+        submission_date: todayIst(),
+        media: [{ url, kind: "photo" }],
+      });
+    expect(submit.status).toBe(422);
+    expect(submit.body.error?.message).toMatch(/video/i);
+
+    const galleryRows = await db
+      .select({ id: gallery_items.id })
+      .from(gallery_items)
+      .innerJoin(niyam_submissions, eq(niyam_submissions.id, gallery_items.submission_id))
+      .where(eq(niyam_submissions.niyam_id, niyamId));
+    expect(galleryRows).toHaveLength(0);
+  });
+
+  it("rejects a proof URL uploaded by a different user", async () => {
+    const jpg = fs.readFileSync(path.join(fixturesDir, "sample.jpg"));
+    const up = await request(app)
+      .post("/v1/uploads")
+      .set(auth(admin.token))
+      .field("folder", "niyam-proof")
+      .attach("file", jpg, { filename: "admin-proof.jpg", contentType: "image/jpeg" });
+    expect(up.status).toBe(200);
+
+    const niyamId = await createNiyam(`stolen-url-${Date.now()}`, {
+      approval_mode: "auto",
+      proof_type: "photo",
+      max_uploads: 2,
+    });
+
+    const submit = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({
+        niyam_id: niyamId,
+        student_id: child0,
+        submission_date: todayIst(),
+        media: [{ url: up.body.data.url, kind: "photo" }],
+      });
+    expect(submit.status).toBe(422);
+    expect(submit.body.error?.message).toMatch(/owned|upload/i);
   });
 });

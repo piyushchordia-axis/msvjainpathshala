@@ -141,6 +141,19 @@ export function canAccessAdminPanel(role: Role | null | undefined): boolean {
   return !!role && ADMIN_PANEL_ROLES.includes(role);
 }
 
+/**
+ * Who may feature gallery items onto Punya Wall / home carousel.
+ *
+ * Deliberately NARROWER than canAccessAdminPanel — sanchalak and shikshak can
+ * open the admin panel but must NOT feature media. Do not "fix" this by
+ * reusing ADMIN_PANEL_ROLES.
+ */
+export const FEATURE_MEDIA_ROLES: Role[] = ["super_admin", "state_admin", "city_admin"];
+
+export function canFeatureMedia(role: Role | null | undefined): boolean {
+  return !!role && FEATURE_MEDIA_ROLES.includes(role);
+}
+
 /* ------------------------------------------------------------------ */
 /* Auth                                                               */
 /* ------------------------------------------------------------------ */
@@ -425,6 +438,9 @@ export const galleryItemSchema = z.object({
   niyam_title_en: z.string(),
   niyam_title_hi: z.string(),
   niyam_type: z.string(),
+  featured_gallery: z.boolean(),
+  featured_home: z.boolean().optional(),
+  /** @deprecated Wire alias of featured_gallery for older clients. */
   is_featured: z.boolean(),
   created_at: z.string(),
 });

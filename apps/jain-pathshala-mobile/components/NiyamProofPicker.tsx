@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Image, Platform, Pressable, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
+import * as FileSystem from "expo-file-system/legacy";
 import {
   AudioModule,
   RecordingPresets,
@@ -13,7 +14,37 @@ import {
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { apiUpload, ApiError } from "@/lib/api";
+import { fileTooLargeMessage, rejectIfOverUploadLimit } from "@/lib/upload-size-guard";
 import { Body, Button, Row } from "@/components/ui";
+
+/** Camera/library max video length (seconds). Library picks may still ignore this. */
+const VIDEO_MAX_DURATION_SEC = 30;
+
+/**
+ * Force a JPEG/H.264-compatible representation on iOS. If this enum is missing
+ * after an SDK bump, optional chaining would silently pass `undefined` and iOS
+ * would fall back to Current (raw HEIC) — which our upload pipeline rejects.
+ */
+const PREFERRED_ASSET_REPRESENTATION_MODE =
+  ImagePicker.UIImagePickerPreferredAssetRepresentationMode?.Compatible;
+
+if (__DEV__ && PREFERRED_ASSET_REPRESENTATION_MODE === undefined) {
+  throw new Error(
+    "[NiyamProofPicker] UIImagePickerPreferredAssetRepresentationMode.Compatible is undefined. " +
+      "iOS would upload raw HEIC. Check the expo-image-picker version.",
+  );
+}
+
+async function resolveLocalByteSize(uri: string, blob?: Blob): Promise<number | null> {
+  if (blob && typeof blob.size === "number") return blob.size;
+  try {
+    const info = await FileSystem.getInfoAsync(uri);
+    if (!info.exists || info.isDirectory) return null;
+    return typeof info.size === "number" ? info.size : null;
+  } catch {
+    return null;
+  }
+}
 
 type PendingAudio = {
   uri: string;
@@ -172,8 +203,26 @@ export function NiyamProofPicker({
     [onChange],
   );
 
+  const uploadErrorMessage = useCallback(
+    (err: unknown): string => {
+      if (err instanceof ApiError) {
+        if (err.code === "ERR_FILE_TOO_LARGE" && hi) return fileTooLargeMessage(true);
+        return err.message;
+      }
+      return hi ? "अपलोड विफल।" : "Upload failed.";
+    },
+    [hi],
+  );
+
   const enqueueUpload = useCallback(
     async (kind: MediaKind, uri: string, name: string, mime: string, blob?: Blob) => {
+      const sizeBytes = await resolveLocalByteSize(uri, blob);
+      const overLimit = rejectIfOverUploadLimit(sizeBytes, hi);
+      if (overLimit) {
+        Alert.alert(hi ? "फ़ाइल बहुत बड़ी" : "File too large", overLimit);
+        return;
+      }
+
       const localId = newId();
       const placeholder: ProofMediaItem = {
         localId,
@@ -206,12 +255,7 @@ export function NiyamProofPicker({
           ),
         );
       } catch (err) {
-        const message =
-          err instanceof ApiError
-            ? err.message
-            : hi
-              ? "अपलोड विफल।"
-              : "Upload failed.";
+        const message = uploadErrorMessage(err);
         onChange(
           valueRef.current.map((m) =>
             m.localId === localId
@@ -221,7 +265,7 @@ export function NiyamProofPicker({
         );
       }
     },
-    [hi, onChange],
+    [hi, onChange, uploadErrorMessage],
   );
 
   async function retry(item: ProofMediaItem) {
@@ -246,7 +290,7 @@ export function NiyamProofPicker({
     } catch (err) {
       patch(item.localId, {
         status: "failed",
-        error: err instanceof ApiError ? err.message : hi ? "अपलोड विफल।" : "Upload failed.",
+        error: uploadErrorMessage(err),
       });
     }
   }
@@ -264,9 +308,8 @@ export function NiyamProofPicker({
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: [media],
       quality: 0.85,
-      videoMaxDuration: 120,
-      preferredAssetRepresentationMode:
-        ImagePicker.UIImagePickerPreferredAssetRepresentationMode?.Compatible,
+      videoMaxDuration: VIDEO_MAX_DURATION_SEC,
+      preferredAssetRepresentationMode: PREFERRED_ASSET_REPRESENTATION_MODE,
     });
     if (result.canceled || !result.assets[0]) return;
     const asset = result.assets[0];
@@ -300,9 +343,8 @@ export function NiyamProofPicker({
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: [kind === "video" ? "videos" : "images"],
       quality: 0.85,
-      videoMaxDuration: 120,
-      preferredAssetRepresentationMode:
-        ImagePicker.UIImagePickerPreferredAssetRepresentationMode?.Compatible,
+      videoMaxDuration: VIDEO_MAX_DURATION_SEC,
+      preferredAssetRepresentationMode: PREFERRED_ASSET_REPRESENTATION_MODE,
     });
     if (result.canceled || !result.assets[0]) return;
     const asset = result.assets[0];

@@ -14,6 +14,7 @@ import {
   GraduationCap,
   History,
   Image as ImageIcon,
+  Images,
   Inbox,
   LayoutDashboard,
   LifeBuoy,
@@ -30,6 +31,7 @@ import {
 } from 'lucide-react';
 import type { Role } from '@/lib/auth';
 import { ROLE_PRECEDENCE } from '@/lib/auth';
+import { canFeatureMedia } from '@workspace/api-zod';
 import type { ComponentType } from 'react';
 
 export interface NavItem {
@@ -37,6 +39,8 @@ export interface NavItem {
   label: string;
   icon: ComponentType<{ className?: string }>;
   min: Role;
+  /** When set, visibility uses canFeatureMedia instead of min alone. */
+  gate?: 'featureMedia';
 }
 
 export interface NavGroup {
@@ -86,6 +90,13 @@ export const ADMIN_NAV: NavGroup[] = [
       { href: '/admin/attendance', label: 'Attendance', icon: CalendarCheck, min: 'shikshak' },
       { href: '/admin/notices', label: 'Notices', icon: Megaphone, min: 'shikshak' },
       { href: '/admin/gallery', label: 'Gallery', icon: ImageIcon, min: 'sanchalak' },
+      {
+        href: '/admin/media-curation',
+        label: 'Media curation',
+        icon: Images,
+        min: 'city_admin',
+        gate: 'featureMedia',
+      },
       { href: '/admin/library', label: 'Library', icon: Library, min: 'city_admin' },
       { href: '/admin/donations', label: 'Donations', icon: BarChart3, min: 'city_admin' },
       { href: '/admin/service-requests', label: 'Service requests', icon: LifeBuoy, min: 'sanchalak' },
@@ -119,6 +130,9 @@ export function roleSatisfies(actor: Role, min: Role): boolean {
 export function filterNavForRole(role: Role): NavGroup[] {
   return ADMIN_NAV.map((group) => ({
     heading: group.heading,
-    items: group.items.filter((i) => roleSatisfies(role, i.min)),
+    items: group.items.filter((i) => {
+      if (i.gate === 'featureMedia') return canFeatureMedia(role);
+      return roleSatisfies(role, i.min);
+    }),
   })).filter((g) => g.items.length > 0);
 }

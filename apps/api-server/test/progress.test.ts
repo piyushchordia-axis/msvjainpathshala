@@ -11,21 +11,32 @@ afterAll(async () => {
 /**
  * Progress + reports are upsert-based (UNIQUE student+item, UNIQUE
  * student+period_kind+period_label), so this test is rerun-safe against a
- * non-reset DB. It picks an in-scope student (super_admin sees all), reads the
- * curriculum items via the progress endpoint, sets one to 'mastered', generates
- * a report, releases it, and verifies the report is readable. A unique
- * period_label per run keeps the audit/snapshot clean.
+ * non-reset DB. It picks an in-scope Mumbai student (seeded Foundation
+ * curriculum is city-scoped to Mumbai), reads the curriculum items via the
+ * progress endpoint, sets one to 'mastered', generates a report, releases it,
+ * and verifies the report is readable. A unique period_label per run keeps
+ * the audit/snapshot clean.
  */
-function firstAdminStudent(token: string) {
-  return request(app)
-    .get("/v1/admin/students?limit=200")
-    .set(auth(token))
-    .then((res) => {
-      expect(res.status).toBe(200);
-      const student = res.body.data.items[0];
-      expect(student).toBeTruthy();
-      return student.id as string;
-    });
+async function mumbaiStudentWithCurriculum(token: string): Promise<string> {
+  const students = await request(app)
+    .get("/v1/admin/students?limit=500")
+    .set(auth(token));
+  expect(students.status).toBe(200);
+  const items = students.body.data.items as Array<{ id: string; student_code: string }>;
+  // Prefer the seeded Mumbai child (STU000001 Aarav) — newest Indore seed rows
+  // sort first by created_at and have no city curriculum items.
+  const aarav = items.find((s) => s.student_code === "STU000001");
+  if (aarav) return aarav.id;
+
+  for (const s of items) {
+    const grid = await request(app)
+      .get(`/v1/progress/students/${s.id}`)
+      .set(auth(token));
+    if (grid.status === 200 && (grid.body.data.items?.length ?? 0) > 0) {
+      return s.id;
+    }
+  }
+  throw new Error("No in-scope student with curriculum progress items found");
 }
 
 describe("progress", () => {
@@ -46,7 +57,7 @@ describe("progress", () => {
 
   it("admin sets a level, generates a report, releases it, and can read reports", async () => {
     const admin = await loginAs("super_admin");
-    const studentId = await firstAdminStudent(admin.token);
+    const studentId = await mumbaiStudentWithCurriculum(admin.token);
 
     // GET progress grid -> seeded curriculum items appear, default not_started.
     const grid = await request(app)

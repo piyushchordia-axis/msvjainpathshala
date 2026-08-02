@@ -1,6 +1,8 @@
-import { boolean, index, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 import { softDelete, timestamps } from "./_helpers";
+import { cities } from "./geography";
 import { users } from "./identity";
 import { niyams, niyam_submissions } from "./niyams";
 import { students } from "./students";
@@ -13,11 +15,13 @@ import { students } from "./students";
  *  - non-student media (student_id null) — centre / event / general photos with
  *    no child attached; always allowed publicly when is_public is true.
  *
- * Every item now carries a real uploaded image (image_url) plus an optional
- * thumbnail and bilingual caption. student_id / niyam_id are nullable so
- * non-student media can be inserted; the seed still inserts student-tied rows.
- * deleted_at is a soft-delete used by admin takedown so a removed image is gone
- * from every read without losing the audit trail row.
+ * Curation flags (independent):
+ *  - is_public        — not soft-hidden by an admin
+ *  - featured_gallery — appears on the public Punya Wall
+ *  - featured_home    — appears in the logged-in home dashboard carousel
+ * Featuring never overrides parent opt-in (Q6).
+ *
+ * city_id is denormalised from the student's centre at insert for hot filters.
  */
 export const gallery_items = pgTable(
   "gallery_items",
@@ -32,6 +36,9 @@ export const gallery_items = pgTable(
     submission_id: uuid("submission_id").references(() => niyam_submissions.id, {
       onDelete: "set null",
     }),
+    city_id: uuid("city_id").references(() => cities.id, {
+      onDelete: "set null",
+    }),
     // Real media. image_url is the displayed image; thumbnail_url is an optional
     // smaller variant for grids; caption / caption_hi are an optional bilingual
     // description shown under the tile.
@@ -39,9 +46,17 @@ export const gallery_items = pgTable(
     thumbnail_url: text("thumbnail_url"),
     caption: text("caption"),
     caption_hi: text("caption_hi"),
-    is_featured: boolean("is_featured").notNull().default(false),
+    /** Appears on the public Punya Wall (explicit curation). */
+    featured_gallery: boolean("featured_gallery").notNull().default(false),
+    /** Appears in the logged-in home dashboard carousel (explicit curation). */
+    featured_home: boolean("featured_home").notNull().default(false),
+    featured_at: timestamp("featured_at", { withTimezone: true }),
+    featured_by: uuid("featured_by").references(() => users.id, {
+      onDelete: "set null",
+    }),
+    /** Soft-hide by an admin — independent of featuring. */
     is_public: boolean("is_public").notNull().default(true),
-    // Admin who created the item (null for legacy/seed rows).
+    // Admin who created the item (null for auto-inserted niyam proof rows).
     created_by: uuid("created_by").references(() => users.id, {
       onDelete: "set null",
     }),
@@ -53,6 +68,13 @@ export const gallery_items = pgTable(
     niyam_idx: index("idx_gallery_items_niyam").on(t.niyam_id),
     public_idx: index("idx_gallery_items_public").on(t.is_public),
     submission_idx: index("idx_gallery_items_submission").on(t.submission_id),
+    featured_gallery_created_idx: index("idx_gallery_items_featured_gallery_created")
+      .on(t.featured_gallery, t.created_at)
+      .where(sql`${t.deleted_at} IS NULL`),
+    featured_home_created_idx: index("idx_gallery_items_featured_home_created")
+      .on(t.featured_home, t.created_at)
+      .where(sql`${t.deleted_at} IS NULL`),
+    city_created_idx: index("idx_gallery_items_city_created").on(t.city_id, t.created_at),
   }),
 );
 

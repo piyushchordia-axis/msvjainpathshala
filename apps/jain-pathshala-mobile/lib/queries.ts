@@ -27,6 +27,7 @@ import type {
   ShivirDetail,
   ShivirRow,
 } from "@/lib/types";
+import { galleryHomeKey, galleryWallKey } from "@/lib/gallery-query-keys";
 
 type List<T> = ListResponse<T>;
 
@@ -37,7 +38,10 @@ export const qk = {
   shivir: (id: string) => ["public", "shivir", id] as const,
   library: ["public", "library"] as const,
   notices: ["public", "notices"] as const,
-  gallery: (limit: number) => ["public", "gallery", limit] as const,
+  /** Home carousel — distinct from wall so caches never collide. */
+  galleryHome: galleryHomeKey,
+  /** Punya Wall — distinct from home so caches never collide. */
+  galleryWall: galleryWallKey,
   clientSettings: ["public", "settings"] as const,
   children: ["me", "children"] as const,
   attendance: (id: string) => ["me", "attendance", id] as const,
@@ -116,10 +120,21 @@ export type GalleryMediaItem = PublicGalleryItem & {
   caption_hi?: string | null;
 };
 
-export function useGallery(limit = 60) {
+/** Home carousel surface (`featured_home`). Default limit 12. */
+export function useHomeGallery(limit = 12) {
   return useQuery({
-    queryKey: qk.gallery(limit),
-    queryFn: () => apiGet<List<GalleryMediaItem>>(`/v1/gallery?limit=${limit}`),
+    queryKey: qk.galleryHome(limit),
+    queryFn: () =>
+      apiGet<List<GalleryMediaItem>>(`/v1/gallery?surface=home&limit=${limit}`),
+  });
+}
+
+/** Punya Wall surface (`featured_gallery`). Default limit 60. */
+export function useWallGallery(limit = 60) {
+  return useQuery({
+    queryKey: qk.galleryWall(limit),
+    queryFn: () =>
+      apiGet<List<GalleryMediaItem>>(`/v1/gallery?surface=wall&limit=${limit}`),
   });
 }
 

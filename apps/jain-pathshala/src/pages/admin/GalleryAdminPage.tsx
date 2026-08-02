@@ -126,7 +126,6 @@ export default function GalleryAdminPage() {
         ...(captionHi.trim() ? { caption_hi: captionHi.trim() } : {}),
         ...(studentId !== 'none' ? { student_id: studentId } : {}),
         is_public: makePublic,
-        is_featured: makeFeatured,
       });
       toast.success('Gallery item published.');
       resetForm();
@@ -138,19 +137,37 @@ export default function GalleryAdminPage() {
     }
   }
 
-  async function patchVisibility(item: AdminGalleryItem, body: Record<string, boolean>) {
+  async function patchVisibility(item: AdminGalleryItem, isPublic: boolean) {
     setRowBusy(item.id);
     try {
       const res = await fetch(`${API_BASE}/v1/gallery/admin/${item.id}/visibility`, {
         method: 'PATCH',
         credentials: 'include',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ is_public: isPublic }),
       });
       if (!res.ok) throw new Error('patch');
       void reload();
     } catch {
       toast.error('Could not update item.');
+    } finally {
+      setRowBusy(null);
+    }
+  }
+
+  async function patchFeatured(item: AdminGalleryItem, featuredGallery: boolean) {
+    setRowBusy(item.id);
+    try {
+      const res = await fetch(`${API_BASE}/v1/gallery/admin/${item.id}/featured`, {
+        method: 'PATCH',
+        credentials: 'include',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ featured_gallery: featuredGallery }),
+      });
+      if (!res.ok) throw new Error('patch');
+      void reload();
+    } catch {
+      toast.error('Could not update featuring.');
     } finally {
       setRowBusy(null);
     }
@@ -309,7 +326,7 @@ export default function GalleryAdminPage() {
                           size="sm"
                           variant="outline"
                           disabled={rowBusy === g.id}
-                          onClick={() => patchVisibility(g, { is_public: !g.is_public })}
+                          onClick={() => patchVisibility(g, !g.is_public)}
                         >
                           {g.is_public ? <EyeOff className="mr-1 h-3.5 w-3.5" /> : <Eye className="mr-1 h-3.5 w-3.5" />}
                           {g.is_public ? 'Hide' : 'Show'}
@@ -318,7 +335,7 @@ export default function GalleryAdminPage() {
                           size="sm"
                           variant="outline"
                           disabled={rowBusy === g.id}
-                          onClick={() => patchVisibility(g, { is_featured: !g.is_featured })}
+                          onClick={() => patchFeatured(g, !g.is_featured)}
                         >
                           <Star className="mr-1 h-3.5 w-3.5" />
                           {g.is_featured ? 'Unfeature' : 'Feature'}
