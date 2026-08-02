@@ -33,7 +33,8 @@ export async function notifyUsers(opts: {
     | "service_request"
     | "exam"
     | "shivir"
-    | "niyam_rejected";
+    | "niyam_rejected"
+    | "niyam_badge";
   title_en: string;
   title_hi: string;
   body_en: string;

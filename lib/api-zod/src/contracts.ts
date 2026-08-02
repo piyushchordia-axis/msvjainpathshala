@@ -577,6 +577,50 @@ export function niyamSubmittedPeriodTag(
   }
   return lang === "hi" ? "इस माह प्रस्तुत" : "Submitted this month";
 }
+
+/** Streak badge ladder (D1) + bilingual labels. Jain term "Niyam" stays untranslated. */
+export type NiyamBadgeMilestone = {
+  key: string;
+  length: number;
+  labelEn: string;
+  labelHi: string;
+};
+
+const NIYAM_BADGE_DAILY: NiyamBadgeMilestone[] = [
+  { key: "daily_7", length: 7, labelEn: "7-day streak", labelHi: "7-दिन की लकीर" },
+  { key: "daily_14", length: 14, labelEn: "14-day streak", labelHi: "14-दिन की लकीर" },
+  { key: "daily_30", length: 30, labelEn: "30-day streak", labelHi: "30-दिन की लकीर" },
+  { key: "daily_60", length: 60, labelEn: "60-day streak", labelHi: "60-दिन की लकीर" },
+  { key: "daily_100", length: 100, labelEn: "100-day streak", labelHi: "100-दिन की लकीर" },
+];
+
+const NIYAM_BADGE_WEEKLY: NiyamBadgeMilestone[] = [
+  { key: "weekly_4", length: 4, labelEn: "4-week streak", labelHi: "4-सप्ताह की लकीर" },
+];
+
+const NIYAM_BADGE_MONTHLY: NiyamBadgeMilestone[] = [
+  { key: "monthly_3", length: 3, labelEn: "3-month streak", labelHi: "3-माह की लकीर" },
+];
+
+/** Full ladder by niyam_type — shared by api-server push copy and mobile UI. */
+export const NIYAM_BADGE_LADDER = {
+  daily: NIYAM_BADGE_DAILY,
+  weekly: NIYAM_BADGE_WEEKLY,
+  monthly: NIYAM_BADGE_MONTHLY,
+} as const;
+
+export function niyamBadgeLadder(niyamType: string): NiyamBadgeMilestone[] {
+  if (niyamType === "weekly") return NIYAM_BADGE_WEEKLY;
+  if (niyamType === "monthly") return NIYAM_BADGE_MONTHLY;
+  return NIYAM_BADGE_DAILY;
+}
+
+export function niyamBadgeLabel(key: string, lang: "en" | "hi" = "en"): string {
+  for (const m of [...NIYAM_BADGE_DAILY, ...NIYAM_BADGE_WEEKLY, ...NIYAM_BADGE_MONTHLY]) {
+    if (m.key === key) return lang === "hi" ? m.labelHi : m.labelEn;
+  }
+  return key;
+}
 export const shikshakSessionRowSchema = z.object({
   id: z.string(),
   session_date: z.string(),

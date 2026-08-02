@@ -18,9 +18,11 @@ import {
   device_push_tokens,
   punya_transactions,
   upload_objects,
+  users,
 } from "@workspace/db";
-import { and, asc, desc, eq, gte, inArray, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
+import { QUEUE_NAMES, CRON_EXPRESSIONS } from "@jp/shared/constants";
 import { ok, fail } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
 import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
@@ -40,6 +42,8 @@ import { studentCanAccessNiyam } from "../../lib/niyam-audience";
 import { awardNewlyReachedBadges, notifyBadgesPush, type AwardedBadge } from "../../lib/niyam-badges";
 import { resolveNiyamAwardPoints } from "../../lib/niyam-points";
 import { rateLimit } from "../../lib/ratelimit";
+import { registerCron } from "../../lib/scheduler";
+import { logger } from "../../lib/logger";
 import {
   allowedMediaKinds,
   addCalendarDays,
@@ -120,8 +124,10 @@ async function maybeInsertGalleryFromSubmission(
  * longest_streak = max(stored, recomputed) so a rejection never lowers a peak already reached.
  *
  * Badges are NOT revoked here — see awardNewlyReachedBadges.
+ *
+ * Exported for unit tests (lapse behaviour) without going through HTTP submit.
  */
-async function recomputeStreak(
+export async function recomputeStreak(
   studentId: string,
   niyamId: string,
   niyamType: NiyamPeriodType,
@@ -181,18 +187,29 @@ async function recomputeStreak(
 
   let current = 0;
   let recomputedLongest = 0;
-  let prevKey: string | null = null;
+  let walkPrev: string | null = null;
   for (const r of ordered) {
-    if (prevKey && previousPeriodKey(niyamType, r.period_key) === prevKey) {
+    if (walkPrev && previousPeriodKey(niyamType, r.period_key) === walkPrev) {
       current += 1;
     } else {
       current = 1;
     }
     recomputedLongest = Math.max(recomputedLongest, current);
-    prevKey = r.period_key;
+    walkPrev = r.period_key;
   }
   const last = ordered[ordered.length - 1]!;
   const longest = Math.max(existing?.longest_streak ?? 0, recomputedLongest);
+
+  // Lapse check: the walk ends at the LAST submission's run length, which is
+  // stale if the child stopped submitting. A streak is still alive when the
+  // last period is today OR the immediately previous period (e.g. daily: still
+  // alive at 9am today if yesterday was submitted; it only dies once today is
+  // also missed). Keep last_submission_date / last_period_key as history.
+  const todayKey = periodKey(niyamType, today);
+  const alivePrevKey = previousPeriodKey(niyamType, todayKey);
+  if (last.period_key !== todayKey && last.period_key !== alivePrevKey) {
+    current = 0;
+  }
 
   if (existing) {
     await exec
@@ -217,6 +234,63 @@ async function recomputeStreak(
 
   return { current, longest };
 }
+
+const STREAK_LAPSE_BATCH = 200;
+
+/**
+ * Zero `current_streak` for rows whose last_period_key is neither the current
+ * nor previous period for that niyam's type. Batched — does not call
+ * recomputeStreak per row. Exported so tests can invoke without the scheduler.
+ */
+export async function runNiyamStreakLapse(): Promise<{ zeroed: number }> {
+  const today = todayIstDate();
+  const types: NiyamPeriodType[] = ["daily", "weekly", "monthly"];
+  let zeroed = 0;
+
+  for (const niyamType of types) {
+    const todayKey = periodKey(niyamType, today);
+    const prevKey = previousPeriodKey(niyamType, todayKey);
+
+    // Cursor-batch by id so we never load the whole table into memory.
+    let afterId: string | null = null;
+    for (;;) {
+      const filters = [
+        eq(niyams.niyam_type, niyamType),
+        gt(niyam_streaks.current_streak, 0),
+        sql`${niyam_streaks.last_period_key} is not null`,
+        ne(niyam_streaks.last_period_key, todayKey),
+        ne(niyam_streaks.last_period_key, prevKey),
+      ];
+      if (afterId) filters.push(gt(niyam_streaks.id, afterId));
+
+      const batch = await db
+        .select({ id: niyam_streaks.id })
+        .from(niyam_streaks)
+        .innerJoin(niyams, eq(niyams.id, niyam_streaks.niyam_id))
+        .where(and(...filters))
+        .orderBy(asc(niyam_streaks.id))
+        .limit(STREAK_LAPSE_BATCH);
+
+      if (batch.length === 0) break;
+
+      const ids = batch.map((r) => r.id);
+      await db
+        .update(niyam_streaks)
+        .set({ current_streak: 0, updated_at: new Date() })
+        .where(inArray(niyam_streaks.id, ids));
+      zeroed += ids.length;
+      afterId = ids[ids.length - 1]!;
+      if (batch.length < STREAK_LAPSE_BATCH) break;
+    }
+  }
+
+  return { zeroed };
+}
+
+// Frozen cron: niyam-streak-lapse @ 05:00 IST (ReplitAgent §9.5). No timer in tests.
+registerCron(QUEUE_NAMES.NIYAM_STREAK_LAPSE, CRON_EXPRESSIONS.NIYAM_STREAK_LAPSE, async () => {
+  await runNiyamStreakLapse();
+});
 
 /** Post-commit parent alert when a submission is rejected (insert gates push). */
 async function notifyParentOfRejection(opts: {
@@ -248,8 +322,9 @@ async function notifyParentOfRejection(opts: {
 
   if (!inserted) return;
 
+  let tokens: { expo_token: string }[] = [];
   try {
-    const tokens = await db
+    tokens = await db
       .select({ expo_token: device_push_tokens.expo_token })
       .from(device_push_tokens)
       .where(
@@ -258,18 +333,31 @@ async function notifyParentOfRejection(opts: {
           eq(device_push_tokens.is_active, true),
         ),
       );
-    if (tokens.length === 0) return;
-    await sendPush(
-      tokens.map((t) => ({
-        to: t.expo_token,
-        title: titleEn,
-        body: bodyEn,
-        data: { kind: "niyam_rejected", submission_id: opts.submissionId },
-      })),
+  } catch (err) {
+    logger.warn(
+      { err, userId: opts.parentId, kind: "niyam_rejected" },
+      "Failed to load device_push_tokens for rejection notification",
     );
-  } catch {
-    // Best-effort push — inbox row already committed.
+    return;
   }
+  if (tokens.length === 0) return;
+
+  const [parent] = await db
+    .select({ preferred_language: users.preferred_language })
+    .from(users)
+    .where(eq(users.id, opts.parentId))
+    .limit(1);
+  const hi = parent?.preferred_language === "hi";
+
+  // sendPush never throws — inbox row already committed.
+  await sendPush(
+    tokens.map((t) => ({
+      to: t.expo_token,
+      title: hi ? titleHi : titleEn,
+      body: hi ? bodyHi : bodyEn,
+      data: { kind: "niyam_rejected", submission_id: opts.submissionId },
+    })),
+  );
 }
 
 function encodeSubmissionCursor(submissionDate: string, id: string): string {
@@ -865,20 +953,32 @@ router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response
     fail(res, 409, "ERR_INVALID_STATE", "Submission cannot be rejected."); return;
   }
 
-  if (
-    (sub.status === "auto_approved" || sub.status === "approved") &&
-    !canRejectSubmission(sub.status, sub.created_at)
-  ) {
-    fail(
-      res,
-      409,
-      "ERR_NIYAM_REVERSAL_WINDOW_EXPIRED",
-      "The 30-day rejection window for this submission has closed.",
-    );
-    return;
-  }
-
   const outcome = await db.transaction(async (tx) => {
+    // Re-read status / created_at / points_awarded inside the transaction so the
+    // Q5 window and reversal amount cannot race a concurrent approve/reject or a
+    // day-boundary clock tick between the outer SELECT and this UPDATE.
+    const [fresh] = await tx
+      .select({
+        status: niyam_submissions.status,
+        created_at: niyam_submissions.created_at,
+        points_awarded: niyam_submissions.points_awarded,
+        punya_transaction_id: niyam_submissions.punya_transaction_id,
+      })
+      .from(niyam_submissions)
+      .where(eq(niyam_submissions.id, sub.id))
+      .limit(1);
+    if (!fresh || !rejectable.includes(fresh.status as (typeof rejectable)[number])) {
+      return { ok: false as const };
+    }
+
+    if (
+      (fresh.status === "auto_approved" || fresh.status === "approved") &&
+      !canRejectSubmission(fresh.status, fresh.created_at)
+    ) {
+      return { ok: false as const, windowExpired: true as const };
+    }
+
+    const pointsToReverse = fresh.points_awarded;
     const now = new Date();
     const rejected = await tx
       .update(niyam_submissions)
@@ -899,12 +999,12 @@ router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response
     if (rejected.length === 0) return { ok: false as const };
 
     let reverseResult: Awaited<ReturnType<typeof reversePunya>> | null = null;
-    if (sub.points_awarded > 0) {
+    if (pointsToReverse > 0) {
       reverseResult = await reversePunya(
         {
           studentId: sub.student_id,
           featureKey: "niyam_submission",
-          points: sub.points_awarded,
+          points: pointsToReverse,
           note: body.reason,
           awardedBy: req.authUser!.id,
           idempotencyKey: `submission:${sub.id}:reversal`,
@@ -912,7 +1012,7 @@ router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response
         tx,
       );
 
-      let awardTxnId = sub.punya_transaction_id;
+      let awardTxnId = fresh.punya_transaction_id;
       if (!awardTxnId) {
         const [origRow] = await tx
           .select({ id: punya_transactions.id })
@@ -941,6 +1041,16 @@ router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response
 
     return { ok: true as const, reverseResult };
   });
+
+  if ("windowExpired" in outcome && outcome.windowExpired) {
+    fail(
+      res,
+      409,
+      "ERR_NIYAM_REVERSAL_WINDOW_EXPIRED",
+      "The 30-day rejection window for this submission has closed.",
+    );
+    return;
+  }
 
   if (!outcome.ok) {
     fail(res, 409, "ERR_INVALID_STATE", "Submission could not be rejected."); return;

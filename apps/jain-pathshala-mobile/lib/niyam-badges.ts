@@ -1,41 +1,23 @@
-/** Streak badge ladder (D1) + bilingual labels. Jain term "Niyam" stays untranslated. */
+/**
+ * Client helpers for niyam streak badges / date chips.
+ * Ladder + bilingual labels live in @workspace/api-zod (shared with api-server).
+ */
+import {
+  niyamBadgeLabel,
+  niyamBadgeLadder,
+  type NiyamBadgeMilestone,
+} from "@workspace/api-zod";
 
 export type NiyamPeriodType = "daily" | "weekly" | "monthly";
-
-export type BadgeMilestone = {
-  key: string;
-  length: number;
-  labelEn: string;
-  labelHi: string;
-};
-
-const DAILY: BadgeMilestone[] = [
-  { key: "daily_7", length: 7, labelEn: "7-day streak", labelHi: "7-दिन की लकीर" },
-  { key: "daily_14", length: 14, labelEn: "14-day streak", labelHi: "14-दिन की लकीर" },
-  { key: "daily_30", length: 30, labelEn: "30-day streak", labelHi: "30-दिन की लकीर" },
-  { key: "daily_60", length: 60, labelEn: "60-day streak", labelHi: "60-दिन की लकीर" },
-  { key: "daily_100", length: 100, labelEn: "100-day streak", labelHi: "100-दिन की लकीर" },
-];
-
-const WEEKLY: BadgeMilestone[] = [
-  { key: "weekly_4", length: 4, labelEn: "4-week streak", labelHi: "4-सप्ताह की लकीर" },
-];
-
-const MONTHLY: BadgeMilestone[] = [
-  { key: "monthly_3", length: 3, labelEn: "3-month streak", labelHi: "3-माह की लकीर" },
-];
+export type BadgeMilestone = NiyamBadgeMilestone;
 
 export function badgeLadder(niyamType: string): BadgeMilestone[] {
-  if (niyamType === "weekly") return WEEKLY;
-  if (niyamType === "monthly") return MONTHLY;
-  return DAILY;
+  return niyamBadgeLadder(niyamType);
 }
 
+/** Mobile screens pass `hi`; map to the shared lang enum. */
 export function badgeLabel(key: string, hi: boolean): string {
-  for (const m of [...DAILY, ...WEEKLY, ...MONTHLY]) {
-    if (m.key === key) return hi ? m.labelHi : m.labelEn;
-  }
-  return key;
+  return niyamBadgeLabel(key, hi ? "hi" : "en");
 }
 
 export function nextMilestone(

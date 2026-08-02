@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import request from "supertest";
 import app from "../src/app";
 import {
@@ -12,6 +12,7 @@ import {
   punya_transactions,
   users,
   students,
+  device_push_tokens,
 } from "@workspace/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { loginAs, auth, type Session } from "./helpers";
@@ -20,6 +21,8 @@ import {
   clearMemoryRateLimitKeyForTests,
 } from "../src/lib/ratelimit";
 import { periodKey } from "../src/lib/niyam-period";
+import { recomputeStreak, runNiyamStreakLapse } from "../src/routes/v1/niyam-submissions";
+import * as pushModule from "../src/lib/push";
 
 /** Valid reject reason (≥20 chars) used across N2a reject tests. */
 const REJECT_REASON =
@@ -66,6 +69,8 @@ async function createNiyam(label: string, extra: Record<string, unknown> = {}): 
       proof_required: false,
       max_uploads: 3,
       points: 10,
+      // Open window so tests can seed / submit yesterday and older period keys.
+      start_date: daysAgoIst(60),
       ...extra,
     });
   expect([200, 201]).toContain(res.status);
@@ -904,5 +909,239 @@ describe("niyam-submissions", () => {
       .get(`/v1/admin/niyam-submissions?limit=1&status=pending&cursor=${page1.body.data.next_cursor}`)
       .set(auth(admin.token));
     expect(page2b.body.data.items[0].id).toBe(page2.body.data.items[0].id);
+  });
+
+  it("recomputeStreak lapses a daily streak that ended 10 days ago; keeps longest + badge", async () => {
+    const niyamId = await createNiyam(`lapse-recompute-${Date.now()}`, {
+      approval_mode: "auto",
+      points: 3,
+    });
+    for (let i = 16; i >= 10; i--) {
+      const d = daysAgoIst(i);
+      await db.insert(niyam_submissions).values({
+        niyam_id: niyamId,
+        student_id: child0,
+        submission_date: d,
+        period_key: periodKey("daily", d),
+        status: "auto_approved",
+        points_awarded: 3,
+        submitted_by: parent.user.id,
+      });
+    }
+    await db.insert(niyam_streaks).values({
+      student_id: child0,
+      niyam_id: niyamId,
+      current_streak: 7,
+      longest_streak: 7,
+      last_submission_date: daysAgoIst(10),
+      last_period_key: periodKey("daily", daysAgoIst(10)),
+    });
+    await db.insert(niyam_badges).values({
+      student_id: child0,
+      niyam_id: niyamId,
+      badge_key: "daily_7",
+      streak_length: 7,
+      points_awarded: 25,
+    });
+
+    const result = await recomputeStreak(child0, niyamId, "daily");
+    expect(result.current).toBe(0);
+    expect(result.longest).toBe(7);
+
+    const [streak] = await db
+      .select()
+      .from(niyam_streaks)
+      .where(and(eq(niyam_streaks.student_id, child0), eq(niyam_streaks.niyam_id, niyamId)))
+      .limit(1);
+    expect(streak.current_streak).toBe(0);
+    expect(streak.longest_streak).toBe(7);
+    expect(streak.last_period_key).toBe(periodKey("daily", daysAgoIst(10)));
+
+    const badges = await db
+      .select()
+      .from(niyam_badges)
+      .where(
+        and(
+          eq(niyam_badges.student_id, child0),
+          eq(niyam_badges.niyam_id, niyamId),
+          eq(niyam_badges.badge_key, "daily_7"),
+        ),
+      );
+    expect(badges).toHaveLength(1);
+  });
+
+  it("recomputeStreak preserves a streak whose last submission was yesterday", async () => {
+    const niyamId = await createNiyam(`alive-yesterday-${Date.now()}`, {
+      approval_mode: "auto",
+      points: 3,
+    });
+    for (let i = 3; i >= 1; i--) {
+      const d = daysAgoIst(i);
+      await db.insert(niyam_submissions).values({
+        niyam_id: niyamId,
+        student_id: child0,
+        submission_date: d,
+        period_key: periodKey("daily", d),
+        status: "auto_approved",
+        points_awarded: 3,
+        submitted_by: parent.user.id,
+      });
+    }
+    await db.insert(niyam_streaks).values({
+      student_id: child0,
+      niyam_id: niyamId,
+      current_streak: 3,
+      longest_streak: 3,
+      last_submission_date: daysAgoIst(1),
+      last_period_key: periodKey("daily", daysAgoIst(1)),
+    });
+
+    const result = await recomputeStreak(child0, niyamId, "daily");
+    expect(result.current).toBe(3);
+    expect(result.longest).toBe(3);
+  });
+
+  it("runNiyamStreakLapse zeroes a stale row and leaves a live one untouched", async () => {
+    const staleNiyam = await createNiyam(`lapse-stale-${Date.now()}`, { approval_mode: "auto" });
+    const liveNiyam = await createNiyam(`lapse-live-${Date.now()}`, { approval_mode: "auto" });
+
+    await db.insert(niyam_streaks).values({
+      student_id: child1,
+      niyam_id: staleNiyam,
+      current_streak: 5,
+      longest_streak: 5,
+      last_submission_date: daysAgoIst(10),
+      last_period_key: periodKey("daily", daysAgoIst(10)),
+    });
+    await db.insert(niyam_streaks).values({
+      student_id: child1,
+      niyam_id: liveNiyam,
+      current_streak: 2,
+      longest_streak: 2,
+      last_submission_date: daysAgoIst(1),
+      last_period_key: periodKey("daily", daysAgoIst(1)),
+    });
+
+    const { zeroed } = await runNiyamStreakLapse();
+    expect(zeroed).toBeGreaterThanOrEqual(1);
+
+    const [stale] = await db
+      .select()
+      .from(niyam_streaks)
+      .where(and(eq(niyam_streaks.student_id, child1), eq(niyam_streaks.niyam_id, staleNiyam)))
+      .limit(1);
+    const [live] = await db
+      .select()
+      .from(niyam_streaks)
+      .where(and(eq(niyam_streaks.student_id, child1), eq(niyam_streaks.niyam_id, liveNiyam)))
+      .limit(1);
+    expect(stale.current_streak).toBe(0);
+    expect(stale.longest_streak).toBe(5);
+    expect(live.current_streak).toBe(2);
+  });
+
+  it("awarding a badge inserts a niyam_badge notification with Devanagari title_hi", async () => {
+    const niyamId = await createNiyam(`badge-notif-${Date.now()}`, {
+      approval_mode: "auto",
+      points: 5,
+    });
+    for (let i = 7; i >= 2; i--) {
+      const d = daysAgoIst(i);
+      await db.insert(niyam_submissions).values({
+        niyam_id: niyamId,
+        student_id: child0,
+        submission_date: d,
+        period_key: periodKey("daily", d),
+        status: "auto_approved",
+        points_awarded: 5,
+        submitted_by: parent.user.id,
+      });
+    }
+
+    const day7 = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({ niyam_id: niyamId, student_id: child0, submission_date: daysAgoIst(1) });
+    expect(day7.status).toBe(200);
+    expect(day7.body.data.new_badges?.some((b: { badge_key: string }) => b.badge_key === "daily_7")).toBe(
+      true,
+    );
+
+    const [note] = await db
+      .select({
+        kind: notifications.kind,
+        title_en: notifications.title_en,
+        title_hi: notifications.title_hi,
+        body_en: notifications.body_en,
+      })
+      .from(notifications)
+      .where(
+        and(eq(notifications.user_id, parent.user.id), eq(notifications.kind, "niyam_badge")),
+      )
+      .orderBy(desc(notifications.created_at))
+      .limit(1);
+    expect(note).toBeTruthy();
+    expect(note.kind).toBe("niyam_badge");
+    expect(note.title_hi).toMatch(/[\u0900-\u097F]/);
+    expect(note.body_en).toMatch(/7-day streak/);
+    expect(note.body_en).not.toMatch(/daily_7/);
+  });
+
+  it("parent with preferred_language hi gets Hindi push copy on rejection", async () => {
+    const niyamId = await createNiyam(`hi-push-${Date.now()}`, { approval_mode: "review" });
+    const [langBefore] = await db
+      .select({ preferred_language: users.preferred_language })
+      .from(users)
+      .where(eq(users.id, parent.user.id))
+      .limit(1);
+
+    const token = `ExponentPushToken[niyam-hi-test-${Date.now()}]`;
+    await db.insert(device_push_tokens).values({
+      user_id: parent.user.id,
+      expo_token: token,
+      platform: "ios",
+      is_active: true,
+    });
+
+    const spy = vi.spyOn(pushModule, "sendPush").mockResolvedValue([]);
+    try {
+      await db
+        .update(users)
+        .set({ preferred_language: "hi" })
+        .where(eq(users.id, parent.user.id));
+
+      const submit = await request(app)
+        .post("/v1/niyam-submissions")
+        .set(auth(parent.token))
+        .send({
+          niyam_id: niyamId,
+          student_id: child0,
+          submission_date: todayIst(),
+          proof_url: PROOF,
+        });
+      expect(submit.status).toBe(200);
+
+      const reject = await request(app)
+        .post(`/v1/niyam-submissions/${submit.body.data.id}/reject`)
+        .set(auth(shikshak.token))
+        .send({ reason: REJECT_REASON });
+      expect(reject.status).toBe(200);
+
+      expect(spy).toHaveBeenCalled();
+      const payloads = spy.mock.calls.flatMap((c) => c[0]);
+      const rejectionPush = payloads.find(
+        (p) => p.data && (p.data as { kind?: string }).kind === "niyam_rejected",
+      );
+      expect(rejectionPush).toBeTruthy();
+      expect(rejectionPush!.title).toBe("नियम जमा अस्वीकृत");
+      expect(rejectionPush!.body).toMatch(/अस्वीकृत/);
+    } finally {
+      spy.mockRestore();
+      await db
+        .update(users)
+        .set({ preferred_language: langBefore.preferred_language })
+        .where(eq(users.id, parent.user.id));
+      await db.delete(device_push_tokens).where(eq(device_push_tokens.expo_token, token));
+    }
   });
 });

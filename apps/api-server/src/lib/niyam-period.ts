@@ -13,7 +13,13 @@ export type NiyamPeriodType = "daily" | "weekly" | "monthly";
  */
 export const SUBMISSION_BACKDATE_DAYS = 1;
 
-/** Lookback window when rebuilding streaks from historical submissions. */
+/**
+ * Lookback window when rebuilding streaks from historical submissions.
+ * Caps `current_streak` for a daily niyam at this many contiguous periods.
+ * Sits well beyond the top badge milestone (daily_100) — a deliberate bound
+ * on recompute cost, not a product limit. `longest_streak` is protected by
+ * max(stored, recomputed) so a capped recompute never lowers a recorded peak.
+ */
 export const STREAK_RECOMPUTE_LOOKBACK_DAYS = 400;
 
 /** Parse YYYY-MM-DD as a UTC noon Date (avoids DST edge cases; dates are IST calendar). */
