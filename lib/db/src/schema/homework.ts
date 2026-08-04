@@ -61,7 +61,11 @@ export const homework_submissions = pgTable(
       t.student_id,
     ),
     assignment_idx: index("idx_homework_submissions_assignment").on(t.assignment_id),
-    student_idx: index("idx_homework_submissions_student").on(t.student_id),
+    /** SPEC §5.9 — (student_id, status); replaces student-only idx (F7). */
+    student_status_idx: index("idx_homework_submissions_student_status").on(
+      t.student_id,
+      t.status,
+    ),
   }),
 );
 
