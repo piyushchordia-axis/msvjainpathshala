@@ -29,6 +29,7 @@ import { storage, makeKey } from "../../lib/storage";
 import { signUploadUrl } from "../../lib/file-tokens";
 import { PdfBuilder } from "../../lib/pdf";
 import { inScope, scopedCentreFilter } from "../../lib/route-helpers";
+import { getStudentHomeworkCompletionRate } from "../../lib/homework-completion-rate";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -37,6 +38,85 @@ router.use(requireAuth);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const CURRICULUM_LEVELS = ["not_started", "in_progress", "completed", "mastered"] as const;
+
+/**
+ * Monthly reports use period_label = YYYY-MM. Other labels leave the window open
+ * (null from/to) so the canonical SQL function still returns a rate when homework exists.
+ */
+function periodDateRange(
+  periodLabel: string,
+): { from: string | null; to: string | null } {
+  const m = /^(\d{4})-(\d{2})$/.exec(periodLabel.trim());
+  if (!m) return { from: null, to: null };
+  const y = Number(m[1]);
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) return { from: null, to: null };
+  const from = `${m[1]}-${m[2]}-01`;
+  const lastDay = new Date(Date.UTC(y, month, 0)).getUTCDate();
+  const to = `${m[1]}-${m[2]}-${String(lastDay).padStart(2, "0")}`;
+  return { from, to };
+}
+
+type HomeworkSnapshot = {
+  completion_rate: number | null;
+  /** True when rate is null — no assignments due in the period. */
+  no_homework_set: boolean;
+  starred_count: number;
+  by_status: Record<string, number>;
+  label_en: string;
+  label_hi: string;
+  summary_en: string;
+  summary_hi: string;
+};
+
+async function buildHomeworkSnapshot(
+  studentId: string,
+  periodLabel: string,
+): Promise<HomeworkSnapshot> {
+  const { from, to } = periodDateRange(periodLabel);
+  const rate = await getStudentHomeworkCompletionRate(studentId, from, to);
+
+  const statusRows = await db.execute(sql`
+    select hs.status::text as status, count(*)::int as n
+    from homework_submissions hs
+    inner join homework_assignments ha on ha.id = hs.assignment_id
+    where hs.student_id = ${studentId}::uuid
+      and ha.deleted_at is null
+      and (${from}::date is null or ha.due_date >= ${from}::date)
+      and (${to}::date is null or ha.due_date <= ${to}::date)
+    group by hs.status
+  `);
+  const statusList =
+    (statusRows as unknown as { rows?: Array<{ status: string; n: number }> }).rows ?? [];
+  const by_status: Record<string, number> = {};
+  let starred_count = 0;
+  for (const r of statusList) {
+    by_status[r.status] = Number(r.n);
+    if (r.status === "starred") starred_count = Number(r.n);
+  }
+
+  const no_homework_set = rate == null;
+  const pct =
+    rate == null ? null : Math.round(rate * 1000) / 10; /* one decimal percent */
+
+  const summary_en = no_homework_set
+    ? "No homework set for this period."
+    : `Completion ${pct}% — ${starred_count} starred.`;
+  const summary_hi = no_homework_set
+    ? "इस अवधि में कोई गृहकार्य नहीं दिया गया।"
+    : `पूर्णता ${pct}% — ${starred_count} सितारा।`;
+
+  return {
+    completion_rate: rate,
+    no_homework_set,
+    starred_count,
+    by_status,
+    label_en: "Homework",
+    label_hi: "गृहकार्य",
+    summary_en,
+    summary_hi,
+  };
+}
 
 /** Fetch a student row (id, name, code, centre) by id, or null if missing. */
 async function fetchStudent(id: string) {
@@ -291,7 +371,18 @@ router.post(
       note: r.note ?? null,
     }));
 
-    // Render the PDF.
+    // F5 — homework block via F4 SQL function (never recompute the rate in TS).
+    // §8.14 also names attendance % and niyam streaks — those remain absent from
+    // this snapshot; this commit only adds homework.
+    const homework = await buildHomeworkSnapshot(student.id, body.period_label);
+    const snapshot = {
+      items: snapshotItems,
+      homework,
+      generated_at: new Date().toISOString(),
+    };
+
+    // Render the PDF (PdfBuilder is English-first / WinAnsi; bilingual copy lives
+    // in the snapshot for parents and a future Hindi-capable renderer).
     const pdf = await PdfBuilder.create();
     pdf
       .title("Progress Report")
@@ -299,7 +390,15 @@ router.post(
       .keyValue("Student code", student.student_code)
       .keyValue("Period", `${body.period_kind} — ${body.period_label}`)
       .hr()
-      .heading("Curriculum progress");
+      .heading("Homework")
+      .text(homework.summary_en);
+    if (!homework.no_homework_set) {
+      const statusLine = Object.entries(homework.by_status)
+        .map(([s, n]) => `${s}: ${n}`)
+        .join(", ");
+      if (statusLine) pdf.text(statusLine);
+    }
+    pdf.hr().heading("Curriculum progress");
     if (snapshotItems.length === 0) {
       pdf.text("No curriculum progress recorded yet.");
     } else {
@@ -316,6 +415,7 @@ router.post(
     const stored = await storage.put(key, buf, "application/pdf");
 
     const now = new Date();
+    snapshot.generated_at = now.toISOString();
     const [row] = await db
       .insert(progress_reports)
       .values({
@@ -325,7 +425,7 @@ router.post(
         generated_at: now,
         pdf_url: stored.url,
         shikshak_comment: body.shikshak_comment ?? null,
-        snapshot: { items: snapshotItems, generated_at: now.toISOString() },
+        snapshot,
       })
       .onConflictDoUpdate({
         target: [
@@ -337,11 +437,11 @@ router.post(
           generated_at: now,
           pdf_url: stored.url,
           shikshak_comment: body.shikshak_comment ?? null,
-          snapshot: { items: snapshotItems, generated_at: now.toISOString() },
+          snapshot,
           updated_at: now,
         },
       })
-      .returning({ id: progress_reports.id, pdf_url: progress_reports.pdf_url });
+      .returning({ id: progress_reports.id, pdf_url: progress_reports.pdf_url, snapshot: progress_reports.snapshot });
 
     await auditFromReq(req, {
       action: "create",
@@ -351,7 +451,11 @@ router.post(
     });
 
     // Progress PDFs are long-lived report downloads — override the 1h gallery default.
-    ok(res, { id: row.id, pdf_url: signUploadUrl(row.pdf_url, 7 * 24 * 3600) });
+    ok(res, {
+      id: row.id,
+      pdf_url: signUploadUrl(row.pdf_url, 7 * 24 * 3600),
+      snapshot: row.snapshot,
+    });
   },
 );
 

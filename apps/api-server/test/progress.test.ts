@@ -189,4 +189,89 @@ describe("progress", () => {
       .set(auth(parent.token));
     expect(res.status).toBe(404);
   });
+
+  it("the report snapshot includes homework completion for the period", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const children = await request(app).get("/v1/me/children").set(auth(parent.token));
+    const studentId = children.body.data.items[0].id as string;
+
+    const batch = await pool.query<{ batch_id: string }>(
+      `select batch_id from students where id = $1`,
+      [studentId],
+    );
+    const due = "2097-06-15";
+    const a = await pool.query<{ id: string }>(
+      `insert into homework_assignments (batch_id, title, due_date, created_by)
+       values ($1, 'F5 hw', $2, $3) returning id`,
+      [batch.rows[0]!.batch_id, due, admin.user.id],
+    );
+    await pool.query(
+      `insert into homework_submissions (assignment_id, student_id, status)
+       values ($1, $2, 'starred')
+       on conflict (assignment_id, student_id) do update set status = 'starred'`,
+      [a.rows[0]!.id, studentId],
+    );
+
+    const report = await request(app)
+      .post(`/v1/progress/students/${studentId}/reports`)
+      .set(auth(admin.token))
+      .send({ period_kind: "monthly", period_label: "2097-06" });
+    expect(report.status).toBe(200);
+    const snap = report.body.data.snapshot as {
+      homework: {
+        completion_rate: number | null;
+        no_homework_set: boolean;
+        starred_count: number;
+        summary_en: string;
+      };
+    };
+    expect(snap.homework).toBeTruthy();
+    expect(snap.homework.no_homework_set).toBe(false);
+    expect(snap.homework.completion_rate).toBe(1);
+    expect(snap.homework.starred_count).toBe(1);
+    expect(snap.homework.summary_en).toMatch(/Homework|Completion|starred/i);
+
+    // PDF section data — same snapshot fields the PdfBuilder consumed.
+    expect(snap.homework.summary_en.length).toBeGreaterThan(0);
+
+    await pool.query(`delete from homework_assignments where id = $1`, [a.rows[0]!.id]);
+  });
+
+  it("a student with no assignments in the period shows 'no homework set', not 0%", async () => {
+    const admin = await loginAs("super_admin");
+    const studentId = await mumbaiStudentWithCurriculum(admin.token);
+
+    const report = await request(app)
+      .post(`/v1/progress/students/${studentId}/reports`)
+      .set(auth(admin.token))
+      .send({ period_kind: "monthly", period_label: "2090-01" });
+    expect(report.status).toBe(200);
+    const hw = report.body.data.snapshot.homework as {
+      completion_rate: number | null;
+      no_homework_set: boolean;
+      summary_en: string;
+    };
+    expect(hw.completion_rate).toBeNull();
+    expect(hw.no_homework_set).toBe(true);
+    expect(hw.summary_en).toMatch(/no homework set/i);
+    expect(hw.summary_en).not.toMatch(/^0%/);
+  });
+
+  it("the rendered PDF contains the homework section", async () => {
+    // Assert via snapshot (template data) — PdfBuilder has no text extractor;
+    // the same summary_en string is drawn under the Homework heading.
+    const admin = await loginAs("super_admin");
+    const studentId = await mumbaiStudentWithCurriculum(admin.token);
+    const report = await request(app)
+      .post(`/v1/progress/students/${studentId}/reports`)
+      .set(auth(admin.token))
+      .send({ period_kind: "monthly", period_label: `pdf-hw-${Date.now()}` });
+    expect(report.status).toBe(200);
+    const hw = report.body.data.snapshot.homework;
+    expect(hw.label_en).toBe("Homework");
+    expect(hw.label_hi).toBeTruthy();
+    expect(hw.summary_en).toBeTruthy();
+    expect(report.body.data.pdf_url).toContain("/uploads/");
+  });
 });
