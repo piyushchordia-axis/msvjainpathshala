@@ -4,7 +4,7 @@
  */
 import type { Request } from "express";
 import type { PgColumn } from "drizzle-orm/pg-core";
-import { and, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db, students } from "@workspace/db";
 import type { AdminScope } from "./scope";
 
@@ -32,22 +32,48 @@ export function firstName(full: string | null): string {
 }
 
 /**
+ * Ownership filter shared by ownedStudentId / listOwnedStudents (Q11).
+ * Soft-deleted and non-active students are excluded.
+ */
+export function ownedStudentsCondition(callerUserId: string) {
+  return and(
+    isNull(students.deleted_at),
+    eq(students.status, "active"),
+    or(eq(students.parent_id, callerUserId), eq(students.user_id, callerUserId)),
+  );
+}
+
+/**
  * Resolve a student the caller owns (parent of, or is, that student).
  * Soft-deleted and non-active students are treated as not found (Q11).
  */
 export async function ownedStudentId(req: Request, id: string): Promise<string | null> {
+  const row = await ownedStudentRow(req, id);
+  return row?.id ?? null;
+}
+
+/** Same ownership as ownedStudentId, with display name (F6 feed labelling). */
+export async function ownedStudentRow(
+  req: Request,
+  id: string,
+): Promise<{ id: string; full_name: string } | null> {
   const uid = req.authUser!.id;
   const [row] = await db
-    .select({ id: students.id })
+    .select({ id: students.id, full_name: students.full_name })
     .from(students)
-    .where(
-      and(
-        eq(students.id, id),
-        isNull(students.deleted_at),
-        eq(students.status, "active"),
-        or(eq(students.parent_id, uid), eq(students.user_id, uid)),
-      ),
-    )
+    .where(and(eq(students.id, id), ownedStudentsCondition(uid)))
     .limit(1);
-  return row?.id ?? null;
+  return row ?? null;
+}
+
+/** Every active student the caller owns — same filter as ownedStudentId (F6). */
+export async function listOwnedStudents(
+  req: Request,
+): Promise<Array<{ id: string; full_name: string }>> {
+  const uid = req.authUser!.id;
+  return db
+    .select({ id: students.id, full_name: students.full_name })
+    .from(students)
+    .where(ownedStudentsCondition(uid))
+    .orderBy(asc(students.full_name));
 }

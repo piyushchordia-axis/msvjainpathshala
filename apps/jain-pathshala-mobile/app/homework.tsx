@@ -240,9 +240,13 @@ function MarkDoneButton({
 export default function HomeworkScreen() {
   const c = useColors();
   const { hi } = useLocale();
-  const { activeStudentId, activeChild, loading, refetch } = useSessionView();
+  const { activeStudentId, activeChild, children, loading, refetch, setActiveStudentId } =
+    useSessionView();
+  const [allChildren, setAllChildren] = useState(false);
 
-  const homework = useHomework(activeStudentId ?? undefined);
+  const homework = useHomework(allChildren ? null : activeStudentId, {
+    allChildren,
+  });
   const rows = homework.data?.items ?? [];
 
   return (
@@ -272,7 +276,15 @@ export default function HomeworkScreen() {
         />
       ) : (
         <>
-          <ChildSwitcher />
+          <ChildSwitcher
+            includeAll={children.length > 1}
+            allSelected={allChildren}
+            onSelectAll={() => setAllChildren(true)}
+            onSelectChild={(id) => {
+              setAllChildren(false);
+              setActiveStudentId(id);
+            }}
+          />
           {homework.isLoading ? (
         <StateView status="loading" emptyText="" />
       ) : homework.isError ? (
@@ -293,10 +305,16 @@ export default function HomeworkScreen() {
           const status = row.status.toLowerCase();
           const canSubmit = status !== "approved" && status !== "starred";
           const canMarkDone = status === "pending" || status === "returned";
+          const rowStudentId = row.student_id ?? activeStudentId;
           return (
             <Card key={row.id}>
               <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
                 <View style={{ flex: 1, paddingRight: 10 }}>
+                  {allChildren && row.student_name ? (
+                    <Body muted style={{ fontSize: 12, marginBottom: 2 }}>
+                      {row.student_name}
+                    </Body>
+                  ) : null}
                   <Title style={{ fontSize: 16 }}>{row.title}</Title>
                   <Body muted style={{ fontSize: 12, marginTop: 2 }}>
                     {hi ? "नियत तिथि: " : "Due: "}
@@ -384,10 +402,10 @@ export default function HomeworkScreen() {
                   <SubmitForm
                     assignmentId={row.assignment_id}
                     submissionId={row.id}
-                    studentId={activeStudentId}
+                    studentId={rowStudentId}
                   />
                   {canMarkDone ? (
-                    <MarkDoneButton submissionId={row.id} studentId={activeStudentId} />
+                    <MarkDoneButton submissionId={row.id} studentId={rowStudentId} />
                   ) : null}
                 </View>
               ) : null}

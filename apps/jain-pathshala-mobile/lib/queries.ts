@@ -534,16 +534,21 @@ export interface HomeworkRow {
   feedback_note: string | null;
   late: boolean;
   overdue?: boolean;
+  student_id?: string;
+  student_name?: string;
 }
-export function useHomework(studentId?: string) {
+/** Per-student when studentId is set; combined across children when allChildren. */
+export function useHomework(studentId?: string | null, opts?: { allChildren?: boolean }) {
+  const allChildren = opts?.allChildren === true;
   return useQuery({
-    queryKey: qk.homework(studentId ?? ""),
+    queryKey: qk.homework(allChildren ? "__all__" : studentId ?? ""),
     queryFn: async () => {
       const collected: HomeworkRow[] = [];
       let cursor: string | null = null;
       let guard = 0;
       do {
-        const qs = new URLSearchParams({ student_id: studentId!, limit: "50" });
+        const qs = new URLSearchParams({ limit: "50" });
+        if (!allChildren && studentId) qs.set("student_id", studentId);
         if (cursor) qs.set("cursor", cursor);
         const envelope = await apiGetEnvelope<List<HomeworkRow>>(
           `/v1/homework/mine?${qs.toString()}`,
@@ -557,7 +562,7 @@ export function useHomework(studentId?: string) {
       collected.sort((a, b) => Number(!!b.overdue) - Number(!!a.overdue));
       return { items: collected } satisfies List<HomeworkRow>;
     },
-    enabled: !!studentId,
+    enabled: allChildren || !!studentId,
   });
 }
 export function useSubmitHomework() {
@@ -588,8 +593,10 @@ export function useSubmitHomework() {
       await drainQueues();
       return { submission_op_id, queued: true as const };
     },
-    onSuccess: (_data, vars) =>
-      qc.invalidateQueries({ queryKey: qk.homework(vars.studentId) }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: qk.homework(vars.studentId) });
+      qc.invalidateQueries({ queryKey: qk.homework("__all__") });
+    },
   });
 }
 
@@ -613,8 +620,10 @@ export function useMarkHomeworkDone() {
       await drainQueues();
       return { submission_op_id, queued: true as const };
     },
-    onSuccess: (_data, vars) =>
-      qc.invalidateQueries({ queryKey: qk.homework(vars.studentId) }),
+    onSuccess: (_data, vars) => {
+      qc.invalidateQueries({ queryKey: qk.homework(vars.studentId) });
+      qc.invalidateQueries({ queryKey: qk.homework("__all__") });
+    },
   });
 }
 

@@ -2952,4 +2952,127 @@ describe("homework", () => {
     expect(row.late).toBe(true);
     expect(row.status).toBe("late");
   });
+
+  it("the combined feed returns items for every child the parent owns", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const children = await request(app).get("/v1/me/children").set(auth(parent.token));
+    expect(children.status).toBe(200);
+    const kids = children.body.data.items as Array<{ id: string; full_name: string }>;
+    expect(kids.length).toBeGreaterThanOrEqual(2);
+
+    const created: Array<{ studentId: string; assignmentId: string }> = [];
+    for (const kid of kids.slice(0, 2)) {
+      const { assignmentId } = await freshAssignmentTargeting(admin.token, kid.id);
+      created.push({ studentId: kid.id, assignmentId });
+    }
+
+    const combined = await request(app)
+      .get("/v1/homework/mine?limit=200")
+      .set(auth(parent.token));
+    expect(combined.status).toBe(200);
+    const items = combined.body.data.items as Array<{
+      assignment_id: string;
+      student_id: string;
+      student_name: string;
+    }>;
+
+    for (const c of created) {
+      const row = items.find(
+        (r) => r.assignment_id === c.assignmentId && r.student_id === c.studentId,
+      );
+      expect(row).toBeTruthy();
+      expect(row!.student_name.length).toBeGreaterThan(0);
+    }
+    const studentIdsInFeed = new Set(
+      items.filter((r) => created.some((c) => c.assignmentId === r.assignment_id)).map((r) => r.student_id),
+    );
+    expect(studentIdsInFeed.has(created[0]!.studentId)).toBe(true);
+    expect(studentIdsInFeed.has(created[1]!.studentId)).toBe(true);
+  });
+
+  it("the combined feed excludes children who are deactivated", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const children = await request(app).get("/v1/me/children").set(auth(parent.token));
+    const kids = children.body.data.items as Array<{ id: string }>;
+    expect(kids.length).toBeGreaterThanOrEqual(2);
+    const keep = kids[0]!.id;
+    const drop = kids[1]!.id;
+
+    const { assignmentId: keepAssign } = await freshAssignmentTargeting(admin.token, keep);
+    const { assignmentId: dropAssign } = await freshAssignmentTargeting(admin.token, drop);
+
+    try {
+      const deact = await request(app)
+        .post(`/v1/admin/students/${drop}/status`)
+        .set(auth(admin.token))
+        .send({ action: "deactivate" });
+      expect(deact.status).toBe(200);
+
+      const combined = await request(app)
+        .get("/v1/homework/mine?limit=200")
+        .set(auth(parent.token));
+      expect(combined.status).toBe(200);
+      const items = combined.body.data.items as Array<{
+        assignment_id: string;
+        student_id: string;
+      }>;
+      expect(items.some((r) => r.assignment_id === keepAssign && r.student_id === keep)).toBe(
+        true,
+      );
+      // Deactivated child's own rows are gone (Q11). Same assignment may still
+      // appear for siblings who share the batch.
+      expect(items.some((r) => r.student_id === drop)).toBe(false);
+    } finally {
+      await request(app)
+        .post(`/v1/admin/students/${drop}/status`)
+        .set(auth(admin.token))
+        .send({ action: "reactivate" });
+    }
+  });
+
+  it("a parent with one child gets the same rows as the per-student feed", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    await freshAssignmentTargeting(admin.token, studentId);
+
+    // Scope the ownership list to a single child by deactivating siblings temporarily.
+    const children = await request(app).get("/v1/me/children").set(auth(parent.token));
+    const siblings = (children.body.data.items as Array<{ id: string }>).filter(
+      (c) => c.id !== studentId,
+    );
+
+    try {
+      for (const s of siblings) {
+        await request(app)
+          .post(`/v1/admin/students/${s.id}/status`)
+          .set(auth(admin.token))
+          .send({ action: "deactivate" });
+      }
+
+      const per = await request(app)
+        .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
+        .set(auth(parent.token));
+      const combined = await request(app)
+        .get("/v1/homework/mine?limit=200")
+        .set(auth(parent.token));
+      expect(per.status).toBe(200);
+      expect(combined.status).toBe(200);
+
+      const perIds = (per.body.data.items as Array<{ id: string }>).map((r) => r.id).sort();
+      const combinedIds = (combined.body.data.items as Array<{ id: string }>)
+        .map((r) => r.id)
+        .sort();
+      expect(combinedIds).toEqual(perIds);
+    } finally {
+      for (const s of siblings) {
+        await request(app)
+          .post(`/v1/admin/students/${s.id}/status`)
+          .set(auth(admin.token))
+          .send({ action: "reactivate" });
+      }
+    }
+  });
 });

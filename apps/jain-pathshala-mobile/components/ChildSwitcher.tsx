@@ -12,27 +12,46 @@ type Props = {
    * (e.g. parent home) so the name isn't duplicated when there is only one.
    */
   alwaysShow?: boolean;
+  /**
+   * Homework combined feed (F6): show an "All children" chip. When selected,
+   * `onSelectAll` runs; picking a child clears combined mode via `onSelectChild`.
+   */
+  includeAll?: boolean;
+  allSelected?: boolean;
+  onSelectAll?: () => void;
+  onSelectChild?: (id: string) => void;
 };
 
 /**
  * Shows which child every "me" activity screen is scoped to.
  * With multiple children, also offers chips to switch.
  */
-export function ChildSwitcher({ alwaysShow = true }: Props) {
+export function ChildSwitcher({
+  alwaysShow = true,
+  includeAll = false,
+  allSelected = false,
+  onSelectAll,
+  onSelectChild,
+}: Props) {
   const c = useColors();
   const { hi } = useLocale();
   const { children, activeStudentId, activeChild, setActiveStudentId } = useSessionView();
 
-  if (!activeChild) return null;
+  if (!activeChild && !allSelected) return null;
 
-  if (children.length <= 1) {
+  if (children.length <= 1 && !includeAll) {
     if (!alwaysShow) return null;
     return (
       <Body muted style={{ marginLeft: 2 }}>
-        {activeChild.full_name}
+        {activeChild?.full_name}
       </Body>
     );
   }
+
+  const selectChild = (id: string) => {
+    if (onSelectChild) onSelectChild(id);
+    else setActiveStudentId(id);
+  };
 
   return (
     <View style={{ gap: 8 }}>
@@ -52,12 +71,33 @@ export function ChildSwitcher({ alwaysShow = true }: Props) {
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={{ gap: 8, paddingRight: 4 }}
       >
+        {includeAll && children.length > 1 ? (
+          <Pressable
+            onPress={() => onSelectAll?.()}
+            style={{
+              backgroundColor: allSelected ? c.primary : c.muted,
+              borderRadius: 999,
+              paddingHorizontal: 16,
+              paddingVertical: 9,
+            }}
+          >
+            <Text
+              style={{
+                fontFamily: bodyFamily(hi, "semibold"),
+                fontSize: 14,
+                color: allSelected ? c.primaryForeground : c.mutedForeground,
+              }}
+            >
+              {hi ? "सभी बच्चे" : "All children"}
+            </Text>
+          </Pressable>
+        ) : null}
         {children.map((child) => {
-          const active = child.id === activeStudentId;
+          const active = !allSelected && child.id === activeStudentId;
           return (
             <Pressable
               key={child.id}
-              onPress={() => setActiveStudentId(child.id)}
+              onPress={() => selectChild(child.id)}
               style={{
                 backgroundColor: active ? c.primary : c.muted,
                 borderRadius: 999,

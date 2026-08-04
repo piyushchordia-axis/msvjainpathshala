@@ -33,7 +33,7 @@ import {
 } from "../../lib/homework-notify";
 import { auditFromReq } from "../../lib/audit";
 
-import { clampLimit, ownedStudentId, scopedCentreFilter } from "../../lib/route-helpers";
+import { clampLimit, ownedStudentRow, listOwnedStudents, scopedCentreFilter } from "../../lib/route-helpers";
 import { kolkataDateString } from "../../services/attendance-mark";
 
 const router: IRouter = Router();
@@ -1446,22 +1446,42 @@ router.post("/submissions/:id/ungrade", requireAdminPanel, async (req: Request, 
 
 /* ═══════════════════════════ Student / parent ═══════════════════════════ */
 
-/* GET /v1/homework/mine?student_id=&limit=&cursor= — a student's homework feed */
+/* GET /v1/homework/mine?student_id=&limit=&cursor=
+ * Per-student feed when student_id is set; combined feed across every owned
+ * child when omitted (F6). Keyset remains (due_date, submission.id) — id is
+ * globally unique so the cursor stays stable across children.
+ */
 router.get("/mine", async (req: Request, res: Response) => {
-  const studentId = String(req.query.student_id ?? "");
-  if (!isUuid(studentId)) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "student_id must be a valid UUID.");
-    return;
-  }
-  if (!(await ownedStudentId(req, studentId))) {
-    fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
-    return;
-  }
+  const rawStudentId = typeof req.query.student_id === "string" ? req.query.student_id.trim() : "";
   const limit = clampLimit(req.query.limit, 50, 200);
   const cursor = decodeKeysetCursor(req.query.cursor, DATE_RE);
 
+  let scopeStudents: Array<{ id: string; full_name: string }>;
+  if (rawStudentId.length > 0) {
+    if (!isUuid(rawStudentId)) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "student_id must be a valid UUID.");
+      return;
+    }
+    const one = await ownedStudentRow(req, rawStudentId);
+    if (!one) {
+      fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
+      return;
+    }
+    scopeStudents = [one];
+  } else {
+    scopeStudents = await listOwnedStudents(req);
+  }
+
+  if (scopeStudents.length === 0) {
+    ok(res, { items: [] }, { count: 0, has_more: false, next_cursor: null });
+    return;
+  }
+
+  const studentIds = scopeStudents.map((s) => s.id);
+  const nameById = new Map(scopeStudents.map((s) => [s.id, s.full_name]));
+
   const filters = [
-    eq(homework_submissions.student_id, studentId),
+    inArray(homework_submissions.student_id, studentIds),
     isNull(homework_assignments.deleted_at),
   ];
   if (cursor) {
@@ -1479,6 +1499,7 @@ router.get("/mine", async (req: Request, res: Response) => {
   const rows = await db
     .select({
       id: homework_submissions.id,
+      student_id: homework_submissions.student_id,
       assignment_id: homework_assignments.id,
       title: homework_assignments.title,
       description: homework_assignments.description,
@@ -1505,6 +1526,7 @@ router.get("/mine", async (req: Request, res: Response) => {
   const today = kolkataDateString(new Date());
   const items = page.map((r) => ({
     ...r,
+    student_name: nameById.get(r.student_id) ?? "",
     overdue: isOverdueHomework(r.due_date, r.status, today),
     attachment_url: signUploadUrl(r.attachment_url),
     submission_url: signUploadUrl(r.submission_url),
