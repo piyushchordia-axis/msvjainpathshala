@@ -312,23 +312,47 @@ function GradeButtons({ submission, onGraded }: { submission: SubmissionRow; onG
   // unedited field must not wipe existing feedback (FIX #13).
   const [feedbackEdited, setFeedbackEdited] = useState(false);
 
-  async function grade(status: 'approved' | 'starred') {
+  const graded = submission.status === 'approved' || submission.status === 'starred';
+  const canReturn =
+    submission.status === 'submitted' ||
+    submission.status === 'late' ||
+    submission.status === 'acknowledged' ||
+    graded;
+
+  async function grade(status: 'approved' | 'starred' | 'returned') {
     if (busy) return;
+    if (status === 'returned' && !feedback.trim()) {
+      toast.error('Add a short note explaining what to fix before returning.');
+      return;
+    }
     setBusy(status);
     try {
-      const body: { status: 'approved' | 'starred'; feedback_note?: string | null } = { status };
-      if (feedbackEdited) {
-        // Empty after edit → explicit clear (null); otherwise the trimmed text.
+      const body: { status: 'approved' | 'starred' | 'returned'; feedback_note?: string | null } = { status };
+      if (status === 'returned' || feedbackEdited) {
         body.feedback_note = feedback.trim() || null;
       }
       await apiPost(`/v1/homework/submissions/${submission.id}/grade`, body);
-      toast.success(status === 'starred' ? 'Submission starred.' : 'Submission approved.');
+      toast.success(
+        status === 'returned'
+          ? 'Returned for rework.'
+          : status === 'starred'
+            ? 'Submission starred.'
+            : 'Submission approved.',
+      );
       onGraded();
     } catch (err) {
       toast.error('Could not grade submission.', err instanceof ApiError ? err.message : undefined);
     } finally {
       setBusy(null);
     }
+  }
+
+  if (submission.status === 'returned' || submission.status === 'pending') {
+    return (
+      <p className="text-xs text-muted-foreground">
+        {submission.status === 'returned' ? 'Waiting for resubmission.' : 'Not submitted yet.'}
+      </p>
+    );
   }
 
   return (
@@ -339,16 +363,21 @@ function GradeButtons({ submission, onGraded }: { submission: SubmissionRow; onG
           setFeedback(e.target.value);
           setFeedbackEdited(true);
         }}
-        placeholder="Feedback (optional)"
+        placeholder={canReturn ? 'Feedback (required to return)' : 'Feedback (optional)'}
         className="h-8 text-xs"
       />
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <Button size="sm" variant="secondary" disabled={!!busy} onClick={() => grade('approved')}>
           {busy === 'approved' ? '…' : 'Approve'}
         </Button>
         <Button size="sm" disabled={!!busy} onClick={() => grade('starred')}>
           {busy === 'starred' ? '…' : 'Star'}
         </Button>
+        {canReturn ? (
+          <Button size="sm" variant="outline" disabled={!!busy} onClick={() => grade('returned')}>
+            {busy === 'returned' ? '…' : 'Return'}
+          </Button>
+        ) : null}
       </div>
     </div>
   );

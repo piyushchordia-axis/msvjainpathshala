@@ -93,3 +93,46 @@ export async function notifyParentHomeworkGraded(opts: {
     logger.warn({ err, studentId: opts.studentId }, "notifyParentHomeworkGraded failed");
   }
 }
+
+/** After Guruji returns work for rework — parent must act (F9). */
+export async function notifyParentHomeworkReturned(opts: {
+  studentId: string;
+  assignmentId?: string;
+  feedbackNote: string;
+}): Promise<void> {
+  try {
+    const [stu] = await db
+      .select({
+        parent_id: students.parent_id,
+        full_name: students.full_name,
+      })
+      .from(students)
+      .where(eq(students.id, opts.studentId))
+      .limit(1);
+    if (!stu?.parent_id) return;
+
+    let assignmentTitle = "homework";
+    if (opts.assignmentId) {
+      const [a] = await db
+        .select({ title: homework_assignments.title })
+        .from(homework_assignments)
+        .where(eq(homework_assignments.id, opts.assignmentId))
+        .limit(1);
+      if (a?.title) assignmentTitle = a.title;
+    }
+
+    const shortName = (stu.full_name ?? "your child").trim().split(/\s+/)[0] || "your child";
+    const note = opts.feedbackNote.trim().slice(0, 200);
+
+    await notifyUsers({
+      userIds: [stu.parent_id],
+      kind: "homework",
+      title_en: "Homework returned",
+      title_hi: "गृहकार्य वापस",
+      body_en: `Guruji returned ${shortName}'s work on "${assignmentTitle}" — please revise and resubmit. ${note}`,
+      body_hi: `गुरुजी ने ${shortName} के "${assignmentTitle}" कार्य को वापस किया — कृपया सुधारकर पुनः प्रस्तुत करें। ${note}`,
+    });
+  } catch (err) {
+    logger.warn({ err, studentId: opts.studentId }, "notifyParentHomeworkReturned failed");
+  }
+}

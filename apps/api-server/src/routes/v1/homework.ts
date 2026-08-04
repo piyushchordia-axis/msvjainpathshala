@@ -28,6 +28,7 @@ import { resolveHomeworkAwardPoints } from "../../lib/homework-points";
 import {
   notifyParentsHomeworkAssigned,
   notifyParentHomeworkGraded,
+  notifyParentHomeworkReturned,
 } from "../../lib/homework-notify";
 import { auditFromReq } from "../../lib/audit";
 
@@ -604,26 +605,44 @@ router.get("/assignments/:id/submissions", requireAdminPanel, async (req: Reques
   ok(res, { items }, { count: items.length });
 });
 
-const gradeSchema = z.object({
-  status: z.enum(["approved", "starred"]),
-  // .nullable() allows explicit clear; absence is detected on req.body (not via ??).
-  feedback_note: z.string().max(2000).nullable().optional(),
-});
+const gradeSchema = z
+  .object({
+    status: z.enum(["approved", "starred", "returned"]),
+    // .nullable() allows explicit clear; absence is detected on req.body (not via ??).
+    feedback_note: z.string().max(2000).nullable().optional(),
+  })
+  .superRefine((val, ctx) => {
+    if (val.status === "returned" && !(val.feedback_note ?? "").trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["feedback_note"],
+        message:
+          "Add a short note explaining what to fix — returning work without feedback leaves the family guessing.",
+      });
+    }
+  });
 
 /* POST /v1/homework/submissions/:id/grade — grade + award punya (AT18 / AT20) */
 router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, res: Response) => {
   let body: z.infer<typeof gradeSchema>;
   try {
     body = gradeSchema.parse(req.body);
-  } catch {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid grade data.");
+  } catch (err) {
+    const msg =
+      err instanceof z.ZodError
+        ? err.issues[0]?.message ?? "Invalid grade data."
+        : "Invalid grade data.";
+    fail(res, 422, "ERR_VALIDATION_FAILED", msg);
     return;
   }
 
   // Partial update: only write feedback_note when the key is present on the wire.
-  const feedbackPresent = Object.prototype.hasOwnProperty.call(req.body ?? {}, "feedback_note");
+  // Returning always requires feedback (validated above) so it is always written.
+  const feedbackPresent =
+    body.status === "returned" ||
+    Object.prototype.hasOwnProperty.call(req.body ?? {}, "feedback_note");
   const feedbackPatch = feedbackPresent
-    ? { feedback_note: body.feedback_note ?? null }
+    ? { feedback_note: body.feedback_note?.trim() || null }
     : ({} as { feedback_note?: string | null });
 
   const id = String(req.params.id);
@@ -646,6 +665,88 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     .limit(1);
   if (!sub || !inBatchWriteScope(scope, sub.batch_id, sub.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Submission not found.");
+    return;
+  }
+
+  // F9 — return for rework: no Punya award; reverse if already graded.
+  if (body.status === "returned") {
+    if (sub.status === "pending") {
+      fail(
+        res,
+        409,
+        "ERR_CONFLICT",
+        "Nothing has been submitted yet — there is nothing to return.",
+      );
+      return;
+    }
+    if (sub.status === "returned") {
+      fail(res, 409, "ERR_CONFLICT", "This submission is already returned for rework.");
+      return;
+    }
+
+    const outcome = await db.transaction(async (tx) => {
+      let reversedPoints = 0;
+      if (sub.status === "approved" || sub.status === "starred") {
+        const prior = await findLatestUnreversedHomeworkAward(tx, sub.id, sub.student_id);
+        if (prior && prior.points > 0) {
+          const rev = await reversePunya(
+            {
+              studentId: sub.student_id,
+              featureKey: "homework",
+              points: prior.points,
+              note: "Homework returned for rework",
+              awardedBy: req.authUser!.id,
+              idempotencyKey: homeworkReversalKey(prior.idempotency_key),
+            },
+            tx,
+          );
+          reversedPoints = rev.reversed ? rev.points_reversed : rev.points_reversed;
+        }
+      }
+
+      await tx
+        .update(homework_submissions)
+        .set({
+          status: "returned",
+          feedback_note: body.feedback_note!.trim(),
+          marked_by: req.authUser!.id,
+          marked_at: new Date(),
+          revision: sql`${homework_submissions.revision} + 1`,
+        })
+        .where(eq(homework_submissions.id, sub.id));
+
+      const [bal] = await tx
+        .select({ total_points: punya_balances.total_points })
+        .from(punya_balances)
+        .where(eq(punya_balances.student_id, sub.student_id))
+        .limit(1);
+
+      return { reversedPoints, total_points: bal?.total_points ?? 0 };
+    });
+
+    await auditFromReq(req, {
+      action: "grade",
+      entityKind: "homework_submission",
+      entityId: sub.id,
+      summary: `Returned homework for rework (reversed ${outcome.reversedPoints}).`,
+      metadata: {
+        status: "returned",
+        points_reversed: outcome.reversedPoints,
+        feedback_note: body.feedback_note!.trim(),
+      },
+    });
+    await notifyParentHomeworkReturned({
+      studentId: sub.student_id,
+      assignmentId: sub.assignment_id,
+      feedbackNote: body.feedback_note!.trim(),
+    });
+
+    ok(res, {
+      id: sub.id,
+      status: "returned" as const,
+      total_points: outcome.total_points,
+      points_reversed: outcome.reversedPoints,
+    });
     return;
   }
 

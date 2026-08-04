@@ -2333,4 +2333,123 @@ describe("homework", () => {
     );
     expect(row.rows[0]!.status).toBe("acknowledged");
   });
+
+  /* ─── F9 — return for rework ─── */
+
+  it("returning a submission awards no Punya and reopens it for resubmission", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/return-me.jpg" });
+
+    const before = await totalPunya(parent.token, studentId);
+    const ret = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(admin.token))
+      .send({ status: "returned", feedback_note: "Please recite the full mantra." });
+    expect(ret.status).toBe(200);
+    expect(ret.body.data.status).toBe("returned");
+    expect(ret.body.data.points_reversed ?? 0).toBe(0);
+
+    const after = await totalPunya(parent.token, studentId);
+    expect(after).toBe(before);
+
+    const resubmit = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/return-me-v2.jpg" });
+    expect(resubmit.status).toBe(200);
+    expect(resubmit.body.data.status).toMatch(/^(submitted|late)$/);
+  });
+
+  it("a returned submission can be resubmitted, then graded normally", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/round1.jpg" });
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(admin.token))
+      .send({ status: "returned", feedback_note: "Try again with clearer writing." });
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/round2.jpg" });
+
+    const before = await totalPunya(parent.token, studentId);
+    const grade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(admin.token))
+      .send({ status: "approved" });
+    expect(grade.status).toBe(200);
+    expect(grade.body.data.status).toBe("approved");
+    expect(grade.body.data.total_points).toBeGreaterThan(before);
+  });
+
+  it("returning an already-approved submission reverses the awarded Punya", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/approved-then-return.jpg" });
+
+    const before = await totalPunya(parent.token, studentId);
+    const grade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(admin.token))
+      .send({ status: "approved" });
+    expect(grade.status).toBe(200);
+    expect(grade.body.data.total_points).toBeGreaterThan(before);
+
+    const ret = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(admin.token))
+      .send({ status: "returned", feedback_note: "Sorry — please redo this chapter." });
+    expect(ret.status).toBe(200);
+    expect(ret.body.data.status).toBe("returned");
+    expect(ret.body.data.points_reversed).toBeGreaterThan(0);
+
+    const after = await totalPunya(parent.token, studentId);
+    expect(after).toBe(before);
+  });
+
+  it("feedback_note is required when returning", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/needs-note.jpg" });
+
+    const empty = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(admin.token))
+      .send({ status: "returned", feedback_note: "   " });
+    expect(empty.status).toBe(422);
+    expect(empty.body.error.code).toBe("ERR_VALIDATION_FAILED");
+
+    const missing = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(admin.token))
+      .send({ status: "returned" });
+    expect(missing.status).toBe(422);
+  });
 });
