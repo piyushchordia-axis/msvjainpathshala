@@ -38,6 +38,14 @@ async function firstChildId(parentToken: string): Promise<string> {
  * every call mints a new assignment, so the submission always starts pending.
  */
 async function freshSubmissionFor(adminToken: string, studentId: string): Promise<string> {
+  const created = await freshAssignmentTargeting(adminToken, studentId);
+  return created.submissionId;
+}
+
+async function freshAssignmentTargeting(
+  adminToken: string,
+  studentId: string,
+): Promise<{ assignmentId: string; submissionId: string }> {
   const batchesRes = await request(app).get("/v1/admin/batches").set(auth(adminToken));
   expect(batchesRes.status).toBe(200);
   const batchList: Array<{ id: string }> = batchesRes.body.data.items;
@@ -55,7 +63,9 @@ async function freshSubmissionFor(adminToken: string, studentId: string): Promis
       .set(auth(adminToken));
     expect(subs.status).toBe(200);
     const mine = subs.body.data.items.find((s: { student_id: string }) => s.student_id === studentId);
-    if (mine) return mine.id as string;
+    if (mine) {
+      return { assignmentId: create.body.data.id as string, submissionId: mine.id as string };
+    }
   }
   throw new Error("could not create a submission targeting the student");
 }
@@ -655,5 +665,151 @@ describe("homework", () => {
     expect(submit.status).toBe(200);
     expect(submit.body.data.status).toBe("submitted");
     expect(submit.body.data.late).toBe(false);
+  });
+
+  it("a homework sync op resolves the submission from assignment_id + student_id", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const { assignmentId, submissionId } = await freshAssignmentTargeting(admin.token, studentId);
+    const url = "https://example.com/resolved-pair.jpg";
+
+    const sync = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(parent.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: ulid(),
+            op_type: "homework_submission",
+            payload: {
+              assignment_id: assignmentId,
+              student_id: studentId,
+              proof_asset_id: url,
+            },
+            client_timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    expect(sync.status).toBe(200);
+    expect(sync.body.data.results[0].status).toBe("success");
+    expect(sync.body.data.results[0].server_id).toBe(submissionId);
+
+    const feed = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
+      .set(auth(parent.token));
+    const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
+    expect(row.status).toBe("submitted");
+    expect(row.submission_url).toBe(url);
+  });
+
+  it("submission_id still works", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    const sync = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(parent.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: ulid(),
+            op_type: "homework_submission",
+            payload: {
+              submission_id: submissionId,
+              file_url: "https://example.com/by-submission-id.jpg",
+            },
+            client_timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    expect(sync.status).toBe(200);
+    expect(sync.body.data.results[0].status).toBe("success");
+    expect(sync.body.data.results[0].server_id).toBe(submissionId);
+  });
+
+  it("an unresolvable pair fails with ERR_NOT_FOUND, not ERR_VALIDATION_FAILED", async () => {
+    const parent = await loginAs("parent");
+    const sync = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(parent.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: ulid(),
+            op_type: "homework_submission",
+            payload: {
+              assignment_id: "11111111-1111-1111-1111-111111111111",
+              student_id: "22222222-2222-2222-2222-222222222222",
+              proof_asset_id: "https://example.com/x.jpg",
+            },
+            client_timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    expect(sync.status).toBe(200);
+    const result = sync.body.data.results[0];
+    expect(result.status).toBe("failed");
+    expect(result.error.code).toBe("ERR_NOT_FOUND");
+  });
+
+  it("replaying the same submission_op_id returns the stored response and does not re-execute", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const { assignmentId, submissionId } = await freshAssignmentTargeting(admin.token, studentId);
+    const opId = ulid();
+    const url = "https://example.com/replay-once.jpg";
+
+    const first = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(parent.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: opId,
+            op_type: "homework_submission",
+            payload: {
+              assignment_id: assignmentId,
+              student_id: studentId,
+              proof_asset_id: url,
+            },
+            client_timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    expect(first.status).toBe(200);
+    expect(first.body.data.results[0].status).toBe("success");
+
+    // Second submit via online would 409 if graded; here we only check replay
+    // does not re-apply — change URL would stick if re-executed.
+    const second = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(parent.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: opId,
+            op_type: "homework_submission",
+            payload: {
+              assignment_id: assignmentId,
+              student_id: studentId,
+              proof_asset_id: "https://example.com/should-not-apply.jpg",
+            },
+            client_timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    expect(second.status).toBe(200);
+    expect(second.body.data.results[0].status).toBe("success");
+    expect(second.body.data.results[0].server_id).toBe(first.body.data.results[0].server_id);
+
+    const feed = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
+      .set(auth(parent.token));
+    const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
+    expect(row.submission_url).toBe(url);
   });
 });

@@ -61,10 +61,11 @@ export type PendingNiyamSubmissionOp = {
 
 export type PendingHomeworkSubmissionOp = {
   submission_op_id: string;
-  assignment_id?: string;
+  assignment_id: string;
+  student_id: string;
+  /** Optional back-compat — prefer resolving from assignment_id + student_id. */
   submission_id?: string;
-  student_id?: string;
-  payload?: Record<string, unknown>;
+  proof_asset_id?: string;
   client_timestamp: string;
 };
 

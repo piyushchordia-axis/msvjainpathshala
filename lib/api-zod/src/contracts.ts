@@ -73,6 +73,22 @@ export const syncSubmissionSchema = z.object({
 });
 export type SyncSubmission = z.infer<typeof syncSubmissionSchema>;
 
+/**
+ * Homework offline op payload (CLAUDE.md §1). Prefer assignment_id + student_id;
+ * submission_id is optional back-compat for older clients.
+ */
+export const homeworkSyncPayloadSchema = z.object({
+  assignment_id: z.string().uuid().optional(),
+  student_id: z.string().uuid().optional(),
+  submission_id: z.string().uuid().optional(),
+  /** Canonical proof field — http(s) URL or upload asset id resolved by the client. */
+  proof_asset_id: z.string().optional(),
+  /** Legacy alias for proof_asset_id. */
+  file_url: z.string().optional(),
+  payload: z.record(z.unknown()).optional(),
+});
+export type HomeworkSyncPayload = z.infer<typeof homeworkSyncPayloadSchema>;
+
 export const markAttendanceRecordSchema = z.object({
   student_id: z.string().uuid(),
   status: attendanceStatusSchema,

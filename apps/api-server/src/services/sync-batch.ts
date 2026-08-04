@@ -2,10 +2,10 @@
  * POST /v1/sync/batch — single offline transport.
  * Each op_type handler calls the SAME service method as the online endpoint.
  */
-import { db, sessions, notice_reads, type User } from "@workspace/db";
+import { db, sessions, notice_reads, homework_submissions, type User } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
-import { ulidSchema, attendanceStatusSchema } from "@workspace/api-zod";
+import { ulidSchema, attendanceStatusSchema, homeworkSyncPayloadSchema } from "@workspace/api-zod";
 import {
   findSuccessfulSync,
   writeSyncOperation,
@@ -360,34 +360,52 @@ async function handleHomeworkSubmission(
   payload: unknown,
   clientTimestamp?: string,
 ): Promise<SyncResult> {
-  const p = z
-    .object({
-      assignment_id: z.string().uuid().optional(),
-      submission_id: z.string().uuid().optional(),
-      student_id: z.string().uuid().optional(),
-      payload: z.record(z.unknown()).optional(),
-      file_url: z.string().optional(),
-    })
-    .parse(payload);
+  const p = homeworkSyncPayloadSchema.parse(payload);
 
-  const submissionId = p.submission_id;
+  let submissionId = p.submission_id;
+  if (!submissionId && p.assignment_id && p.student_id) {
+    const [row] = await db
+      .select({ id: homework_submissions.id })
+      .from(homework_submissions)
+      .where(
+        and(
+          eq(homework_submissions.assignment_id, p.assignment_id),
+          eq(homework_submissions.student_id, p.student_id),
+        ),
+      )
+      .limit(1);
+    if (!row) {
+      return {
+        submission_op_id: submissionOpId,
+        status: "failed",
+        error: {
+          code: "ERR_NOT_FOUND",
+          message: "No homework submission found for that assignment and student.",
+        },
+      };
+    }
+    submissionId = row.id;
+  }
+
   if (!submissionId) {
     return {
       submission_op_id: submissionOpId,
       status: "failed",
       error: {
         code: "ERR_VALIDATION_FAILED",
-        message: "submission_id is required for homework_submission ops.",
+        message:
+          "Provide submission_id, or both assignment_id and student_id, for homework_submission ops.",
       },
     };
   }
 
+  const fileUrl = p.proof_asset_id ?? p.file_url;
   const { applyHomeworkSubmit, HomeworkSubmitError } = await import("./homework-submit-sync");
   try {
     const data = await applyHomeworkSubmit({
       actor,
       submissionId,
-      fileUrl: p.file_url,
+      fileUrl,
       clientTimestamp,
     });
     return {
