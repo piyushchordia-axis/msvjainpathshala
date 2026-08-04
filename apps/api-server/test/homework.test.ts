@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll, beforeAll, vi } from "vitest";
+import { describe, it, expect, afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import request from "supertest";
 import app from "../src/app";
 import { pool } from "@workspace/db";
@@ -6,8 +6,8 @@ import { loginAs, auth } from "./helpers";
 import { ulid } from "../src/lib/ulid";
 
 beforeAll(async () => {
-  // Soft-delete leftover assignments from prior runs so /mine (max limit 200)
-  // can still see rows minted by this suite.
+  // Soft-delete leftover active assignments from prior unclean runs so /mine
+  // (max limit 200) can still see rows minted by this suite.
   await pool.query(`update homework_assignments set deleted_at = now() where deleted_at is null`);
   // AT21 catalogue rows (migration 0021) — idempotent for DBs that have not migrated yet.
   await pool.query(`
@@ -20,17 +20,32 @@ beforeAll(async () => {
   `);
 });
 
+/** Wall-clock mark — afterEach removes assignments created at or after this. */
+let testStartedAt = new Date().toISOString();
+
+beforeEach(() => {
+  // 1s slack so DB now() cannot land before the Node mark under clock skew.
+  testStartedAt = new Date(Date.now() - 1000).toISOString();
+});
+
+afterEach(async () => {
+  // Suite fixtures only (created_at watermark). Hard-delete so the shared seed
+  // DB does not accumulate soft-deleted junk forever; CASCADE clears submissions.
+  await pool.query(
+    `delete from homework_assignments
+      where created_at >= $1::timestamptz`,
+    [testStartedAt],
+  );
+});
+
 afterAll(async () => {
   await pool.end(); // close the shared pg pool so vitest exits cleanly
 });
 
 /**
- * Homework is self-creating: each run picks a real seeded batch (the one Aarav,
- * the parent's first child, belongs to) via the admin batches list, creates a
- * fresh assignment for it (so its submissions are brand new), then drives the
- * full lifecycle: parent reads /mine, submits a url, shikshak stars it, and the
- * student's punya total goes up. No reliance on specific seed rows beyond the
- * seeded login personas.
+ * Homework is self-creating: each run resolves the student's batch_id, creates
+ * one assignment for that batch, then drives the lifecycle. Rerunnable against
+ * a seeded DB — fixtures are deleted in afterEach.
  */
 function tomorrow(): string {
   const d = new Date();
@@ -46,11 +61,18 @@ async function firstChildId(parentToken: string): Promise<string> {
   return child.id as string;
 }
 
+async function studentBatchId(studentId: string): Promise<string> {
+  const res = await pool.query<{ batch_id: string | null }>(
+    `select batch_id from students where id = $1`,
+    [studentId],
+  );
+  expect(res.rows[0]?.batch_id).toBeTruthy();
+  return res.rows[0]!.batch_id!;
+}
+
 /**
- * Create a brand-new assignment that targets `studentId` and return its fresh
- * `pending` submission id. Iterates the admin batch list (like the lifecycle
- * test) until an assignment yields a submission for the student. Rerun-safe:
- * every call mints a new assignment, so the submission always starts pending.
+ * Create a brand-new assignment for the student's current batch and return its
+ * fresh `pending` submission id. One assignment per call — never scans every batch.
  */
 async function freshSubmissionFor(adminToken: string, studentId: string): Promise<string> {
   const created = await freshAssignmentTargeting(adminToken, studentId);
@@ -60,29 +82,26 @@ async function freshSubmissionFor(adminToken: string, studentId: string): Promis
 async function freshAssignmentTargeting(
   adminToken: string,
   studentId: string,
-): Promise<{ assignmentId: string; submissionId: string }> {
-  const batchesRes = await request(app).get("/v1/admin/batches").set(auth(adminToken));
-  expect(batchesRes.status).toBe(200);
-  const batchList: Array<{ id: string }> = batchesRes.body.data.items;
-  expect(batchList.length).toBeGreaterThan(0);
+): Promise<{ assignmentId: string; submissionId: string; batchId: string }> {
+  const batchId = await studentBatchId(studentId);
+  const create = await request(app)
+    .post("/v1/homework/assignments")
+    .set(auth(adminToken))
+    .send({
+      batch_id: batchId,
+      title: `HW ${Date.now()}-${batchId.slice(0, 6)}`,
+      due_date: tomorrow(),
+    });
+  expect(create.status).toBe(200);
+  const assignmentId = create.body.data.id as string;
 
-  for (const b of batchList) {
-    const create = await request(app)
-      .post("/v1/homework/assignments")
-      .set(auth(adminToken))
-      .send({ batch_id: b.id, title: `HW ${Date.now()}-${b.id.slice(0, 6)}`, due_date: tomorrow() });
-    expect(create.status).toBe(200);
-
-    const subs = await request(app)
-      .get(`/v1/homework/assignments/${create.body.data.id}/submissions`)
-      .set(auth(adminToken));
-    expect(subs.status).toBe(200);
-    const mine = subs.body.data.items.find((s: { student_id: string }) => s.student_id === studentId);
-    if (mine) {
-      return { assignmentId: create.body.data.id as string, submissionId: mine.id as string };
-    }
-  }
-  throw new Error("could not create a submission targeting the student");
+  const subs = await request(app)
+    .get(`/v1/homework/assignments/${assignmentId}/submissions`)
+    .set(auth(adminToken));
+  expect(subs.status).toBe(200);
+  const mine = subs.body.data.items.find((s: { student_id: string }) => s.student_id === studentId);
+  expect(mine).toBeTruthy();
+  return { assignmentId, submissionId: mine!.id as string, batchId };
 }
 
 async function totalPunya(parentToken: string, studentId: string): Promise<number> {
@@ -124,41 +143,9 @@ describe("homework", () => {
     const parent = await loginAs("parent");
     const shikshak = await loginAs("shikshak");
 
-    // Aarav (parent's first child).
+    // Aarav (parent's first child) — one assignment on their batch, not every batch.
     const studentId = await firstChildId(parent.token);
-
-    // Find the batch for Aarav from the student's centre's batches. We pick the
-    // batch that, after creating an assignment, yields a submission for Aarav.
-    const batchesRes = await request(app).get("/v1/admin/batches").set(auth(admin.token));
-    expect(batchesRes.status).toBe(200);
-    const batchList: Array<{ id: string }> = batchesRes.body.data.items;
-    expect(batchList.length).toBeGreaterThan(0);
-
-    // Create an assignment per batch until Aarav appears as a submission target.
-    let assignmentId = "";
-    let submissionId = "";
-    for (const b of batchList) {
-      const create = await request(app)
-        .post("/v1/homework/assignments")
-        .set(auth(admin.token))
-        .send({ batch_id: b.id, title: `HW ${Date.now()}-${b.id.slice(0, 6)}`, due_date: tomorrow(), description: "Read chapter 1." });
-      expect(create.status).toBe(200);
-      expect(create.body.data.submissions_created).toBeGreaterThanOrEqual(0);
-
-      const subs = await request(app)
-        .get(`/v1/homework/assignments/${create.body.data.id}/submissions`)
-        .set(auth(admin.token));
-      expect(subs.status).toBe(200);
-      const mine = subs.body.data.items.find((s: { student_id: string }) => s.student_id === studentId);
-      if (mine) {
-        assignmentId = create.body.data.id;
-        submissionId = mine.id;
-        expect(create.body.data.submissions_created).toBeGreaterThan(0);
-        break;
-      }
-    }
-    expect(assignmentId).toBeTruthy();
-    expect(submissionId).toBeTruthy();
+    const { assignmentId, submissionId } = await freshAssignmentTargeting(admin.token, studentId);
 
     // Parent sees the assignment in the student's feed.
     const feed = await request(app)
@@ -706,28 +693,20 @@ describe("homework", () => {
 
   it("an assignment and its submissions are created atomically", async () => {
     const admin = await loginAs("super_admin");
-    const batchesRes = await request(app).get("/v1/admin/batches").set(auth(admin.token));
-    expect(batchesRes.status).toBe(200);
-    // Prefer a batch that has active students so fan-out is non-empty.
-    let batchId = "";
-    let created = { id: "", submissions_created: 0 };
-    for (const b of batchesRes.body.data.items as Array<{ id: string }>) {
-      const create = await request(app)
-        .post("/v1/homework/assignments")
-        .set(auth(admin.token))
-        .send({
-          batch_id: b.id,
-          title: `Atomic HW ${Date.now()}-${b.id.slice(0, 6)}`,
-          due_date: tomorrow(),
-        });
-      expect(create.status).toBe(200);
-      if (create.body.data.submissions_created > 0) {
-        batchId = b.id;
-        created = create.body.data;
-        break;
-      }
-    }
-    expect(batchId).toBeTruthy();
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const batchId = await studentBatchId(studentId);
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `Atomic HW ${Date.now()}`,
+        due_date: tomorrow(),
+      });
+    expect(create.status).toBe(200);
+    const created = create.body.data as { id: string; submissions_created: number };
     expect(created.submissions_created).toBeGreaterThan(0);
 
     const counted = await pool.query(
