@@ -420,41 +420,21 @@ router.post("/submissions/:id/submit", async (req: Request, res: Response) => {
     return;
   }
 
-  const id = String(req.params.id);
-  const [sub] = await db
-    .select({
-      id: homework_submissions.id,
-      student_id: homework_submissions.student_id,
-      status: homework_submissions.status,
-      due_date: homework_assignments.due_date,
-    })
-    .from(homework_submissions)
-    .innerJoin(homework_assignments, eq(homework_assignments.id, homework_submissions.assignment_id))
-    .where(and(eq(homework_submissions.id, id), isNull(homework_assignments.deleted_at)))
-    .limit(1);
-  if (!sub || !(await ownedStudentId(req, sub.student_id))) {
-    fail(res, 404, "ERR_NOT_FOUND", "Submission not found.");
-    return;
+  const { applyHomeworkSubmit, HomeworkSubmitError } = await import("../../services/homework-submit-sync");
+  try {
+    const data = await applyHomeworkSubmit({
+      actor: req.authUser!,
+      submissionId: String(req.params.id),
+      fileUrl: body.submission_url,
+    });
+    ok(res, { id: data.id, status: data.status });
+  } catch (err) {
+    if (err instanceof HomeworkSubmitError) {
+      fail(res, err.httpStatus, err.code, err.message);
+      return;
+    }
+    throw err;
   }
-
-  // A graded submission is locked: a student must not be able to overwrite it
-  // and clobber the awarded grade. Not-yet-graded states may still re-submit.
-  if (sub.status === "approved" || sub.status === "starred") {
-    fail(res, 409, "ERR_CONFLICT", "Submission already graded.");
-    return;
-  }
-
-  // due_date is a 'YYYY-MM-DD' string; compare against today (UTC date).
-  const today = new Date().toISOString().slice(0, 10);
-  const isLate = sub.due_date < today;
-  const nextStatus = isLate ? ("late" as const) : ("submitted" as const);
-
-  await db
-    .update(homework_submissions)
-    .set({ submission_url: body.submission_url, status: nextStatus, late: isLate })
-    .where(eq(homework_submissions.id, sub.id));
-
-  ok(res, { id: sub.id, status: nextStatus });
 });
 
 export default router;

@@ -3,6 +3,7 @@ import request from "supertest";
 import app from "../src/app";
 import { pool } from "@workspace/db";
 import { loginAs, auth } from "./helpers";
+import { ulid } from "../src/lib/ulid";
 
 afterAll(async () => {
   await pool.end(); // close the shared pg pool so vitest exits cleanly
@@ -441,5 +442,110 @@ describe("homework", () => {
         .set(auth(admin.token))
         .send({ action: "reactivate" });
     }
+  });
+
+  it("an offline homework op with a non-http url is rejected", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    const sync = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(parent.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: ulid(),
+            op_type: "homework_submission",
+            payload: {
+              submission_id: submissionId,
+              file_url: "javascript:alert(1)",
+            },
+            client_timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    expect(sync.status).toBe(200);
+    const result = sync.body.data.results[0];
+    expect(result.status).toBe("failed");
+    expect(result.error.code).toBe("ERR_VALIDATION_FAILED");
+  });
+
+  it("an offline homework op without a url does not erase an existing submission", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    const url = "https://example.com/keep-me.jpg";
+    const online = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: url });
+    expect(online.status).toBe(200);
+
+    const sync = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(parent.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: ulid(),
+            op_type: "homework_submission",
+            payload: { submission_id: submissionId },
+            client_timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    expect(sync.status).toBe(200);
+    expect(sync.body.data.results[0].status).toBe("success");
+
+    const feed = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}`)
+      .set(auth(parent.token));
+    const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
+    expect(row.submission_url).toBe(url);
+  });
+
+  it("the online route and the sync path produce the same row", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+
+    const onlineId = await freshSubmissionFor(admin.token, studentId);
+    const syncId = await freshSubmissionFor(admin.token, studentId);
+    const url = "https://example.com/parity.jpg";
+
+    const online = await request(app)
+      .post(`/v1/homework/submissions/${onlineId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: url });
+    expect(online.status).toBe(200);
+
+    const sync = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(parent.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: ulid(),
+            op_type: "homework_submission",
+            payload: { submission_id: syncId, file_url: url },
+            client_timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    expect(sync.status).toBe(200);
+    expect(sync.body.data.results[0].status).toBe("success");
+
+    const feed = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}`)
+      .set(auth(parent.token));
+    const onlineRow = feed.body.data.items.find((r: { id: string }) => r.id === onlineId);
+    const syncRow = feed.body.data.items.find((r: { id: string }) => r.id === syncId);
+    expect(onlineRow.status).toBe(syncRow.status);
+    expect(onlineRow.late).toBe(syncRow.late);
+    expect(onlineRow.submission_url).toBe(syncRow.submission_url);
   });
 });

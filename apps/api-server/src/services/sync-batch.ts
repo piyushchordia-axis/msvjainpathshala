@@ -366,7 +366,6 @@ async function handleHomeworkSubmission(
       student_id: z.string().uuid().optional(),
       payload: z.record(z.unknown()).optional(),
       file_url: z.string().optional(),
-      notes: z.string().optional(),
     })
     .parse(payload);
 
@@ -388,7 +387,6 @@ async function handleHomeworkSubmission(
       actor,
       submissionId,
       fileUrl: p.file_url,
-      notes: p.notes,
     });
     return {
       submission_op_id: submissionOpId,
