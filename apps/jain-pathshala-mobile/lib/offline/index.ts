@@ -6,6 +6,7 @@ export {
   enqueueCheckIn,
   enqueueAttendance,
   enqueueCheckOut,
+  enqueueHomeworkSubmission,
   drainQueues,
   retryOp,
   startSyncLoop,

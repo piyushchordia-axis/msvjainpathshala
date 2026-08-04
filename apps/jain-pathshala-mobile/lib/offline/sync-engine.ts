@@ -10,6 +10,7 @@ import type {
   PendingAttendanceOp,
   PendingCheckInOp,
   PendingCheckOutOp,
+  PendingHomeworkSubmissionOp,
   QueuedOp,
   SyncUiState,
 } from "./types";
@@ -100,6 +101,32 @@ export async function enqueueCheckOut(input: Omit<PendingCheckOutOp, "submission
     client_timestamp: new Date().toISOString(),
   };
   await enqueueOp(QUEUE_KEYS.checkout, {
+    submission_op_id,
+    payload,
+    state: "queued",
+    attempts: 0,
+    next_attempt_at: 0,
+    created_at: payload.client_timestamp,
+  });
+  return submission_op_id;
+}
+
+export async function enqueueHomeworkSubmission(input: {
+  assignment_id: string;
+  student_id: string;
+  submission_id?: string;
+  proof_asset_id?: string;
+}): Promise<string> {
+  const submission_op_id = ulid();
+  const payload: PendingHomeworkSubmissionOp = {
+    submission_op_id,
+    assignment_id: input.assignment_id,
+    student_id: input.student_id,
+    submission_id: input.submission_id,
+    proof_asset_id: input.proof_asset_id,
+    client_timestamp: new Date().toISOString(),
+  };
+  await enqueueOp(QUEUE_KEYS.homework_submissions, {
     submission_op_id,
     payload,
     state: "queued",

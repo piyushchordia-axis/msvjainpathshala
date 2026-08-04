@@ -542,10 +542,33 @@ export function useHomework(studentId?: string) {
 export function useSubmitHomework() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, submission_url }: { id: string; studentId: string; submission_url: string }) =>
-      apiPost<{ id: string; status: string }>(`/v1/homework/submissions/${id}/submit`, { submission_url }),
-    onSuccess: (_data, vars) => qc.invalidateQueries({ queryKey: qk.homework(vars.studentId) }),
-    onError: (err) => Alert.alert("Could not submit", err instanceof Error ? err.message : "Please try again."),
+    mutationFn: async ({
+      assignmentId,
+      studentId,
+      submissionId,
+      submission_url,
+    }: {
+      assignmentId: string;
+      studentId: string;
+      /** Optional back-compat — server resolves from assignment_id + student_id. */
+      submissionId?: string;
+      submission_url: string;
+    }) => {
+      const { enqueueHomeworkSubmission, drainQueues } = await import(
+        "@/lib/offline/sync-engine"
+      );
+      const submission_op_id = await enqueueHomeworkSubmission({
+        assignment_id: assignmentId,
+        student_id: studentId,
+        submission_id: submissionId,
+        proof_asset_id: submission_url,
+      });
+      // Best-effort immediate drain when online — /v1/sync/batch is the only transport.
+      await drainQueues();
+      return { submission_op_id, queued: true as const };
+    },
+    onSuccess: (_data, vars) =>
+      qc.invalidateQueries({ queryKey: qk.homework(vars.studentId) }),
   });
 }
 

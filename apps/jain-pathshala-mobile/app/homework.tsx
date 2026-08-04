@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { TextInput, View } from "react-native";
+import { Alert, TextInput, View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
@@ -34,9 +34,11 @@ function statusLabel(status: string, hi: boolean): string {
 
 /** Inline "submit work" form shown for items not yet approved/starred. */
 function SubmitForm({
+  assignmentId,
   submissionId,
   studentId,
 }: {
+  assignmentId: string;
   submissionId: string;
   studentId: string;
 }) {
@@ -92,11 +94,36 @@ function SubmitForm({
           style={{ flex: 1 }}
           onPress={() =>
             submit.mutate(
-              { id: submissionId, studentId, submission_url: trimmed },
               {
-                onSuccess: () => {
+                assignmentId,
+                submissionId,
+                studentId,
+                submission_url: trimmed,
+              },
+              {
+                onSuccess: (res) => {
                   setUrl("");
                   setOpen(false);
+                  // §8 vocabulary: enqueue always lands as queued; drain may move
+                  // it to syncing/synced/duplicate/conflict/failed asynchronously.
+                  if (res.queued) {
+                    Alert.alert(
+                      hi ? "ऑफ़लाइन सहेजा गया" : "Saved offline",
+                      hi
+                        ? "आपका गृहकार्य सहेज लिया गया है और समन्वयित होगा।"
+                        : "Your homework was saved and will sync.",
+                    );
+                  }
+                },
+                onError: (err) => {
+                  Alert.alert(
+                    hi ? "सहेजा नहीं जा सका" : "Could not save",
+                    err instanceof Error
+                      ? err.message
+                      : hi
+                        ? "फिर से प्रयास करें।"
+                        : "Please try again.",
+                  );
                 },
               },
             )
@@ -219,7 +246,11 @@ export default function HomeworkScreen() {
               ) : null}
 
               {canSubmit ? (
-                <SubmitForm submissionId={row.id} studentId={activeStudentId} />
+                <SubmitForm
+                  assignmentId={row.assignment_id}
+                  submissionId={row.id}
+                  studentId={activeStudentId}
+                />
               ) : null}
             </Card>
           );
