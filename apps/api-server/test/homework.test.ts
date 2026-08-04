@@ -1961,4 +1961,239 @@ describe("homework", () => {
     expect(create.status).toBe(200);
     expect(create.body.data.id).toBeTruthy();
   });
+
+  it("two simultaneous grade requests award Punya exactly once", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    const submit = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/concurrent-grade.jpg" });
+    expect(submit.status).toBe(200);
+
+    const before = await totalPunya(parent.token, studentId);
+
+    const [a, b] = await Promise.all([
+      request(app)
+        .post(`/v1/homework/submissions/${submissionId}/grade`)
+        .set(auth(admin.token))
+        .send({ status: "approved", feedback_note: "a" }),
+      request(app)
+        .post(`/v1/homework/submissions/${submissionId}/grade`)
+        .set(auth(admin.token))
+        .send({ status: "approved", feedback_note: "b" }),
+    ]);
+
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(200);
+    // Both responses see the same final balance — only one claim awarded.
+    expect(a.body.data.total_points).toBe(b.body.data.total_points);
+    expect(a.body.data.total_points).toBeGreaterThan(before);
+
+    const after = await totalPunya(parent.token, studentId);
+    expect(after).toBe(a.body.data.total_points);
+
+    const awards = await pool.query<{ n: string; pts: string }>(
+      `select count(*)::text as n, coalesce(sum(points), 0)::text as pts
+         from punya_transactions
+        where source_entity_id = $1
+          and source_entity_kind = 'homework'
+          and points > 0
+          and idempotency_key not like '%:reversal'`,
+      [submissionId],
+    );
+    expect(Number(awards.rows[0]!.n)).toBe(1);
+    expect(after - before).toBe(Number(awards.rows[0]!.pts));
+  });
+
+  it("target_student_ids creates submissions only for the listed students", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const children = await request(app).get("/v1/me/children").set(auth(parent.token));
+    const kids: Array<{ id: string; batch_id?: string }> = children.body.data.items;
+    const aarav = kids[0];
+    const diya = kids[1];
+    expect(aarav).toBeTruthy();
+    expect(diya).toBeTruthy();
+
+    const batchId = await studentBatchId(aarav!.id);
+    // Diya shares Aarav's batch in seed — listing only Aarav must exclude Diya.
+    const diyaBatch = await studentBatchId(diya!.id);
+    expect(diyaBatch).toBe(batchId);
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `Subset HW ${Date.now()}`,
+        due_date: tomorrow(),
+        target_student_ids: [aarav!.id],
+      });
+    expect(create.status).toBe(200);
+    expect(create.body.data.submissions_created).toBe(1);
+
+    const subs = await request(app)
+      .get(`/v1/homework/assignments/${create.body.data.id}/submissions`)
+      .set(auth(admin.token));
+    expect(subs.status).toBe(200);
+    const ids = (subs.body.data.items as Array<{ student_id: string }>).map((s) => s.student_id);
+    expect(ids).toEqual([aarav!.id]);
+  });
+
+  it("a student id not active in the batch is rejected with 422", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const batchId = await studentBatchId(studentId);
+
+    // Pune student is active, but not in this Mumbai batch.
+    const pune = await pool.query<{ id: string }>(
+      `select id from students where student_code = 'STU000004' limit 1`,
+    );
+    expect(pune.rows[0]).toBeTruthy();
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `Bad target ${Date.now()}`,
+        due_date: tomorrow(),
+        target_student_ids: [pune.rows[0]!.id],
+      });
+    expect(create.status).toBe(422);
+    expect(create.body.error.code).toBe("ERR_VALIDATION_FAILED");
+  });
+
+  it("a city_admin cannot grade a submission outside their city", async () => {
+    const admin = await loginAs("super_admin");
+    const cityAdmin = await loginAs("city_admin"); // Mumbai
+
+    const pune = await pool.query<{ id: string; batch_id: string }>(
+      `select id, batch_id from students where student_code = 'STU000004' limit 1`,
+    );
+    expect(pune.rows[0]?.batch_id).toBeTruthy();
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: pune.rows[0]!.batch_id,
+        title: `Pune HW ${Date.now()}`,
+        due_date: tomorrow(),
+        target_student_ids: [pune.rows[0]!.id],
+      });
+    expect(create.status).toBe(200);
+
+    const planted = await pool.query<{ id: string }>(
+      `update homework_submissions
+          set status = 'submitted',
+              submission_url = 'https://example.com/pune.jpg'
+        where assignment_id = $1 and student_id = $2
+      returning id`,
+      [create.body.data.id, pune.rows[0]!.id],
+    );
+    const submissionId = planted.rows[0]!.id;
+
+    const denied = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(cityAdmin.token))
+      .send({ status: "approved" });
+    expect(denied.status).toBe(404);
+    expect(denied.body.error.code).toBe("ERR_NOT_FOUND");
+
+    const allowed = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(admin.token))
+      .send({ status: "approved" });
+    expect(allowed.status).toBe(200);
+  });
+
+  it("a sanchalak can grade across every batch at their assigned centre", async () => {
+    const admin = await loginAs("super_admin");
+    const sanchalak = await loginAs("sanchalak");
+    const shikshak = await loginAs("shikshak");
+
+    const allBatches = await request(app).get("/v1/admin/batches").set(auth(admin.token));
+    const batchList: Array<{ id: string; name: string }> = allBatches.body.data.items;
+
+    // Batch at the sanchalak's centre that the seeded shikshak is NOT assigned to.
+    const outsider = batchList.find((b) => b.name === "Tarun Batch - Unassigned Scope Fixture");
+    expect(outsider).toBeTruthy();
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: outsider!.id,
+        title: `Centre-wide HW ${Date.now()}`,
+        due_date: tomorrow(),
+      });
+    expect(create.status).toBe(200);
+
+    // Plant a submitted row — fixture batch may have no roster students.
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const planted = await pool.query<{ id: string }>(
+      `insert into homework_submissions (assignment_id, student_id, status, submission_url)
+       values ($1, $2, 'submitted', 'https://example.com/sanchalak-scope.jpg')
+       on conflict (assignment_id, student_id) do update
+         set status = 'submitted',
+             submission_url = excluded.submission_url
+       returning id`,
+      [create.body.data.id, studentId],
+    );
+    const submissionId = planted.rows[0]!.id;
+
+    const asShikshak = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved" });
+    expect(asShikshak.status).toBe(404);
+
+    const asSanchalak = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(sanchalak.token))
+      .send({ status: "approved" });
+    expect(asSanchalak.status).toBe(200);
+    expect(asSanchalak.body.data.status).toBe("approved");
+  });
+
+  it("an assignment for a batch with no active students creates zero submissions and still returns 200", async () => {
+    const admin = await loginAs("super_admin");
+    const emptyBatch = await pool.query<{ id: string }>(
+      `insert into batches (centre_id, name, age_groups, day_of_week, start_time, end_time, capacity, status)
+       select centre_id, $1, array['bal']::age_group_enum[], array[6]::integer[], '10:00', '11:00', 20, 'active'
+         from batches where deleted_at is null limit 1
+       returning id`,
+      [`Empty roster ${Date.now()}`],
+    );
+    const emptyBatchId = emptyBatch.rows[0]!.id;
+
+    try {
+      const create = await request(app)
+        .post("/v1/homework/assignments")
+        .set(auth(admin.token))
+        .send({
+          batch_id: emptyBatchId,
+          title: `Empty batch HW ${Date.now()}`,
+          due_date: tomorrow(),
+        });
+      expect(create.status).toBe(200);
+      expect(create.body.data.submissions_created).toBe(0);
+      expect(create.body.data.id).toBeTruthy();
+
+      const counted = await pool.query<{ n: string }>(
+        `select count(*)::text as n from homework_submissions where assignment_id = $1`,
+        [create.body.data.id],
+      );
+      expect(Number(counted.rows[0]!.n)).toBe(0);
+    } finally {
+      await pool.query(`update batches set deleted_at = now() where id = $1`, [emptyBatchId]);
+    }
+  });
 });
