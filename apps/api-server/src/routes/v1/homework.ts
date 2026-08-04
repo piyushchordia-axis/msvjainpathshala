@@ -47,6 +47,11 @@ function isPastDueDate(dueDate: string): boolean {
   return dueDate < kolkataDateString(new Date());
 }
 
+/** Derived — never stored. Pending past due_date (Kolkata); distinct from `late`. */
+function isOverdueHomework(dueDate: string, status: string, today = kolkataDateString(new Date())): boolean {
+  return status === "pending" && dueDate < today;
+}
+
 /** Keyset cursor: `value|uuid` base64url — matches admin niyam-submissions. */
 function encodeKeysetCursor(value: string, id: string): string {
   return Buffer.from(`${value}|${id}`, "utf8").toString("base64url");
@@ -567,6 +572,20 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
   if (typeof batchId === "string" && UUID_RE.test(batchId)) {
     filters.push(eq(homework_assignments.batch_id, batchId));
   }
+  const todayKolkata = kolkataDateString(new Date());
+  const overdueOnly =
+    req.query.overdue === "1" ||
+    req.query.overdue === "true" ||
+    req.query.overdue === "yes";
+  if (overdueOnly) {
+    // Assignments past due that still have at least one pending submission.
+    filters.push(sql`${homework_assignments.due_date} < ${todayKolkata}`);
+    filters.push(sql`exists (
+      select 1 from homework_submissions hs
+      where hs.assignment_id = ${homework_assignments.id}
+        and hs.status = 'pending'
+    )`);
+  }
   if (cursor) {
     const cursorAt = new Date(cursor.value);
     filters.push(
@@ -601,7 +620,10 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
   const page = hasMore ? pageRows.slice(0, limit) : pageRows;
 
   // Counts only for the limited page (LATERAL), not a national GROUP BY then LIMIT.
-  const countById = new Map<string, { total: number; submitted: number; graded: number }>();
+  const countById = new Map<
+    string,
+    { total: number; submitted: number; graded: number; overdue: number }
+  >();
   if (page.length > 0) {
     const idArray = sql`array[${sql.join(
       page.map((r) => sql`${r.id}::uuid`),
@@ -612,7 +634,8 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
         ha.id,
         coalesce(cnt.total, 0)::int as total,
         coalesce(cnt.submitted, 0)::int as submitted,
-        coalesce(cnt.graded, 0)::int as graded
+        coalesce(cnt.graded, 0)::int as graded,
+        coalesce(cnt.overdue, 0)::int as overdue
       from unnest(${idArray}) as ha(id)
       left join lateral (
         select
@@ -622,21 +645,38 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
           )::int as submitted,
           count(*) filter (
             where hs.status in ('approved', 'starred')
-          )::int as graded
+          )::int as graded,
+          count(*) filter (
+            where hs.status = 'pending'
+              and (select due_date from homework_assignments where id = ha.id) < ${todayKolkata}
+          )::int as overdue
         from homework_submissions hs
         where hs.assignment_id = ha.id
       ) cnt on true
     `);
     const countRows =
       (countResult as unknown as {
-        rows?: Array<{ id: string; total: number; submitted: number; graded: number }>;
+        rows?: Array<{
+          id: string;
+          total: number;
+          submitted: number;
+          graded: number;
+          overdue: number;
+        }>;
       }).rows ??
-      (countResult as unknown as Array<{ id: string; total: number; submitted: number; graded: number }>);
+      (countResult as unknown as Array<{
+        id: string;
+        total: number;
+        submitted: number;
+        graded: number;
+        overdue: number;
+      }>);
     for (const r of countRows) {
       countById.set(r.id, {
         total: Number(r.total),
         submitted: Number(r.submitted),
         graded: Number(r.graded),
+        overdue: Number(r.overdue),
       });
     }
   }
@@ -646,7 +686,7 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
     hasMore && last ? encodeKeysetCursor(last.created_at.toISOString(), last.id) : null;
 
   const items = page.map((r) => {
-    const counts = countById.get(r.id) ?? { total: 0, submitted: 0, graded: 0 };
+    const counts = countById.get(r.id) ?? { total: 0, submitted: 0, graded: 0, overdue: 0 };
     return {
       ...r,
       ...counts,
@@ -1388,11 +1428,15 @@ router.get("/mine", async (req: Request, res: Response) => {
   const nextCursor =
     hasMore && last ? encodeKeysetCursor(last.due_date, last.id) : null;
 
+  const today = kolkataDateString(new Date());
   const items = page.map((r) => ({
     ...r,
+    overdue: isOverdueHomework(r.due_date, r.status, today),
     attachment_url: signUploadUrl(r.attachment_url),
     submission_url: signUploadUrl(r.submission_url),
   }));
+  // Overdue first within the page (derived; not a stored status).
+  items.sort((a, b) => Number(b.overdue) - Number(a.overdue));
   ok(res, { items }, { count: items.length, has_more: hasMore, next_cursor: nextCursor });
 });
 

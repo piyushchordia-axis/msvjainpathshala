@@ -533,6 +533,7 @@ export interface HomeworkRow {
   submission_url: string | null;
   feedback_note: string | null;
   late: boolean;
+  overdue?: boolean;
 }
 export function useHomework(studentId?: string) {
   return useQuery({
@@ -552,6 +553,8 @@ export function useHomework(studentId?: string) {
         cursor = typeof next === "string" && next.length > 0 ? next : null;
         guard += 1;
       } while (cursor && guard < 50);
+      // Overdue first across the full feed (F11).
+      collected.sort((a, b) => Number(!!b.overdue) - Number(!!a.overdue));
       return { items: collected } satisfies List<HomeworkRow>;
     },
     enabled: !!studentId,

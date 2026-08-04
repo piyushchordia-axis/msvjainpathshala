@@ -312,6 +312,12 @@ export default function HomeworkScreen() {
                 </Row>
               ) : null}
 
+              {row.overdue ? (
+                <Row style={{ marginTop: 10 }}>
+                  <Pill label={hi ? "समय समाप्त" : "Overdue"} tone="error" />
+                </Row>
+              ) : null}
+
               {row.attachment_url ? (
                 <Button
                   label={hi ? "कार्यपत्रक खोलें" : "Open worksheet"}

@@ -2765,4 +2765,78 @@ describe("homework", () => {
     // One award (+ maybe unrelated history); at least the revision-scoped key once.
     expect(Number(awards.rows[0]!.n)).toBeGreaterThanOrEqual(1);
   });
+
+  /* ─── F11 — overdue visibility ─── */
+
+  it("the assignment list reports an overdue count", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const { assignmentId } = await freshAssignmentTargeting(admin.token, studentId);
+
+    await pool.query(`update homework_assignments set due_date = '2020-01-01' where id = $1`, [
+      assignmentId,
+    ]);
+
+    const list = await request(app)
+      .get("/v1/homework/assignments?limit=100")
+      .set(auth(admin.token));
+    expect(list.status).toBe(200);
+    const row = list.body.data.items.find((a: { id: string }) => a.id === assignmentId);
+    expect(row).toBeTruthy();
+    expect(row.overdue).toBeGreaterThan(0);
+
+    const filtered = await request(app)
+      .get("/v1/homework/assignments?limit=100&overdue=1")
+      .set(auth(admin.token));
+    expect(filtered.status).toBe(200);
+    expect(filtered.body.data.items.some((a: { id: string }) => a.id === assignmentId)).toBe(true);
+  });
+
+  it("the student feed flags overdue items", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const { assignmentId, submissionId } = await freshAssignmentTargeting(admin.token, studentId);
+
+    await pool.query(`update homework_assignments set due_date = '2020-01-01' where id = $1`, [
+      assignmentId,
+    ]);
+
+    const feed = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=50`)
+      .set(auth(parent.token));
+    expect(feed.status).toBe(200);
+    const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
+    expect(row).toBeTruthy();
+    expect(row.overdue).toBe(true);
+    expect(row.status).toBe("pending");
+  });
+
+  it("an overdue item that is later submitted is marked late, not overdue", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const { assignmentId, submissionId } = await freshAssignmentTargeting(admin.token, studentId);
+
+    await pool.query(`update homework_assignments set due_date = '2020-01-01' where id = $1`, [
+      assignmentId,
+    ]);
+
+    const submit = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
+    expect(submit.status).toBe(200);
+    expect(submit.body.data.status).toBe("late");
+    expect(submit.body.data.late).toBe(true);
+
+    const feed = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=50`)
+      .set(auth(parent.token));
+    const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
+    expect(row.overdue).toBe(false);
+    expect(row.late).toBe(true);
+    expect(row.status).toBe("late");
+  });
 });

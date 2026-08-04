@@ -60,6 +60,7 @@ interface AssignmentRow {
   total: number;
   submitted: number;
   graded: number;
+  overdue: number;
 }
 
 interface BatchOption { id: string; name: string | null; centre_name: string; }
@@ -650,22 +651,38 @@ function SubmissionsDialog({ assignment }: { assignment: AssignmentRow }) {
 }
 
 export default function HomeworkPage() {
-  const { items, loading, error, reload } = useAdminList<AssignmentRow>('/v1/homework/assignments?limit=100');
+  const [overdueOnly, setOverdueOnly] = useState(false);
+  const listPath = overdueOnly
+    ? '/v1/homework/assignments?limit=100&overdue=1'
+    : '/v1/homework/assignments?limit=100';
+  const { items, loading, error, reload } = useAdminList<AssignmentRow>(listPath, [overdueOnly]);
 
   return (
     <AdminPageShell
       title="Homework"
       subtitle="Assignments across your batches, with submission progress."
-      actions={<NewAssignmentDialog onAdded={reload} />}
+      actions={
+        <div className="flex items-center gap-3">
+          <label className="flex items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={overdueOnly}
+              onChange={(e) => setOverdueOnly(e.target.checked)}
+            />
+            Overdue only
+          </label>
+          <NewAssignmentDialog onAdded={reload} />
+        </div>
+      }
     >
       {error ? <AdminError message={error} /> : null}
       <AdminTable
-        columns={['Assignment', 'Batch', 'Due', 'Submitted', 'Graded', 'Actions']}
+        columns={['Assignment', 'Batch', 'Due', 'Submitted', 'Graded', 'Overdue', 'Actions']}
         loading={loading}
         empty=""
-        colSpan={6}
+        colSpan={7}
       >
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={6} message="No homework assigned yet." /> : null}
+        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={7} message="No homework assigned yet." /> : null}
         {items.map((a) => (
           <tr key={a.id} className="hover:bg-muted/30">
             <td className="px-4 py-3 font-medium">
@@ -693,6 +710,13 @@ export default function HomeworkPage() {
             <td className="px-4 py-3 text-xs text-muted-foreground">{fmtDate(a.due_date)}</td>
             <td className="px-4 py-3 text-xs">{a.submitted}/{a.total}</td>
             <td className="px-4 py-3 text-xs">{a.graded}/{a.total}</td>
+            <td className="px-4 py-3 text-xs">
+              {(a.overdue ?? 0) > 0 ? (
+                <span className="font-semibold text-rose-700">{a.overdue}</span>
+              ) : (
+                '0'
+              )}
+            </td>
             <td className="px-4 py-3">
               <div className="flex items-center gap-1">
                 <SubmissionsDialog assignment={a} />
