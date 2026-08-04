@@ -183,6 +183,13 @@
       "when": 1787827200000,
       "tag": "0025_homework_submissions_student_status_idx",
       "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1787913600000,
+      "tag": "0026_homework_completion_rate",
+      "breakpoints": true
     }
   ]
 }

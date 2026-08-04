@@ -281,6 +281,58 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
   void msv_enrolments;
 });
 
+/**
+ * GET /v1/admin/analytics/engagement-trend?months=6
+ * Monthly attendance + homework completion from mv_centre_engagement (F4).
+ * Scope-aggregated: average of centre rates in scope per month.
+ */
+router.get("/analytics/engagement-trend", async (req: Request, res: Response) => {
+  const scope = await resolveAdminScope(req.authUser!);
+  const monthsRaw = Number(req.query.months ?? 6);
+  const months = Number.isFinite(monthsRaw) ? Math.min(24, Math.max(1, Math.floor(monthsRaw))) : 6;
+
+  const centresSql =
+    scope.centreIds === null
+      ? sql`null::uuid[]`
+      : sql`array[${sql.join(
+          scope.centreIds.map((id) => sql`${id}::uuid`),
+          sql`, `,
+        )}]::uuid[]`;
+
+  const result = await db.execute(sql`
+    select
+      month::text as month,
+      avg(attendance_rate)::float8 as attendance_rate,
+      avg(homework_completion_rate)::float8 as homework_completion_rate
+    from mv_centre_engagement
+    where (${centresSql} is null or centre_id = any(${centresSql}))
+      and month >= (date_trunc('month', (now() at time zone 'Asia/Kolkata'))::date
+                    - ((${months}::int - 1) * interval '1 month'))::date
+    group by month
+    order by month asc
+  `);
+  const rows =
+    (result as unknown as {
+      rows?: Array<{
+        month: string;
+        attendance_rate: number | null;
+        homework_completion_rate: number | null;
+      }>;
+    }).rows ?? [];
+
+  ok(res, {
+    items: rows.map((r) => ({
+      month: String(r.month).slice(0, 10),
+      attendance_rate:
+        r.attendance_rate == null ? null : Math.round(Number(r.attendance_rate) * 1000) / 10,
+      homework_completion_rate:
+        r.homework_completion_rate == null
+          ? null
+          : Math.round(Number(r.homework_completion_rate) * 1000) / 10,
+    })),
+  }, { count: rows.length });
+});
+
 /* GET /v1/admin/students?limit= */
 router.get("/students", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
