@@ -16,17 +16,16 @@
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, homework_assignments, homework_submissions, batches, centres, students, punya_balances } from "@workspace/db";
-import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
-import type { PgColumn } from "drizzle-orm/pg-core";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
 import { signUploadUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
-import { resolveAdminScope, inBatchWriteScope, type AdminScope } from "../../lib/scope";
+import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
 import { awardPunya } from "../../lib/punya";
 import { auditFromReq } from "../../lib/audit";
-import { clampLimit, scopedCentreFilter } from "../../lib/route-helpers";
+import { clampLimit, ownedStudentId, scopedCentreFilter } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -35,18 +34,6 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** Base punya points for an approved homework; starred gets a 20% bonus. */
 const POINTS = 10;
-
-
-/** Resolve a student the caller owns (parent of, or is, that student). */
-async function ownedStudentId(req: Request, id: string): Promise<string | null> {
-  const uid = req.authUser!.id;
-  const [row] = await db
-    .select({ id: students.id })
-    .from(students)
-    .where(and(eq(students.id, id), or(eq(students.parent_id, uid), eq(students.user_id, uid))))
-    .limit(1);
-  return row?.id ?? null;
-}
 
 /* ═══════════════════════════ Admin / shikshak ═══════════════════════════ */
 

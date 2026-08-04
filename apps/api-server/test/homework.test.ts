@@ -358,4 +358,57 @@ describe("homework", () => {
       expect(assignedIds.has(item.batch_id)).toBe(true);
     }
   });
+
+  it("a deactivated student's homework feed returns 404", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+
+    try {
+      const deact = await request(app)
+        .post(`/v1/admin/students/${studentId}/status`)
+        .set(auth(admin.token))
+        .send({ action: "deactivate" });
+      expect(deact.status).toBe(200);
+      expect(deact.body.data.status).toBe("inactive");
+
+      const feed = await request(app)
+        .get(`/v1/homework/mine?student_id=${studentId}`)
+        .set(auth(parent.token));
+      expect(feed.status).toBe(404);
+      expect(feed.body.error.code).toBe("ERR_NOT_FOUND");
+    } finally {
+      await request(app)
+        .post(`/v1/admin/students/${studentId}/status`)
+        .set(auth(admin.token))
+        .send({ action: "reactivate" });
+    }
+  });
+
+  it("a deactivated student cannot submit homework", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    try {
+      const deact = await request(app)
+        .post(`/v1/admin/students/${studentId}/status`)
+        .set(auth(admin.token))
+        .send({ action: "deactivate" });
+      expect(deact.status).toBe(200);
+
+      const submit = await request(app)
+        .post(`/v1/homework/submissions/${submissionId}/submit`)
+        .set(auth(parent.token))
+        .send({ submission_url: "https://example.com/after-deactivate.jpg" });
+      expect(submit.status).toBe(404);
+      expect(submit.body.error.code).toBe("ERR_NOT_FOUND");
+    } finally {
+      await request(app)
+        .post(`/v1/admin/students/${studentId}/status`)
+        .set(auth(admin.token))
+        .send({ action: "reactivate" });
+    }
+  });
 });
