@@ -1859,4 +1859,90 @@ describe("homework", () => {
     expect(page2.body.meta?.has_more).toBeDefined();
     expect(typeof page2.body.meta.has_more).toBe("boolean");
   });
+
+  it("the counts are identical before and after", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+
+    // Assignment with a normal fan-out (pending rows).
+    const withSubs = await freshAssignmentTargeting(admin.token, studentId);
+
+    // Submit + grade one so submitted/graded are non-zero.
+    const submit = await request(app)
+      .post(`/v1/homework/submissions/${withSubs.submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/hw-counts.pdf" });
+    expect(submit.status).toBe(200);
+    const grade = await request(app)
+      .post(`/v1/homework/submissions/${withSubs.submissionId}/grade`)
+      .set(auth(admin.token))
+      .send({ status: "approved", feedback_note: "ok" });
+    expect(grade.status).toBe(200);
+
+    // Zero-submission case: assignment on an empty batch (LEFT JOIN / LATERAL
+    // must both report total=0, not drop the row).
+    const emptyBatch = await pool.query<{ id: string }>(
+      `insert into batches (centre_id, name, age_groups, day_of_week, start_time, end_time, capacity, status)
+       select centre_id, $1, array['bal']::age_group_enum[], array[6]::integer[], '10:00', '11:00', 20, 'active'
+         from batches where deleted_at is null limit 1
+       returning id`,
+      [`Empty HW batch ${Date.now()}`],
+    );
+    const emptyBatchId = emptyBatch.rows[0]!.id;
+    const zero = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: emptyBatchId,
+        title: `Zero-sub ${Date.now()}`,
+        due_date: tomorrow(),
+      });
+    expect(zero.status).toBe(200);
+    const zeroId = zero.body.data.id as string;
+
+    // Ground truth — same FILTER semantics the list endpoint must preserve.
+    const expected = await pool.query<{
+      id: string;
+      total: number;
+      submitted: number;
+      graded: number;
+    }>(
+      `select ha.id,
+              count(hs.id)::int as total,
+              count(hs.id) filter (where hs.status in ('submitted','approved','starred','late'))::int as submitted,
+              count(hs.id) filter (where hs.status in ('approved','starred'))::int as graded
+         from homework_assignments ha
+         left join homework_submissions hs on hs.assignment_id = ha.id
+        where ha.id = any($1::uuid[])
+        group by ha.id`,
+      [[withSubs.assignmentId, zeroId]],
+    );
+    const byId = new Map(expected.rows.map((r) => [r.id, r]));
+
+    const list = await request(app)
+      .get(`/v1/homework/assignments?limit=200`)
+      .set(auth(admin.token));
+    expect(list.status).toBe(200);
+    const items: Array<{ id: string; total: number; submitted: number; graded: number }> =
+      list.body.data.items;
+
+    const gotWith = items.find((r) => r.id === withSubs.assignmentId);
+    const gotZero = items.find((r) => r.id === zeroId);
+    expect(gotWith).toBeTruthy();
+    expect(gotZero).toBeTruthy();
+
+    const expWith = byId.get(withSubs.assignmentId)!;
+    const expZero = byId.get(zeroId)!;
+    expect(Number(gotWith!.total)).toBe(Number(expWith.total));
+    expect(Number(gotWith!.submitted)).toBe(Number(expWith.submitted));
+    expect(Number(gotWith!.graded)).toBe(Number(expWith.graded));
+    expect(Number(gotZero!.total)).toBe(0);
+    expect(Number(gotZero!.submitted)).toBe(0);
+    expect(Number(gotZero!.graded)).toBe(0);
+    expect(Number(expZero.total)).toBe(0);
+
+    await pool.query(`update homework_assignments set deleted_at = now() where id = $1`, [zeroId]);
+    await pool.query(`update batches set deleted_at = now() where id = $1`, [emptyBatchId]);
+  });
 });

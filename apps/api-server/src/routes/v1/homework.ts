@@ -458,7 +458,7 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
     );
   }
 
-  const rows = await db
+  const pageRows = await db
     .select({
       id: homework_assignments.id,
       title: homework_assignments.title,
@@ -470,28 +470,70 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
       batch_name: batches.name,
       centre_name: centres.name,
       created_at: homework_assignments.created_at,
-      total: sql<number>`count(${homework_submissions.id})::int`,
-      // pending cannot become approved/starred (grade route rejects it), so this
-      // filter stays accurate without listing pending separately.
-      submitted: sql<number>`count(${homework_submissions.id}) filter (where ${homework_submissions.status} in ('submitted','approved','starred','late'))::int`,
-      graded: sql<number>`count(${homework_submissions.id}) filter (where ${homework_submissions.status} in ('approved','starred'))::int`,
     })
     .from(homework_assignments)
     .innerJoin(batches, eq(batches.id, homework_assignments.batch_id))
     .innerJoin(centres, eq(centres.id, batches.centre_id))
-    .leftJoin(homework_submissions, eq(homework_submissions.assignment_id, homework_assignments.id))
     .where(and(...filters))
-    .groupBy(homework_assignments.id, batches.name, centres.name)
     .orderBy(desc(homework_assignments.created_at), desc(homework_assignments.id))
     .limit(limit + 1);
 
-  const hasMore = rows.length > limit;
-  const page = hasMore ? rows.slice(0, limit) : rows;
+  const hasMore = pageRows.length > limit;
+  const page = hasMore ? pageRows.slice(0, limit) : pageRows;
+
+  // Counts only for the limited page (LATERAL), not a national GROUP BY then LIMIT.
+  const countById = new Map<string, { total: number; submitted: number; graded: number }>();
+  if (page.length > 0) {
+    const idArray = sql`array[${sql.join(
+      page.map((r) => sql`${r.id}::uuid`),
+      sql`, `,
+    )}]::uuid[]`;
+    const countResult = await db.execute(sql`
+      select
+        ha.id,
+        coalesce(cnt.total, 0)::int as total,
+        coalesce(cnt.submitted, 0)::int as submitted,
+        coalesce(cnt.graded, 0)::int as graded
+      from unnest(${idArray}) as ha(id)
+      left join lateral (
+        select
+          count(*)::int as total,
+          count(*) filter (
+            where hs.status in ('submitted', 'approved', 'starred', 'late')
+          )::int as submitted,
+          count(*) filter (
+            where hs.status in ('approved', 'starred')
+          )::int as graded
+        from homework_submissions hs
+        where hs.assignment_id = ha.id
+      ) cnt on true
+    `);
+    const countRows =
+      (countResult as unknown as {
+        rows?: Array<{ id: string; total: number; submitted: number; graded: number }>;
+      }).rows ??
+      (countResult as unknown as Array<{ id: string; total: number; submitted: number; graded: number }>);
+    for (const r of countRows) {
+      countById.set(r.id, {
+        total: Number(r.total),
+        submitted: Number(r.submitted),
+        graded: Number(r.graded),
+      });
+    }
+  }
+
   const last = page[page.length - 1];
   const nextCursor =
     hasMore && last ? encodeKeysetCursor(last.created_at.toISOString(), last.id) : null;
 
-  const items = page.map((r) => ({ ...r, created_at: r.created_at.toISOString() }));
+  const items = page.map((r) => {
+    const counts = countById.get(r.id) ?? { total: 0, submitted: 0, graded: 0 };
+    return {
+      ...r,
+      ...counts,
+      created_at: r.created_at.toISOString(),
+    };
+  });
   ok(res, { items }, { count: items.length, has_more: hasMore, next_cursor: nextCursor });
 });
 
