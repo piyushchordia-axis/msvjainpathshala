@@ -29,9 +29,9 @@ export function useAdminList<T>(path: string, deps: unknown[] = []) {
       let cursor: string | null = null;
       let guard = 0;
       do {
-        const envelope = await get<ListEnvelope<T>>(withCursor(path, cursor));
+        const envelope: ListEnvelope<T> = await get<ListEnvelope<T>>(withCursor(path, cursor));
         collected.push(...(envelope.data?.items ?? []));
-        const next = envelope.meta?.next_cursor;
+        const next: string | null | undefined = envelope.meta?.next_cursor;
         cursor = typeof next === 'string' && next.length > 0 ? next : null;
         guard += 1;
       } while (cursor && guard < 50);
