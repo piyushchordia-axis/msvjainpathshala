@@ -11,6 +11,7 @@ import {
   curriculum_items,
   online_exams,
   exam_attempts,
+  exam_questions,
   students,
   donation_campaigns,
   donations,
@@ -25,6 +26,7 @@ import {
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
+import { canAdministerExams } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
@@ -32,6 +34,7 @@ import { resolveAdminScope, cityIdsForState } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { clampLimit } from "../../lib/route-helpers";
 import { validateNiyamPointsBounds } from "../../lib/niyam-points";
+import { generateExamAccessCode, hashOtpCode } from "../../lib/tokens";
 
 const router: IRouter = Router();
 router.use(requireAuth, requireAdminPanel);
@@ -161,6 +164,7 @@ router.get("/exams", async (req: Request, res: Response) => {
       window_start: online_exams.window_start,
       window_end: online_exams.window_end,
       exam_otp: online_exams.exam_otp,
+      exam_otp_hash: online_exams.exam_otp_hash,
       results_released: online_exams.results_released,
       total_marks: online_exams.total_marks,
       pass_mark: online_exams.pass_mark,
@@ -174,31 +178,49 @@ router.get("/exams", async (req: Request, res: Response) => {
     .orderBy(desc(online_exams.window_start))
     .limit(limit);
 
-  const items = rows.map((r) => ({
-    ...r,
-    window_start: r.window_start.toISOString(),
-    window_end: r.window_end.toISOString(),
-  }));
+  const showOtp = canAdministerExams(req.authUser!.role);
+  const items = rows.map((r) => {
+    const requires_otp = !!(r.exam_otp_hash || (r.exam_otp && r.exam_otp.length > 0));
+    const base = {
+      id: r.id,
+      title_en: r.title_en,
+      city_name: r.city_name,
+      window_start: r.window_start.toISOString(),
+      window_end: r.window_end.toISOString(),
+      results_released: r.results_released,
+      total_marks: r.total_marks,
+      pass_mark: r.pass_mark,
+      attempt_count: r.attempt_count,
+    };
+    if (showOtp) {
+      // Plaintext only for legacy rows; hashed codes are never readable again.
+      return { ...base, exam_otp: r.exam_otp, requires_otp };
+    }
+    return { ...base, requires_otp };
+  });
   ok(res, { items }, { count: items.length });
 });
 
 /* POST /v1/admin/exams/:id/release-results */
-router.post("/exams/:id/release-results", async (req: Request, res: Response) => {
-  const cityIds = await cityIdsForUser(req.authUser!);
-  const id = String(req.params.id);
-  if (!isUuid(id)) {
-    fail(res, 404, "ERR_NOT_FOUND", "Exam not found.");
-    return;
-  }
-  const [exam] = await db.select().from(online_exams).where(eq(online_exams.id, id)).limit(1);
-  if (!exam || (cityIds !== null && !cityIds.includes(exam.city_id))) {
-    fail(res, 404, "ERR_NOT_FOUND", "Exam not found.");
-    return;
-  }
-  await db.update(online_exams).set({ results_released: true }).where(eq(online_exams.id, id));
-  ok(res, { id, results_released: true });
-});
-
+router.post(
+  "/exams/:id/release-results",
+  requireRole("super_admin", "state_admin", "city_admin"),
+  async (req: Request, res: Response) => {
+    const cityIds = await cityIdsForUser(req.authUser!);
+    const id = String(req.params.id);
+    if (!isUuid(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Exam not found.");
+      return;
+    }
+    const [exam] = await db.select().from(online_exams).where(eq(online_exams.id, id)).limit(1);
+    if (!exam || (cityIds !== null && !cityIds.includes(exam.city_id))) {
+      fail(res, 404, "ERR_NOT_FOUND", "Exam not found.");
+      return;
+    }
+    await db.update(online_exams).set({ results_released: true }).where(eq(online_exams.id, id));
+    ok(res, { id, results_released: true });
+  },
+);
 /* GET /v1/admin/exams/:id/attempts */
 router.get("/exams/:id/attempts", async (req: Request, res: Response) => {
   const cityIds = await cityIdsForUser(req.authUser!);
@@ -344,28 +366,59 @@ router.post("/curricula", requireRole("super_admin", "state_admin", "city_admin"
   ok(res, row);
 });
 
-const createExamSchema = z.object({
-  title_en: z.string().min(1).max(500),
-  title_hi: z.string().max(500).optional(),
-  city_id: z.string().uuid(),
-  window_start: z.string().datetime(),
-  window_end: z.string().datetime(),
-  total_marks: z.coerce.number().int().min(1).default(100),
-  pass_mark: z.coerce.number().int().min(0).default(40),
-  max_attempts: z.coerce.number().int().min(1).default(1),
-  exam_otp: z.string().max(20).optional(),
-});
+const createExamSchema = z
+  .object({
+    title_en: z.string().min(1).max(500),
+    title_hi: z.string().max(500).optional(),
+    city_id: z.string().uuid(),
+    window_start: z.string().datetime(),
+    window_end: z.string().datetime(),
+    total_marks: z.coerce.number().int().min(1).default(100),
+    pass_mark: z.coerce.number().int().min(0).default(40),
+    max_attempts: z.coerce.number().int().min(1).default(1),
+    exam_otp: z.string().max(20).optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (new Date(data.window_start).getTime() >= new Date(data.window_end).getTime()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["window_end"],
+        message: "The exam must end after it starts — check the window dates.",
+      });
+    }
+    if (data.pass_mark > data.total_marks) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["pass_mark"],
+        message: "Pass mark cannot be higher than total marks.",
+      });
+    }
+  });
 
 /* POST /v1/admin/exams */
 router.post("/exams", requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   let body: z.infer<typeof createExamSchema>;
   try { body = createExamSchema.parse(req.body); }
-  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid exam data."); return; }
+  catch (err) {
+    const msg =
+      err instanceof z.ZodError
+        ? (err.issues[0]?.message ?? "Invalid exam data.")
+        : "Invalid exam data.";
+    fail(res, 422, "ERR_VALIDATION_FAILED", msg);
+    return;
+  }
   const cityIds = await cityIdsForUser(req.authUser!);
   if (cityIds !== null && !cityIds.includes(body.city_id)) {
     fail(res, 403, "ERR_FORBIDDEN", "City not in your scope."); return;
   }
-  const otp = body.exam_otp ?? Math.random().toString(36).slice(2, 8).toUpperCase();
+
+  // Empty string = no access code. Undefined = auto-generate. Non-empty = use as given.
+  const wantsOtp = body.exam_otp !== "";
+  const plaintextOtp = wantsOtp
+    ? (body.exam_otp && body.exam_otp.length > 0 ? body.exam_otp : generateExamAccessCode())
+    : null;
+  const examOtpHash = plaintextOtp ? await hashOtpCode(plaintextOtp) : null;
+
   const [row] = await db.insert(online_exams).values({
     title_en: body.title_en,
     title_hi: body.title_hi ?? body.title_en,
@@ -375,9 +428,11 @@ router.post("/exams", requireRole("super_admin", "state_admin", "city_admin"), a
     total_marks: body.total_marks,
     pass_mark: body.pass_mark,
     max_attempts: body.max_attempts,
-    exam_otp: otp,
-  }).returning({ id: online_exams.id, title_en: online_exams.title_en, exam_otp: online_exams.exam_otp });
-  ok(res, row);
+    exam_otp: null,
+    exam_otp_hash: examOtpHash,
+  }).returning({ id: online_exams.id, title_en: online_exams.title_en });
+  // Plaintext returned exactly once — never stored, never listable again.
+  ok(res, { ...row, exam_otp: plaintextOtp });
 });
 
 const createNiyamSchema = z.object({

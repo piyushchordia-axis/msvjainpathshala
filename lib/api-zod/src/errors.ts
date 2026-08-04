@@ -18,6 +18,7 @@ export const ERROR_CODES = [
   "ERR_STUDENT_NOT_ENROLLED",
   "ERR_NIYAM_REVERSAL_WINDOW_EXPIRED",
   "ERR_FILE_TOO_LARGE",
+  "ERR_RATE_LIMITED",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -38,6 +39,7 @@ export const ErrorCode = {
   STUDENT_NOT_ENROLLED: "ERR_STUDENT_NOT_ENROLLED",
   NIYAM_REVERSAL_WINDOW_EXPIRED: "ERR_NIYAM_REVERSAL_WINDOW_EXPIRED",
   FILE_TOO_LARGE: "ERR_FILE_TOO_LARGE",
+  RATE_LIMITED: "ERR_RATE_LIMITED",
 } as const satisfies Record<string, ErrorCode>;
 
 /** Server + client upload size cap (multer + pre-upload guard). */

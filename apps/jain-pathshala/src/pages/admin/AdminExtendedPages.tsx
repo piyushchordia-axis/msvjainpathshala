@@ -450,7 +450,9 @@ interface ExamRow {
   city_name: string;
   window_start: string;
   window_end: string;
-  exam_otp: string | null;
+  /** Present only for city_admin+; shikshak/sanchalak get requires_otp instead. */
+  exam_otp?: string | null;
+  requires_otp?: boolean;
   results_released: boolean;
   attempt_count: number;
 }
@@ -484,7 +486,7 @@ function AddExamDialog({ onAdded }: { onAdded: () => void }) {
         total_marks: Number(totalMarks), pass_mark: Number(passMark),
         exam_otp: otp.trim() || undefined,
       });
-      toast.success(`Exam created. OTP: ${res.exam_otp}`);
+      toast.success(res.exam_otp ? `Exam created. OTP: ${res.exam_otp}` : 'Exam created.');
       setOpen(false); setTitle(''); setCityId(''); setWindowStart(''); setWindowEnd(''); setOtp('');
       onAdded();
     } catch (err) {
@@ -561,7 +563,13 @@ export function ExamsPage() {
               {new Date(e.window_start).toLocaleDateString('en-GB')} –{' '}
               {new Date(e.window_end).toLocaleDateString('en-GB')}
             </td>
-            <td className="px-4 py-3 font-mono text-xs">{e.exam_otp ?? '—'}</td>
+            <td className="px-4 py-3 font-mono text-xs">
+              {e.exam_otp
+                ? e.exam_otp
+                : e.requires_otp
+                  ? 'Set'
+                  : '—'}
+            </td>
             <td className="px-4 py-3">{e.attempt_count}</td>
             <td className="px-4 py-3">{e.results_released ? 'Released' : 'Pending'}</td>
             <td className="px-4 py-3">

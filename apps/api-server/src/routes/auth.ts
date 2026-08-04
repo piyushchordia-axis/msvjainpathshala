@@ -11,10 +11,12 @@ import {
   generateOtpCode,
   generateOtpToken,
   generateRefreshToken,
+  hashOtpCode,
   hashSecret,
   signAccessToken,
   TOKEN_TTL,
   verifyAccessToken,
+  verifyOtpCode,
 } from "../lib/tokens";
 import { setAuthCookies, clearAuthCookies } from "../lib/cookies";
 import { getSmsProvider } from "../lib/sms";
@@ -134,7 +136,7 @@ router.post("/login", async (req: Request, res: Response) => {
     await db.insert(otp_codes).values({
       phone: parsed.phone,
       otp_token: otpToken,
-      code_hash: sessionId ? null : hashSecret(code),
+      code_hash: sessionId ? null : await hashOtpCode(code),
       session_id: sessionId,
       expires_at: expiresAt,
     });
@@ -215,7 +217,7 @@ router.post("/login", async (req: Request, res: Response) => {
       matched = false;
     }
   } else {
-    matched = otp.code_hash !== null && otp.code_hash === hashSecret(parsed.code);
+    matched = otp.code_hash !== null && (await verifyOtpCode(otp.code_hash, parsed.code));
   }
 
   if (!matched) {

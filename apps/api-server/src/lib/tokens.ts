@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from "node:crypto";
+import argon2 from "argon2";
 
 const SECRET = (() => {
   const fromEnv = process.env.JP_AUTH_SECRET;
@@ -78,4 +79,47 @@ export function generateOtpCode(): string {
   // PRNG state is recoverable from observed outputs. Unused when the SMS
   // provider mints the code itself (2Factor AUTOGEN).
   return String(randomInt(0, 1_000_000)).padStart(6, "0");
+}
+
+/**
+ * argon2id hash for short OTP / exam access codes (CLAUDE.md security rules).
+ * Auth login OTP and exam access codes share this helper — do not add a second hasher.
+ */
+export async function hashOtpCode(code: string): Promise<string> {
+  return argon2.hash(code, { type: argon2.argon2id });
+}
+
+/** Verify a code against a hash produced by hashOtpCode (argon2id). */
+export async function verifyOtpCode(hash: string, code: string): Promise<boolean> {
+  if (hash.startsWith("$argon2")) {
+    try {
+      return await argon2.verify(hash, code);
+    } catch {
+      return false;
+    }
+  }
+  // Legacy SHA256 OTP hashes from before argon2id (auth code_hash).
+  return timingSafeEqualString(hash, hashSecret(code));
+}
+
+/**
+ * Exam / class access codes: unambiguous alphabet (no O/0/I/1/L), 6 chars,
+ * CSPRNG via randomInt.
+ */
+const EXAM_OTP_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+
+export function generateExamAccessCode(length = 6): string {
+  let out = "";
+  for (let i = 0; i < length; i++) {
+    out += EXAM_OTP_ALPHABET[randomInt(0, EXAM_OTP_ALPHABET.length)]!;
+  }
+  return out;
+}
+
+/** Constant-time string compare for legacy plaintext exam_otp rows. */
+export function timingSafeEqualString(a: string, b: string): boolean {
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return timingSafeEqual(bufA, bufB);
 }

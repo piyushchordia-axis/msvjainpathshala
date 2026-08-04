@@ -2,8 +2,9 @@
  * /v1/exams — full online exams: question/option authoring (admin), the student
  * take flow (available → start → submit → result), and auto + manual grading.
  *
- * Exams are CITY-scoped. Admin authoring/grading routes require the admin panel
- * and verify the exam's city is in the caller's city scope (404 out of scope).
+ * Exams are CITY-scoped. Admin authoring/grading routes require city_admin+
+ * (canAdministerExams — narrower than canAccessAdminPanel; SPEC 6.17) and
+ * verify the exam's city is in the caller's city scope (404 out of scope).
  * Student routes require role 'student', resolve the caller's single student
  * profile, and confirm the exam's city matches the student's centre city.
  */
@@ -22,11 +23,13 @@ import {
 } from "@workspace/db";
 import { and, asc, count, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
-import { canAccessAdminPanel } from "@workspace/api-zod";
+import { canAdministerExams } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
-import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
+import { requireAuth } from "../../middlewares/auth";
 import { resolveAdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
+import { rateLimit } from "../../lib/ratelimit";
+import { timingSafeEqualString, verifyOtpCode } from "../../lib/tokens";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -93,8 +96,8 @@ function sameIdSet(a: string[], b: string[]): boolean {
 
 /* GET /v1/exams/:id/questions — admin view (includes is_correct) */
 router.get("/:id/questions", async (req: Request, res: Response) => {
-  if (!canAccessAdminPanel(req.authUser?.role)) {
-    fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
+  if (!canAdministerExams(req.authUser?.role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Only city admins and above can administer exams.");
     return;
   }
   const cityIds = await cityScopeForUser(req.authUser!);
@@ -163,8 +166,8 @@ const createQuestionSchema = z.object({
 
 /* POST /v1/exams/:id/questions — add a question (+ options) */
 router.post("/:id/questions", async (req: Request, res: Response) => {
-  if (!canAccessAdminPanel(req.authUser?.role)) {
-    fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
+  if (!canAdministerExams(req.authUser?.role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Only city admins and above can administer exams.");
     return;
   }
   let body: z.infer<typeof createQuestionSchema>;
@@ -251,8 +254,8 @@ router.post("/:id/questions", async (req: Request, res: Response) => {
 
 /* DELETE /v1/exams/:id/questions/:qid — remove a question (options cascade) */
 router.delete("/:id/questions/:qid", async (req: Request, res: Response) => {
-  if (!canAccessAdminPanel(req.authUser?.role)) {
-    fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
+  if (!canAdministerExams(req.authUser?.role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Only city admins and above can administer exams.");
     return;
   }
   const cityIds = await cityScopeForUser(req.authUser!);
@@ -293,8 +296,8 @@ router.delete("/:id/questions/:qid", async (req: Request, res: Response) => {
 
 /* GET /v1/exams/:id/attempts/:attemptId — attempt detail with answers joined */
 router.get("/:id/attempts/:attemptId", async (req: Request, res: Response) => {
-  if (!canAccessAdminPanel(req.authUser?.role)) {
-    fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
+  if (!canAdministerExams(req.authUser?.role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Only city admins and above can administer exams.");
     return;
   }
   const cityIds = await cityScopeForUser(req.authUser!);
@@ -387,8 +390,8 @@ const gradeSchema = z.object({
 
 /* POST /v1/exams/:id/attempts/:attemptId/grade — manual grade text answers */
 router.post("/:id/attempts/:attemptId/grade", async (req: Request, res: Response) => {
-  if (!canAccessAdminPanel(req.authUser?.role)) {
-    fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
+  if (!canAdministerExams(req.authUser?.role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Only city admins and above can administer exams.");
     return;
   }
   let body: z.infer<typeof gradeSchema>;
@@ -567,6 +570,7 @@ router.get("/available", async (req: Request, res: Response) => {
       pass_mark: online_exams.pass_mark,
       max_attempts: online_exams.max_attempts,
       exam_otp: online_exams.exam_otp,
+      exam_otp_hash: online_exams.exam_otp_hash,
     })
     .from(online_exams)
     .where(and(eq(online_exams.city_id, cityId), sql`${online_exams.window_end} >= ${now}`))
@@ -591,7 +595,7 @@ router.get("/available", async (req: Request, res: Response) => {
     total_marks: r.total_marks,
     pass_mark: r.pass_mark,
     max_attempts: r.max_attempts,
-    requires_otp: !!r.exam_otp,
+    requires_otp: !!(r.exam_otp_hash || r.exam_otp),
     already_attempted_count: countByExam.get(r.id) ?? 0,
   }));
   ok(res, { items }, { count: items.length });
@@ -605,6 +609,18 @@ const startSchema = z.object({
 router.post("/:id/start", async (req: Request, res: Response) => {
   const student = await requireStudent(req, res);
   if (!student) return;
+
+  const uid = req.authUser!.id;
+  const examId = String(req.params.id);
+  if (await rateLimit(`exam:start:user:${uid}`, 10, 3600)) {
+    fail(res, 429, "ERR_RATE_LIMITED", "Too many requests. Please try again later.");
+    return;
+  }
+  if (await rateLimit(`exam:start:exam:${examId}:user:${uid}`, 5, 900)) {
+    fail(res, 429, "ERR_RATE_LIMITED", "Too many requests. Please try again later.");
+    return;
+  }
+
   let body: z.infer<typeof startSchema>;
   try {
     body = startSchema.parse(req.body ?? {});
@@ -613,7 +629,6 @@ router.post("/:id/start", async (req: Request, res: Response) => {
     return;
   }
 
-  const examId = String(req.params.id);
   const [exam] = await db
     .select()
     .from(online_exams)
@@ -636,11 +651,22 @@ router.post("/:id/start", async (req: Request, res: Response) => {
     return;
   }
 
-  if (exam.exam_otp) {
-    if (!body.otp || body.otp !== exam.exam_otp) {
+  const requiresOtp = !!(exam.exam_otp_hash || exam.exam_otp);
+  let otpVerifiedAt: Date | null = null;
+  if (requiresOtp) {
+    const submitted = body.otp ?? "";
+    let okCode = false;
+    if (exam.exam_otp_hash) {
+      okCode = await verifyOtpCode(exam.exam_otp_hash, submitted);
+    } else if (exam.exam_otp) {
+      // Legacy plaintext — one-release bridge while exam_otp_hash is NULL.
+      okCode = timingSafeEqualString(submitted, exam.exam_otp);
+    }
+    if (!okCode) {
       fail(res, 401, "ERR_OTP_INVALID", "Invalid exam access code.");
       return;
     }
+    otpVerifiedAt = now;
   }
 
   // Atomically count existing attempts and insert the new one so two parallel
@@ -664,6 +690,7 @@ router.post("/:id/start", async (req: Request, res: Response) => {
         started_at: now,
         status: "in_progress",
         needs_grading: false,
+        otp_verified_at: otpVerifiedAt,
       })
       .returning({ id: exam_attempts.id });
     return { capped: false as const, attempt: created };

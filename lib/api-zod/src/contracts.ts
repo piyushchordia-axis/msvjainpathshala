@@ -170,6 +170,18 @@ export function canFeatureMedia(role: Role | null | undefined): boolean {
   return !!role && FEATURE_MEDIA_ROLES.includes(role);
 }
 
+/**
+ * Who may author exam questions, grade attempts, and release results.
+ * Deliberately NARROWER than canAccessAdminPanel — sanchalak and shikshak can
+ * open the admin panel but must NOT touch exam content or results (SPEC 6.17).
+ * Do not "fix" this by reusing ADMIN_PANEL_ROLES.
+ */
+export const EXAM_ADMIN_ROLES: Role[] = ["super_admin", "state_admin", "city_admin"];
+
+export function canAdministerExams(role: Role | null | undefined): boolean {
+  return !!role && EXAM_ADMIN_ROLES.includes(role);
+}
+
 /* ------------------------------------------------------------------ */
 /* Auth                                                               */
 /* ------------------------------------------------------------------ */

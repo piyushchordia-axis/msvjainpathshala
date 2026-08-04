@@ -21,7 +21,10 @@ export const online_exams = pgTable(
     max_attempts: integer("max_attempts").notNull().default(1),
     total_marks: integer("total_marks").notNull().default(100),
     pass_mark: integer("pass_mark").notNull().default(40),
+    // Legacy plaintext — NULL for new rows; kept one release for pre-hash exams.
     exam_otp: text("exam_otp"),
+    // argon2id hash of the class-wide access code (SPEC 8.9).
+    exam_otp_hash: text("exam_otp_hash"),
     results_released: boolean("results_released").notNull().default(false),
     ...timestamps(),
   },
@@ -79,6 +82,8 @@ export const exam_attempts = pgTable(
       .references(() => students.id, { onDelete: "cascade" }),
     started_at: timestamp("started_at", { withTimezone: true }).notNull(),
     submitted_at: timestamp("submitted_at", { withTimezone: true }),
+    // Set when the class-wide exam access code was accepted at start (SPEC 8.9).
+    otp_verified_at: timestamp("otp_verified_at", { withTimezone: true }),
     score: integer("score"),
     // Split objective (auto) vs subjective (manual) scoring; needs_grading flips
     // false once all text answers are graded.

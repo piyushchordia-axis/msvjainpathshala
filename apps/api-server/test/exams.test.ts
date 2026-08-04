@@ -8,6 +8,10 @@ import request from "supertest";
 import app from "../src/app";
 import { pool } from "@workspace/db";
 import { loginAs, auth } from "./helpers";
+import {
+  clearMemoryRateLimitKeyForTests,
+  resetMemoryRateLimitsForTests,
+} from "../src/lib/ratelimit";
 
 afterAll(async () => {
   await pool.end();
@@ -453,6 +457,14 @@ describe("online exams", () => {
     expect(createExam.status).toBe(200);
     const examId: string = createExam.body.data.id;
     expect(examId).toBeTruthy();
+    // Plaintext is returned once on create; DB stores only the hash.
+    expect(createExam.body.data.exam_otp).toBe(otp);
+    const stored = await pool.query(
+      `select exam_otp, exam_otp_hash from online_exams where id = $1`,
+      [examId],
+    );
+    expect(stored.rows[0]!.exam_otp).toBeNull();
+    expect(stored.rows[0]!.exam_otp_hash).toMatch(/^\$argon2id\$/);
     return { examId, otp };
   }
 
@@ -733,5 +745,115 @@ describe("online exams", () => {
       .send({ grades: [{ question_id: qtId, marks_awarded: 10 }] });
     expect(parentGrade.status).toBe(403);
     expect(parentGrade.body.error.code).toBe("ERR_FORBIDDEN");
+  });
+
+  it("authorization: shikshak cannot author questions, grade, or release results (SPEC 6.17)", async () => {
+    // Shikshak can open the admin panel but must NOT touch exam content/results.
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+    const examId = await createMumbaiExam(admin.token, cityId);
+
+    const q = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({ question_en: "What is Ahimsa?", question_type: "text", marks: 10 });
+    expect(q.status).toBe(200);
+    const qId: string = q.body.data.id;
+
+    const student = await loginAs("student");
+    const startRes = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({});
+    expect(startRes.status).toBe(200);
+    const attemptId: string = startRes.body.data.attempt_id;
+    const submit = await request(app)
+      .post(`/v1/exams/attempts/${attemptId}/submit`)
+      .set(auth(student.token))
+      .send({ answers: [{ question_id: qId, text_answer: "Non-violence." }] });
+    expect(submit.status).toBe(200);
+
+    const shikshak = await loginAs("shikshak");
+
+    const addQ = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(shikshak.token))
+      .send({ question_en: "Forbidden question?", question_type: "text", marks: 5 });
+    expect(addQ.status).toBe(403);
+    expect(addQ.body.error.code).toBe("ERR_FORBIDDEN");
+
+    const delQ = await request(app)
+      .delete(`/v1/exams/${examId}/questions/${qId}`)
+      .set(auth(shikshak.token));
+    expect(delQ.status).toBe(403);
+    expect(delQ.body.error.code).toBe("ERR_FORBIDDEN");
+
+    const grade = await request(app)
+      .post(`/v1/exams/${examId}/attempts/${attemptId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ grades: [{ question_id: qId, marks_awarded: 10 }] });
+    expect(grade.status).toBe(403);
+    expect(grade.body.error.code).toBe("ERR_FORBIDDEN");
+
+    const release = await request(app)
+      .post(`/v1/admin/exams/${examId}/release-results`)
+      .set(auth(shikshak.token))
+      .send({});
+    expect(release.status).toBe(403);
+    expect(release.body.error.code).toBe("ERR_FORBIDDEN");
+  });
+
+  it("6th wrong access code within 15 minutes returns 429; correct code after window clears sets otp_verified_at", async () => {
+    process.env.JP_TEST_RATE_LIMIT = "1";
+    resetMemoryRateLimitsForTests();
+    try {
+      const admin = await loginAs("super_admin");
+      const cityId = await mumbaiCityId(admin.token);
+      const { examId, otp } = await createOtpGatedExam(admin.token, cityId);
+
+      const student = await loginAs("student");
+      const examKey = `exam:start:exam:${examId}:user:${student.user.id}`;
+      const userKey = `exam:start:user:${student.user.id}`;
+
+      for (let i = 0; i < 5; i++) {
+        const wrong = await request(app)
+          .post(`/v1/exams/${examId}/start`)
+          .set(auth(student.token))
+          .send({ otp: `WRONG${i}` });
+        expect(wrong.status).toBe(401);
+        expect(wrong.body.error.code).toBe("ERR_OTP_INVALID");
+        // Keep the per-exam 5/900s bucket; clear the hourly bucket so this test
+        // isolates the per-exam window (same pattern as niyam rate-limit tests).
+        clearMemoryRateLimitKeyForTests(userKey);
+      }
+
+      const blocked = await request(app)
+        .post(`/v1/exams/${examId}/start`)
+        .set(auth(student.token))
+        .send({ otp: "WRONG6" });
+      expect(blocked.status).toBe(429);
+      expect(blocked.body.error.code).toBe("ERR_RATE_LIMITED");
+
+      // Simulate the 15-minute window elapsing.
+      clearMemoryRateLimitKeyForTests(examKey);
+      clearMemoryRateLimitKeyForTests(userKey);
+
+      const okStart = await request(app)
+        .post(`/v1/exams/${examId}/start`)
+        .set(auth(student.token))
+        .send({ otp });
+      expect(okStart.status).toBe(200);
+      const attemptId: string = okStart.body.data.attempt_id;
+      expect(attemptId).toBeTruthy();
+
+      const row = await pool.query(
+        `select otp_verified_at from exam_attempts where id = $1`,
+        [attemptId],
+      );
+      expect(row.rows[0]!.otp_verified_at).not.toBeNull();
+    } finally {
+      delete process.env.JP_TEST_RATE_LIMIT;
+      resetMemoryRateLimitsForTests();
+    }
   });
 });
