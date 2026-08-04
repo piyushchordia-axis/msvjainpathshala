@@ -1092,6 +1092,128 @@ describe("homework", () => {
     expect(gone.body.data.items.some((a: { id: string }) => a.id === assignmentId)).toBe(false);
   });
 
+  it("an is_msv assignment only fans out to MSV-approved students in the batch", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const children = await request(app).get("/v1/me/children").set(auth(parent.token));
+    expect(children.status).toBe(200);
+    const kids: Array<{ id: string; msv_status: string; batch_id?: string }> = children.body.data.items;
+    const aarav = kids.find((k) => k.msv_status === "approved");
+    const diya = kids.find((k) => k.msv_status === "none");
+    expect(aarav).toBeTruthy();
+    expect(diya).toBeTruthy();
+
+    // Both share batchA1 in seed — create MSV homework on that batch.
+    const batchId = (
+      await pool.query<{ batch_id: string }>(`select batch_id from students where id = $1`, [aarav!.id])
+    ).rows[0]!.batch_id;
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `MSV-only HW ${Date.now()}`,
+        due_date: tomorrow(),
+        is_msv: true,
+      });
+    expect(create.status).toBe(200);
+
+    const subs = await request(app)
+      .get(`/v1/homework/assignments/${create.body.data.id}/submissions`)
+      .set(auth(admin.token));
+    expect(subs.status).toBe(200);
+    const studentIds = (subs.body.data.items as Array<{ student_id: string }>).map((s) => s.student_id);
+    expect(studentIds).toContain(aarav!.id);
+    expect(studentIds).not.toContain(diya!.id);
+
+    for (const sid of studentIds) {
+      const row = await pool.query<{ msv_status: string }>(
+        `select msv_status from students where id = $1`,
+        [sid],
+      );
+      expect(row.rows[0]!.msv_status).toBe("approved");
+    }
+  });
+
+  it("a non-MSV student cannot submit against an is_msv assignment", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const children = await request(app).get("/v1/me/children").set(auth(parent.token));
+    const kids: Array<{ id: string; msv_status: string }> = children.body.data.items;
+    const diya = kids.find((k) => k.msv_status === "none");
+    expect(diya).toBeTruthy();
+
+    const batchId = (
+      await pool.query<{ batch_id: string }>(`select batch_id from students where id = $1`, [diya!.id])
+    ).rows[0]!.batch_id;
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `MSV re-check ${Date.now()}`,
+        due_date: tomorrow(),
+        is_msv: true,
+      });
+    expect(create.status).toBe(200);
+
+    // Fan-out correctly skipped Diya — plant a row to prove submit re-checks.
+    const planted = await pool.query<{ id: string }>(
+      `insert into homework_submissions (assignment_id, student_id, status)
+       values ($1, $2, 'pending')
+       returning id`,
+      [create.body.data.id, diya!.id],
+    );
+    const submissionId = planted.rows[0]!.id;
+
+    const submit = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/should-not-submit.jpg" });
+    expect(submit.status).toBe(403);
+    expect(submit.body.error.code).toBe("ERR_FORBIDDEN");
+  });
+
+  it("a normal assignment still fans out to everyone active", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const children = await request(app).get("/v1/me/children").set(auth(parent.token));
+    const kids: Array<{ id: string; msv_status: string }> = children.body.data.items;
+    const aarav = kids.find((k) => k.msv_status === "approved");
+    const diya = kids.find((k) => k.msv_status === "none");
+    expect(aarav).toBeTruthy();
+    expect(diya).toBeTruthy();
+
+    const batchId = (
+      await pool.query<{ batch_id: string }>(`select batch_id from students where id = $1`, [aarav!.id])
+    ).rows[0]!.batch_id;
+    // Same batch for both bal siblings in seed.
+    const diyaBatch = (
+      await pool.query<{ batch_id: string }>(`select batch_id from students where id = $1`, [diya!.id])
+    ).rows[0]!.batch_id;
+    expect(diyaBatch).toBe(batchId);
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `Everyone HW ${Date.now()}`,
+        due_date: tomorrow(),
+        is_msv: false,
+      });
+    expect(create.status).toBe(200);
+
+    const subs = await request(app)
+      .get(`/v1/homework/assignments/${create.body.data.id}/submissions`)
+      .set(auth(admin.token));
+    const studentIds = (subs.body.data.items as Array<{ student_id: string }>).map((s) => s.student_id);
+    expect(studentIds).toContain(aarav!.id);
+    expect(studentIds).toContain(diya!.id);
+  });
+
   it("homework points come from punya_configs when a city override exists", async () => {
     const { clearHomeworkPointsCache } = await import("../src/lib/homework-points");
     clearHomeworkPointsCache();

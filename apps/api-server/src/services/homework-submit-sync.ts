@@ -44,8 +44,10 @@ export async function applyHomeworkSubmit(opts: {
       status: homework_submissions.status,
       submission_url: homework_submissions.submission_url,
       due_date: homework_assignments.due_date,
+      is_msv: homework_assignments.is_msv,
       parent_id: students.parent_id,
       user_id: students.user_id,
+      msv_status: students.msv_status,
     })
     .from(homework_submissions)
     .innerJoin(homework_assignments, eq(homework_assignments.id, homework_submissions.assignment_id))
@@ -69,6 +71,16 @@ export async function applyHomeworkSubmit(opts: {
   const owned = sub.parent_id === opts.actor.id || sub.user_id === opts.actor.id;
   if (!owned) {
     throw new HomeworkSubmitError(404, "ERR_NOT_FOUND", "Submission not found.");
+  }
+
+  // Catalog/fan-out filtering alone is not enough — submit re-checks MSV
+  // audience (same reasoning as niyam-audience.ts).
+  if (sub.is_msv && sub.msv_status !== "approved") {
+    throw new HomeworkSubmitError(
+      403,
+      "ERR_FORBIDDEN",
+      "This homework is for MSV-approved students only.",
+    );
   }
 
   if (sub.status === "approved" || sub.status === "starred") {

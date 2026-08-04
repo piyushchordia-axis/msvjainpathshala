@@ -121,20 +121,21 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
     const outcome = await db.transaction(async (tx) => {
       // Target resolution inside the tx so a concurrent deactivate cannot slip
       // a student into the fan-out after we decided the roster.
+      const isMsv = body.is_msv === true;
+      const rosterFilters = [
+        eq(students.batch_id, batch.id),
+        eq(students.status, "active"),
+        isNull(students.deleted_at),
+        ...(isMsv ? [eq(students.msv_status, "approved")] : []),
+      ];
+
       let targetIds: string[];
       if (body.target_student_ids && body.target_student_ids.length > 0) {
         const requested = Array.from(new Set(body.target_student_ids));
         const valid = await tx
           .select({ id: students.id })
           .from(students)
-          .where(
-            and(
-              inArray(students.id, requested),
-              eq(students.batch_id, batch.id),
-              eq(students.status, "active"),
-              isNull(students.deleted_at),
-            ),
-          );
+          .where(and(inArray(students.id, requested), ...rosterFilters));
         if (valid.length !== requested.length) {
           throw Object.assign(new Error("invalid targets"), { code: "ERR_VALIDATION_FAILED" as const });
         }
@@ -143,13 +144,7 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
         const all = await tx
           .select({ id: students.id })
           .from(students)
-          .where(
-            and(
-              eq(students.batch_id, batch.id),
-              eq(students.status, "active"),
-              isNull(students.deleted_at),
-            ),
-          );
+          .where(and(...rosterFilters));
         targetIds = all.map((r) => r.id);
       }
 
