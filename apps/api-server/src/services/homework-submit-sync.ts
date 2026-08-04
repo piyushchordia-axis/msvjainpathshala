@@ -11,6 +11,7 @@ import {
 } from "@workspace/db";
 import { and, eq, isNull } from "drizzle-orm";
 import { httpUrl } from "../lib/validation";
+import { kolkataDateString } from "./attendance-mark";
 
 export class HomeworkSubmitError extends Error {
   constructor(
@@ -30,6 +31,11 @@ export async function applyHomeworkSubmit(opts: {
   submissionId: string;
   /** When omitted, an existing submission_url is preserved (never nulled). */
   fileUrl?: string;
+  /**
+   * Client clock for lateness (AT26). Prefer this over server receipt time so
+   * an offline op drained days later is still judged by when the parent acted.
+   */
+  clientTimestamp?: Date | string;
 }): Promise<{ id: string; status: string; late: boolean }> {
   const [sub] = await db
     .select({
@@ -88,9 +94,15 @@ export async function applyHomeworkSubmit(opts: {
     );
   }
 
-  // due_date is 'YYYY-MM-DD'; compare against today (UTC). FIX #9 will move this
-  // to Asia/Kolkata — keep the shared helper call-site ready.
-  const today = new Date().toISOString().slice(0, 10);
+  // AT26: lateness is Asia/Kolkata calendar day vs due_date, using the client's
+  // clock when provided (offline drain must not be judged by server receipt).
+  const when =
+    opts.clientTimestamp instanceof Date
+      ? opts.clientTimestamp
+      : typeof opts.clientTimestamp === "string" && opts.clientTimestamp.length > 0
+        ? new Date(opts.clientTimestamp)
+        : new Date();
+  const today = kolkataDateString(Number.isNaN(when.getTime()) ? new Date() : when);
   const isLate = !!sub.due_date && sub.due_date < today;
   const nextStatus = isLate ? ("late" as const) : ("submitted" as const);
 

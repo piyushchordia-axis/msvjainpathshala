@@ -454,7 +454,7 @@ router.post("/submissions/:id/submit", async (req: Request, res: Response) => {
       submissionId: String(req.params.id),
       fileUrl: body.submission_url,
     });
-    ok(res, { id: data.id, status: data.status });
+    ok(res, { id: data.id, status: data.status, late: data.late });
   } catch (err) {
     if (err instanceof HomeworkSubmitError) {
       fail(res, err.httpStatus, err.code, err.message);

@@ -358,6 +358,7 @@ async function handleHomeworkSubmission(
   actor: User,
   submissionOpId: string,
   payload: unknown,
+  clientTimestamp?: string,
 ): Promise<SyncResult> {
   const p = z
     .object({
@@ -387,6 +388,7 @@ async function handleHomeworkSubmission(
       actor,
       submissionId,
       fileUrl: p.file_url,
+      clientTimestamp,
     });
     return {
       submission_op_id: submissionOpId,
@@ -446,6 +448,7 @@ async function executeOp(
   opType: SyncOpType,
   submissionOpId: string,
   payload: unknown,
+  clientTimestamp?: string,
 ): Promise<SyncResult> {
   switch (opType) {
     case "checkin":
@@ -459,7 +462,7 @@ async function executeOp(
     case "niyam_submission":
       return handleNiyamSubmission(actor, submissionOpId, payload);
     case "homework_submission":
-      return handleHomeworkSubmission(actor, submissionOpId, payload);
+      return handleHomeworkSubmission(actor, submissionOpId, payload, clientTimestamp);
     case "acknowledgement":
       return handleAcknowledgement(actor, submissionOpId, payload);
     default:
@@ -516,7 +519,7 @@ export async function processSyncBatch(
 
     let result: SyncResult;
     try {
-      result = await executeOp(actor, opType, op.submission_op_id, op.payload);
+      result = await executeOp(actor, opType, op.submission_op_id, op.payload, op.client_timestamp);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unexpected sync error.";
       result = {

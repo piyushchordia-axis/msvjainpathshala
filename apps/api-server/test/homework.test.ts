@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, vi } from "vitest";
 import request from "supertest";
 import app from "../src/app";
 import { pool } from "@workspace/db";
@@ -540,10 +540,12 @@ describe("homework", () => {
     expect(sync.body.data.results[0].status).toBe("success");
 
     const feed = await request(app)
-      .get(`/v1/homework/mine?student_id=${studentId}`)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
       .set(auth(parent.token));
     const onlineRow = feed.body.data.items.find((r: { id: string }) => r.id === onlineId);
     const syncRow = feed.body.data.items.find((r: { id: string }) => r.id === syncId);
+    expect(onlineRow).toBeTruthy();
+    expect(syncRow).toBeTruthy();
     expect(onlineRow.status).toBe(syncRow.status);
     expect(onlineRow.late).toBe(syncRow.late);
     expect(onlineRow.submission_url).toBe(syncRow.submission_url);
@@ -591,5 +593,67 @@ describe("homework", () => {
       [created.id],
     );
     expect(orphan.rows).toHaveLength(0);
+  });
+
+  it("a submission made at 02:00 IST on the day after the due date is late", async () => {
+    // 02:00 IST on 2026-03-16 == 2026-03-15T20:30:00.000Z — UTC date is still
+    // the due day, so a UTC comparison would wrongly mark this on-time.
+    vi.useFakeTimers({
+      now: new Date("2026-03-15T20:30:00.000Z"),
+      toFake: ["Date"],
+    });
+    try {
+      const admin = await loginAs("super_admin");
+      const parent = await loginAs("parent");
+      const studentId = await firstChildId(parent.token);
+
+      const batchesRes = await request(app).get("/v1/admin/batches").set(auth(admin.token));
+      let submissionId = "";
+      for (const b of batchesRes.body.data.items as Array<{ id: string }>) {
+        const create = await request(app)
+          .post("/v1/homework/assignments")
+          .set(auth(admin.token))
+          .send({
+            batch_id: b.id,
+            title: `Late IST ${Date.now()}`,
+            due_date: "2026-03-15",
+          });
+        expect(create.status).toBe(200);
+        const subs = await request(app)
+          .get(`/v1/homework/assignments/${create.body.data.id}/submissions`)
+          .set(auth(admin.token));
+        const mine = subs.body.data.items.find((s: { student_id: string }) => s.student_id === studentId);
+        if (mine) {
+          submissionId = mine.id;
+          break;
+        }
+      }
+      expect(submissionId).toBeTruthy();
+
+      const submit = await request(app)
+        .post(`/v1/homework/submissions/${submissionId}/submit`)
+        .set(auth(parent.token))
+        .send({ submission_url: "https://example.com/late-ist.jpg" });
+      expect(submit.status).toBe(200);
+      expect(submit.body.data.status).toBe("late");
+      expect(submit.body.data.late).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an on-time submission is not marked late", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    const submit = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/on-time.jpg" });
+    expect(submit.status).toBe(200);
+    expect(submit.body.data.status).toBe("submitted");
+    expect(submit.body.data.late).toBe(false);
   });
 });
