@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Alert, Image, Platform, Pressable, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
-import * as FileSystem from "expo-file-system/legacy";
 import {
   AudioModule,
   RecordingPresets,
@@ -15,36 +14,21 @@ import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { apiUpload, ApiError } from "@/lib/api";
 import { fileTooLargeMessage, rejectIfOverUploadLimit } from "@/lib/upload-size-guard";
+import {
+  VIDEO_MAX_DURATION_SEC,
+  PREFERRED_ASSET_REPRESENTATION_MODE,
+  resolveLocalByteSize,
+  newProofLocalId,
+  guessMime,
+  mediaReady,
+  toSubmitMedia,
+  type MediaKind,
+  type ProofMediaItem,
+} from "@/lib/proof-media";
 import { Body, Button, Row } from "@/components/ui";
 
-/** Camera/library max video length (seconds). Library picks may still ignore this. */
-const VIDEO_MAX_DURATION_SEC = 30;
-
-/**
- * Force a JPEG/H.264-compatible representation on iOS. If this enum is missing
- * after an SDK bump, optional chaining would silently pass `undefined` and iOS
- * would fall back to Current (raw HEIC) — which our upload pipeline rejects.
- */
-const PREFERRED_ASSET_REPRESENTATION_MODE =
-  ImagePicker.UIImagePickerPreferredAssetRepresentationMode?.Compatible;
-
-if (__DEV__ && PREFERRED_ASSET_REPRESENTATION_MODE === undefined) {
-  throw new Error(
-    "[NiyamProofPicker] UIImagePickerPreferredAssetRepresentationMode.Compatible is undefined. " +
-      "iOS would upload raw HEIC. Check the expo-image-picker version.",
-  );
-}
-
-async function resolveLocalByteSize(uri: string, blob?: Blob): Promise<number | null> {
-  if (blob && typeof blob.size === "number") return blob.size;
-  try {
-    const info = await FileSystem.getInfoAsync(uri);
-    if (!info.exists || info.isDirectory) return null;
-    return typeof info.size === "number" ? info.size : null;
-  } catch {
-    return null;
-  }
-}
+export type { MediaKind, ProofMediaItem };
+export { mediaReady, toSubmitMedia };
 
 type PendingAudio = {
   uri: string;
@@ -59,20 +43,6 @@ function formatMs(ms: number): string {
   const s = totalSec % 60;
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
-
-export type MediaKind = "photo" | "video" | "audio";
-
-export type ProofMediaItem = {
-  localId: string;
-  kind: MediaKind;
-  url: string;
-  mime?: string;
-  size_bytes?: number;
-  /** Local preview URI while uploading / after failure. */
-  previewUri?: string;
-  status: "uploading" | "ready" | "failed";
-  error?: string;
-};
 
 type Props = {
   proofType: string;
@@ -90,20 +60,6 @@ function allowedKinds(proofType: string): MediaKind[] {
   if (proofType === "either") return ["photo", "video"];
   if (proofType === "any") return ["photo", "video", "audio"];
   return ["photo", "video"];
-}
-
-function newId(): string {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
-function guessMime(kind: MediaKind, declared?: string | null): string {
-  const d = (declared ?? "").split(";")[0]!.trim().toLowerCase();
-  if (d === "image/jpg") return "image/jpeg";
-  if (d === "audio/m4a" || d === "audio/x-m4a" || d === "audio/aac") return "audio/mp4";
-  if (d) return d;
-  if (kind === "video") return "video/mp4";
-  if (kind === "audio") return "audio/mp4";
-  return "image/jpeg";
 }
 
 async function uploadUri(
@@ -223,7 +179,7 @@ export function NiyamProofPicker({
         return;
       }
 
-      const localId = newId();
+      const localId = newProofLocalId();
       const placeholder: ProofMediaItem = {
         localId,
         kind,
@@ -747,17 +703,3 @@ export function NiyamProofPicker({
   );
 }
 
-export function mediaReady(items: ProofMediaItem[]): boolean {
-  return items.every((m) => m.status === "ready") && !items.some((m) => m.status === "uploading");
-}
-
-export function toSubmitMedia(items: ProofMediaItem[]) {
-  return items
-    .filter((m) => m.status === "ready" && m.url)
-    .map((m) => ({
-      url: m.url,
-      kind: m.kind,
-      mime: m.mime,
-      size_bytes: m.size_bytes,
-    }));
-}

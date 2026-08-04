@@ -291,9 +291,20 @@ export async function drainQueues(): Promise<void> {
 
 /** Start periodic drain (call once from app root). */
 export function startSyncLoop(intervalMs = 5_000): () => void {
-  const id = setInterval(() => {
-    void drainQueues();
-  }, intervalMs);
-  void drainQueues();
+  const tick = () => {
+    void (async () => {
+      try {
+        const { resumeHomeworkProofUploads } = await import(
+          "./media-upload-queue"
+        );
+        await resumeHomeworkProofUploads();
+      } catch {
+        /* media drain is best-effort */
+      }
+      await drainQueues();
+    })();
+  };
+  const id = setInterval(tick, intervalMs);
+  tick();
   return () => clearInterval(id);
 }

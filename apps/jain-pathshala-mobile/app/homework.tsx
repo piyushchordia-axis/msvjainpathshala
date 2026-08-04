@@ -7,6 +7,7 @@ import { useHomework, useSubmitHomework } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { bodyFamily } from "@/constants/typography";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
+import { HomeworkProofPicker } from "@/components/HomeworkProofPicker";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 type Tone = "success" | "warning" | "error" | "info" | "primary" | "neutral";
@@ -32,7 +33,7 @@ function statusLabel(status: string, hi: boolean): string {
   return status;
 }
 
-/** Inline "submit work" form shown for items not yet approved/starred. */
+/** Inline "submit work" form — photo/file primary, URL secondary. */
 function SubmitForm({
   assignmentId,
   submissionId,
@@ -45,6 +46,7 @@ function SubmitForm({
   const c = useColors();
   const { hi } = useLocale();
   const [open, setOpen] = useState(false);
+  const [showUrl, setShowUrl] = useState(false);
   const [url, setUrl] = useState("");
   const submit = useSubmitHomework();
 
@@ -63,82 +65,126 @@ function SubmitForm({
 
   const trimmed = url.trim();
   return (
-    <View style={{ marginTop: 12, gap: 10 }}>
-      <TextInput
-        value={url}
-        onChangeText={setUrl}
-        placeholder={hi ? "कार्य का लिंक (URL)" : "Link to your work (URL)"}
-        placeholderTextColor={c.inkDim}
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="url"
-        editable={!submit.isPending}
-        style={{
-          fontFamily: bodyFamily(hi),
-          fontSize: 15,
-          color: c.foreground,
-          backgroundColor: c.background,
-          borderWidth: 1,
-          borderColor: c.border,
-          borderRadius: c.radius,
-          paddingHorizontal: 14,
-          paddingVertical: 11,
+    <View style={{ marginTop: 12, gap: 12 }}>
+      <HomeworkProofPicker
+        assignmentId={assignmentId}
+        submissionId={submissionId}
+        studentId={studentId}
+        disabled={submit.isPending}
+        onQueued={() => {
+          setOpen(false);
+          setShowUrl(false);
+          setUrl("");
+          Alert.alert(
+            hi ? "ऑफ़लाइन सहेजा गया" : "Saved offline",
+            hi
+              ? "आपका गृहकार्य सहेज लिया गया है और समन्वयित होगा।"
+              : "Your homework was saved and will sync.",
+          );
         }}
       />
-      <Row style={{ gap: 10 }}>
+
+      {!showUrl ? (
         <Button
-          label={hi ? "भेजें" : "Send"}
-          icon="checkmark"
-          loading={submit.isPending}
-          disabled={!trimmed}
-          style={{ flex: 1 }}
-          onPress={() =>
-            submit.mutate(
-              {
-                assignmentId,
-                submissionId,
-                studentId,
-                submission_url: trimmed,
-              },
-              {
-                onSuccess: (res) => {
-                  setUrl("");
-                  setOpen(false);
-                  // §8 vocabulary: enqueue always lands as queued; drain may move
-                  // it to syncing/synced/duplicate/conflict/failed asynchronously.
-                  if (res.queued) {
-                    Alert.alert(
-                      hi ? "ऑफ़लाइन सहेजा गया" : "Saved offline",
-                      hi
-                        ? "आपका गृहकार्य सहेज लिया गया है और समन्वयित होगा।"
-                        : "Your homework was saved and will sync.",
-                    );
-                  }
-                },
-                onError: (err) => {
-                  Alert.alert(
-                    hi ? "सहेजा नहीं जा सका" : "Could not save",
-                    err instanceof Error
-                      ? err.message
-                      : hi
-                        ? "फिर से प्रयास करें।"
-                        : "Please try again.",
-                  );
-                },
-              },
-            )
-          }
-        />
-        <Button
-          label={hi ? "रद्द करें" : "Cancel"}
+          label={hi ? "लिंक से प्रस्तुत करें" : "Submit with a link instead"}
           variant="ghost"
           disabled={submit.isPending}
-          onPress={() => {
-            setUrl("");
-            setOpen(false);
-          }}
+          onPress={() => setShowUrl(true)}
         />
-      </Row>
+      ) : (
+        <View style={{ gap: 10 }}>
+          <Body muted style={{ fontSize: 12 }}>
+            {hi
+              ? "यदि गुरुजी ने कोई लिंक साझा किया हो"
+              : "If your Guruji shared a link"}
+          </Body>
+          <TextInput
+            value={url}
+            onChangeText={setUrl}
+            placeholder={hi ? "कार्य का लिंक (URL)" : "Link to your work (URL)"}
+            placeholderTextColor={c.inkDim}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="url"
+            editable={!submit.isPending}
+            style={{
+              fontFamily: bodyFamily(hi),
+              fontSize: 15,
+              color: c.foreground,
+              backgroundColor: c.background,
+              borderWidth: 1,
+              borderColor: c.border,
+              borderRadius: c.radius,
+              paddingHorizontal: 14,
+              paddingVertical: 11,
+            }}
+          />
+          <Row style={{ gap: 10 }}>
+            <Button
+              label={hi ? "भेजें" : "Send"}
+              icon="checkmark"
+              loading={submit.isPending}
+              disabled={!trimmed}
+              style={{ flex: 1 }}
+              onPress={() =>
+                submit.mutate(
+                  {
+                    assignmentId,
+                    submissionId,
+                    studentId,
+                    submission_url: trimmed,
+                  },
+                  {
+                    onSuccess: (res) => {
+                      setUrl("");
+                      setShowUrl(false);
+                      setOpen(false);
+                      if (res.queued) {
+                        Alert.alert(
+                          hi ? "ऑफ़लाइन सहेजा गया" : "Saved offline",
+                          hi
+                            ? "आपका गृहकार्य सहेज लिया गया है और समन्वयित होगा।"
+                            : "Your homework was saved and will sync.",
+                        );
+                      }
+                    },
+                    onError: (err) => {
+                      Alert.alert(
+                        hi ? "सहेजा नहीं जा सका" : "Could not save",
+                        err instanceof Error
+                          ? err.message
+                          : hi
+                            ? "फिर से प्रयास करें।"
+                            : "Please try again.",
+                      );
+                    },
+                  },
+                )
+              }
+            />
+            <Button
+              label={hi ? "रद्द करें" : "Cancel"}
+              variant="ghost"
+              disabled={submit.isPending}
+              onPress={() => {
+                setUrl("");
+                setShowUrl(false);
+              }}
+            />
+          </Row>
+        </View>
+      )}
+
+      <Button
+        label={hi ? "बंद करें" : "Close"}
+        variant="ghost"
+        disabled={submit.isPending}
+        onPress={() => {
+          setUrl("");
+          setShowUrl(false);
+          setOpen(false);
+        }}
+      />
     </View>
   );
 }
@@ -192,7 +238,7 @@ export default function HomeworkScreen() {
       ) : rows.length === 0 ? (
         <StateView
           status="empty"
-          emptyText={hi ? "अभी कोई गृहकार्य नहीं है।" : "No homework assigned yet."}
+          emptyText={hi ? "अभी कोई गृहकार्य नहीं है。" : "No homework assigned yet."}
         />
       ) : (
         rows.map((row) => {
