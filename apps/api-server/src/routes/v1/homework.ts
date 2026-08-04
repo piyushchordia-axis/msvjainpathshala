@@ -19,7 +19,7 @@ import { db, homework_assignments, homework_submissions, batches, centres, stude
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
-import { httpUrl } from "../../lib/validation";
+import { httpUrl, isUuid, UUID_RE } from "../../lib/validation";
 import { signUploadUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
@@ -37,7 +37,6 @@ import { kolkataDateString } from "../../services/attendance-mark";
 const router: IRouter = Router();
 router.use(requireAuth);
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const DUE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -952,7 +951,11 @@ router.post("/submissions/:id/ungrade", requireAdminPanel, async (req: Request, 
 /* GET /v1/homework/mine?student_id=&limit=&cursor= — a student's homework feed */
 router.get("/mine", async (req: Request, res: Response) => {
   const studentId = String(req.query.student_id ?? "");
-  if (!UUID_RE.test(studentId) || !(await ownedStudentId(req, studentId))) {
+  if (!isUuid(studentId)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "student_id must be a valid UUID.");
+    return;
+  }
+  if (!(await ownedStudentId(req, studentId))) {
     fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
     return;
   }

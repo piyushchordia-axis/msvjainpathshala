@@ -751,38 +751,21 @@ describe("homework", () => {
   it("a submission made at 02:00 IST on the day after the due date is late", async () => {
     // 02:00 IST on 2026-03-16 == 2026-03-15T20:30:00.000Z — UTC date is still
     // the due day, so a UTC comparison would wrongly mark this on-time.
+    // Create under real time (FIX #19 rejects past due_date), then plant the
+    // historical due date before freezing the clock for submit.
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const { assignmentId, submissionId } = await freshAssignmentTargeting(admin.token, studentId);
+    await pool.query(`update homework_assignments set due_date = '2026-03-15' where id = $1`, [
+      assignmentId,
+    ]);
+
     vi.useFakeTimers({
       now: new Date("2026-03-15T20:30:00.000Z"),
       toFake: ["Date"],
     });
     try {
-      const admin = await loginAs("super_admin");
-      const parent = await loginAs("parent");
-      const studentId = await firstChildId(parent.token);
-
-      const batchesRes = await request(app).get("/v1/admin/batches").set(auth(admin.token));
-      let submissionId = "";
-      for (const b of batchesRes.body.data.items as Array<{ id: string }>) {
-        const create = await request(app)
-          .post("/v1/homework/assignments")
-          .set(auth(admin.token))
-          .send({
-            batch_id: b.id,
-            title: `Late IST ${Date.now()}`,
-            due_date: "2026-03-15",
-          });
-        expect(create.status).toBe(200);
-        const subs = await request(app)
-          .get(`/v1/homework/assignments/${create.body.data.id}/submissions`)
-          .set(auth(admin.token));
-        const mine = subs.body.data.items.find((s: { student_id: string }) => s.student_id === studentId);
-        if (mine) {
-          submissionId = mine.id;
-          break;
-        }
-      }
-      expect(submissionId).toBeTruthy();
-
       const submit = await request(app)
         .post(`/v1/homework/submissions/${submissionId}/submit`)
         .set(auth(parent.token))
@@ -1944,6 +1927,15 @@ describe("homework", () => {
 
     await pool.query(`update homework_assignments set deleted_at = now() where id = $1`, [zeroId]);
     await pool.query(`update batches set deleted_at = now() where id = $1`, [emptyBatchId]);
+  });
+
+  it("a malformed student_id returns 422, not 404", async () => {
+    const parent = await loginAs("parent");
+    const res = await request(app)
+      .get("/v1/homework/mine?student_id=not-a-uuid")
+      .set(auth(parent.token));
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe("ERR_VALIDATION_FAILED");
   });
 
   it("creating an assignment with a past due date is rejected", async () => {

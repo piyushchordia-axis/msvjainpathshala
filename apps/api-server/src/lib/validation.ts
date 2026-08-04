@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+/** Canonical UUID v4-ish format check used by route params/query guards. */
+export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isUuid(value: unknown): value is string {
+  return typeof value === "string" && UUID_RE.test(value);
+}
+
 /**
  * A URL field that must use the http(s) scheme.
  *
