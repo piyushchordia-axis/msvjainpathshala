@@ -16,6 +16,7 @@ import {
 import { and, eq, isNull } from "drizzle-orm";
 import { httpUrl } from "../lib/validation";
 import { kolkataDateString } from "./attendance-mark";
+import { resolveOwnedUpload } from "../lib/owned-upload";
 
 export class HomeworkSubmitError extends Error {
   constructor(
@@ -145,6 +146,16 @@ export async function applyHomeworkSubmit(opts: {
         "ERR_VALIDATION_FAILED",
         "That submission link is not a valid http(s) URL — check it and try again.",
       );
+    }
+    const owned = await resolveOwnedUpload({
+      userId: opts.actor.id,
+      url: parsed.data,
+      folderPrefix: "homework/",
+      allowedKinds: ["image", "pdf"],
+      label: "homework",
+    });
+    if (!owned.ok) {
+      throw new HomeworkSubmitError(422, "ERR_VALIDATION_FAILED", owned.message);
     }
     nextUrl = parsed.data;
   } else if (!sub.submission_url) {

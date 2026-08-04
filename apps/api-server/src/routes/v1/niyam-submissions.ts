@@ -17,7 +17,6 @@ import {
   notifications,
   device_push_tokens,
   punya_transactions,
-  upload_objects,
   users,
 } from "@workspace/db";
 import { and, asc, desc, eq, gt, gte, inArray, lt, ne, or, sql } from "drizzle-orm";
@@ -70,17 +69,6 @@ function earliestAllowedSubmissionDate(today: string): string {
   return addCalendarDays(today, -SUBMISSION_BACKDATE_DAYS);
 }
 
-function isNiyamProofUrl(url: string): boolean {
-  const key = uploadKeyFromUrl(url);
-  if (key) return key.startsWith("niyam-proof/");
-  try {
-    const u = new URL(url);
-    return u.pathname.includes("/uploads/niyam-proof/");
-  } catch {
-    return url.includes("/uploads/niyam-proof/");
-  }
-}
-
 type ProofMediaKind = "photo" | "video" | "audio";
 
 type ClientMediaItem = {
@@ -125,46 +113,28 @@ async function resolveSubmissionMedia(
   items: ClientMediaItem[],
   allowed: ProofMediaKind[],
 ): Promise<{ ok: true; items: ResolvedMediaItem[] } | { ok: false; message: string }> {
+  const { resolveOwnedUpload } = await import("../../lib/owned-upload");
+  const allowedKinds = allowed.map((k) =>
+    k === "photo" ? ("image" as const) : k,
+  );
   const resolved: ResolvedMediaItem[] = [];
   for (const item of items) {
-    if (!isNiyamProofUrl(item.url)) {
-      return { ok: false, message: "Media URL must be an uploaded niyam-proof file." };
+    const r = await resolveOwnedUpload({
+      userId,
+      url: item.url,
+      folderPrefix: "niyam-proof/",
+      allowedKinds,
+      label: "niyam proof",
+    });
+    if (!r.ok) {
+      return { ok: false, message: r.message };
     }
-    const key = uploadKeyFromUrl(item.url);
-    if (!key || !key.startsWith("niyam-proof/")) {
-      return { ok: false, message: "Media URL must be an uploaded niyam-proof file." };
-    }
-    const [row] = await db
-      .select({
-        uploaded_by: upload_objects.uploaded_by,
-        content_type: upload_objects.content_type,
-      })
-      .from(upload_objects)
-      .where(eq(upload_objects.key, key))
-      .limit(1);
-    if (!row || row.uploaded_by !== userId) {
-      return {
-        ok: false,
-        message: "Media URL is not an upload owned by you. Re-upload the proof and try again.",
-      };
-    }
-    const kind = kindFromUploadContentType(row.content_type, key);
-    if (!kind) {
-      return {
-        ok: false,
-        message: "Uploaded file type cannot be used as niyam proof.",
-      };
-    }
-    if (!allowed.includes(kind)) {
-      return {
-        ok: false,
-        message: `Media kind "${kind}" is not allowed for this niyam.`,
-      };
-    }
+    const kind: ProofMediaKind =
+      r.kind === "image" ? "photo" : (r.kind as ProofMediaKind);
     resolved.push({
       url: item.url,
       kind,
-      mime: row.content_type ?? item.mime ?? null,
+      mime: r.contentType ?? item.mime ?? null,
       size_bytes: item.size_bytes ?? null,
     });
   }

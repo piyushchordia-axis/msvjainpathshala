@@ -110,6 +110,26 @@ async function totalPunya(parentToken: string, studentId: string): Promise<numbe
   return (res.body.data.total_points as number) ?? 0;
 }
 
+/** Plant an upload_objects row owned by userId; return a local /uploads URL (F2). */
+async function ownedHomeworkUrl(
+  userId: string,
+  opts?: { ext?: "jpg" | "pdf"; contentType?: string },
+): Promise<string> {
+  const ext = opts?.ext ?? "jpg";
+  const contentType =
+    opts?.contentType ?? (ext === "pdf" ? "application/pdf" : "image/jpeg");
+  const key = `homework/test-${userId}-${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+  await pool.query(
+    `insert into upload_objects (key, uploaded_by, content_type)
+     values ($1, $2, $3)
+     on conflict (key) do update
+       set uploaded_by = excluded.uploaded_by,
+           content_type = excluded.content_type`,
+    [key, userId, contentType],
+  );
+  return `http://localhost:8080/uploads/${key}`;
+}
+
 async function studentCityId(studentId: string): Promise<string> {
   const res = await pool.query<{ city_id: string }>(
     `select c.city_id
@@ -160,7 +180,7 @@ describe("homework", () => {
     const submit = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/aarav-homework.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
     expect(submit.status).toBe(200);
     expect(submit.body.data.status).toBe("submitted");
 
@@ -195,7 +215,7 @@ describe("homework", () => {
     const res = await request(app)
       .post(`/v1/homework/submissions/00000000-0000-0000-0000-000000000000/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/x.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
     expect(res.status).toBe(404);
 
     // And a random student_id the parent does not own -> 404 on the feed.
@@ -220,7 +240,7 @@ describe("homework", () => {
     const submit = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/regrade.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
     expect(submit.status).toBe(200);
 
     const before = await totalPunya(parent.token, studentId);
@@ -254,7 +274,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/ungrade-once.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
     const before = await totalPunya(parent.token, studentId);
     const grade = await request(app)
@@ -283,7 +303,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/ungrade-twice.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/grade`)
@@ -313,7 +333,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/regrade-after-ungrade.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
     const before = await totalPunya(parent.token, studentId);
     await request(app)
@@ -348,7 +368,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/approve-to-star.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
     const before = await totalPunya(parent.token, studentId);
     await request(app)
@@ -416,7 +436,7 @@ describe("homework", () => {
     const submit = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/first.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
     expect(submit.status).toBe(200);
 
     const grade = await request(app)
@@ -429,7 +449,7 @@ describe("homework", () => {
     const resubmit = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/sneaky-overwrite.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
     expect(resubmit.status).toBe(409);
     expect(resubmit.body.error.code).toBe("ERR_CONFLICT");
 
@@ -439,7 +459,7 @@ describe("homework", () => {
       .set(auth(parent.token));
     const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
     expect(row.status).toBe("approved");
-    expect(row.submission_url).toBe("https://example.com/first.jpg");
+    expect(row.submission_url).toContain("/uploads/homework/");
   });
 
   it("a shikshak cannot list submissions for a batch they are not assigned to", async () => {
@@ -573,7 +593,7 @@ describe("homework", () => {
       const submit = await request(app)
         .post(`/v1/homework/submissions/${submissionId}/submit`)
         .set(auth(parent.token))
-        .send({ submission_url: "https://example.com/after-deactivate.jpg" });
+        .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
       expect(submit.status).toBe(404);
       expect(submit.body.error.code).toBe("ERR_NOT_FOUND");
     } finally {
@@ -618,7 +638,7 @@ describe("homework", () => {
     const studentId = await firstChildId(parent.token);
     const submissionId = await freshSubmissionFor(admin.token, studentId);
 
-    const url = "https://example.com/keep-me.jpg";
+    const url = await ownedHomeworkUrl(parent.user.id);
     const online = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
@@ -645,7 +665,8 @@ describe("homework", () => {
       .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
       .set(auth(parent.token));
     const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
-    expect(row.submission_url).toBe(url);
+    // Signed feed URL still points at the same storage key.
+    expect(row.submission_url).toContain(url.split("/uploads/")[1]!.split("?")[0]);
   });
 
   it("the online route and the sync path produce the same row", async () => {
@@ -655,7 +676,7 @@ describe("homework", () => {
 
     const onlineId = await freshSubmissionFor(admin.token, studentId);
     const syncId = await freshSubmissionFor(admin.token, studentId);
-    const url = "https://example.com/parity.jpg";
+    const url = await ownedHomeworkUrl(parent.user.id);
 
     const online = await request(app)
       .post(`/v1/homework/submissions/${onlineId}/submit`)
@@ -748,7 +769,7 @@ describe("homework", () => {
       const submit = await request(app)
         .post(`/v1/homework/submissions/${submissionId}/submit`)
         .set(auth(parent.token))
-        .send({ submission_url: "https://example.com/late-ist.jpg" });
+        .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
       expect(submit.status).toBe(200);
       expect(submit.body.data.status).toBe("late");
       expect(submit.body.data.late).toBe(true);
@@ -766,7 +787,7 @@ describe("homework", () => {
     const submit = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/on-time.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
     expect(submit.status).toBe(200);
     expect(submit.body.data.status).toBe("submitted");
     expect(submit.body.data.late).toBe(false);
@@ -777,7 +798,7 @@ describe("homework", () => {
     const parent = await loginAs("parent");
     const studentId = await firstChildId(parent.token);
     const { assignmentId, submissionId } = await freshAssignmentTargeting(admin.token, studentId);
-    const url = "https://example.com/resolved-pair.jpg";
+    const url = await ownedHomeworkUrl(parent.user.id);
 
     const sync = await request(app)
       .post("/v1/sync/batch")
@@ -805,7 +826,7 @@ describe("homework", () => {
       .set(auth(parent.token));
     const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
     expect(row.status).toBe("submitted");
-    expect(row.submission_url).toBe(url);
+    expect(row.submission_url).toContain(url.split("/uploads/")[1]!.split("?")[0]);
   });
 
   it("submission_id still works", async () => {
@@ -824,7 +845,7 @@ describe("homework", () => {
             op_type: "homework_submission",
             payload: {
               submission_id: submissionId,
-              file_url: "https://example.com/by-submission-id.jpg",
+              file_url: await ownedHomeworkUrl(parent.user.id),
             },
             client_timestamp: new Date().toISOString(),
           },
@@ -848,7 +869,7 @@ describe("homework", () => {
             payload: {
               assignment_id: "11111111-1111-1111-1111-111111111111",
               student_id: "22222222-2222-2222-2222-222222222222",
-              proof_asset_id: "https://example.com/x.jpg",
+              proof_asset_id: await ownedHomeworkUrl(parent.user.id),
             },
             client_timestamp: new Date().toISOString(),
           },
@@ -866,7 +887,7 @@ describe("homework", () => {
     const studentId = await firstChildId(parent.token);
     const { assignmentId, submissionId } = await freshAssignmentTargeting(admin.token, studentId);
     const opId = ulid();
-    const url = "https://example.com/replay-once.jpg";
+    const url = await ownedHomeworkUrl(parent.user.id);
 
     const first = await request(app)
       .post("/v1/sync/batch")
@@ -901,7 +922,7 @@ describe("homework", () => {
             payload: {
               assignment_id: assignmentId,
               student_id: studentId,
-              proof_asset_id: "https://example.com/should-not-apply.jpg",
+              proof_asset_id: await ownedHomeworkUrl(parent.user.id),
             },
             client_timestamp: new Date().toISOString(),
           },
@@ -915,7 +936,8 @@ describe("homework", () => {
       .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
       .set(auth(parent.token));
     const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
-    expect(row.submission_url).toBe(url);
+    // Replay must not re-apply the second payload's URL.
+    expect(row.submission_url).toContain(url.split("/uploads/")[1]!.split("?")[0]);
   });
 
   it("an assignment can be edited within scope", async () => {
@@ -1024,7 +1046,7 @@ describe("homework", () => {
     const submit = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/graded-then-delete.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
     expect(submit.status).toBe(200);
 
     const grade = await request(app)
@@ -1133,7 +1155,7 @@ describe("homework", () => {
     const submit = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/should-not-submit.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
     expect(submit.status).toBe(403);
     expect(submit.body.error.code).toBe("ERR_FORBIDDEN");
   });
@@ -1198,7 +1220,7 @@ describe("homework", () => {
       await request(app)
         .post(`/v1/homework/submissions/${submissionId}/submit`)
         .set(auth(parent.token))
-        .send({ submission_url: "https://example.com/city-override.jpg" });
+        .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
       const before = await totalPunya(parent.token, studentId);
       const grade = await request(app)
@@ -1241,7 +1263,7 @@ describe("homework", () => {
       await request(app)
         .post(`/v1/homework/submissions/${submissionId}/submit`)
         .set(auth(parent.token))
-        .send({ submission_url: "https://example.com/global-fallback.jpg" });
+        .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
       const before = await totalPunya(parent.token, studentId);
       const grade = await request(app)
@@ -1262,7 +1284,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId2}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/feature-default.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
     const before2 = await totalPunya(parent.token, studentId);
     const grade2 = await request(app)
       .post(`/v1/homework/submissions/${submissionId2}/grade`)
@@ -1296,7 +1318,7 @@ describe("homework", () => {
       await request(app)
         .post(`/v1/homework/submissions/${submissionId}/submit`)
         .set(auth(parent.token))
-        .send({ submission_url: "https://example.com/starred-config.jpg" });
+        .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
       const before = await totalPunya(parent.token, studentId);
       await request(app)
@@ -1334,7 +1356,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/keep-feedback.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
     const approve = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/grade`)
@@ -1365,7 +1387,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/clear-feedback.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/grade`)
@@ -1395,7 +1417,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/keep-grader.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
     const first = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/grade`)
@@ -1495,7 +1517,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/grade-notify.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
     const before = await pool.query<{ n: string }>(
       `select count(*)::text as n from notifications
@@ -1834,7 +1856,7 @@ describe("homework", () => {
     const submit = await request(app)
       .post(`/v1/homework/submissions/${withSubs.submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/hw-counts.pdf" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
     expect(submit.status).toBe(200);
     const grade = await request(app)
       .post(`/v1/homework/submissions/${withSubs.submissionId}/grade`)
@@ -1971,7 +1993,7 @@ describe("homework", () => {
     const submit = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/concurrent-grade.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
     expect(submit.status).toBe(200);
 
     const before = await totalPunya(parent.token, studentId);
@@ -2247,7 +2269,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/graded-then-mark.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
     const grade = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/grade`)
       .set(auth(admin.token))
@@ -2345,7 +2367,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/return-me.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
     const before = await totalPunya(parent.token, studentId);
     const ret = await request(app)
@@ -2362,7 +2384,7 @@ describe("homework", () => {
     const resubmit = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/return-me-v2.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
     expect(resubmit.status).toBe(200);
     expect(resubmit.body.data.status).toMatch(/^(submitted|late)$/);
   });
@@ -2376,7 +2398,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/round1.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/grade`)
       .set(auth(admin.token))
@@ -2385,7 +2407,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/round2.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
     const before = await totalPunya(parent.token, studentId);
     const grade = await request(app)
@@ -2406,7 +2428,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/approved-then-return.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
     const before = await totalPunya(parent.token, studentId);
     const grade = await request(app)
@@ -2437,7 +2459,7 @@ describe("homework", () => {
     await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
       .set(auth(parent.token))
-      .send({ submission_url: "https://example.com/needs-note.jpg" });
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
 
     const empty = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/grade`)
@@ -2451,5 +2473,73 @@ describe("homework", () => {
       .set(auth(admin.token))
       .send({ status: "returned" });
     expect(missing.status).toBe(422);
+  });
+
+  /* ─── F2 — verify uploads against upload_objects ─── */
+
+  it("a submission url not present in upload_objects is rejected", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    const res = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "http://localhost:8080/uploads/homework/missing-key.jpg" });
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe("ERR_VALIDATION_FAILED");
+  });
+
+  it("a submission url uploaded by a different user is rejected", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const other = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+    const foreignUrl = await ownedHomeworkUrl(other.user.id);
+
+    const res = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: foreignUrl });
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe("ERR_VALIDATION_FAILED");
+  });
+
+  it("a non-image, non-pdf upload is rejected with a helpful message", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+    const key = `homework/test-video-${Date.now()}.mp4`;
+    await pool.query(
+      `insert into upload_objects (key, uploaded_by, content_type)
+       values ($1, $2, 'video/mp4')
+       on conflict (key) do update set uploaded_by = excluded.uploaded_by, content_type = excluded.content_type`,
+      [key, parent.user.id],
+    );
+    const url = `http://localhost:8080/uploads/${key}`;
+
+    const res = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: url });
+    expect(res.status).toBe(422);
+    expect(res.body.error.message).toMatch(/image or pdf/i);
+  });
+
+  it("an external https url is rejected", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    const res = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://drive.google.com/file/d/abc/view" });
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe("ERR_VALIDATION_FAILED");
   });
 });

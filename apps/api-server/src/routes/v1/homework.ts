@@ -20,7 +20,8 @@ import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { httpUrl, isUuid, UUID_RE } from "../../lib/validation";
-import { signUploadUrl } from "../../lib/file-tokens";
+import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
+import { resolveOwnedUpload } from "../../lib/owned-upload";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
 import { awardPunya, reversePunya } from "../../lib/punya";
@@ -158,6 +159,25 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
       "That due date has already passed — pick today or a later date.",
     );
     return;
+  }
+
+  // F2 — attachment must be an owned homework upload; admin may paste an
+  // external https link (library-style escape hatch). Parents never hit this path.
+  if (body.attachment_url) {
+    const key = uploadKeyFromUrl(body.attachment_url);
+    if (key) {
+      const owned = await resolveOwnedUpload({
+        userId: req.authUser!.id,
+        url: body.attachment_url,
+        folderPrefix: "homework/",
+        allowedKinds: ["image", "pdf"],
+        label: "worksheet",
+      });
+      if (!owned.ok) {
+        fail(res, 422, "ERR_VALIDATION_FAILED", owned.message);
+        return;
+      }
+    }
   }
 
   let assignmentId = "";
@@ -324,6 +344,22 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
     patch.due_date = body.due_date;
   }
   if (Object.prototype.hasOwnProperty.call(body, "attachment_url")) {
+    if (body.attachment_url) {
+      const key = uploadKeyFromUrl(body.attachment_url);
+      if (key) {
+        const owned = await resolveOwnedUpload({
+          userId: req.authUser!.id,
+          url: body.attachment_url,
+          folderPrefix: "homework/",
+          allowedKinds: ["image", "pdf"],
+          label: "worksheet",
+        });
+        if (!owned.ok) {
+          fail(res, 422, "ERR_VALIDATION_FAILED", owned.message);
+          return;
+        }
+      }
+    }
     patch.attachment_url = body.attachment_url ?? null;
   }
   if (Object.prototype.hasOwnProperty.call(body, "is_msv") && body.is_msv !== undefined) {
