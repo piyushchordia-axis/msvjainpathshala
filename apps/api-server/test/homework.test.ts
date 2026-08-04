@@ -548,4 +548,48 @@ describe("homework", () => {
     expect(onlineRow.late).toBe(syncRow.late);
     expect(onlineRow.submission_url).toBe(syncRow.submission_url);
   });
+
+  it("an assignment and its submissions are created atomically", async () => {
+    const admin = await loginAs("super_admin");
+    const batchesRes = await request(app).get("/v1/admin/batches").set(auth(admin.token));
+    expect(batchesRes.status).toBe(200);
+    // Prefer a batch that has active students so fan-out is non-empty.
+    let batchId = "";
+    let created = { id: "", submissions_created: 0 };
+    for (const b of batchesRes.body.data.items as Array<{ id: string }>) {
+      const create = await request(app)
+        .post("/v1/homework/assignments")
+        .set(auth(admin.token))
+        .send({
+          batch_id: b.id,
+          title: `Atomic HW ${Date.now()}-${b.id.slice(0, 6)}`,
+          due_date: tomorrow(),
+        });
+      expect(create.status).toBe(200);
+      if (create.body.data.submissions_created > 0) {
+        batchId = b.id;
+        created = create.body.data;
+        break;
+      }
+    }
+    expect(batchId).toBeTruthy();
+    expect(created.submissions_created).toBeGreaterThan(0);
+
+    const counted = await pool.query(
+      `select count(*)::int as n from homework_submissions where assignment_id = $1`,
+      [created.id],
+    );
+    expect(counted.rows[0].n).toBe(created.submissions_created);
+
+    const orphan = await pool.query(
+      `select a.id
+         from homework_assignments a
+         left join homework_submissions s on s.assignment_id = a.id
+        where a.id = $1
+        group by a.id
+       having count(s.id) = 0`,
+      [created.id],
+    );
+    expect(orphan.rows).toHaveLength(0);
+  });
 });

@@ -72,65 +72,92 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
     return;
   }
 
-  // Determine targets: explicit subset (each must be an active student in the
-  // batch) or all active students of the batch.
-  let targetIds: string[];
-  if (body.target_student_ids && body.target_student_ids.length > 0) {
-    const requested = Array.from(new Set(body.target_student_ids));
-    const valid = await db
-      .select({ id: students.id })
-      .from(students)
-      .where(
-        and(
-          inArray(students.id, requested),
-          eq(students.batch_id, batch.id),
-          eq(students.status, "active"),
-        ),
-      );
-    if (valid.length !== requested.length) {
+  let assignmentId = "";
+  let submissionsCreated = 0;
+  let titleForAudit = body.title;
+
+  try {
+    const outcome = await db.transaction(async (tx) => {
+      // Target resolution inside the tx so a concurrent deactivate cannot slip
+      // a student into the fan-out after we decided the roster.
+      let targetIds: string[];
+      if (body.target_student_ids && body.target_student_ids.length > 0) {
+        const requested = Array.from(new Set(body.target_student_ids));
+        const valid = await tx
+          .select({ id: students.id })
+          .from(students)
+          .where(
+            and(
+              inArray(students.id, requested),
+              eq(students.batch_id, batch.id),
+              eq(students.status, "active"),
+              isNull(students.deleted_at),
+            ),
+          );
+        if (valid.length !== requested.length) {
+          throw Object.assign(new Error("invalid targets"), { code: "ERR_VALIDATION_FAILED" as const });
+        }
+        targetIds = valid.map((r) => r.id);
+      } else {
+        const all = await tx
+          .select({ id: students.id })
+          .from(students)
+          .where(
+            and(
+              eq(students.batch_id, batch.id),
+              eq(students.status, "active"),
+              isNull(students.deleted_at),
+            ),
+          );
+        targetIds = all.map((r) => r.id);
+      }
+
+      const [row] = await tx
+        .insert(homework_assignments)
+        .values({
+          batch_id: batch.id,
+          title: body.title,
+          description: body.description ?? null,
+          due_date: body.due_date,
+          attachment_url: body.attachment_url ?? null,
+          is_msv: body.is_msv ?? false,
+          target_student_ids: body.target_student_ids && body.target_student_ids.length > 0 ? targetIds : null,
+          created_by: req.authUser!.id,
+        })
+        .returning({ id: homework_assignments.id });
+
+      // values([]) throws — empty batches still get an assignment row, no fan-out.
+      if (targetIds.length > 0) {
+        await tx.insert(homework_submissions).values(
+          targetIds.map((sid) => ({
+            assignment_id: row.id,
+            student_id: sid,
+            status: "pending" as const,
+          })),
+        );
+      }
+
+      return { id: row.id, submissions_created: targetIds.length };
+    });
+    assignmentId = outcome.id;
+    submissionsCreated = outcome.submissions_created;
+  } catch (err) {
+    if (err && typeof err === "object" && "code" in err && err.code === "ERR_VALIDATION_FAILED") {
       fail(res, 422, "ERR_VALIDATION_FAILED", "One or more target students are not active in this batch.");
       return;
     }
-    targetIds = valid.map((r) => r.id);
-  } else {
-    const all = await db
-      .select({ id: students.id })
-      .from(students)
-      .where(and(eq(students.batch_id, batch.id), eq(students.status, "active")));
-    targetIds = all.map((r) => r.id);
-  }
-
-  const [row] = await db
-    .insert(homework_assignments)
-    .values({
-      batch_id: batch.id,
-      title: body.title,
-      description: body.description ?? null,
-      due_date: body.due_date,
-      attachment_url: body.attachment_url ?? null,
-      is_msv: body.is_msv ?? false,
-      target_student_ids: body.target_student_ids && body.target_student_ids.length > 0 ? targetIds : null,
-      created_by: req.authUser!.id,
-    })
-    .returning({ id: homework_assignments.id });
-
-  let submissionsCreated = 0;
-  if (targetIds.length > 0) {
-    await db.insert(homework_submissions).values(
-      targetIds.map((sid) => ({ assignment_id: row.id, student_id: sid, status: "pending" as const })),
-    );
-    submissionsCreated = targetIds.length;
+    throw err;
   }
 
   await auditFromReq(req, {
     action: "create",
     entityKind: "homework_assignment",
-    entityId: row.id,
-    summary: `Created homework "${body.title}" for ${submissionsCreated} student(s).`,
+    entityId: assignmentId,
+    summary: `Created homework "${titleForAudit}" for ${submissionsCreated} student(s).`,
     metadata: { batch_id: batch.id, submissions_created: submissionsCreated },
   });
 
-  ok(res, { id: row.id, submissions_created: submissionsCreated });
+  ok(res, { id: assignmentId, submissions_created: submissionsCreated });
 });
 
 /* GET /v1/homework/assignments?batch_id=&limit= — scoped list + counts */
