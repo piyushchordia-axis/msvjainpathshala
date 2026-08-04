@@ -188,8 +188,13 @@ describe("homework", () => {
     const shikshak = await loginAs("shikshak");
     const studentId = await firstChildId(parent.token);
 
-    // Fresh pending submission for Aarav.
+    // Fresh pending submission for Aarav — must submit before grade is allowed.
     const submissionId = await freshSubmissionFor(admin.token, studentId);
+    const submit = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/regrade.jpg" });
+    expect(submit.status).toBe(200);
 
     const before = await totalPunya(parent.token, studentId);
 
@@ -230,6 +235,32 @@ describe("homework", () => {
     const graded = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
     expect(graded.status).toBe("starred");
     expect(graded.feedback_note).toBe("Even better.");
+  });
+
+  it("grading a pending submission is rejected and awards no Punya", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+    const before = await totalPunya(parent.token, studentId);
+
+    const grade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved" });
+    expect(grade.status).toBe(409);
+    expect(grade.body.error.code).toBe("ERR_CONFLICT");
+    expect(grade.body.error.message).toMatch(/upload their work/i);
+
+    expect(await totalPunya(parent.token, studentId)).toBe(before);
+
+    const feed = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}`)
+      .set(auth(parent.token));
+    const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
+    expect(row.status).toBe("pending");
   });
 
   it("rejects re-submitting an already-graded submission with 409", async () => {

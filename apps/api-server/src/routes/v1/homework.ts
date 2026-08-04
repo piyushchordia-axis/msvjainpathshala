@@ -165,6 +165,8 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
       centre_name: centres.name,
       created_at: homework_assignments.created_at,
       total: sql<number>`count(${homework_submissions.id})::int`,
+      // pending cannot become approved/starred (grade route rejects it), so this
+      // filter stays accurate without listing pending separately.
       submitted: sql<number>`count(${homework_submissions.id}) filter (where ${homework_submissions.status} in ('submitted','approved','starred','late'))::int`,
       graded: sql<number>`count(${homework_submissions.id}) filter (where ${homework_submissions.status} in ('approved','starred'))::int`,
     })
@@ -256,6 +258,19 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     return;
   }
 
+  // Pending has no work uploaded — refuse before the claim so the client gets a
+  // clear fix. Already-graded rows still enter the tx for metadata-only re-grades.
+  // The claim predicate below is what keeps concurrent awards safe (AT20).
+  if (sub.status === "pending") {
+    fail(
+      res,
+      409,
+      "ERR_CONFLICT",
+      "Nothing has been submitted yet — ask the student to upload their work first.",
+    );
+    return;
+  }
+
   // Idempotent on points: re-grading an already-graded submission updates only
   // the status/feedback metadata and never re-awards punya. Punya is awarded
   // exactly once, on the transition out of a not-yet-graded state.
@@ -270,9 +285,8 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
   const points = body.status === "starred" ? Math.round(POINTS * 1.2) : POINTS;
 
   const result = await db.transaction(async (tx) => {
-    // Compare-and-set: claim the submission for a fresh (points-awarding) grade
-    // only if it is not already graded. `claimed` tells us whether THIS call is
-    // the one that transitioned it out of a not-yet-graded state.
+    // Compare-and-set: claim only a submitted/late row for a points-awarding
+    // grade. `claimed` tells us whether THIS call won the transition.
     const claimedRows = await tx
       .update(homework_submissions)
       .set({
@@ -284,7 +298,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       .where(
         and(
           eq(homework_submissions.id, sub.id),
-          sql`${homework_submissions.status} not in ('approved', 'starred')`,
+          sql`${homework_submissions.status} in ('submitted', 'late')`,
         ),
       )
       .returning({ id: homework_submissions.id });
