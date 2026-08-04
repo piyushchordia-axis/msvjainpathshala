@@ -24,6 +24,7 @@ import { signUploadUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
 import { awardPunya, reversePunya } from "../../lib/punya";
+import { resolveHomeworkAwardPoints } from "../../lib/homework-points";
 import { auditFromReq } from "../../lib/audit";
 import { clampLimit, ownedStudentId, scopedCentreFilter } from "../../lib/route-helpers";
 
@@ -31,9 +32,6 @@ const router: IRouter = Router();
 router.use(requireAuth);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** Base punya points for an approved homework; starred gets a 20% bonus. */
-const POINTS = 10;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -43,10 +41,6 @@ function homeworkAwardKey(submissionId: string, revision: number): string {
 
 function homeworkReversalKey(awardKey: string): string {
   return awardKey.endsWith(":reversal") ? awardKey : `${awardKey}:reversal`;
-}
-
-function pointsForGrade(status: "approved" | "starred"): number {
-  return status === "starred" ? Math.round(POINTS * 1.2) : POINTS;
 }
 
 /** Most recent UNREVERSED homework award for a submission (AT18). */
@@ -542,7 +536,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     return;
   }
 
-  const points = pointsForGrade(body.status);
+  const points = await resolveHomeworkAwardPoints(body.status, sub.centre_id);
 
   // Claim + grade + award run in ONE transaction (AT20). First grade claims a
   // submitted/late row; re-grades of already-graded rows follow AT18:
@@ -612,7 +606,10 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       return { kind: "noop" as const, total_points: bal?.total_points ?? 0, points: 0 };
     }
 
-    const oldPoints = pointsForGrade(fresh.status);
+    const oldPoints = await resolveHomeworkAwardPoints(
+      fresh.status as "approved" | "starred",
+      sub.centre_id,
+    );
     if (oldPoints === points) {
       // Identical award value — metadata only, do NOT bump revision (AT18).
       await tx

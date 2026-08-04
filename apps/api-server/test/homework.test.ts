@@ -9,6 +9,15 @@ beforeAll(async () => {
   // Soft-delete leftover assignments from prior runs so /mine (max limit 200)
   // can still see rows minted by this suite.
   await pool.query(`update homework_assignments set deleted_at = now() where deleted_at is null`);
+  // AT21 catalogue rows (migration 0021) — idempotent for DBs that have not migrated yet.
+  await pool.query(`
+    INSERT INTO punya_features (key, label, min_points, max_points, is_active)
+    SELECT 'homework', 'Homework approved', 0, 10, true
+    WHERE NOT EXISTS (SELECT 1 FROM punya_features WHERE key = 'homework');
+    INSERT INTO punya_features (key, label, min_points, max_points, is_active)
+    SELECT 'homework_starred', 'Homework starred', 0, 12, true
+    WHERE NOT EXISTS (SELECT 1 FROM punya_features WHERE key = 'homework_starred');
+  `);
 });
 
 afterAll(async () => {
@@ -80,6 +89,19 @@ async function totalPunya(parentToken: string, studentId: string): Promise<numbe
   const res = await request(app).get(`/v1/me/students/${studentId}/punya`).set(auth(parentToken));
   expect(res.status).toBe(200);
   return (res.body.data.total_points as number) ?? 0;
+}
+
+async function studentCityId(studentId: string): Promise<string> {
+  const res = await pool.query<{ city_id: string }>(
+    `select c.city_id
+       from students s
+       join batches b on b.id = s.batch_id
+       join centres c on c.id = b.centre_id
+      where s.id = $1`,
+    [studentId],
+  );
+  expect(res.rows[0]?.city_id).toBeTruthy();
+  return res.rows[0]!.city_id;
 }
 
 describe("homework", () => {
@@ -1068,5 +1090,153 @@ describe("homework", () => {
 
     const gone = await request(app).get("/v1/homework/assignments?limit=200").set(auth(admin.token));
     expect(gone.body.data.items.some((a: { id: string }) => a.id === assignmentId)).toBe(false);
+  });
+
+  it("homework points come from punya_configs when a city override exists", async () => {
+    const { clearHomeworkPointsCache } = await import("../src/lib/homework-points");
+    clearHomeworkPointsCache();
+
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const cityId = await studentCityId(studentId);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await pool.query(
+      `insert into punya_configs (feature_key, points, city_id, is_active)
+       values ('homework', 25, $1, true)`,
+      [cityId],
+    );
+    clearHomeworkPointsCache();
+
+    try {
+      await request(app)
+        .post(`/v1/homework/submissions/${submissionId}/submit`)
+        .set(auth(parent.token))
+        .send({ submission_url: "https://example.com/city-override.jpg" });
+
+      const before = await totalPunya(parent.token, studentId);
+      const grade = await request(app)
+        .post(`/v1/homework/submissions/${submissionId}/grade`)
+        .set(auth(shikshak.token))
+        .send({ status: "approved" });
+      expect(grade.status).toBe(200);
+      expect(await totalPunya(parent.token, studentId)).toBe(before + 25);
+    } finally {
+      await pool.query(
+        `delete from punya_configs where feature_key = 'homework' and city_id = $1 and points = 25`,
+        [cityId],
+      );
+      clearHomeworkPointsCache();
+    }
+  });
+
+  it("homework points fall back to the global config, then to the default", async () => {
+    const { clearHomeworkPointsCache } = await import("../src/lib/homework-points");
+    clearHomeworkPointsCache();
+
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const cityId = await studentCityId(studentId);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    // Ensure no city override shadows the global row.
+    await pool.query(`delete from punya_configs where feature_key = 'homework' and city_id = $1`, [
+      cityId,
+    ]);
+    await pool.query(
+      `insert into punya_configs (feature_key, points, city_id, is_active)
+       values ('homework', 7, null, true)`,
+    );
+    clearHomeworkPointsCache();
+
+    try {
+      await request(app)
+        .post(`/v1/homework/submissions/${submissionId}/submit`)
+        .set(auth(parent.token))
+        .send({ submission_url: "https://example.com/global-fallback.jpg" });
+
+      const before = await totalPunya(parent.token, studentId);
+      const grade = await request(app)
+        .post(`/v1/homework/submissions/${submissionId}/grade`)
+        .set(auth(shikshak.token))
+        .send({ status: "approved" });
+      expect(grade.status).toBe(200);
+      expect(await totalPunya(parent.token, studentId)).toBe(before + 7);
+    } finally {
+      await pool.query(
+        `delete from punya_configs where feature_key = 'homework' and city_id is null and points = 7`,
+      );
+      clearHomeworkPointsCache();
+    }
+
+    // No configs → punya_features.max_points (10).
+    const submissionId2 = await freshSubmissionFor(admin.token, studentId);
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId2}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/feature-default.jpg" });
+    const before2 = await totalPunya(parent.token, studentId);
+    const grade2 = await request(app)
+      .post(`/v1/homework/submissions/${submissionId2}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved" });
+    expect(grade2.status).toBe(200);
+    expect(await totalPunya(parent.token, studentId)).toBe(before2 + 10);
+  });
+
+  it("the starred bonus is configurable and not a hardcoded multiplier", async () => {
+    const { clearHomeworkPointsCache } = await import("../src/lib/homework-points");
+    clearHomeworkPointsCache();
+
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const cityId = await studentCityId(studentId);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await pool.query(
+      `insert into punya_configs (feature_key, points, city_id, is_active)
+       values
+         ('homework', 10, $1, true),
+         ('homework_starred', 50, $1, true)`,
+      [cityId],
+    );
+    clearHomeworkPointsCache();
+
+    try {
+      await request(app)
+        .post(`/v1/homework/submissions/${submissionId}/submit`)
+        .set(auth(parent.token))
+        .send({ submission_url: "https://example.com/starred-config.jpg" });
+
+      const before = await totalPunya(parent.token, studentId);
+      await request(app)
+        .post(`/v1/homework/submissions/${submissionId}/grade`)
+        .set(auth(shikshak.token))
+        .send({ status: "approved" });
+      expect(await totalPunya(parent.token, studentId)).toBe(before + 10);
+
+      const star = await request(app)
+        .post(`/v1/homework/submissions/${submissionId}/grade`)
+        .set(auth(shikshak.token))
+        .send({ status: "starred" });
+      expect(star.status).toBe(200);
+      // Configurable 50 — not Math.round(10 * 1.2) = 12.
+      expect(await totalPunya(parent.token, studentId)).toBe(before + 50);
+    } finally {
+      await pool.query(
+        `delete from punya_configs
+          where city_id = $1
+            and feature_key in ('homework', 'homework_starred')
+            and points in (10, 50)`,
+        [cityId],
+      );
+      clearHomeworkPointsCache();
+    }
   });
 });

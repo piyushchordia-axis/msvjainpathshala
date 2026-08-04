@@ -148,6 +148,8 @@ async function main(): Promise<void> {
   await db.insert(punya_features).values([
     { key: "attendance", label: "Attendance", is_active: true, min_points: 0, max_points: 10 },
     { key: "niyam_completion", label: "Niyam completion", is_active: true, min_points: 0, max_points: 1000 },
+    { key: "homework", label: "Homework approved", is_active: true, min_points: 0, max_points: 10 },
+    { key: "homework_starred", label: "Homework starred", is_active: true, min_points: 0, max_points: 12 },
   ]);
 
   /* ---------------- Geography ---------------- */
