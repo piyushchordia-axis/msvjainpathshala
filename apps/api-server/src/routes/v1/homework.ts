@@ -25,7 +25,12 @@ import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
 import { awardPunya, reversePunya } from "../../lib/punya";
 import { resolveHomeworkAwardPoints } from "../../lib/homework-points";
+import {
+  notifyParentsHomeworkAssigned,
+  notifyParentHomeworkGraded,
+} from "../../lib/homework-notify";
 import { auditFromReq } from "../../lib/audit";
+
 import { clampLimit, ownedStudentId, scopedCentreFilter } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
@@ -173,10 +178,16 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
         );
       }
 
-      return { id: row.id, submissions_created: targetIds.length };
+      return { id: row.id, submissions_created: targetIds.length, targetIds };
     });
     assignmentId = outcome.id;
     submissionsCreated = outcome.submissions_created;
+
+    // Best-effort: one notification per parent (not per child) for this assignment.
+    await notifyParentsHomeworkAssigned({
+      studentIds: outcome.targetIds,
+      assignmentTitle: titleForAudit,
+    });
   } catch (err) {
     if (err && typeof err === "object" && "code" in err && err.code === "ERR_VALIDATION_FAILED") {
       fail(res, 422, "ERR_VALIDATION_FAILED", "One or more target students are not active in this batch.");
@@ -513,6 +524,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       status: homework_submissions.status,
       late: homework_submissions.late,
       revision: homework_submissions.revision,
+      assignment_id: homework_submissions.assignment_id,
       batch_id: homework_assignments.batch_id,
       centre_id: batches.centre_id,
     })
@@ -688,6 +700,11 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       summary: `Graded homework submission as ${body.status} (+${result.points}).`,
       metadata: { status: body.status, points: result.points },
     });
+    await notifyParentHomeworkGraded({
+      studentId: sub.student_id,
+      status: body.status,
+      assignmentId: sub.assignment_id,
+    });
   } else if (result.kind === "regrade") {
     await auditFromReq(req, {
       action: "grade",
@@ -700,6 +717,11 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
         reversed: result.reversed,
         re_grade: true,
       },
+    });
+    await notifyParentHomeworkGraded({
+      studentId: sub.student_id,
+      status: body.status,
+      assignmentId: sub.assignment_id,
     });
   } else {
     await auditFromReq(req, {

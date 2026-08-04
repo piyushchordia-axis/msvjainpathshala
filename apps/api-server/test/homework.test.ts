@@ -1461,4 +1461,160 @@ describe("homework", () => {
     expect(after.rows[0]!.status).toBe("starred");
     expect(after.rows[0]!.marked_by).toBe(shikshak.user.id);
   });
+
+  it("creating an assignment enqueues one notification per target student", async () => {
+    // Change 4: one per parent for the assignment — Aarav + Diya share a parent,
+    // so two target students produce one homework notification (not two).
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const children = await request(app).get("/v1/me/children").set(auth(parent.token));
+    const kids: Array<{ id: string; msv_status: string }> = children.body.data.items;
+    const aarav = kids.find((k) => k.msv_status === "approved");
+    const diya = kids.find((k) => k.msv_status === "none");
+    expect(aarav).toBeTruthy();
+    expect(diya).toBeTruthy();
+
+    const batchId = (
+      await pool.query<{ batch_id: string }>(`select batch_id from students where id = $1`, [aarav!.id])
+    ).rows[0]!.batch_id;
+
+    const before = await pool.query<{ n: string }>(
+      `select count(*)::text as n from notifications
+        where user_id = $1 and kind = 'homework'`,
+      [parent.user.id],
+    );
+    const beforeN = Number(before.rows[0]!.n);
+
+    const title = `Notify assign ${Date.now()}`;
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title,
+        due_date: tomorrow(),
+        is_msv: false,
+      });
+    expect(create.status).toBe(200);
+    expect(create.body.data.submissions_created).toBeGreaterThanOrEqual(2);
+
+    const after = await pool.query<{ n: string }>(
+      `select count(*)::text as n from notifications
+        where user_id = $1 and kind = 'homework'`,
+      [parent.user.id],
+    );
+    expect(Number(after.rows[0]!.n) - beforeN).toBe(1);
+
+    const latest = await pool.query<{
+      title_en: string;
+      title_hi: string;
+      body_en: string;
+      body_hi: string;
+    }>(
+      `select title_en, title_hi, body_en, body_hi from notifications
+        where user_id = $1 and kind = 'homework'
+        order by created_at desc limit 1`,
+      [parent.user.id],
+    );
+    expect(latest.rows[0]!.title_en).toBe("New homework");
+    expect(latest.rows[0]!.title_hi).toMatch(/गृहकार्य/);
+    expect(latest.rows[0]!.body_en).toContain(title);
+    expect(latest.rows[0]!.body_en).toMatch(/Guruji/);
+    expect(latest.rows[0]!.body_hi).toMatch(/गुरुजी/);
+  });
+
+  it("grading a submission notifies that student's parent", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/grade-notify.jpg" });
+
+    const before = await pool.query<{ n: string }>(
+      `select count(*)::text as n from notifications
+        where user_id = $1 and kind = 'homework'`,
+      [parent.user.id],
+    );
+    const beforeN = Number(before.rows[0]!.n);
+
+    const grade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved" });
+    expect(grade.status).toBe(200);
+
+    const after = await pool.query<{ n: string }>(
+      `select count(*)::text as n from notifications
+        where user_id = $1 and kind = 'homework'`,
+      [parent.user.id],
+    );
+    expect(Number(after.rows[0]!.n)).toBe(beforeN + 1);
+
+    const latest = await pool.query<{ title_en: string; body_en: string; body_hi: string }>(
+      `select title_en, body_en, body_hi from notifications
+        where user_id = $1 and kind = 'homework'
+        order by created_at desc limit 1`,
+      [parent.user.id],
+    );
+    expect(latest.rows[0]!.title_en).toBe("Homework approved");
+    expect(latest.rows[0]!.body_en).toMatch(/Guruji approved/);
+    expect(latest.rows[0]!.body_hi).toMatch(/गुरुजी/);
+  });
+
+  it("a parent who has opted out of push receives no push", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const batchId = (
+      await pool.query<{ batch_id: string }>(`select batch_id from students where id = $1`, [studentId])
+    ).rows[0]!.batch_id;
+
+    const prev = await pool.query<{ prefs: unknown }>(
+      `select notification_preferences as prefs from users where id = $1`,
+      [parent.user.id],
+    );
+
+    await pool.query(
+      `update users set notification_preferences = '{"push": false}'::jsonb where id = $1`,
+      [parent.user.id],
+    );
+
+    try {
+      const before = await pool.query<{ n: string }>(
+        `select count(*)::text as n from notifications
+          where user_id = $1 and kind = 'homework'`,
+        [parent.user.id],
+      );
+      const beforeN = Number(before.rows[0]!.n);
+
+      const create = await request(app)
+        .post("/v1/homework/assignments")
+        .set(auth(admin.token))
+        .send({
+          batch_id: batchId,
+          title: `Opt-out HW ${Date.now()}`,
+          due_date: tomorrow(),
+          target_student_ids: [studentId],
+        });
+      expect(create.status).toBe(200);
+
+      const after = await pool.query<{ n: string }>(
+        `select count(*)::text as n from notifications
+          where user_id = $1 and kind = 'homework'`,
+        [parent.user.id],
+      );
+      // prefsAllowKind: push===false skips insert entirely in notifyUsers.
+      expect(Number(after.rows[0]!.n)).toBe(beforeN);
+    } finally {
+      await pool.query(`update users set notification_preferences = $2::jsonb where id = $1`, [
+        parent.user.id,
+        JSON.stringify(prev.rows[0]?.prefs ?? {}),
+      ]);
+    }
+  });
 });
