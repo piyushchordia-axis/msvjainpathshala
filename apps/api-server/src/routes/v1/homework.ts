@@ -114,6 +114,61 @@ async function findLatestUnreversedHomeworkAward(
   return rows[0] ?? null;
 }
 
+/**
+ * First-grade claim + AT20 award (AT17 revision-scoped key). Shared by the
+ * single-grade route and bulk grade-all so there is one award path.
+ */
+async function claimAndAwardFirstHomeworkGrade(opts: {
+  tx: Tx;
+  actorId: string;
+  submissionId: string;
+  studentId: string;
+  gradeStatus: "approved" | "starred";
+  points: number;
+  feedbackPatch: { feedback_note?: string | null };
+}): Promise<{ awarded: true; points: number; total_points: number } | { awarded: false }> {
+  const claimedRows = await opts.tx
+    .update(homework_submissions)
+    .set({
+      status: opts.gradeStatus,
+      ...opts.feedbackPatch,
+      marked_by: opts.actorId,
+      marked_at: new Date(),
+      revision: sql`${homework_submissions.revision} + 1`,
+    })
+    .where(
+      and(
+        eq(homework_submissions.id, opts.submissionId),
+        sql`${homework_submissions.status} in ('submitted', 'late', 'acknowledged')`,
+      ),
+    )
+    .returning({
+      id: homework_submissions.id,
+      revision: homework_submissions.revision,
+    });
+
+  if (claimedRows.length === 0) {
+    return { awarded: false };
+  }
+
+  const awardRevision = claimedRows[0]!.revision;
+  const award = await awardPunya(
+    {
+      studentId: opts.studentId,
+      featureKey: "homework",
+      points: opts.points,
+      note: opts.gradeStatus === "starred" ? "Homework starred" : "Homework approved",
+      awardedBy: opts.actorId,
+      idempotencyKey: homeworkAwardKey(opts.submissionId, awardRevision),
+      sourceEntityKind: "homework",
+      sourceEntityId: opts.submissionId,
+      sourceRevision: awardRevision,
+    },
+    opts.tx,
+  );
+  return { awarded: true, points: opts.points, total_points: award.total_points };
+}
+
 /* ═══════════════════════════ Admin / shikshak ═══════════════════════════ */
 
 const createAssignmentSchema = z.object({
@@ -641,6 +696,218 @@ router.get("/assignments/:id/submissions", requireAdminPanel, async (req: Reques
   ok(res, { items }, { count: items.length });
 });
 
+const gradeAllSchema = z.object({
+  status: z.enum(["approved", "starred"]),
+  feedback_note: z.string().max(2000).nullable().optional(),
+  /** Default true — already-graded rows are skipped, not re-graded. */
+  only_ungraded: z.boolean().optional(),
+  exclude: z.array(z.string().uuid()).max(500).optional(),
+  /**
+   * F1 — separate acknowledgements from uploads.
+   * uploaded = has submission_url; acknowledged = status acknowledged / no url.
+   */
+  work_kind: z.enum(["all", "uploaded", "acknowledged"]).optional(),
+});
+
+type BulkGradeRowResult = {
+  submission_id: string;
+  status: "success" | "skipped" | "failed";
+  awarded: number;
+  error?: { code: string; message: string };
+};
+
+/**
+ * POST /v1/homework/assignments/:id/grade-all — bulk first-grade (F10).
+ * Each row uses the same claim-and-award helper as single grade (AT20).
+ * Per-row results: one failure never aborts siblings.
+ */
+router.post("/assignments/:id/grade-all", requireAdminPanel, async (req: Request, res: Response) => {
+  let body: z.infer<typeof gradeAllSchema>;
+  try {
+    body = gradeAllSchema.parse(req.body);
+  } catch {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid bulk grade data.");
+    return;
+  }
+
+  const assignmentId = String(req.params.id);
+  const scope = await resolveAdminScope(req.authUser!);
+  const [assignment] = await db
+    .select({
+      id: homework_assignments.id,
+      batch_id: homework_assignments.batch_id,
+      centre_id: batches.centre_id,
+    })
+    .from(homework_assignments)
+    .innerJoin(batches, eq(batches.id, homework_assignments.batch_id))
+    .where(and(eq(homework_assignments.id, assignmentId), isNull(homework_assignments.deleted_at)))
+    .limit(1);
+  if (!assignment || !inBatchWriteScope(scope, assignment.batch_id, assignment.centre_id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Assignment not found.");
+    return;
+  }
+
+  const onlyUngraded = body.only_ungraded !== false;
+  const workKind = body.work_kind ?? "all";
+  const exclude = new Set(body.exclude ?? []);
+  const feedbackPresent = Object.prototype.hasOwnProperty.call(req.body ?? {}, "feedback_note");
+  const feedbackPatch = feedbackPresent
+    ? { feedback_note: body.feedback_note?.trim() || null }
+    : ({} as { feedback_note?: string | null });
+
+  const points = await resolveHomeworkAwardPoints(body.status, assignment.centre_id);
+
+  const candidates = await db
+    .select({
+      id: homework_submissions.id,
+      student_id: homework_submissions.student_id,
+      status: homework_submissions.status,
+      submission_url: homework_submissions.submission_url,
+    })
+    .from(homework_submissions)
+    .where(eq(homework_submissions.assignment_id, assignment.id));
+
+  const results: BulkGradeRowResult[] = [];
+  let awardedTotal = 0;
+  let gradedCount = 0;
+  let skippedCount = 0;
+  let failedCount = 0;
+
+  for (const sub of candidates) {
+    if (exclude.has(sub.id)) {
+      results.push({
+        submission_id: sub.id,
+        status: "skipped",
+        awarded: 0,
+        error: { code: "ERR_SKIPPED", message: "Excluded from this bulk grade." },
+      });
+      skippedCount += 1;
+      continue;
+    }
+
+    if (workKind === "uploaded" && !sub.submission_url) {
+      results.push({
+        submission_id: sub.id,
+        status: "skipped",
+        awarded: 0,
+        error: {
+          code: "ERR_SKIPPED",
+          message: "No uploaded work — use Approve all marked done for acknowledgements.",
+        },
+      });
+      skippedCount += 1;
+      continue;
+    }
+    if (workKind === "acknowledged" && (sub.status !== "acknowledged" || sub.submission_url)) {
+      results.push({
+        submission_id: sub.id,
+        status: "skipped",
+        awarded: 0,
+        error: {
+          code: "ERR_SKIPPED",
+          message: "Not a parent acknowledgement — use Approve all uploaded work.",
+        },
+      });
+      skippedCount += 1;
+      continue;
+    }
+
+    if (onlyUngraded && (sub.status === "approved" || sub.status === "starred")) {
+      results.push({
+        submission_id: sub.id,
+        status: "skipped",
+        awarded: 0,
+        error: { code: "ERR_SKIPPED", message: "Already graded." },
+      });
+      skippedCount += 1;
+      continue;
+    }
+
+    if (sub.status === "pending" || sub.status === "returned") {
+      results.push({
+        submission_id: sub.id,
+        status: "skipped",
+        awarded: 0,
+        error: {
+          code: "ERR_SKIPPED",
+          message:
+            sub.status === "returned"
+              ? "Waiting for resubmission."
+              : "Nothing submitted yet.",
+        },
+      });
+      skippedCount += 1;
+      continue;
+    }
+
+    try {
+      const outcome = await db.transaction(async (tx) =>
+        claimAndAwardFirstHomeworkGrade({
+          tx,
+          actorId: req.authUser!.id,
+          submissionId: sub.id,
+          studentId: sub.student_id,
+          gradeStatus: body.status,
+          points,
+          feedbackPatch,
+        }),
+      );
+
+      if (!outcome.awarded) {
+        results.push({
+          submission_id: sub.id,
+          status: "skipped",
+          awarded: 0,
+          error: { code: "ERR_SKIPPED", message: "Could not claim — already graded or not ready." },
+        });
+        skippedCount += 1;
+        continue;
+      }
+
+      results.push({
+        submission_id: sub.id,
+        status: "success",
+        awarded: outcome.points,
+      });
+      awardedTotal += outcome.points;
+      gradedCount += 1;
+
+      await auditFromReq(req, {
+        action: "grade",
+        entityKind: "homework_submission",
+        entityId: sub.id,
+        summary: `Bulk-graded homework submission as ${body.status} (+${outcome.points}).`,
+        metadata: { status: body.status, points: outcome.points, bulk: true },
+      });
+      await notifyParentHomeworkGraded({
+        studentId: sub.student_id,
+        status: body.status,
+        assignmentId: assignment.id,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unexpected grade error.";
+      results.push({
+        submission_id: sub.id,
+        status: "failed",
+        awarded: 0,
+        error: { code: "ERR_INTERNAL", message },
+      });
+      failedCount += 1;
+    }
+  }
+
+  ok(res, {
+    results,
+    summary: {
+      graded: gradedCount,
+      skipped: skippedCount,
+      failed: failedCount,
+      points_awarded: awardedTotal,
+      points_per_student: points,
+    },
+  });
+});
+
 const gradeSchema = z
   .object({
     status: z.enum(["approved", "starred", "returned"]),
@@ -803,52 +1070,24 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
   const points = await resolveHomeworkAwardPoints(body.status, sub.centre_id);
 
   // Claim + grade + award run in ONE transaction (AT20). First grade claims a
-  // submitted/late row; re-grades of already-graded rows follow AT18:
+  // submitted/late/acknowledged row; re-grades of already-graded rows follow AT18:
   // reverse-then-award when the point value changes, otherwise metadata only
   // with no revision bump.
   const result = await db.transaction(async (tx) => {
-    const claimedRows = await tx
-      .update(homework_submissions)
-      .set({
-        status: body.status,
-        ...feedbackPatch,
-        marked_by: req.authUser!.id,
-        marked_at: new Date(),
-        revision: sql`${homework_submissions.revision} + 1`,
-      })
-      .where(
-        and(
-          eq(homework_submissions.id, sub.id),
-          sql`${homework_submissions.status} in ('submitted', 'late', 'acknowledged')`,
-        ),
-      )
-      .returning({
-        id: homework_submissions.id,
-        revision: homework_submissions.revision,
-      });
-    const claimed = claimedRows.length > 0;
-
-    if (claimed) {
-      // Award keyed to the revision AFTER the bump (matches attendance AT17).
-      const awardRevision = claimedRows[0]!.revision;
-      const award = await awardPunya(
-        {
-          studentId: sub.student_id,
-          featureKey: "homework",
-          points,
-          note: body.status === "starred" ? "Homework starred" : "Homework approved",
-          awardedBy: req.authUser!.id,
-          idempotencyKey: homeworkAwardKey(sub.id, awardRevision),
-          sourceEntityKind: "homework",
-          sourceEntityId: sub.id,
-          sourceRevision: awardRevision,
-        },
-        tx,
-      );
+    const first = await claimAndAwardFirstHomeworkGrade({
+      tx,
+      actorId: req.authUser!.id,
+      submissionId: sub.id,
+      studentId: sub.student_id,
+      gradeStatus: body.status,
+      points,
+      feedbackPatch,
+    });
+    if (first.awarded) {
       return {
         kind: "first_grade" as const,
-        total_points: award.total_points,
-        points,
+        total_points: first.total_points,
+        points: first.points,
       };
     }
 

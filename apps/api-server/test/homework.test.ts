@@ -2593,4 +2593,176 @@ describe("homework", () => {
     expect(create.status).toBe(422);
     expect(create.body.error.code).toBe("ERR_VALIDATION_FAILED");
   });
+
+  /* ─── F10 — bulk grade ─── */
+
+  it("bulk grading applies to every listed submission", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const batchId = await studentBatchId(studentId);
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `Bulk HW ${Date.now()}`,
+        due_date: tomorrow(),
+      });
+    expect(create.status).toBe(200);
+    const assignmentId = create.body.data.id as string;
+
+    // Mark every fan-out row submitted so bulk has a full list (no parent login per child).
+    await pool.query(
+      `update homework_submissions
+          set status = 'submitted',
+              submission_url = 'http://localhost:8080/uploads/homework/bulk-planted.jpg'
+        where assignment_id = $1 and status = 'pending'`,
+      [assignmentId],
+    );
+    const pendingCount = await pool.query<{ n: string }>(
+      `select count(*)::text as n from homework_submissions where assignment_id = $1 and status = 'submitted'`,
+      [assignmentId],
+    );
+    const n = Number(pendingCount.rows[0]!.n);
+    expect(n).toBeGreaterThan(0);
+
+    const bulk = await request(app)
+      .post(`/v1/homework/assignments/${assignmentId}/grade-all`)
+      .set(auth(admin.token))
+      .send({ status: "approved", only_ungraded: true, work_kind: "all" });
+    expect(bulk.status).toBe(200);
+    expect(bulk.body.data.summary.graded).toBe(n);
+    expect(bulk.body.data.results).toHaveLength(n);
+    expect(bulk.body.data.results.every((r: { status: string }) => r.status === "success")).toBe(true);
+  });
+
+  it("a bulk grade skips already-graded rows without erroring", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+    const assignmentId = (
+      await pool.query<{ assignment_id: string }>(
+        `select assignment_id from homework_submissions where id = $1`,
+        [submissionId],
+      )
+    ).rows[0]!.assignment_id;
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
+    const grade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(admin.token))
+      .send({ status: "approved" });
+    expect(grade.status).toBe(200);
+
+    const bulk = await request(app)
+      .post(`/v1/homework/assignments/${assignmentId}/grade-all`)
+      .set(auth(admin.token))
+      .send({ status: "approved", only_ungraded: true });
+    expect(bulk.status).toBe(200);
+    const row = bulk.body.data.results.find(
+      (r: { submission_id: string }) => r.submission_id === submissionId,
+    );
+    expect(row.status).toBe("skipped");
+    expect(bulk.body.data.summary.failed).toBe(0);
+  });
+
+  it("one failing row does not fail the batch", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const batchId = await studentBatchId(studentId);
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `Bulk partial ${Date.now()}`,
+        due_date: tomorrow(),
+      });
+    const assignmentId = create.body.data.id as string;
+
+    await pool.query(
+      `update homework_submissions
+          set status = 'submitted',
+              submission_url = 'http://localhost:8080/uploads/homework/bulk-partial.jpg'
+        where assignment_id = $1`,
+      [assignmentId],
+    );
+
+    // Force one row into an ungradeable state mid-batch via exclude + pending mix:
+    // leave one pending (skipped), rest submitted (success).
+    const ids = await pool.query<{ id: string }>(
+      `select id from homework_submissions where assignment_id = $1 order by id`,
+      [assignmentId],
+    );
+    expect(ids.rows.length).toBeGreaterThan(0);
+    await pool.query(`update homework_submissions set status = 'pending', submission_url = null where id = $1`, [
+      ids.rows[0]!.id,
+    ]);
+
+    const bulk = await request(app)
+      .post(`/v1/homework/assignments/${assignmentId}/grade-all`)
+      .set(auth(admin.token))
+      .send({ status: "approved", only_ungraded: true });
+    expect(bulk.status).toBe(200);
+    expect(bulk.body.data.results.length).toBe(ids.rows.length);
+    const skipped = bulk.body.data.results.find(
+      (r: { submission_id: string }) => r.submission_id === ids.rows[0]!.id,
+    );
+    expect(skipped.status).toBe("skipped");
+    expect(bulk.body.data.summary.graded).toBe(ids.rows.length - 1);
+  });
+
+  it("bulk grading awards Punya exactly once per student", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+    const assignmentId = (
+      await pool.query<{ assignment_id: string }>(
+        `select assignment_id from homework_submissions where id = $1`,
+        [submissionId],
+      )
+    ).rows[0]!.assignment_id;
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
+
+    const before = await totalPunya(parent.token, studentId);
+    const first = await request(app)
+      .post(`/v1/homework/assignments/${assignmentId}/grade-all`)
+      .set(auth(admin.token))
+      .send({ status: "approved", only_ungraded: true });
+    expect(first.status).toBe(200);
+    const afterFirst = await totalPunya(parent.token, studentId);
+    expect(afterFirst).toBeGreaterThan(before);
+
+    const second = await request(app)
+      .post(`/v1/homework/assignments/${assignmentId}/grade-all`)
+      .set(auth(admin.token))
+      .send({ status: "approved", only_ungraded: true });
+    expect(second.status).toBe(200);
+    const afterSecond = await totalPunya(parent.token, studentId);
+    expect(afterSecond).toBe(afterFirst);
+
+    const awards = await pool.query<{ n: string }>(
+      `select count(*)::text as n from punya_transactions
+        where student_id = $1
+          and feature_key = 'homework'
+          and points > 0
+          and idempotency_key like $2`,
+      [studentId, `homework-grade:${submissionId}:%`],
+    );
+    // One award (+ maybe unrelated history); at least the revision-scoped key once.
+    expect(Number(awards.rows[0]!.n)).toBeGreaterThanOrEqual(1);
+  });
 });

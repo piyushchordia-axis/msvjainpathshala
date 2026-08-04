@@ -486,6 +486,12 @@ function SubmissionsDialog({ assignment }: { assignment: AssignmentRow }) {
   const [items, setItems] = useState<SubmissionRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [confirmBulk, setConfirmBulk] = useState<{
+    work_kind: 'all' | 'uploaded' | 'acknowledged';
+    label: string;
+    count: number;
+  } | null>(null);
 
   async function load() {
     setLoading(true);
@@ -502,14 +508,103 @@ function SubmissionsDialog({ assignment }: { assignment: AssignmentRow }) {
 
   useEffect(() => { if (open) void load(); }, [open]);
 
+  const gradeable = items.filter((s) =>
+    s.status === 'submitted' || s.status === 'late' || s.status === 'acknowledged',
+  );
+  const uploadedReady = gradeable.filter((s) => !!s.submission_url);
+  const acknowledgedReady = gradeable.filter((s) => s.status === 'acknowledged' && !s.submission_url);
+
+  function askBulk(work_kind: 'all' | 'uploaded' | 'acknowledged', label: string, count: number) {
+    if (count === 0) {
+      toast.error('Nothing ready to approve for that action.');
+      return;
+    }
+    setConfirmBulk({ work_kind, label, count });
+  }
+
+  async function runBulk() {
+    if (!confirmBulk || bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      const res = await apiPost<{
+        results: Array<{ submission_id: string; status: string; awarded: number }>;
+        summary: { graded: number; skipped: number; failed: number; points_awarded: number; points_per_student: number };
+      }>(`/v1/homework/assignments/${assignment.id}/grade-all`, {
+        status: 'approved',
+        only_ungraded: true,
+        work_kind: confirmBulk.work_kind,
+      });
+      const s = res?.summary;
+      toast.success(
+        `Approved ${s?.graded ?? 0} submission(s).`,
+        s
+          ? `${s.points_awarded} Punya awarded${s.skipped ? `; ${s.skipped} skipped` : ''}${s.failed ? `; ${s.failed} failed` : ''}.`
+          : undefined,
+      );
+      setConfirmBulk(null);
+      await load();
+    } catch (err) {
+      toast.error('Bulk grade failed.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setConfirmBulk(null); }}>
       <DialogTrigger asChild>
         <Button size="sm" variant="ghost">Submissions</Button>
       </DialogTrigger>
       <DialogContent className="max-w-2xl">
         <DialogHeader><DialogTitle>{assignment.title}</DialogTitle></DialogHeader>
         {error ? <AdminError message={error} /> : null}
+
+        {!loading && gradeable.length > 0 ? (
+          <div className="flex flex-wrap gap-2 border-b border-border pb-3">
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={bulkBusy || uploadedReady.length === 0}
+              onClick={() => askBulk('uploaded', 'Approve all uploaded work', uploadedReady.length)}
+            >
+              Approve uploaded ({uploadedReady.length})
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              disabled={bulkBusy || acknowledgedReady.length === 0}
+              onClick={() => askBulk('acknowledged', 'Approve all marked done', acknowledgedReady.length)}
+            >
+              Approve marked done ({acknowledgedReady.length})
+            </Button>
+            <Button
+              size="sm"
+              disabled={bulkBusy || gradeable.length === 0}
+              onClick={() => askBulk('all', 'Approve all ready work', gradeable.length)}
+            >
+              Approve all ({gradeable.length})
+            </Button>
+          </div>
+        ) : null}
+
+        {confirmBulk ? (
+          <div className="rounded-md border border-border bg-muted/40 p-3 text-sm">
+            <p className="font-medium">{confirmBulk.label}?</p>
+            <p className="mt-1 text-muted-foreground">
+              This will approve {confirmBulk.count} submission(s) and award Punya for each.
+              Already-graded rows are skipped. Per-row Approve / Star / Return still work below.
+            </p>
+            <div className="mt-3 flex justify-end gap-2">
+              <Button type="button" size="sm" variant="outline" disabled={bulkBusy} onClick={() => setConfirmBulk(null)}>
+                Cancel
+              </Button>
+              <Button type="button" size="sm" disabled={bulkBusy} onClick={() => void runBulk()}>
+                {bulkBusy ? 'Approving…' : `Confirm approve ${confirmBulk.count}`}
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
         <div className="max-h-[60vh] overflow-y-auto">
           <table className="w-full text-sm">
             <thead className="bg-muted/40 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
