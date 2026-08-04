@@ -16,7 +16,7 @@
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, homework_assignments, homework_submissions, batches, centres, students, punya_balances } from "@workspace/db";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
@@ -39,6 +39,32 @@ router.use(requireAuth);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+/** Keyset cursor: `value|uuid` base64url — matches admin niyam-submissions. */
+function encodeKeysetCursor(value: string, id: string): string {
+  return Buffer.from(`${value}|${id}`, "utf8").toString("base64url");
+}
+
+function decodeKeysetCursor(
+  raw: unknown,
+  valueRe: RegExp,
+): { value: string; id: string } | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const decoded = Buffer.from(raw, "base64url").toString("utf8");
+    const i = decoded.indexOf("|");
+    if (i < 0) return null;
+    const value = decoded.slice(0, i);
+    const id = decoded.slice(i + 1);
+    if (!valueRe.test(value) || !UUID_RE.test(id)) return null;
+    return { value, id };
+  } catch {
+    return null;
+  }
+}
+
+const ISO_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function homeworkAwardKey(submissionId: string, revision: number): string {
   return `homework-grade:${submissionId}:${revision}`;
@@ -401,11 +427,12 @@ router.delete("/assignments/:id", requireAdminPanel, async (req: Request, res: R
   ok(res, { id: assignment.id, deleted: true, graded_reversed: graded.length });
 });
 
-/* GET /v1/homework/assignments?batch_id=&limit= — scoped list + counts */
+/* GET /v1/homework/assignments?batch_id=&limit=&cursor= — scoped list + counts */
 router.get("/assignments", requireAdminPanel, async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
   const limit = clampLimit(req.query.limit, 50, 200);
   const centreFilter = scopedCentreFilter(scope, batches.centre_id);
+  const cursor = decodeKeysetCursor(req.query.cursor, ISO_TS_RE);
 
   const filters = [isNull(homework_assignments.deleted_at), centreFilter];
   // Shikshak scope is batch-level: centre membership alone would leak every
@@ -420,6 +447,15 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
   const batchId = req.query.batch_id;
   if (typeof batchId === "string" && UUID_RE.test(batchId)) {
     filters.push(eq(homework_assignments.batch_id, batchId));
+  }
+  if (cursor) {
+    const cursorAt = new Date(cursor.value);
+    filters.push(
+      or(
+        lt(homework_assignments.created_at, cursorAt),
+        and(eq(homework_assignments.created_at, cursorAt), lt(homework_assignments.id, cursor.id)),
+      )!,
+    );
   }
 
   const rows = await db
@@ -446,11 +482,17 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
     .leftJoin(homework_submissions, eq(homework_submissions.assignment_id, homework_assignments.id))
     .where(and(...filters))
     .groupBy(homework_assignments.id, batches.name, centres.name)
-    .orderBy(desc(homework_assignments.created_at))
-    .limit(limit);
+    .orderBy(desc(homework_assignments.created_at), desc(homework_assignments.id))
+    .limit(limit + 1);
 
-  const items = rows.map((r) => ({ ...r, created_at: r.created_at.toISOString() }));
-  ok(res, { items }, { count: items.length });
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  const nextCursor =
+    hasMore && last ? encodeKeysetCursor(last.created_at.toISOString(), last.id) : null;
+
+  const items = page.map((r) => ({ ...r, created_at: r.created_at.toISOString() }));
+  ok(res, { items }, { count: items.length, has_more: hasMore, next_cursor: nextCursor });
 });
 
 /* GET /v1/homework/assignments/:id/submissions — scoped submission list */
@@ -837,7 +879,7 @@ router.post("/submissions/:id/ungrade", requireAdminPanel, async (req: Request, 
 
 /* ═══════════════════════════ Student / parent ═══════════════════════════ */
 
-/* GET /v1/homework/mine?student_id= — a student's homework feed */
+/* GET /v1/homework/mine?student_id=&limit=&cursor= — a student's homework feed */
 router.get("/mine", async (req: Request, res: Response) => {
   const studentId = String(req.query.student_id ?? "");
   if (!UUID_RE.test(studentId) || !(await ownedStudentId(req, studentId))) {
@@ -845,6 +887,24 @@ router.get("/mine", async (req: Request, res: Response) => {
     return;
   }
   const limit = clampLimit(req.query.limit, 50, 200);
+  const cursor = decodeKeysetCursor(req.query.cursor, DATE_RE);
+
+  const filters = [
+    eq(homework_submissions.student_id, studentId),
+    isNull(homework_assignments.deleted_at),
+  ];
+  if (cursor) {
+    filters.push(
+      or(
+        lt(homework_assignments.due_date, cursor.value),
+        and(
+          eq(homework_assignments.due_date, cursor.value),
+          lt(homework_submissions.id, cursor.id),
+        ),
+      )!,
+    );
+  }
+
   const rows = await db
     .select({
       id: homework_submissions.id,
@@ -861,21 +921,22 @@ router.get("/mine", async (req: Request, res: Response) => {
     })
     .from(homework_submissions)
     .innerJoin(homework_assignments, eq(homework_assignments.id, homework_submissions.assignment_id))
-    .where(
-      and(
-        eq(homework_submissions.student_id, studentId),
-        isNull(homework_assignments.deleted_at),
-      ),
-    )
-    .orderBy(desc(homework_assignments.due_date))
-    .limit(limit);
+    .where(and(...filters))
+    .orderBy(desc(homework_assignments.due_date), desc(homework_submissions.id))
+    .limit(limit + 1);
 
-  const items = rows.map((r) => ({
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  const nextCursor =
+    hasMore && last ? encodeKeysetCursor(last.due_date, last.id) : null;
+
+  const items = page.map((r) => ({
     ...r,
     attachment_url: signUploadUrl(r.attachment_url),
     submission_url: signUploadUrl(r.submission_url),
   }));
-  ok(res, { items }, { count: items.length });
+  ok(res, { items }, { count: items.length, has_more: hasMore, next_cursor: nextCursor });
 });
 
 const submitSchema = z.object({

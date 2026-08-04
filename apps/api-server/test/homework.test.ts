@@ -1780,4 +1780,83 @@ describe("homework", () => {
       await pool.query(`update homework_assignments set deleted_at = now() where id = $1`, [pastId]);
     }
   });
+
+  it("the second page returns the next set with no overlap", async () => {
+    const admin = await loginAs("super_admin");
+    const batchesRes = await request(app).get("/v1/admin/batches").set(auth(admin.token));
+    expect(batchesRes.status).toBe(200);
+    const batchId = batchesRes.body.data.items[0].id as string;
+
+    const createdIds: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const create = await request(app)
+        .post("/v1/homework/assignments")
+        .set(auth(admin.token))
+        .send({
+          batch_id: batchId,
+          title: `Page HW ${Date.now()}-${i}`,
+          due_date: tomorrow(),
+        });
+      expect(create.status).toBe(200);
+      createdIds.push(create.body.data.id as string);
+      // Distinct created_at for stable keyset ordering across fast inserts.
+      await new Promise((r) => setTimeout(r, 15));
+    }
+
+    const page1 = await request(app)
+      .get(`/v1/homework/assignments?batch_id=${batchId}&limit=2`)
+      .set(auth(admin.token));
+    expect(page1.status).toBe(200);
+    expect(page1.body.data.items).toHaveLength(2);
+    expect(page1.body.meta?.next_cursor).toBeTruthy();
+
+    const page2 = await request(app)
+      .get(
+        `/v1/homework/assignments?batch_id=${batchId}&limit=2&cursor=${encodeURIComponent(page1.body.meta.next_cursor)}`,
+      )
+      .set(auth(admin.token));
+    expect(page2.status).toBe(200);
+    expect(page2.body.data.items.length).toBeGreaterThanOrEqual(1);
+
+    const ids1 = new Set(page1.body.data.items.map((r: { id: string }) => r.id));
+    const ids2 = page2.body.data.items.map((r: { id: string }) => r.id);
+    for (const id of ids2) {
+      expect(ids1.has(id)).toBe(false);
+    }
+    // Our freshly created rows must appear across the pages (no silent drop).
+    const seen = new Set([...ids1, ...ids2]);
+    for (const id of createdIds) {
+      expect(seen.has(id)).toBe(true);
+    }
+  });
+
+  it("the meta block reports whether more rows exist", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+
+    // Ensure enough /mine rows to force a second page.
+    for (let i = 0; i < 3; i++) {
+      await freshAssignmentTargeting(admin.token, studentId);
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    const page1 = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=2`)
+      .set(auth(parent.token));
+    expect(page1.status).toBe(200);
+    expect(page1.body.data.items).toHaveLength(2);
+    expect(page1.body.meta?.has_more).toBe(true);
+    expect(typeof page1.body.meta?.next_cursor).toBe("string");
+    expect(page1.body.meta.next_cursor.length).toBeGreaterThan(0);
+
+    const page2 = await request(app)
+      .get(
+        `/v1/homework/mine?student_id=${studentId}&limit=2&cursor=${encodeURIComponent(page1.body.meta.next_cursor)}`,
+      )
+      .set(auth(parent.token));
+    expect(page2.status).toBe(200);
+    expect(page2.body.meta?.has_more).toBeDefined();
+    expect(typeof page2.body.meta.has_more).toBe("boolean");
+  });
 });

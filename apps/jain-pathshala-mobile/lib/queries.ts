@@ -5,7 +5,7 @@
  */
 import { Alert } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiPost, apiPut, ApiError } from "@/lib/api";
+import { apiGet, apiPost, apiPut, apiGetEnvelope, ApiError } from "@/lib/api";
 import type {
   AdminBatchRow,
   AdminStudentRow,
@@ -535,7 +535,23 @@ export interface HomeworkRow {
 export function useHomework(studentId?: string) {
   return useQuery({
     queryKey: qk.homework(studentId ?? ""),
-    queryFn: () => apiGet<List<HomeworkRow>>(`/v1/homework/mine?student_id=${studentId}`),
+    queryFn: async () => {
+      const collected: HomeworkRow[] = [];
+      let cursor: string | null = null;
+      let guard = 0;
+      do {
+        const qs = new URLSearchParams({ student_id: studentId!, limit: "50" });
+        if (cursor) qs.set("cursor", cursor);
+        const envelope = await apiGetEnvelope<List<HomeworkRow>>(
+          `/v1/homework/mine?${qs.toString()}`,
+        );
+        collected.push(...(envelope.data?.items ?? []));
+        const next = envelope.meta?.next_cursor;
+        cursor = typeof next === "string" && next.length > 0 ? next : null;
+        guard += 1;
+      } while (cursor && guard < 50);
+      return { items: collected } satisfies List<HomeworkRow>;
+    },
     enabled: !!studentId,
   });
 }

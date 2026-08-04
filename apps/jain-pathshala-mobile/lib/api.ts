@@ -285,6 +285,18 @@ export async function apiGet<T>(path: string): Promise<T> {
   return unwrap<T>(res);
 }
 
+/** Full `{ data, meta }` envelope — needed to follow keyset `meta.next_cursor`. */
+export async function apiGetEnvelope<T>(
+  path: string,
+): Promise<{ data: T; meta?: Record<string, unknown> }> {
+  const res = await get<{ data: T; meta?: Record<string, unknown> } | T>(path);
+  if (res && typeof res === "object" && "data" in (res as object)) {
+    const env = res as { data: T; meta?: Record<string, unknown> };
+    return { data: env.data, meta: env.meta };
+  }
+  return { data: res as T };
+}
+
 export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const res = await post<{ data: T } | T>(path, body);
   return unwrap<T>(res);

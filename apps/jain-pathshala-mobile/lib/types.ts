@@ -56,7 +56,9 @@ export type AdminStudent = AdminStudentRow;
 export type AdminEnrolment = EnrolmentRow;
 export type AdminBatch = AdminBatchRow;
 
-/** Standard list envelope used by every collection endpoint. */
 export interface ListResponse<T> {
   items: T[];
+  /** Present when the endpoint uses keyset pagination (e.g. homework /mine). */
+  next_cursor?: string | null;
+  has_more?: boolean;
 }
