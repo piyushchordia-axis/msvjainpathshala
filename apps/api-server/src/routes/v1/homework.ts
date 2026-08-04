@@ -15,7 +15,7 @@
  * detail/action is a 404; an out-of-scope batch on create is a 403.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, homework_assignments, homework_submissions, batches, centres, students, punya_balances, punya_transactions } from "@workspace/db";
+import { db, homework_assignments, homework_submissions, batches, centres, students, punya_balances } from "@workspace/db";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
@@ -34,6 +34,53 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /** Base punya points for an approved homework; starred gets a 20% bonus. */
 const POINTS = 10;
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+function homeworkAwardKey(submissionId: string, revision: number): string {
+  return `homework-grade:${submissionId}:${revision}`;
+}
+
+function homeworkReversalKey(awardKey: string): string {
+  return awardKey.endsWith(":reversal") ? awardKey : `${awardKey}:reversal`;
+}
+
+function pointsForGrade(status: "approved" | "starred"): number {
+  return status === "starred" ? Math.round(POINTS * 1.2) : POINTS;
+}
+
+/** Most recent UNREVERSED homework award for a submission (AT18). */
+async function findLatestUnreversedHomeworkAward(
+  tx: Tx,
+  submissionId: string,
+  studentId: string,
+): Promise<{ id: string; points: number; idempotency_key: string } | null> {
+  const legacy = `homework-grade:${submissionId}`;
+  const prefix = `homework-grade:${submissionId}:`;
+  const result = await tx.execute(sql`
+    select t.id, t.points, t.idempotency_key
+    from punya_transactions t
+    where t.student_id = ${studentId}
+      and t.points > 0
+      and (
+        t.idempotency_key = ${legacy}
+        or (
+          t.idempotency_key like ${prefix + "%"}
+          and t.idempotency_key not like ${"%:reversal"}
+        )
+      )
+      and not exists (
+        select 1 from punya_transactions r where r.reversal_of = t.id
+      )
+    order by t.created_at desc, t.id desc
+    limit 1
+  `);
+  const rows =
+    (result as unknown as {
+      rows?: Array<{ id: string; points: number; idempotency_key: string }>;
+    }).rows ?? [];
+  return rows[0] ?? null;
+}
 
 /* ═══════════════════════════ Admin / shikshak ═══════════════════════════ */
 
@@ -261,8 +308,7 @@ const deleteAssignmentSchema = z.object({
 /**
  * DELETE /v1/homework/assignments/:id — soft-delete only.
  * Graded submissions imply awarded Punya: require force_delete (AT25 shape) and
- * reverse each award before hiding the assignment. Full revision-scoped keys
- * land in FIX #12; until then we reverse against homework-grade:{submission_id}.
+ * reverse each award (revision-scoped keys, AT18) before hiding the assignment.
  */
 router.delete("/assignments/:id", requireAdminPanel, async (req: Request, res: Response) => {
   let body: z.infer<typeof deleteAssignmentSchema> = {};
@@ -319,26 +365,16 @@ router.delete("/assignments/:id", requireAdminPanel, async (req: Request, res: R
 
   await db.transaction(async (tx) => {
     for (const sub of graded) {
-      const awardKey = `homework-grade:${sub.id}`;
-      const [award] = await tx
-        .select({ points: punya_transactions.points })
-        .from(punya_transactions)
-        .where(
-          and(
-            eq(punya_transactions.student_id, sub.student_id),
-            eq(punya_transactions.idempotency_key, awardKey),
-          ),
-        )
-        .limit(1);
-      if (award && award.points > 0) {
+      const prior = await findLatestUnreversedHomeworkAward(tx, sub.id, sub.student_id);
+      if (prior && prior.points > 0) {
         await reversePunya(
           {
             studentId: sub.student_id,
             featureKey: "homework",
-            points: award.points,
+            points: prior.points,
             note: "Homework assignment deleted",
             awardedBy: req.authUser!.id,
-            idempotencyKey: `${awardKey}:reversal`,
+            idempotencyKey: homeworkReversalKey(prior.idempotency_key),
           },
           tx,
         );
@@ -462,7 +498,7 @@ const gradeSchema = z.object({
   feedback_note: z.string().max(2000).optional(),
 });
 
-/* POST /v1/homework/submissions/:id/grade — grade + award punya */
+/* POST /v1/homework/submissions/:id/grade — grade + award punya (AT18 / AT20) */
 router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, res: Response) => {
   let body: z.infer<typeof gradeSchema>;
   try {
@@ -479,6 +515,8 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       id: homework_submissions.id,
       student_id: homework_submissions.student_id,
       status: homework_submissions.status,
+      late: homework_submissions.late,
+      revision: homework_submissions.revision,
       batch_id: homework_assignments.batch_id,
       centre_id: batches.centre_id,
     })
@@ -493,8 +531,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
   }
 
   // Pending has no work uploaded — refuse before the claim so the client gets a
-  // clear fix. Already-graded rows still enter the tx for metadata-only re-grades.
-  // The claim predicate below is what keeps concurrent awards safe (AT20).
+  // clear fix. Already-graded rows still enter the tx for AT18 re-grades.
   if (sub.status === "pending") {
     fail(
       res,
@@ -505,22 +542,13 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     return;
   }
 
-  // Idempotent on points: re-grading an already-graded submission updates only
-  // the status/feedback metadata and never re-awards punya. Punya is awarded
-  // exactly once, on the transition out of a not-yet-graded state.
-  //
-  // Claim + grade + award run in ONE transaction: the status UPDATE is
-  // conditional (only fires on a not-yet-graded row) and we read whether it
-  // actually claimed the row. Only the call that wins the claim awards punya,
-  // so concurrent double-clicks can't double-award. If the award crashes after
-  // the claim, the whole tx rolls back — the status reverts and a retry can
-  // re-claim, so points are never permanently lost. awardPunya also carries a
-  // submission-scoped idempotency key as belt-and-suspenders against replays.
-  const points = body.status === "starred" ? Math.round(POINTS * 1.2) : POINTS;
+  const points = pointsForGrade(body.status);
 
+  // Claim + grade + award run in ONE transaction (AT20). First grade claims a
+  // submitted/late row; re-grades of already-graded rows follow AT18:
+  // reverse-then-award when the point value changes, otherwise metadata only
+  // with no revision bump.
   const result = await db.transaction(async (tx) => {
-    // Compare-and-set: claim only a submitted/late row for a points-awarding
-    // grade. `claimed` tells us whether THIS call won the transition.
     const claimedRows = await tx
       .update(homework_submissions)
       .set({
@@ -528,6 +556,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
         feedback_note: body.feedback_note ?? null,
         marked_by: req.authUser!.id,
         marked_at: new Date(),
+        revision: sql`${homework_submissions.revision} + 1`,
       })
       .where(
         and(
@@ -535,12 +564,57 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
           sql`${homework_submissions.status} in ('submitted', 'late')`,
         ),
       )
-      .returning({ id: homework_submissions.id });
+      .returning({
+        id: homework_submissions.id,
+        revision: homework_submissions.revision,
+      });
     const claimed = claimedRows.length > 0;
 
-    if (!claimed) {
-      // Already graded (or claimed by a concurrent request): update only the
-      // status/feedback metadata, never re-award punya.
+    if (claimed) {
+      // Award keyed to the revision AFTER the bump (matches attendance AT17).
+      const awardRevision = claimedRows[0]!.revision;
+      const award = await awardPunya(
+        {
+          studentId: sub.student_id,
+          featureKey: "homework",
+          points,
+          note: body.status === "starred" ? "Homework starred" : "Homework approved",
+          awardedBy: req.authUser!.id,
+          idempotencyKey: homeworkAwardKey(sub.id, awardRevision),
+          sourceEntityKind: "homework",
+          sourceEntityId: sub.id,
+          sourceRevision: awardRevision,
+        },
+        tx,
+      );
+      return {
+        kind: "first_grade" as const,
+        total_points: award.total_points,
+        points,
+      };
+    }
+
+    // Already graded — lock current row for AT18 comparison.
+    const [fresh] = await tx
+      .select({
+        status: homework_submissions.status,
+        revision: homework_submissions.revision,
+      })
+      .from(homework_submissions)
+      .where(eq(homework_submissions.id, sub.id))
+      .limit(1);
+    if (!fresh || (fresh.status !== "approved" && fresh.status !== "starred")) {
+      const [bal] = await tx
+        .select({ total_points: punya_balances.total_points })
+        .from(punya_balances)
+        .where(eq(punya_balances.student_id, sub.student_id))
+        .limit(1);
+      return { kind: "noop" as const, total_points: bal?.total_points ?? 0, points: 0 };
+    }
+
+    const oldPoints = pointsForGrade(fresh.status);
+    if (oldPoints === points) {
+      // Identical award value — metadata only, do NOT bump revision (AT18).
       await tx
         .update(homework_submissions)
         .set({
@@ -550,15 +624,43 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
           marked_at: new Date(),
         })
         .where(eq(homework_submissions.id, sub.id));
-
       const [bal] = await tx
         .select({ total_points: punya_balances.total_points })
         .from(punya_balances)
         .where(eq(punya_balances.student_id, sub.student_id))
         .limit(1);
-      return { claimed: false, total_points: bal?.total_points ?? 0 };
+      return { kind: "metadata" as const, total_points: bal?.total_points ?? 0, points: 0 };
     }
 
+    // Different point value: reverse old, award new, bump revision.
+    const prior = await findLatestUnreversedHomeworkAward(tx, sub.id, sub.student_id);
+    if (prior && prior.points > 0) {
+      await reversePunya(
+        {
+          studentId: sub.student_id,
+          featureKey: "homework",
+          points: prior.points,
+          note: "Homework re-grade reversal",
+          awardedBy: req.authUser!.id,
+          idempotencyKey: homeworkReversalKey(prior.idempotency_key),
+        },
+        tx,
+      );
+    }
+
+    const [bumped] = await tx
+      .update(homework_submissions)
+      .set({
+        status: body.status,
+        feedback_note: body.feedback_note ?? null,
+        marked_by: req.authUser!.id,
+        marked_at: new Date(),
+        revision: sql`${homework_submissions.revision} + 1`,
+      })
+      .where(eq(homework_submissions.id, sub.id))
+      .returning({ revision: homework_submissions.revision });
+
+    const awardRevision = bumped!.revision;
     const award = await awardPunya(
       {
         studentId: sub.student_id,
@@ -566,35 +668,152 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
         points,
         note: body.status === "starred" ? "Homework starred" : "Homework approved",
         awardedBy: req.authUser!.id,
-        idempotencyKey: `homework-grade:${sub.id}`,
+        idempotencyKey: homeworkAwardKey(sub.id, awardRevision),
+        sourceEntityKind: "homework",
+        sourceEntityId: sub.id,
+        sourceRevision: awardRevision,
       },
       tx,
     );
-    return { claimed: true, total_points: award.total_points };
+    return {
+      kind: "regrade" as const,
+      total_points: award.total_points,
+      points,
+      reversed: prior?.points ?? 0,
+    };
   });
 
-  if (!result.claimed) {
+  if (result.kind === "first_grade") {
     await auditFromReq(req, {
       action: "grade",
       entityKind: "homework_submission",
       entityId: sub.id,
-      summary: `Re-graded homework submission as ${body.status} (no punya re-award).`,
+      summary: `Graded homework submission as ${body.status} (+${result.points}).`,
+      metadata: { status: body.status, points: result.points },
+    });
+  } else if (result.kind === "regrade") {
+    await auditFromReq(req, {
+      action: "grade",
+      entityKind: "homework_submission",
+      entityId: sub.id,
+      summary: `Re-graded homework submission as ${body.status} (reverse ${result.reversed}, award ${result.points}).`,
+      metadata: {
+        status: body.status,
+        points: result.points,
+        reversed: result.reversed,
+        re_grade: true,
+      },
+    });
+  } else {
+    await auditFromReq(req, {
+      action: "grade",
+      entityKind: "homework_submission",
+      entityId: sub.id,
+      summary: `Re-graded homework submission as ${body.status} (no punya change).`,
       metadata: { status: body.status, points: 0, re_grade: true },
     });
+  }
 
-    ok(res, { id: sub.id, status: body.status, total_points: result.total_points });
+  ok(res, { id: sub.id, status: body.status, total_points: result.total_points });
+});
+
+/**
+ * POST /v1/homework/submissions/:id/ungrade — reverse Punya and return to
+ * submitted/late. No 30-day window (unlike niyam Q5): homework grades are
+ * pastoral corrections that must stay fixable after parent conversations, and
+ * assignment force_delete already needs unbounded reverse of the same awards.
+ */
+router.post("/submissions/:id/ungrade", requireAdminPanel, async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  const scope = await resolveAdminScope(req.authUser!);
+  const [sub] = await db
+    .select({
+      id: homework_submissions.id,
+      student_id: homework_submissions.student_id,
+      status: homework_submissions.status,
+      late: homework_submissions.late,
+      revision: homework_submissions.revision,
+      batch_id: homework_assignments.batch_id,
+      centre_id: batches.centre_id,
+    })
+    .from(homework_submissions)
+    .innerJoin(homework_assignments, eq(homework_assignments.id, homework_submissions.assignment_id))
+    .innerJoin(batches, eq(batches.id, homework_assignments.batch_id))
+    .where(and(eq(homework_submissions.id, id), isNull(homework_assignments.deleted_at)))
+    .limit(1);
+  if (!sub || !inBatchWriteScope(scope, sub.batch_id, sub.centre_id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Submission not found.");
     return;
   }
+  if (sub.status !== "approved" && sub.status !== "starred") {
+    fail(res, 409, "ERR_CONFLICT", "Only an approved or starred submission can be un-graded.");
+    return;
+  }
+
+  const restoredStatus = sub.late ? ("late" as const) : ("submitted" as const);
+
+  const outcome = await db.transaction(async (tx) => {
+    const prior = await findLatestUnreversedHomeworkAward(tx, sub.id, sub.student_id);
+    let reversedPoints = 0;
+    if (prior && prior.points > 0) {
+      const rev = await reversePunya(
+        {
+          studentId: sub.student_id,
+          featureKey: "homework",
+          points: prior.points,
+          note: "Homework un-graded",
+          awardedBy: req.authUser!.id,
+          idempotencyKey: homeworkReversalKey(prior.idempotency_key),
+        },
+        tx,
+      );
+      reversedPoints = rev.reversed ? rev.points_reversed : 0;
+      // Idempotent replay still reports the reversed amount without double-debit.
+      if (!rev.reversed) reversedPoints = rev.points_reversed;
+    }
+
+    await tx
+      .update(homework_submissions)
+      .set({
+        status: restoredStatus,
+        marked_by: null,
+        marked_at: null,
+        revision: sql`${homework_submissions.revision} + 1`,
+      })
+      .where(eq(homework_submissions.id, sub.id));
+
+    const [bal] = await tx
+      .select({ total_points: punya_balances.total_points })
+      .from(punya_balances)
+      .where(eq(punya_balances.student_id, sub.student_id))
+      .limit(1);
+
+    return {
+      status: restoredStatus,
+      points_reversed: prior?.points ?? 0,
+      total_points: bal?.total_points ?? 0,
+      actually_reversed: reversedPoints > 0 || (prior != null && prior.points > 0),
+    };
+  });
 
   await auditFromReq(req, {
     action: "grade",
     entityKind: "homework_submission",
     entityId: sub.id,
-    summary: `Graded homework submission as ${body.status} (+${points}).`,
-    metadata: { status: body.status, points },
+    summary: `Un-graded homework submission (restored to ${outcome.status}, reversed ${outcome.points_reversed}).`,
+    metadata: {
+      ungrade: true,
+      restored_status: outcome.status,
+      points_reversed: outcome.points_reversed,
+    },
   });
 
-  ok(res, { id: sub.id, status: body.status, total_points: result.total_points });
+  ok(res, {
+    id: sub.id,
+    status: outcome.status,
+    points_reversed: outcome.points_reversed,
+    total_points: outcome.total_points,
+  });
 });
 
 /* ═══════════════════════════ Student / parent ═══════════════════════════ */

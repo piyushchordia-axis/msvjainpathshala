@@ -1,4 +1,4 @@
-import { boolean, date, index, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
+import { boolean, date, index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
 import { softDelete, timestamps } from "./_helpers";
 import { homeworkStatusEnum } from "./enums";
@@ -45,6 +45,8 @@ export const homework_submissions = pgTable(
     marked_by: uuid("marked_by").references(() => users.id, { onDelete: "set null" }),
     marked_at: timestamp("marked_at", { withTimezone: true }),
     late: boolean("late").notNull().default(false),
+    /** Bumped on every award-worthiness / point-value transition (AT18). */
+    revision: integer("revision").notNull().default(0),
     ...timestamps(),
   },
   (t) => ({

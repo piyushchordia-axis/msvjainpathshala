@@ -200,12 +200,13 @@ describe("homework", () => {
   });
 
   it("re-grading is idempotent on punya: approve then star awards points only once", async () => {
+    // Superseded by AT18 differential re-grade — kept title so older diffs still
+    // grep; behaviour is asserted in "approved -> starred re-grade…".
     const admin = await loginAs("super_admin");
     const parent = await loginAs("parent");
     const shikshak = await loginAs("shikshak");
     const studentId = await firstChildId(parent.token);
 
-    // Fresh pending submission for Aarav — must submit before grade is allowed.
     const submissionId = await freshSubmissionFor(admin.token, studentId);
     const submit = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/submit`)
@@ -215,21 +216,140 @@ describe("homework", () => {
 
     const before = await totalPunya(parent.token, studentId);
 
-    // First grade: approve (not-yet-graded -> graded) awards the base amount.
     const approve = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/grade`)
       .set(auth(shikshak.token))
       .send({ status: "approved", feedback_note: "Good." });
     expect(approve.status).toBe(200);
-    expect(approve.body.data.status).toBe("approved");
 
     const afterApprove = await totalPunya(parent.token, studentId);
     const awarded = afterApprove - before;
-    // Approving awards a positive amount exactly once.
     expect(awarded).toBeGreaterThan(0);
-    expect(approve.body.data.total_points).toBe(afterApprove);
 
-    // Second grade: star (already-graded -> already-graded) must NOT re-award.
+    // Same status again — identical point value → no ledger move (AT18).
+    const again = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved", feedback_note: "Still good." });
+    expect(again.status).toBe(200);
+    expect(await totalPunya(parent.token, studentId)).toBe(afterApprove);
+  });
+
+  it("un-grading reverses the awarded Punya exactly once", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/ungrade-once.jpg" });
+
+    const before = await totalPunya(parent.token, studentId);
+    const grade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved" });
+    expect(grade.status).toBe(200);
+    const afterGrade = await totalPunya(parent.token, studentId);
+    expect(afterGrade - before).toBeGreaterThan(0);
+
+    const ungrade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/ungrade`)
+      .set(auth(shikshak.token));
+    expect(ungrade.status).toBe(200);
+    expect(ungrade.body.data.status).toMatch(/^(submitted|late)$/);
+    expect(await totalPunya(parent.token, studentId)).toBe(before);
+  });
+
+  it("un-grading twice does not double-debit", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/ungrade-twice.jpg" });
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "starred" });
+
+    const first = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/ungrade`)
+      .set(auth(shikshak.token));
+    expect(first.status).toBe(200);
+    const afterFirst = await totalPunya(parent.token, studentId);
+
+    const second = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/ungrade`)
+      .set(auth(shikshak.token));
+    expect(second.status).toBe(409);
+    expect(await totalPunya(parent.token, studentId)).toBe(afterFirst);
+  });
+
+  it("re-grading after an un-grade awards again", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/regrade-after-ungrade.jpg" });
+
+    const before = await totalPunya(parent.token, studentId);
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved" });
+    const afterFirst = await totalPunya(parent.token, studentId);
+    const firstAward = afterFirst - before;
+    expect(firstAward).toBeGreaterThan(0);
+
+    const ungrade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/ungrade`)
+      .set(auth(shikshak.token));
+    expect(ungrade.status).toBe(200);
+    expect(await totalPunya(parent.token, studentId)).toBe(before);
+
+    const regrade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved" });
+    expect(regrade.status).toBe(200);
+    expect(await totalPunya(parent.token, studentId)).toBe(before + firstAward);
+  });
+
+  it("approved -> starred re-grade reverses the old value and awards the new", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/approve-to-star.jpg" });
+
+    const before = await totalPunya(parent.token, studentId);
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved" });
+    const afterApprove = await totalPunya(parent.token, studentId);
+    const approvePts = afterApprove - before;
+    expect(approvePts).toBe(10);
+
     const star = await request(app)
       .post(`/v1/homework/submissions/${submissionId}/grade`)
       .set(auth(shikshak.token))
@@ -238,14 +358,9 @@ describe("homework", () => {
     expect(star.body.data.status).toBe("starred");
 
     const afterStar = await totalPunya(parent.token, studentId);
-    // The crux: the second grade added ZERO punya. Total is unchanged from the
-    // single approve award (not before + approve-award + star-award).
-    expect(afterStar).toBe(afterApprove);
-    expect(afterStar - before).toBe(awarded);
-    // The returned total reflects the student's CURRENT (unchanged) balance.
-    expect(star.body.data.total_points).toBe(afterStar);
+    // Net = starred (12), not approve+star (22) and not stuck at approve (10).
+    expect(afterStar - before).toBe(12);
 
-    // The new status/feedback still persisted despite no re-award.
     const feed = await request(app)
       .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
       .set(auth(parent.token));
