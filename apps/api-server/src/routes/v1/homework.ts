@@ -1258,7 +1258,14 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     return;
   }
 
-  const points = await resolveHomeworkAwardPoints(body.status, sub.centre_id);
+  // Returned already returned above; remaining wire statuses are approve/star.
+  if (body.status !== "approved" && body.status !== "starred") {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid grade status.");
+    return;
+  }
+  const gradeStatus = body.status;
+
+  const points = await resolveHomeworkAwardPoints(gradeStatus, sub.centre_id);
 
   // Claim + grade + award run in ONE transaction (AT20). First grade claims a
   // submitted/late/acknowledged row; re-grades of already-graded rows follow AT18:
@@ -1270,7 +1277,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       actorId: req.authUser!.id,
       submissionId: sub.id,
       studentId: sub.student_id,
-      gradeStatus: body.status,
+      gradeStatus,
       points,
       feedbackPatch,
     });
