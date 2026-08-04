@@ -269,4 +269,93 @@ describe("homework", () => {
     expect(row.status).toBe("approved");
     expect(row.submission_url).toBe("https://example.com/first.jpg");
   });
+
+  it("a shikshak cannot list submissions for a batch they are not assigned to", async () => {
+    const admin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+
+    // Discover which batches this shikshak can write (create succeeds = assigned).
+    const allBatches = await request(app).get("/v1/admin/batches").set(auth(admin.token));
+    expect(allBatches.status).toBe(200);
+    const batchList: Array<{ id: string; name: string }> = allBatches.body.data.items;
+
+    const assignedIds = new Set<string>();
+    for (const b of batchList) {
+      const probe = await request(app)
+        .post("/v1/homework/assignments")
+        .set(auth(shikshak.token))
+        .send({ batch_id: b.id, title: `scope-probe ${b.id.slice(0, 8)}`, due_date: tomorrow() });
+      if (probe.status === 200) assignedIds.add(b.id);
+    }
+    expect(assignedIds.size).toBeGreaterThan(0);
+
+    // Seed: Ghatkopar batchA3 shares the shikshak's centre but is not assigned.
+    const outsider = batchList.find(
+      (b) => !assignedIds.has(b.id) && b.name === "Tarun Batch - Unassigned Scope Fixture",
+    );
+    expect(outsider).toBeTruthy();
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: outsider!.id,
+        title: `Out-of-batch HW ${Date.now()}`,
+        due_date: tomorrow(),
+      });
+    expect(create.status).toBe(200);
+
+    const asAdmin = await request(app)
+      .get(`/v1/homework/assignments/${create.body.data.id}/submissions`)
+      .set(auth(admin.token));
+    expect(asAdmin.status).toBe(200);
+
+    const asShikshak = await request(app)
+      .get(`/v1/homework/assignments/${create.body.data.id}/submissions`)
+      .set(auth(shikshak.token));
+    expect(asShikshak.status).toBe(404);
+    expect(asShikshak.body.error.code).toBe("ERR_NOT_FOUND");
+  });
+
+  it("the assignment list is limited to a shikshak's assigned batches", async () => {
+    const admin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+
+    const allBatches = await request(app).get("/v1/admin/batches").set(auth(admin.token));
+    expect(allBatches.status).toBe(200);
+    const batchList: Array<{ id: string; name: string }> = allBatches.body.data.items;
+
+    const assignedIds = new Set<string>();
+    for (const b of batchList) {
+      const probe = await request(app)
+        .post("/v1/homework/assignments")
+        .set(auth(shikshak.token))
+        .send({ batch_id: b.id, title: `list-probe ${b.id.slice(0, 8)}`, due_date: tomorrow() });
+      if (probe.status === 200) assignedIds.add(b.id);
+    }
+    expect(assignedIds.size).toBeGreaterThan(0);
+
+    const outsider = batchList.find(
+      (b) => !assignedIds.has(b.id) && b.name === "Tarun Batch - Unassigned Scope Fixture",
+    );
+    expect(outsider).toBeTruthy();
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: outsider!.id,
+        title: `List-leak probe ${Date.now()}`,
+        due_date: tomorrow(),
+      });
+    expect(create.status).toBe(200);
+
+    const list = await request(app).get("/v1/homework/assignments").set(auth(shikshak.token));
+    expect(list.status).toBe(200);
+    const items: Array<{ id: string; batch_id: string }> = list.body.data.items;
+    expect(items.some((i) => i.id === create.body.data.id)).toBe(false);
+    for (const item of items) {
+      expect(assignedIds.has(item.batch_id)).toBe(true);
+    }
+  });
 });

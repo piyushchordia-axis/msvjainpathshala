@@ -10,9 +10,9 @@
  * submission_url (auto-marked late if past the due date). Ownership of the
  * student is verified on every persona action.
  *
- * Scope: every admin read/mutation is constrained by the caller's centre scope
- * (via the assignment's batch -> centre). Out-of-scope on a detail/action is a
- * 404; an out-of-scope batch on create is a 403.
+ * Scope: every admin read/mutation is constrained by the caller's batch/centre
+ * write scope (via the assignment's batch -> centre). Out-of-scope on a
+ * detail/action is a 404; an out-of-scope batch on create is a 403.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, homework_assignments, homework_submissions, batches, centres, students, punya_balances } from "@workspace/db";
@@ -26,7 +26,7 @@ import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, inBatchWriteScope, type AdminScope } from "../../lib/scope";
 import { awardPunya } from "../../lib/punya";
 import { auditFromReq } from "../../lib/audit";
-import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
+import { clampLimit, scopedCentreFilter } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -153,6 +153,15 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
   const centreFilter = scopedCentreFilter(scope, batches.centre_id);
 
   const filters = [isNull(homework_assignments.deleted_at), centreFilter];
+  // Shikshak scope is batch-level: centre membership alone would leak every
+  // assignment at their centre (including batches they do not teach).
+  if (scope.batchIds !== null) {
+    filters.push(
+      scope.batchIds.length === 0
+        ? sql`false`
+        : inArray(homework_assignments.batch_id, scope.batchIds),
+    );
+  }
   const batchId = req.query.batch_id;
   if (typeof batchId === "string" && UUID_RE.test(batchId)) {
     filters.push(eq(homework_assignments.batch_id, batchId));
@@ -190,12 +199,16 @@ router.get("/assignments/:id/submissions", requireAdminPanel, async (req: Reques
   const id = String(req.params.id);
   const scope = await resolveAdminScope(req.authUser!);
   const [assignment] = await db
-    .select({ id: homework_assignments.id, centre_id: batches.centre_id })
+    .select({
+      id: homework_assignments.id,
+      batch_id: homework_assignments.batch_id,
+      centre_id: batches.centre_id,
+    })
     .from(homework_assignments)
     .innerJoin(batches, eq(batches.id, homework_assignments.batch_id))
     .where(and(eq(homework_assignments.id, id), isNull(homework_assignments.deleted_at)))
     .limit(1);
-  if (!assignment || !inScope(scope, assignment.centre_id)) {
+  if (!assignment || !inBatchWriteScope(scope, assignment.batch_id, assignment.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Assignment not found.");
     return;
   }

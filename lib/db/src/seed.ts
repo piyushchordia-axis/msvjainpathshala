@@ -411,6 +411,26 @@ async function main(): Promise<void> {
     })
     .returning();
 
+  // Same centre as batchA1/A2 but deliberately NOT in Pathshala Shikshak's
+  // batch assignments — homework tests need an out-of-batch sibling to prove
+  // batch-scoped reads (FIX #1). Unique name so tests do not confuse it with
+  // Indore Tarun batches that share the generic "Sunday Afternoon" label.
+  const [batchA3] = await db
+    .insert(batches)
+    .values({
+      centre_id: centreA.id,
+      name: "Tarun Batch - Unassigned Scope Fixture",
+      age_groups: ["tarun"],
+      day_of_week: [7],
+      start_time: "14:00:00",
+      end_time: "15:30:00",
+      capacity: 20,
+      language_preference: "hi",
+      status: "active",
+    })
+    .returning();
+  void batchA3; // referenced only as the unassigned sibling fixture
+
   const [batchB1] = await db
     .insert(batches)
     .values({
