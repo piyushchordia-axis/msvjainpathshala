@@ -15,7 +15,7 @@
  * detail/action is a 404; an out-of-scope batch on create is a 403.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, homework_assignments, homework_submissions, batches, centres, students, punya_balances } from "@workspace/db";
+import { db, homework_assignments, homework_submissions, batches, centres, students, punya_balances, curriculum_items, curriculum_sections } from "@workspace/db";
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
@@ -35,6 +35,10 @@ import { auditFromReq } from "../../lib/audit";
 
 import { clampLimit, ownedStudentRow, listOwnedStudents, scopedCentreFilter } from "../../lib/route-helpers";
 import { kolkataDateString } from "../../services/attendance-mark";
+import {
+  listCurriculumTopicsForBatch,
+  resolveCurriculumItemForBatch,
+} from "../../lib/homework-curriculum";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -214,6 +218,31 @@ async function claimAndAwardFirstHomeworkGrade(opts: {
 
 /* ═══════════════════════════ Admin / shikshak ═══════════════════════════ */
 
+/**
+ * GET /v1/homework/batches/:batchId/curriculum-topics?is_msv=
+ * Topics for the create/edit selector (city + kind filter).
+ */
+router.get("/batches/:batchId/curriculum-topics", requireAdminPanel, async (req: Request, res: Response) => {
+  const batchId = String(req.params.batchId);
+  if (!isUuid(batchId)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "batch_id must be a valid UUID.");
+    return;
+  }
+  const scope = await resolveAdminScope(req.authUser!);
+  const [batch] = await db
+    .select({ id: batches.id, centre_id: batches.centre_id })
+    .from(batches)
+    .where(eq(batches.id, batchId))
+    .limit(1);
+  if (!batch || !inBatchWriteScope(scope, batch.id, batch.centre_id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Batch not found.");
+    return;
+  }
+  const isMsv = String(req.query.is_msv ?? "") === "true" || req.query.is_msv === "1";
+  const items = await listCurriculumTopicsForBatch({ batchId: batch.id, isMsv });
+  ok(res, { items }, { count: items.length });
+});
+
 const createAssignmentSchema = z.object({
   batch_id: z.string().uuid(),
   title: z.string().min(1).max(300),
@@ -221,6 +250,8 @@ const createAssignmentSchema = z.object({
   due_date: z.string().regex(DUE_DATE_RE),
   attachment_url: httpUrl(1000).optional(),
   is_msv: z.boolean().optional(),
+  /** Advisory curriculum topic (F12) — null/omit = none. */
+  curriculum_item_id: z.string().uuid().nullable().optional(),
   // Create-time subset only — not persisted (FIX #14 dropped the column).
   target_student_ids: z.array(z.string().uuid()).max(500).optional(),
 });
@@ -259,6 +290,26 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
     return;
   }
 
+  const isMsv = body.is_msv === true;
+  let curriculumItemId: string | null = null;
+  if (body.curriculum_item_id) {
+    const topic = await resolveCurriculumItemForBatch({
+      batchId: batch.id,
+      curriculumItemId: body.curriculum_item_id,
+      isMsv,
+    });
+    if (!topic) {
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        "That curriculum topic is not available for this batch — pick a topic from this centre's curriculum.",
+      );
+      return;
+    }
+    curriculumItemId = topic.curriculum_item_id;
+  }
+
   // F2 — attachment must be an owned homework upload; admin may paste an
   // external https link (library-style escape hatch). Parents never hit this path.
   if (body.attachment_url) {
@@ -286,7 +337,6 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
     const outcome = await db.transaction(async (tx) => {
       // Target resolution inside the tx so a concurrent deactivate cannot slip
       // a student into the fan-out after we decided the roster.
-      const isMsv = body.is_msv === true;
       const rosterFilters = [
         eq(students.batch_id, batch.id),
         eq(students.status, "active"),
@@ -321,7 +371,8 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
           description: body.description ?? null,
           due_date: body.due_date,
           attachment_url: body.attachment_url ?? null,
-          is_msv: body.is_msv ?? false,
+          is_msv: isMsv,
+          curriculum_item_id: curriculumItemId,
           created_by: req.authUser!.id,
         })
         .returning({ id: homework_assignments.id });
@@ -373,6 +424,7 @@ const patchAssignmentSchema = z
     due_date: z.string().regex(DUE_DATE_RE).optional(),
     attachment_url: httpUrl(1000).nullable().optional(),
     is_msv: z.boolean().optional(),
+    curriculum_item_id: z.string().uuid().nullable().optional(),
     /** Required when PATCH sets due_date to a past Kolkata calendar day. */
     allow_past_due_date: z.boolean().optional(),
   })
@@ -402,6 +454,7 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
       due_date: homework_assignments.due_date,
       attachment_url: homework_assignments.attachment_url,
       is_msv: homework_assignments.is_msv,
+      curriculum_item_id: homework_assignments.curriculum_item_id,
     })
     .from(homework_assignments)
     .innerJoin(batches, eq(batches.id, homework_assignments.batch_id))
@@ -422,6 +475,7 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
     due_date?: string;
     attachment_url?: string | null;
     is_msv?: boolean;
+    curriculum_item_id?: string | null;
   } = {};
   if (Object.prototype.hasOwnProperty.call(body, "title") && body.title !== undefined) {
     patch.title = body.title;
@@ -464,6 +518,45 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
     patch.is_msv = body.is_msv;
   }
 
+  const nextIsMsv = patch.is_msv ?? assignment.is_msv;
+  if (Object.prototype.hasOwnProperty.call(body, "curriculum_item_id")) {
+    if (body.curriculum_item_id == null) {
+      patch.curriculum_item_id = null;
+    } else {
+      const topic = await resolveCurriculumItemForBatch({
+        batchId: assignment.batch_id,
+        curriculumItemId: body.curriculum_item_id,
+        isMsv: nextIsMsv,
+      });
+      if (!topic) {
+        fail(
+          res,
+          422,
+          "ERR_VALIDATION_FAILED",
+          "That curriculum topic is not available for this batch — pick a topic from this centre's curriculum.",
+        );
+        return;
+      }
+      patch.curriculum_item_id = topic.curriculum_item_id;
+    }
+  } else if (patch.is_msv !== undefined && assignment.curriculum_item_id) {
+    // Track flip must keep an already-linked topic valid for the new kind.
+    const topic = await resolveCurriculumItemForBatch({
+      batchId: assignment.batch_id,
+      curriculumItemId: assignment.curriculum_item_id,
+      isMsv: nextIsMsv,
+    });
+    if (!topic) {
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        "This assignment's curriculum topic does not match the MSV setting — clear the topic or pick another.",
+      );
+      return;
+    }
+  }
+
   const [updated] = await db
     .update(homework_assignments)
     .set(patch)
@@ -476,6 +569,7 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
       attachment_url: homework_assignments.attachment_url,
       is_msv: homework_assignments.is_msv,
       batch_id: homework_assignments.batch_id,
+      curriculum_item_id: homework_assignments.curriculum_item_id,
     });
 
   await auditFromReq(req, {
@@ -648,6 +742,9 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
       due_date: homework_assignments.due_date,
       attachment_url: homework_assignments.attachment_url,
       is_msv: homework_assignments.is_msv,
+      curriculum_item_id: homework_assignments.curriculum_item_id,
+      curriculum_topic_en: sql<string | null>`case when ${curriculum_items.id} is null then null else ${curriculum_sections.title_en} || ': ' || ${curriculum_items.title_en} end`,
+      curriculum_topic_hi: sql<string | null>`case when ${curriculum_items.id} is null then null else ${curriculum_sections.title_hi} || ': ' || ${curriculum_items.title_hi} end`,
       batch_id: homework_assignments.batch_id,
       batch_name: batches.name,
       centre_name: centres.name,
@@ -656,6 +753,8 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
     .from(homework_assignments)
     .innerJoin(batches, eq(batches.id, homework_assignments.batch_id))
     .innerJoin(centres, eq(centres.id, batches.centre_id))
+    .leftJoin(curriculum_items, eq(curriculum_items.id, homework_assignments.curriculum_item_id))
+    .leftJoin(curriculum_sections, eq(curriculum_sections.id, curriculum_items.section_id))
     .where(and(...filters))
     .orderBy(desc(homework_assignments.created_at), desc(homework_assignments.id))
     .limit(limit + 1);
@@ -1506,6 +1605,9 @@ router.get("/mine", async (req: Request, res: Response) => {
       due_date: homework_assignments.due_date,
       attachment_url: homework_assignments.attachment_url,
       is_msv: homework_assignments.is_msv,
+      curriculum_item_id: homework_assignments.curriculum_item_id,
+      curriculum_topic_en: sql<string | null>`case when ${curriculum_items.id} is null then null else ${curriculum_sections.title_en} || ': ' || ${curriculum_items.title_en} end`,
+      curriculum_topic_hi: sql<string | null>`case when ${curriculum_items.id} is null then null else ${curriculum_sections.title_hi} || ': ' || ${curriculum_items.title_hi} end`,
       status: homework_submissions.status,
       submission_url: homework_submissions.submission_url,
       feedback_note: homework_submissions.feedback_note,
@@ -1513,6 +1615,8 @@ router.get("/mine", async (req: Request, res: Response) => {
     })
     .from(homework_submissions)
     .innerJoin(homework_assignments, eq(homework_assignments.id, homework_submissions.assignment_id))
+    .leftJoin(curriculum_items, eq(curriculum_items.id, homework_assignments.curriculum_item_id))
+    .leftJoin(curriculum_sections, eq(curriculum_sections.id, curriculum_items.section_id))
     .where(and(...filters))
     .orderBy(desc(homework_assignments.due_date), desc(homework_submissions.id))
     .limit(limit + 1);

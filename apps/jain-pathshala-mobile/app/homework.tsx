@@ -316,6 +316,11 @@ export default function HomeworkScreen() {
                     </Body>
                   ) : null}
                   <Title style={{ fontSize: 16 }}>{row.title}</Title>
+                  {(hi ? row.curriculum_topic_hi : row.curriculum_topic_en) ? (
+                    <Body muted style={{ fontSize: 12, marginTop: 2 }}>
+                      {hi ? row.curriculum_topic_hi : row.curriculum_topic_en}
+                    </Body>
+                  ) : null}
                   <Body muted style={{ fontSize: 12, marginTop: 2 }}>
                     {hi ? "नियत तिथि: " : "Due: "}
                     {formatDate(row.due_date)}

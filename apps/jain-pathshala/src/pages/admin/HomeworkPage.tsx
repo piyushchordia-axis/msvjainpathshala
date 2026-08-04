@@ -53,6 +53,9 @@ interface AssignmentRow {
   due_date: string;
   attachment_url: string | null;
   is_msv: boolean;
+  curriculum_item_id: string | null;
+  curriculum_topic_en: string | null;
+  curriculum_topic_hi: string | null;
   batch_id: string;
   batch_name: string | null;
   centre_name: string;
@@ -61,6 +64,13 @@ interface AssignmentRow {
   submitted: number;
   graded: number;
   overdue: number;
+}
+
+interface CurriculumTopicOption {
+  id: string;
+  label_en: string;
+  label_hi: string;
+  curriculum_name: string;
 }
 
 interface BatchOption { id: string; name: string | null; centre_name: string; }
@@ -117,11 +127,23 @@ function NewAssignmentDialog({ onAdded }: { onAdded: () => void }) {
   const [dueDate, setDueDate] = useState('');
   const [description, setDescription] = useState('');
   const [attachmentUrl, setAttachmentUrl] = useState('');
+  const [curriculumItemId, setCurriculumItemId] = useState('');
+  const [topics, setTopics] = useState<CurriculumTopicOption[]>([]);
 
   useEffect(() => {
     if (!open) return;
     void apiGet<{ items: BatchOption[] }>('/v1/admin/batches').then((r) => setBatches(r?.items ?? []));
   }, [open]);
+
+  useEffect(() => {
+    if (!open || !batchId) {
+      setTopics([]);
+      return;
+    }
+    void apiGet<{ items: CurriculumTopicOption[] }>(
+      `/v1/homework/batches/${batchId}/curriculum-topics?is_msv=false`,
+    ).then((r) => setTopics(r?.items ?? []));
+  }, [open, batchId]);
 
   async function onPickAttachment(file: File | null) {
     if (!file) return;
@@ -148,10 +170,12 @@ function NewAssignmentDialog({ onAdded }: { onAdded: () => void }) {
         due_date: dueDate,
         description: description.trim() || undefined,
         ...(attachmentUrl.trim() ? { attachment_url: attachmentUrl.trim() } : {}),
+        ...(curriculumItemId ? { curriculum_item_id: curriculumItemId } : {}),
       });
       toast.success('Assignment created.', `${res?.submissions_created ?? 0} student(s) assigned.`);
       setOpen(false);
       setBatchId(''); setTitle(''); setDueDate(''); setDescription(''); setAttachmentUrl('');
+      setCurriculumItemId('');
       onAdded();
     } catch (err) {
       toast.error('Failed to create assignment.', err instanceof ApiError ? err.message : undefined);
@@ -169,7 +193,13 @@ function NewAssignmentDialog({ onAdded }: { onAdded: () => void }) {
         <DialogHeader><DialogTitle>New homework assignment</DialogTitle></DialogHeader>
         <form className="space-y-4 pt-2" onSubmit={submit}>
           <FormRow label="Batch *">
-            <Select value={batchId} onValueChange={setBatchId}>
+            <Select
+              value={batchId}
+              onValueChange={(v) => {
+                setBatchId(v);
+                setCurriculumItemId('');
+              }}
+            >
               <SelectTrigger><SelectValue placeholder="Select batch" /></SelectTrigger>
               <SelectContent>
                 {batches.map((b) => (
@@ -182,6 +212,25 @@ function NewAssignmentDialog({ onAdded }: { onAdded: () => void }) {
           </FormRow>
           <FormRow label="Title *">
             <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Learn the Navkar Mantra" required />
+          </FormRow>
+          <FormRow label="Curriculum topic (optional)">
+            <Select
+              value={curriculumItemId || '__none__'}
+              onValueChange={(v) => setCurriculumItemId(v === '__none__' ? '' : v)}
+              disabled={!batchId || topics.length === 0}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder={batchId ? (topics.length ? 'None' : 'No topics for this batch') : 'Pick a batch first'} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">None</SelectItem>
+                {topics.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.label_en}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </FormRow>
           <FormRow label="Due date *">
             <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} required />
@@ -229,6 +278,8 @@ function EditAssignmentDialog({
   const [description, setDescription] = useState(assignment.description ?? '');
   const [attachmentUrl, setAttachmentUrl] = useState(assignment.attachment_url ?? '');
   const [isMsv, setIsMsv] = useState(assignment.is_msv);
+  const [curriculumItemId, setCurriculumItemId] = useState(assignment.curriculum_item_id ?? '');
+  const [topics, setTopics] = useState<CurriculumTopicOption[]>([]);
 
   useEffect(() => {
     if (!open) return;
@@ -237,7 +288,15 @@ function EditAssignmentDialog({
     setDescription(assignment.description ?? '');
     setAttachmentUrl(assignment.attachment_url ?? '');
     setIsMsv(assignment.is_msv);
+    setCurriculumItemId(assignment.curriculum_item_id ?? '');
   }, [open, assignment]);
+
+  useEffect(() => {
+    if (!open) return;
+    void apiGet<{ items: CurriculumTopicOption[] }>(
+      `/v1/homework/batches/${assignment.batch_id}/curriculum-topics?is_msv=${isMsv ? 'true' : 'false'}`,
+    ).then((r) => setTopics(r?.items ?? []));
+  }, [open, assignment.batch_id, isMsv]);
 
   async function onPickAttachment(file: File | null) {
     if (!file) return;
@@ -268,6 +327,7 @@ function EditAssignmentDialog({
         description: description.trim() || null,
         attachment_url: attachmentUrl.trim() || null,
         is_msv: isMsv,
+        curriculum_item_id: curriculumItemId || null,
       });
       toast.success('Assignment updated.');
       setOpen(false);
@@ -291,6 +351,24 @@ function EditAssignmentDialog({
         <form className="space-y-4 pt-2" onSubmit={submit}>
           <FormRow label="Title *">
             <Input value={title} onChange={(e) => setTitle(e.target.value)} required />
+          </FormRow>
+          <FormRow label="Curriculum topic (optional)">
+            <Select
+              value={curriculumItemId || '__none__'}
+              onValueChange={(v) => setCurriculumItemId(v === '__none__' ? '' : v)}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder={topics.length ? 'None' : 'No topics for this track'} />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">None</SelectItem>
+                {topics.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.label_en}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </FormRow>
           <FormRow label="Due date *">
             <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} required />
@@ -690,6 +768,11 @@ export default function HomeworkPage() {
                 <ClipboardList className="h-3.5 w-3.5 text-muted-foreground" />
                 {a.title}
               </span>
+              {a.curriculum_topic_en ? (
+                <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+                  {a.curriculum_topic_en}
+                </span>
+              ) : null}
               {a.is_msv ? <span className="ml-2 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">MSV</span> : null}
               {a.attachment_url ? (
                 <a

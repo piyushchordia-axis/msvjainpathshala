@@ -536,6 +536,8 @@ export interface HomeworkRow {
   overdue?: boolean;
   student_id?: string;
   student_name?: string;
+  curriculum_topic_en?: string | null;
+  curriculum_topic_hi?: string | null;
 }
 /** Per-student when studentId is set; combined across children when allChildren. */
 export function useHomework(studentId?: string | null, opts?: { allChildren?: boolean }) {

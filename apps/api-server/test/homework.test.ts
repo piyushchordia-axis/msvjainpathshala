@@ -3075,4 +3075,130 @@ describe("homework", () => {
       }
     }
   });
+
+  it("an assignment can be linked to a curriculum item within the same curriculum", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const batchId = await studentBatchId(studentId);
+
+    const topics = await request(app)
+      .get(`/v1/homework/batches/${batchId}/curriculum-topics?is_msv=false`)
+      .set(auth(admin.token));
+    expect(topics.status).toBe(200);
+    const topic = (topics.body.data.items as Array<{ id: string; label_en: string }>)[0];
+    expect(topic).toBeTruthy();
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `F12 link ${Date.now()}`,
+        due_date: tomorrow(),
+        curriculum_item_id: topic.id,
+      });
+    expect(create.status).toBe(200);
+
+    const list = await request(app)
+      .get("/v1/homework/assignments?limit=50")
+      .set(auth(admin.token));
+    const row = (list.body.data.items as Array<{
+      id: string;
+      curriculum_item_id: string | null;
+      curriculum_topic_en: string | null;
+    }>).find((a) => a.id === create.body.data.id);
+    expect(row?.curriculum_item_id).toBe(topic.id);
+    expect(row?.curriculum_topic_en).toContain(":");
+  });
+
+  it("a curriculum item from another curriculum is rejected", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const batchId = await studentBatchId(studentId);
+
+    // Plant a curriculum + item in a city that is not this batch's city.
+    const foreign = await pool.query<{ item_id: string }>(
+      `with c as (
+         insert into curricula (city_id, name, kind, status)
+         select id, 'F12 foreign ' || gen_random_uuid()::text, 'standard', 'active'
+           from cities
+          where id <> (
+            select ce.city_id from batches b
+            join centres ce on ce.id = b.centre_id
+            where b.id = $1
+          )
+          limit 1
+         returning id
+       ),
+       s as (
+         insert into curriculum_sections (curriculum_id, title_en, title_hi, order_index)
+         select id, 'Foreign section', 'विदेशी', 0 from c
+         returning id
+       )
+       insert into curriculum_items (section_id, title_en, title_hi, order_index)
+       select id, 'Foreign item', 'विदेशी विषय', 0 from s
+       returning id as item_id`,
+      [batchId],
+    );
+    const foreignItemId = foreign.rows[0]?.item_id;
+    expect(foreignItemId).toBeTruthy();
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `F12 reject ${Date.now()}`,
+        due_date: tomorrow(),
+        curriculum_item_id: foreignItemId,
+      });
+    expect(create.status).toBe(422);
+    expect(create.body.error.code).toBe("ERR_VALIDATION_FAILED");
+  });
+
+  it("the curriculum link survives assignment edit and appears in the feed", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const batchId = await studentBatchId(studentId);
+
+    const topics = await request(app)
+      .get(`/v1/homework/batches/${batchId}/curriculum-topics?is_msv=false`)
+      .set(auth(admin.token));
+    const topic = (topics.body.data.items as Array<{ id: string; label_en: string }>)[0];
+    expect(topic).toBeTruthy();
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `F12 survive ${Date.now()}`,
+        due_date: tomorrow(),
+        curriculum_item_id: topic.id,
+      });
+    expect(create.status).toBe(200);
+    const assignmentId = create.body.data.id as string;
+
+    const patch = await request(app)
+      .patch(`/v1/homework/assignments/${assignmentId}`)
+      .set(auth(admin.token))
+      .send({ title: `F12 survive edited ${Date.now()}` });
+    expect(patch.status).toBe(200);
+    expect(patch.body.data.curriculum_item_id).toBe(topic.id);
+
+    const feed = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=50`)
+      .set(auth(parent.token));
+    expect(feed.status).toBe(200);
+    const row = (feed.body.data.items as Array<{
+      assignment_id: string;
+      curriculum_item_id: string | null;
+      curriculum_topic_en: string | null;
+    }>).find((r) => r.assignment_id === assignmentId);
+    expect(row?.curriculum_item_id).toBe(topic.id);
+    expect(row?.curriculum_topic_en).toBeTruthy();
+  });
 });

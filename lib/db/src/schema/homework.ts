@@ -6,6 +6,7 @@ import { batches } from "./centres";
 import { students } from "./students";
 import { users } from "./identity";
 import { punya_transactions } from "./punya";
+import { curriculum_items } from "./curriculum";
 
 export const homework_assignments = pgTable(
   "homework_assignments",
@@ -19,12 +20,20 @@ export const homework_assignments = pgTable(
     due_date: date("due_date").notNull(),
     attachment_url: text("attachment_url"),
     is_msv: boolean("is_msv").notNull().default(false),
+    /**
+     * Advisory topic tag (F12) — does not write student_curriculum_progress.
+     * Cleared if the curriculum item is deleted.
+     */
+    curriculum_item_id: uuid("curriculum_item_id").references(() => curriculum_items.id, {
+      onDelete: "set null",
+    }),
     created_by: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     ...softDelete(),
     ...timestamps(),
   },
   (t) => ({
     batch_idx: index("idx_homework_assignments_batch").on(t.batch_id),
+    curriculum_item_idx: index("idx_homework_assignments_curriculum_item").on(t.curriculum_item_id),
   }),
 );
 
