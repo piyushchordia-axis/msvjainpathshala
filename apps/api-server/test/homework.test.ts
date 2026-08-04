@@ -664,6 +664,35 @@ describe("homework", () => {
     }
   });
 
+  it("GET /v1/admin/batches returns only a shikshak's assigned batches", async () => {
+    const admin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+
+    const asAdmin = await request(app).get("/v1/admin/batches").set(auth(admin.token));
+    expect(asAdmin.status).toBe(200);
+    const all: Array<{ id: string; name: string }> = asAdmin.body.data.items;
+
+    const assignedIds = new Set<string>();
+    for (const b of all) {
+      const probe = await request(app)
+        .post("/v1/homework/assignments")
+        .set(auth(shikshak.token))
+        .send({ batch_id: b.id, title: `batch-list-probe ${b.id.slice(0, 8)}`, due_date: tomorrow() });
+      if (probe.status === 200) assignedIds.add(b.id);
+    }
+    expect(assignedIds.size).toBeGreaterThan(0);
+    expect(assignedIds.size).toBeLessThan(all.length);
+
+    const asShikshak = await request(app).get("/v1/admin/batches").set(auth(shikshak.token));
+    expect(asShikshak.status).toBe(200);
+    const visible: Array<{ id: string }> = asShikshak.body.data.items;
+    expect(visible.length).toBe(assignedIds.size);
+    for (const b of visible) {
+      expect(assignedIds.has(b.id)).toBe(true);
+    }
+    expect(visible.some((b) => !assignedIds.has(b.id))).toBe(false);
+  });
+
   it("a deactivated student's homework feed returns 404", async () => {
     const admin = await loginAs("super_admin");
     const parent = await loginAs("parent");
@@ -2685,6 +2714,18 @@ describe("homework", () => {
     );
     expect(row).toBeTruthy();
     expect(row.attachment_url).toContain("/uploads/homework/");
+    // Gated /uploads — families need se+sig or the browser/app gets 403.
+    expect(row.attachment_url).toMatch(/[?&]se=\d+/);
+    expect(row.attachment_url).toMatch(/[?&]sig=/);
+
+    const list = await request(app)
+      .get("/v1/homework/assignments?limit=50")
+      .set(auth(admin.token));
+    expect(list.status).toBe(200);
+    const listed = list.body.data.items.find(
+      (r: { id: string }) => r.id === create.body.data.id,
+    );
+    expect(listed?.attachment_url).toMatch(/[?&]sig=/);
   });
 
   it("the attachment is rejected if it is not an admin-owned upload", async () => {

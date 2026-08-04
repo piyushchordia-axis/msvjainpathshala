@@ -58,6 +58,10 @@ export const qk = {
   // Wave 4 (new student/parent flows)
   notifications: ["me", "notifications"] as const,
   homework: (id: string) => ["me", "homework", id] as const,
+  homeworkAssignments: (overdue?: boolean) =>
+    ["shikshak", "homework-assignments", overdue ? "overdue" : "all"] as const,
+  homeworkSubmissions: (assignmentId: string) =>
+    ["shikshak", "homework-submissions", assignmentId] as const,
   quizzesAvailable: (id: string) => ["me", "quizzes", "available", id] as const,
   pushQuizActive: (id: string) => ["me", "quizzes", "push-active", id] as const,
   openCompetitions: ["me", "competitions", "open"] as const,
@@ -625,6 +629,136 @@ export function useMarkHomeworkDone() {
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: qk.homework(vars.studentId) });
       qc.invalidateQueries({ queryKey: qk.homework("__all__") });
+    },
+  });
+}
+
+/* ---------------- Shikshak / admin homework (assign + grade) ---------------- */
+
+export type HomeworkAssignmentRow = {
+  id: string;
+  title: string;
+  description: string | null;
+  due_date: string;
+  attachment_url: string | null;
+  is_msv: boolean;
+  curriculum_item_id: string | null;
+  curriculum_topic_en: string | null;
+  curriculum_topic_hi: string | null;
+  batch_id: string;
+  batch_name: string | null;
+  centre_name: string;
+  created_at: string;
+  total: number;
+  submitted: number;
+  graded: number;
+  overdue: number;
+};
+
+export type HomeworkSubmissionAdminRow = {
+  id: string;
+  student_id: string;
+  student_name: string;
+  student_code: string;
+  status: "pending" | "submitted" | "approved" | "starred" | "late" | "acknowledged" | "returned";
+  submission_url: string | null;
+  feedback_note: string | null;
+  late: boolean;
+  marked_at: string | null;
+};
+
+export function useHomeworkAssignments(opts?: { overdue?: boolean; enabled?: boolean }) {
+  const overdue = opts?.overdue === true;
+  return useQuery({
+    queryKey: qk.homeworkAssignments(overdue),
+    queryFn: () => {
+      const qs = new URLSearchParams({ limit: "100" });
+      if (overdue) qs.set("overdue", "1");
+      return apiGet<List<HomeworkAssignmentRow>>(`/v1/homework/assignments?${qs.toString()}`);
+    },
+    enabled: opts?.enabled !== false,
+  });
+}
+
+export function useHomeworkSubmissions(assignmentId: string | undefined) {
+  return useQuery({
+    queryKey: qk.homeworkSubmissions(assignmentId ?? ""),
+    queryFn: () =>
+      apiGet<List<HomeworkSubmissionAdminRow>>(
+        `/v1/homework/assignments/${assignmentId}/submissions`,
+      ),
+    enabled: !!assignmentId,
+  });
+}
+
+export function useCreateHomeworkAssignment() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      batch_id: string;
+      title: string;
+      due_date: string;
+      description?: string;
+      attachment_url?: string;
+    }) =>
+      apiPost<{ id: string; submissions_created: number }>("/v1/homework/assignments", body),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["shikshak", "homework-assignments"] });
+    },
+  });
+}
+
+export function useGradeHomeworkSubmission() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      submissionId,
+      status,
+      feedback_note,
+    }: {
+      submissionId: string;
+      status: "approved" | "starred" | "returned";
+      feedback_note?: string | null;
+      assignmentId: string;
+    }) => {
+      const body: {
+        status: "approved" | "starred" | "returned";
+        feedback_note?: string | null;
+      } = { status };
+      if (feedback_note !== undefined) body.feedback_note = feedback_note;
+      return apiPost(`/v1/homework/submissions/${submissionId}/grade`, body);
+    },
+    onSuccess: (_data, vars) => {
+      void qc.invalidateQueries({ queryKey: qk.homeworkSubmissions(vars.assignmentId) });
+      void qc.invalidateQueries({ queryKey: ["shikshak", "homework-assignments"] });
+    },
+  });
+}
+
+export function useGradeAllHomework() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      assignmentId,
+      work_kind,
+    }: {
+      assignmentId: string;
+      work_kind?: "all" | "uploaded" | "acknowledged";
+    }) =>
+      apiPost<{
+        summary: {
+          graded: number;
+          skipped: number;
+          failed: number;
+          points_awarded: number;
+        };
+      }>(`/v1/homework/assignments/${assignmentId}/grade-all`, {
+        status: "approved",
+        ...(work_kind ? { work_kind } : {}),
+      }),
+    onSuccess: (_data, vars) => {
+      void qc.invalidateQueries({ queryKey: qk.homeworkSubmissions(vars.assignmentId) });
+      void qc.invalidateQueries({ queryKey: ["shikshak", "homework-assignments"] });
     },
   });
 }

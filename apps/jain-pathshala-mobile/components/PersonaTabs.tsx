@@ -19,7 +19,16 @@ export interface PersonaTab {
  * Redirects to sign-in when logged out, or to the user's own home when they
  * stray into a group they aren't allowed into.
  */
-export function PersonaTabs({ allowed, tabs }: { allowed: Role[]; tabs: PersonaTab[] }) {
+export function PersonaTabs({
+  allowed,
+  tabs,
+  hide = [],
+}: {
+  allowed: Role[];
+  tabs: PersonaTab[];
+  /** File-based routes in this folder that must not appear as tabs. */
+  hide?: string[];
+}) {
   const c = useColors();
   const { user, loading } = useAuth();
 
@@ -68,6 +77,9 @@ export function PersonaTabs({ allowed, tabs }: { allowed: Role[]; tabs: PersonaT
             tabBarIcon: ({ color }) => <Ionicons name={t.icon} size={22} color={color} />,
           }}
         />
+      ))}
+      {hide.map((name) => (
+        <Tabs.Screen key={name} name={name} options={{ href: null }} />
       ))}
     </Tabs>
   );

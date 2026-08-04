@@ -1,16 +1,45 @@
-import { useState } from "react";
-import { Alert, Linking, TextInput, View } from "react-native";
+import { useMemo, useState } from "react";
+import { Alert, Linking, Pressable, Text, TextInput, View } from "react-native";
+import { Image } from "expo-image";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
-import { useHomework, useSubmitHomework, useMarkHomeworkDone } from "@/lib/queries";
+import {
+  useHomework,
+  useSubmitHomework,
+  useMarkHomeworkDone,
+  type HomeworkRow,
+} from "@/lib/queries";
+import { resolveUploadUrl } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { bodyFamily } from "@/constants/typography";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { HomeworkProofPicker } from "@/components/HomeworkProofPicker";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
+function isImageUploadUrl(url: string): boolean {
+  const path = url.split("?")[0]?.toLowerCase() ?? "";
+  return /\.(jpe?g|png|webp|gif)$/.test(path);
+}
+
+function openUploadUrl(raw: string | null | undefined, hi: boolean, failHi: string, failEn: string) {
+  const url = resolveUploadUrl(raw);
+  if (!url) {
+    Alert.alert(hi ? "खोल नहीं सके" : "Could not open", hi ? failHi : failEn);
+    return;
+  }
+  void Linking.openURL(url).catch(() => {
+    Alert.alert(hi ? "खोल नहीं सके" : "Could not open", hi ? failHi : failEn);
+  });
+}
+
 type Tone = "success" | "warning" | "error" | "info" | "primary" | "neutral";
+type FeedTab = "todo" | "submitted";
+
+function isOpenStatus(status: string): boolean {
+  const s = status.toLowerCase();
+  return s === "pending" || s === "returned";
+}
 
 /** Map a homework status to a Pill tone. `late` is surfaced as a separate pill. */
 function statusTone(status: string): Tone {
@@ -41,10 +70,12 @@ function SubmitForm({
   assignmentId,
   submissionId,
   studentId,
+  onQueued,
 }: {
   assignmentId: string;
   submissionId: string;
   studentId: string;
+  onQueued?: () => void;
 }) {
   const c = useColors();
   const { hi } = useLocale();
@@ -76,6 +107,7 @@ function SubmitForm({
           setOpen(false);
           setShowUrl(false);
           setUrl("");
+          onQueued?.();
           Alert.alert(
             hi ? "ऑफ़लाइन सहेजा गया" : "Saved offline",
             hi
@@ -140,6 +172,7 @@ function SubmitForm({
                       setUrl("");
                       setShowUrl(false);
                       setOpen(false);
+                      onQueued?.();
                       if (res.queued) {
                         Alert.alert(
                           hi ? "ऑफ़लाइन सहेजा गया" : "Saved offline",
@@ -194,9 +227,11 @@ function SubmitForm({
 function MarkDoneButton({
   submissionId,
   studentId,
+  onDone,
 }: {
   submissionId: string;
   studentId: string;
+  onDone?: () => void;
 }) {
   const { hi } = useLocale();
   const markDone = useMarkHomeworkDone();
@@ -213,6 +248,7 @@ function MarkDoneButton({
           { submissionId, studentId },
           {
             onSuccess: () => {
+              onDone?.();
               Alert.alert(
                 hi ? "पूर्ण बताया" : "Marked done",
                 hi
@@ -237,17 +273,194 @@ function MarkDoneButton({
   );
 }
 
+function HomeworkCard({
+  row,
+  allChildren,
+  activeStudentId,
+  onSubmitted,
+}: {
+  row: HomeworkRow;
+  allChildren: boolean;
+  activeStudentId: string;
+  onSubmitted?: () => void;
+}) {
+  const c = useColors();
+  const { hi } = useLocale();
+  const status = row.status.toLowerCase();
+  const canSubmit = isOpenStatus(status);
+  const rowStudentId = row.student_id ?? activeStudentId;
+  const worksheetUri = resolveUploadUrl(row.attachment_url);
+  const showWorksheetImage = Boolean(worksheetUri && row.attachment_url && isImageUploadUrl(row.attachment_url));
+
+  return (
+    <Card>
+      <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+        <View style={{ flex: 1, paddingRight: 10 }}>
+          {allChildren && row.student_name ? (
+            <Body muted style={{ fontSize: 12, marginBottom: 2 }}>
+              {row.student_name}
+            </Body>
+          ) : null}
+          <Title style={{ fontSize: 16 }}>{row.title}</Title>
+          {(hi ? row.curriculum_topic_hi : row.curriculum_topic_en) ? (
+            <Body muted style={{ fontSize: 12, marginTop: 2 }}>
+              {hi ? row.curriculum_topic_hi : row.curriculum_topic_en}
+            </Body>
+          ) : null}
+          <Body muted style={{ fontSize: 12, marginTop: 2 }}>
+            {hi ? "नियत तिथि: " : "Due: "}
+            {formatDate(row.due_date)}
+          </Body>
+        </View>
+        <Pill label={statusLabel(row.status, hi)} tone={statusTone(row.status)} />
+      </Row>
+
+      {row.late ? (
+        <Row style={{ marginTop: 10 }}>
+          <Pill label={hi ? "विलंबित" : "Late"} tone="error" />
+        </Row>
+      ) : null}
+
+      {row.overdue ? (
+        <Row style={{ marginTop: 10 }}>
+          <Pill label={hi ? "समय समाप्त" : "Overdue"} tone="error" />
+        </Row>
+      ) : null}
+
+      {row.description ? (
+        <Body muted style={{ marginTop: 10, fontSize: 13 }}>
+          {row.description}
+        </Body>
+      ) : null}
+
+      {row.attachment_url ? (
+        <View style={{ marginTop: 10, gap: 8 }}>
+          {showWorksheetImage ? (
+            <Pressable
+              onPress={() =>
+                openUploadUrl(
+                  row.attachment_url,
+                  hi,
+                  "कार्यपत्रक लिंक काम नहीं कर रहा — गुरुजी से पूछें।",
+                  "That worksheet link could not be opened — ask your Guruji.",
+                )
+              }
+              accessibilityRole="imagebutton"
+              accessibilityLabel={hi ? "कार्यपत्रक देखें" : "View worksheet"}
+            >
+              <Image
+                source={{ uri: worksheetUri! }}
+                style={{
+                  width: "100%",
+                  height: 220,
+                  borderRadius: c.radius,
+                  backgroundColor: c.muted,
+                }}
+                contentFit="contain"
+              />
+            </Pressable>
+          ) : null}
+          <Button
+            label={hi ? "कार्यपत्रक खोलें / डाउनलोड" : "Open / download worksheet"}
+            variant="outline"
+            icon="download-outline"
+            onPress={() =>
+              openUploadUrl(
+                row.attachment_url,
+                hi,
+                "कार्यपत्रक लिंक काम नहीं कर रहा — गुरुजी से पूछें।",
+                "That worksheet link could not be opened — ask your Guruji.",
+              )
+            }
+          />
+        </View>
+      ) : null}
+
+      {row.submission_url ? (
+        <Button
+          label={hi ? "प्रस्तुत कार्य देखें" : "View your submission"}
+          variant="ghost"
+          icon="link-outline"
+          style={{ marginTop: 4 }}
+          onPress={() =>
+            openUploadUrl(
+              row.submission_url,
+              hi,
+              "लिंक काम नहीं कर रहा।",
+              "That link could not be opened.",
+            )
+          }
+        />
+      ) : null}
+
+      {row.feedback_note ? (
+        <View
+          style={{
+            marginTop: 12,
+            backgroundColor: status === "returned" ? c.warningSoft : c.muted,
+            borderRadius: c.radius,
+            padding: 12,
+            ...(status === "returned"
+              ? { borderWidth: 1, borderColor: c.warningText }
+              : {}),
+          }}
+        >
+          <Body
+            style={{
+              fontSize: 11,
+              color: status === "returned" ? c.warningText : c.mutedForeground,
+              marginBottom: 2,
+            }}
+          >
+            {hi ? "प्रतिक्रिया" : "Feedback"}
+          </Body>
+          <Body style={{ fontSize: 14 }}>{row.feedback_note}</Body>
+        </View>
+      ) : null}
+
+      {canSubmit ? (
+        <View style={{ marginTop: 12, gap: 8 }}>
+          <SubmitForm
+            assignmentId={row.assignment_id}
+            submissionId={row.id}
+            studentId={rowStudentId}
+            onQueued={onSubmitted}
+          />
+          <MarkDoneButton
+            submissionId={row.id}
+            studentId={rowStudentId}
+            onDone={onSubmitted}
+          />
+        </View>
+      ) : null}
+    </Card>
+  );
+}
+
 export default function HomeworkScreen() {
   const c = useColors();
   const { hi } = useLocale();
   const { activeStudentId, activeChild, children, loading, refetch, setActiveStudentId } =
     useSessionView();
   const [allChildren, setAllChildren] = useState(false);
+  const [tab, setTab] = useState<FeedTab>("todo");
 
   const homework = useHomework(allChildren ? null : activeStudentId, {
     allChildren,
   });
   const rows = homework.data?.items ?? [];
+
+  const { todoRows, submittedRows } = useMemo(() => {
+    const todo: HomeworkRow[] = [];
+    const submitted: HomeworkRow[] = [];
+    for (const row of rows) {
+      if (isOpenStatus(row.status)) todo.push(row);
+      else submitted.push(row);
+    }
+    return { todoRows: todo, submittedRows: submitted };
+  }, [rows]);
+
+  const visible = tab === "todo" ? todoRows : submittedRows;
 
   return (
     <Screen
@@ -259,10 +472,11 @@ export default function HomeworkScreen() {
     >
       <Title style={{ fontSize: 22 }}>{hi ? "गृहकार्य" : "Homework"}</Title>
       <Body muted style={{ marginTop: -4 }}>
-        {hi ? "आपके सौंपे गए कार्य और प्रस्तुतियाँ" : "Your assigned work and submissions"}
+        {hi
+          ? "लंबित कार्य और पहले प्रस्तुत गृहकार्य"
+          : "Open work and past submissions"}
       </Body>
 
-      {/* canonical state ladder: session-loading -> no-child -> query-loading -> error -> empty -> data */}
       {loading ? (
         <StateView status="loading" emptyText="" />
       ) : !activeStudentId || !activeChild ? (
@@ -285,139 +499,84 @@ export default function HomeworkScreen() {
               setActiveStudentId(id);
             }}
           />
-          {homework.isLoading ? (
-        <StateView status="loading" emptyText="" />
-      ) : homework.isError ? (
-        <StateView
-          status="error"
-          emptyText=""
-          errorText={hi ? "गृहकार्य लोड नहीं हुआ।" : "Could not load homework."}
-          onRetry={homework.refetch}
-          retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
-        />
-      ) : rows.length === 0 ? (
-        <StateView
-          status="empty"
-          emptyText={hi ? "अभी कोई गृहकार्य नहीं है。" : "No homework assigned yet."}
-        />
-      ) : (
-        rows.map((row) => {
-          const status = row.status.toLowerCase();
-          const canSubmit = status !== "approved" && status !== "starred";
-          const canMarkDone = status === "pending" || status === "returned";
-          const rowStudentId = row.student_id ?? activeStudentId;
-          return (
-            <Card key={row.id}>
-              <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-                <View style={{ flex: 1, paddingRight: 10 }}>
-                  {allChildren && row.student_name ? (
-                    <Body muted style={{ fontSize: 12, marginBottom: 2 }}>
-                      {row.student_name}
-                    </Body>
-                  ) : null}
-                  <Title style={{ fontSize: 16 }}>{row.title}</Title>
-                  {(hi ? row.curriculum_topic_hi : row.curriculum_topic_en) ? (
-                    <Body muted style={{ fontSize: 12, marginTop: 2 }}>
-                      {hi ? row.curriculum_topic_hi : row.curriculum_topic_en}
-                    </Body>
-                  ) : null}
-                  <Body muted style={{ fontSize: 12, marginTop: 2 }}>
-                    {hi ? "नियत तिथि: " : "Due: "}
-                    {formatDate(row.due_date)}
-                  </Body>
-                </View>
-                <Pill label={statusLabel(row.status, hi)} tone={statusTone(row.status)} />
-              </Row>
 
-              {row.late ? (
-                <Row style={{ marginTop: 10 }}>
-                  <Pill label={hi ? "विलंबित" : "Late"} tone="error" />
-                </Row>
-              ) : null}
-
-              {row.overdue ? (
-                <Row style={{ marginTop: 10 }}>
-                  <Pill label={hi ? "समय समाप्त" : "Overdue"} tone="error" />
-                </Row>
-              ) : null}
-
-              {row.attachment_url ? (
-                <Button
-                  label={hi ? "कार्यपत्रक खोलें" : "Open worksheet"}
-                  variant="outline"
-                  icon="document-outline"
-                  style={{ marginTop: 10 }}
-                  onPress={() => {
-                    void Linking.openURL(row.attachment_url!).catch(() => {
-                      Alert.alert(
-                        hi ? "खोल नहीं सके" : "Could not open",
-                        hi
-                          ? "कार्यपत्रक लिंक काम नहीं कर रहा — गुरुजी से पूछें।"
-                          : "That worksheet link could not be opened — ask your Guruji.",
-                      );
-                    });
-                  }}
-                />
-              ) : null}
-
-              {row.submission_url ? (
-                <Button
-                  label={hi ? "प्रस्तुत कार्य देखें" : "View your submission"}
-                  variant="ghost"
-                  icon="link-outline"
-                  style={{ marginTop: 4 }}
-                  onPress={() => {
-                    void Linking.openURL(row.submission_url!).catch(() => {
-                      Alert.alert(
-                        hi ? "खोल नहीं सके" : "Could not open",
-                        hi ? "लिंक काम नहीं कर रहा।" : "That link could not be opened.",
-                      );
-                    });
-                  }}
-                />
-              ) : null}
-
-              {row.feedback_note ? (
-                <View
+          <Row style={{ gap: 8, marginBottom: 14, marginTop: 4 }}>
+            {(
+              [
+                {
+                  key: "todo" as const,
+                  label: hi
+                    ? `करना है (${todoRows.length})`
+                    : `To do (${todoRows.length})`,
+                },
+                {
+                  key: "submitted" as const,
+                  label: hi
+                    ? `प्रस्तुत (${submittedRows.length})`
+                    : `Submitted (${submittedRows.length})`,
+                },
+              ] as const
+            ).map((t) => {
+              const active = tab === t.key;
+              return (
+                <Pressable
+                  key={t.key}
+                  onPress={() => setTab(t.key)}
                   style={{
-                    marginTop: 12,
-                    backgroundColor: status === "returned" ? c.warningSoft : c.muted,
-                    borderRadius: c.radius,
-                    padding: 12,
-                    ...(status === "returned"
-                      ? { borderWidth: 1, borderColor: c.warningText }
-                      : {}),
+                    backgroundColor: active ? c.primary : c.muted,
+                    borderRadius: 999,
+                    paddingHorizontal: 14,
+                    paddingVertical: 8,
                   }}
                 >
-                  <Body
+                  <Text
                     style={{
-                      fontSize: 11,
-                      color: status === "returned" ? c.warningText : c.mutedForeground,
-                      marginBottom: 2,
+                      fontFamily: bodyFamily(hi, "semibold"),
+                      fontSize: 13,
+                      color: active ? c.primaryForeground : c.mutedForeground,
                     }}
                   >
-                    {hi ? "प्रतिक्रिया" : "Feedback"}
-                  </Body>
-                  <Body style={{ fontSize: 14 }}>{row.feedback_note}</Body>
-                </View>
-              ) : null}
+                    {t.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </Row>
 
-              {canSubmit ? (
-                <View style={{ marginTop: 12, gap: 8 }}>
-                  <SubmitForm
-                    assignmentId={row.assignment_id}
-                    submissionId={row.id}
-                    studentId={rowStudentId}
-                  />
-                  {canMarkDone ? (
-                    <MarkDoneButton submissionId={row.id} studentId={rowStudentId} />
-                  ) : null}
-                </View>
-              ) : null}
-            </Card>
-          );
-        })
-      )}
+          {homework.isLoading ? (
+            <StateView status="loading" emptyText="" />
+          ) : homework.isError ? (
+            <StateView
+              status="error"
+              emptyText=""
+              errorText={hi ? "गृहकार्य लोड नहीं हुआ।" : "Could not load homework."}
+              onRetry={homework.refetch}
+              retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
+            />
+          ) : visible.length === 0 ? (
+            <StateView
+              status="empty"
+              emptyText={
+                tab === "todo"
+                  ? hi
+                    ? "अभी कोई लंबित गृहकार्य नहीं है।"
+                    : "No open homework right now."
+                  : hi
+                    ? "अभी कोई प्रस्तुत गृहकार्य नहीं है।"
+                    : "No submitted homework yet."
+              }
+            />
+          ) : (
+            visible.map((row) => (
+              <HomeworkCard
+                key={row.id}
+                row={row}
+                allChildren={allChildren}
+                activeStudentId={activeStudentId}
+                onSubmitted={() => setTab("submitted")}
+              />
+            ))
+          )}
         </>
       )}
     </Screen>

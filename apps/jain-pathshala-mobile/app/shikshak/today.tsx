@@ -3,26 +3,45 @@ import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { useToday } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
+import { ShikshakQuickActions } from "@/components/QuickActions";
 import { Body, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 export default function TodayScreen() {
   const c = useColors();
   const { hi } = useLocale();
+  const { user } = useAuth();
   const { data, isLoading, isError, refetch, isRefetching } = useToday();
   const items = data?.items ?? [];
+  const firstName = user?.full_name?.split(" ")[0] ?? "";
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
-      <AppHeader title={hi ? "आज के सत्र" : "Today's sessions"} />
-      <Screen refreshing={isRefetching} onRefresh={refetch}>
+      <AppHeader
+        title={hi ? `जय जिनेन्द्र, ${firstName}` : `Jai Jinendra, ${firstName}`}
+        subtitle={hi ? "आज के सत्र और गुरुजी मेनू" : "Today's sessions and Guruji menu"}
+      />
+      <Screen
+        refreshing={isRefetching}
+        onRefresh={refetch}
+        contentStyle={{ paddingBottom: 110 }}
+      >
         <AnimatedMount delay={0}>
           <GalleryCarousel />
         </AnimatedMount>
+
+        <AnimatedMount delay={40}>
+          <ShikshakQuickActions />
+        </AnimatedMount>
+
+        <Title style={{ fontSize: 17, marginTop: 8, marginBottom: 4 }}>
+          {hi ? "आज के सत्र" : "Today's sessions"}
+        </Title>
 
         {isLoading ? (
           <StateView status="loading" emptyText="" />

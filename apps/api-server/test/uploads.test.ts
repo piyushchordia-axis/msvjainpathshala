@@ -101,6 +101,27 @@ describe("upload Content-Type round-trip", () => {
     },
   );
 
+  it("stores Android MediaRecorder mpeg4 (ftyp mp42) as audio/mp4 when declared audio", async () => {
+    // file-type reports video/mp4 for mp42/isom — same collision as audio/webm.
+    const size = 8 + 8 + 8; // ftyp + brand + minor + one compatible
+    const buf = Buffer.alloc(size);
+    buf.writeUInt32BE(size, 0);
+    buf.write("ftyp", 4);
+    buf.write("mp42", 8);
+    buf.writeUInt32BE(0, 12);
+    buf.write("mp42", 16);
+
+    const res = await request(app)
+      .post("/v1/uploads")
+      .set(auth(token))
+      .field("folder", "niyam-proof")
+      .attach("file", buf, { filename: "recording.m4a", contentType: "audio/mp4" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.data.content_type).toBe("audio/mp4");
+    expect(res.body.data.key).toMatch(/\.m4a$/);
+  });
+
   it.each([
     { file: "sample.heic", declareAs: "image/heic" },
     { file: "sample.heif", declareAs: "image/heif" },

@@ -45,7 +45,7 @@ export default function StudentHome() {
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <AppHeader
-        title={`${hi ? "नमस्ते" : "Namaste"}, ${firstName}`}
+        title={`${hi ? "जय जिनेन्द्र" : "Jai Jinendra"}, ${firstName}`}
         subtitle={hi ? "आपकी पाठशाला यात्रा" : "Your pathshala journey"}
       />
       <Screen refreshing={attendance.isRefetching} onRefresh={() => { refetch(); attendance.refetch(); punya.refetch(); }}>

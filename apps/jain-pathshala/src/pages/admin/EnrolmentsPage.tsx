@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useSearch } from 'wouter';
-import { Plus } from 'lucide-react';
+import { Check, ChevronsUpDown, Plus } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
@@ -12,6 +12,16 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import { cn } from '@/lib/utils';
 
 type EnrolmentStatus = 'pending' | 'waitlisted' | 'approved' | 'rejected';
 
@@ -105,6 +115,85 @@ function DecideActions({ id, status, onChanged }: DecideActionsProps) {
 interface StudentOption { id: string; full_name: string | null; student_code: string; }
 interface BatchOption { id: string; name: string | null; centre_name: string; status: 'active' | 'inactive'; }
 
+function batchLabel(b: BatchOption): string {
+  return `${b.name ?? '—'} · ${b.centre_name}`;
+}
+
+function BatchSearchSelect({
+  batches,
+  value,
+  onChange,
+  disabled,
+  loading,
+}: {
+  batches: BatchOption[];
+  value: string;
+  onChange: (id: string) => void;
+  disabled?: boolean;
+  loading?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = useMemo(() => batches.find((b) => b.id === value) ?? null, [batches, value]);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          disabled={disabled || loading}
+          className="h-9 w-full justify-between font-normal"
+        >
+          <span className="truncate text-left">
+            {loading
+              ? 'Loading…'
+              : selected
+                ? batchLabel(selected)
+                : 'Search batch…'}
+          </span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="z-[100] w-[var(--radix-popover-trigger-width)] p-0"
+        align="start"
+      >
+        <Command>
+          <CommandInput placeholder="Search by batch or centre…" />
+          <CommandList>
+            <CommandEmpty>No matching batch.</CommandEmpty>
+            <CommandGroup>
+              {batches.map((b) => {
+                const label = batchLabel(b);
+                return (
+                  <CommandItem
+                    key={b.id}
+                    value={label}
+                    onSelect={() => {
+                      onChange(b.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <Check
+                      className={cn(
+                        'mr-2 h-4 w-4',
+                        value === b.id ? 'opacity-100' : 'opacity-0',
+                      )}
+                    />
+                    <span className="truncate">{label}</span>
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function AddEnrolmentDialog({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -179,16 +268,13 @@ function AddEnrolmentDialog({ onAdded }: { onAdded: () => void }) {
           </div>
           <div className="space-y-1">
             <Label className="text-xs font-medium">Batch *</Label>
-            <Select value={batchId} onValueChange={setBatchId} disabled={loadingOpts}>
-              <SelectTrigger><SelectValue placeholder={loadingOpts ? 'Loading…' : 'Select batch'} /></SelectTrigger>
-              <SelectContent>
-                {batches.map((b) => (
-                  <SelectItem key={b.id} value={b.id}>
-                    {(b.name ?? '—')} · {b.centre_name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <BatchSearchSelect
+              batches={batches}
+              value={batchId}
+              onChange={setBatchId}
+              loading={loadingOpts}
+              disabled={loadingOpts}
+            />
             {!loadingOpts && batches.length === 0 ? (
               <p className="text-xs text-muted-foreground">No active batches in your scope.</p>
             ) : null}

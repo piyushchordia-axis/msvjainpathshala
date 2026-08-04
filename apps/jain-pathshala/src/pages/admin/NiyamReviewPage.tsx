@@ -60,15 +60,22 @@ interface NiyamOption {
   title_en: string;
 }
 
-type TabKey = 'pending' | 'recent' | 'rejected';
+type TabKey = 'open' | 'approved' | 'rejected';
 
 const TABS: { key: TabKey; statusQuery: string[]; labelEn: string; labelHi: string }[] = [
-  { key: 'pending', statusQuery: ['pending'], labelEn: 'Needs review', labelHi: 'समीक्षा आवश्यक' },
   {
-    key: 'recent',
-    statusQuery: ['auto_approved', 'approved'],
-    labelEn: 'Recent',
-    labelHi: 'हालिया',
+    // Auto-approved used to live only under "Recent" — admins never saw proofs
+    // when they stayed on the default pending tab.
+    key: 'open',
+    statusQuery: ['pending', 'auto_approved'],
+    labelEn: 'Open',
+    labelHi: 'खुले',
+  },
+  {
+    key: 'approved',
+    statusQuery: ['approved'],
+    labelEn: 'Approved',
+    labelHi: 'स्वीकृत',
   },
   { key: 'rejected', statusQuery: ['rejected'], labelEn: 'Rejected', labelHi: 'अस्वीकृत' },
 ];
@@ -106,7 +113,12 @@ function daysLeftChip(expiresAt: string, hi: boolean): string | null {
   return hi ? `${days} दिन शेष` : `${days} days left`;
 }
 
-function ProofCell({ row }: { row: ReviewRow }) {
+function isImageProof(m: { kind: string; mime: string | null }): boolean {
+  if ((m.mime ?? '').toLowerCase().startsWith('image/')) return true;
+  return m.kind === 'photo';
+}
+
+function ProofCell({ row, hi }: { row: ReviewRow; hi: boolean }) {
   const media = row.media?.length
     ? row.media
     : row.proof_url
@@ -116,19 +128,44 @@ function ProofCell({ row }: { row: ReviewRow }) {
   if (media.length === 0) return <>—</>;
 
   return (
-    <div className="flex flex-col gap-1">
+    <div className="flex flex-wrap items-center gap-2">
       {media.map((m) => {
         const href = safeHref(m.url);
         if (!href) return null;
+        if (isImageProof(m)) {
+          return (
+            <a
+              key={m.id}
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              className="block overflow-hidden rounded-md border border-border"
+              title={t(hi, 'Open proof', 'प्रमाण खोलें')}
+            >
+              <img
+                src={href}
+                alt=""
+                className="h-14 w-14 object-cover"
+                loading="lazy"
+              />
+            </a>
+          );
+        }
+        const label =
+          m.kind === 'audio'
+            ? t(hi, 'Open audio', 'ऑडियो खोलें')
+            : m.kind === 'video'
+              ? t(hi, 'Open video', 'वीडियो खोलें')
+              : t(hi, 'Open proof', 'प्रमाण खोलें');
         return (
           <a
             key={m.id}
             href={href}
             target="_blank"
             rel="noreferrer"
-            className="text-primary underline underline-offset-2 capitalize"
+            className="rounded-md border border-border bg-muted px-2 py-1 text-xs font-medium text-primary underline-offset-2 hover:underline"
           >
-            {m.kind}
+            {label}
           </a>
         );
       })}
@@ -311,7 +348,7 @@ export default function NiyamReviewPage() {
   const locale = useLocale();
   const hi = locale === 'hi';
 
-  const [tab, setTab] = useState<TabKey>('recent');
+  const [tab, setTab] = useState<TabKey>('open');
   const [studentId, setStudentId] = useState('');
   const [niyamId, setNiyamId] = useState('');
   const [from, setFrom] = useState('');
@@ -336,7 +373,7 @@ export default function NiyamReviewPage() {
   }, []);
 
   const statusQuery = useMemo(
-    () => TABS.find((x) => x.key === tab)?.statusQuery ?? ['auto_approved', 'approved'],
+    () => TABS.find((x) => x.key === tab)?.statusQuery ?? ['pending', 'auto_approved'],
     [tab],
   );
 
@@ -399,8 +436,8 @@ export default function NiyamReviewPage() {
       title={t(hi, 'Niyam Review', 'Niyam समीक्षा')}
       subtitle={t(
         hi,
-        'Review pending submissions and retroactively reject recent auto-approved Niyam work in your scope.',
-        'अपने दायरे में लंबित जमा की समीक्षा करें और हालिया स्वतः-स्वीकृत Niyam को अस्वीकृत करें।',
+        'Pending submissions need approval. Auto-approved work appears here too — open the proof, or reject within 30 days.',
+        'लंबित जमा को स्वीकृति चाहिए। स्वतः-स्वीकृत कार्य भी यहाँ दिखता है — प्रमाण खोलें, या 30 दिनों में अस्वीकृत करें।',
       )}
       actions={
         <div className="flex flex-wrap items-center gap-2">
@@ -533,7 +570,7 @@ export default function NiyamReviewPage() {
                 )}
               </td>
               <td className="px-4 py-3 text-xs">
-                <ProofCell row={s} />
+                <ProofCell row={s} hi={hi} />
               </td>
               <td className="px-4 py-3 text-xs text-muted-foreground">{s.notes ?? '—'}</td>
               <td className="px-4 py-3">

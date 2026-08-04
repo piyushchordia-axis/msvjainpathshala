@@ -4,31 +4,13 @@ import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useNiyamCatalog, useStudentNiyams } from "@/lib/queries";
-import { formatDate } from "@/lib/format";
 import { dateRangeLabel, endsInDaysLabel } from "@/lib/niyam-badges";
 import { AppHeader } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { NiyamListRow } from "@/components/NiyamListRow";
 import { NiyamBadgeRow } from "@/components/NiyamBadgeRow";
+import { NiyamSubmissionsList } from "@/components/NiyamSubmissionsList";
 import { Body, Button, Pill, Row, Screen, StateView, Title } from "@/components/ui";
-
-function statusTone(status: string): "success" | "warning" | "error" | "neutral" | "primary" {
-  const s = status.toLowerCase();
-  if (s === "approved" || s === "accepted" || s === "auto_approved") return "success";
-  if (s === "pending") return "warning";
-  if (s === "rejected") return "error";
-  return "neutral";
-}
-
-function statusLabel(status: string, hi: boolean): string {
-  const s = status.toLowerCase();
-  if (s === "approved" || s === "accepted" || s === "auto_approved") {
-    return hi ? "स्वीकृत" : "Approved";
-  }
-  if (s === "pending") return hi ? "लंबित" : "Pending";
-  if (s === "rejected") return hi ? "अस्वीकृत" : "Rejected";
-  return status;
-}
 
 export default function StudentNiyams() {
   const c = useColors();
@@ -75,9 +57,9 @@ export default function StudentNiyams() {
             <Row style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
               <Title style={{ fontSize: 17 }}>{hi ? "मेरे नियम" : "My niyams"}</Title>
               <Button
-                label={hi ? "नियम भेजें" : "Submit"}
+                label={hi ? "नियम प्रस्तुत करें" : "Submit Niyam"}
                 icon="sparkles-outline"
-                variant="outline"
+                variant="primary"
                 onPress={() => router.push("/niyam-submit")}
               />
             </Row>
@@ -98,27 +80,7 @@ export default function StudentNiyams() {
                 emptyText={hi ? "अभी कोई नियम प्रस्तुत नहीं किया।" : "No niyams submitted yet."}
               />
             ) : (
-              <View style={{ gap: 8 }}>
-                {submissionRows.map((row) => {
-                  const title = hi ? row.niyam_title_hi : row.niyam_title_en;
-                  const featured = row.is_featured ? (hi ? "विशेष" : "Featured") : null;
-                  const meta = [row.niyam_type, formatDate(row.submission_date), featured]
-                    .filter(Boolean)
-                    .join(" · ");
-                  return (
-                    <NiyamListRow
-                      key={row.id}
-                      title={title}
-                      meta={meta}
-                      points={row.points_awarded}
-                      niyamType={row.niyam_type}
-                      statusLabel={statusLabel(row.status, hi)}
-                      statusTone={statusTone(row.status)}
-                      showChevron={false}
-                    />
-                  );
-                })}
-              </View>
+              <NiyamSubmissionsList items={submissionRows} hi={hi} preview />
             )}
 
             <Title style={{ fontSize: 17, marginTop: 10, marginBottom: 4 }}>

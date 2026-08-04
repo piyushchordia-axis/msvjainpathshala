@@ -32,7 +32,7 @@ export default function DashboardScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <AppHeader
-        title={`${hi ? "नमस्ते" : "Namaste"}, ${firstName}`}
+        title={`${hi ? "जय जिनेन्द्र" : "Jai Jinendra"}, ${firstName}`}
         subtitle={hi ? "संगठन का अवलोकन" : "Organisation overview"}
       />
       <Screen refreshing={isRefetching} onRefresh={refetch}>

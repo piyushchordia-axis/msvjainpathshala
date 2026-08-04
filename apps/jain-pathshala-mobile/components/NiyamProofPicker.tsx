@@ -20,6 +20,7 @@ import {
   resolveLocalByteSize,
   newProofLocalId,
   guessMime,
+  ensureFileUri,
   mediaReady,
   toSubmitMedia,
   type MediaKind,
@@ -89,7 +90,7 @@ export function NiyamProofPicker({
   const recorderState = useAudioRecorderState(audioRecorder, 200);
   const [audioReady, setAudioReady] = useState(Platform.OS === "web");
   const [webRecording, setWebRecording] = useState(false);
-  const [webElapsedMs, setWebElapsedMs] = useState(0);
+  const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [pendingAudio, setPendingAudio] = useState<PendingAudio | null>(null);
   // Bind source to pending URI so the player reloads when a take is ready
   // (replace()+immediate play often fails silently after a recording session).
@@ -101,16 +102,20 @@ export function NiyamProofPicker({
   const valueRef = useRef(value);
   valueRef.current = value;
 
+  const isRecordingNative = recorderState.isRecording;
+  const isRecording = isRecordingNative || webRecording;
+
+  // Wall-clock timer — iOS durationMillis often stays 0 even while audio is captured.
   useEffect(() => {
-    if (!webRecording) {
-      setWebElapsedMs(0);
+    if (!isRecording) {
+      setRecordingElapsedMs(0);
       return;
     }
     const started = Date.now();
-    setWebElapsedMs(0);
-    const id = setInterval(() => setWebElapsedMs(Date.now() - started), 200);
+    setRecordingElapsedMs(0);
+    const id = setInterval(() => setRecordingElapsedMs(Date.now() - started), 200);
     return () => clearInterval(id);
-  }, [webRecording]);
+  }, [isRecording]);
 
   const pendingAudioRef = useRef<PendingAudio | null>(null);
   pendingAudioRef.current = pendingAudio;
@@ -172,7 +177,8 @@ export function NiyamProofPicker({
 
   const enqueueUpload = useCallback(
     async (kind: MediaKind, uri: string, name: string, mime: string, blob?: Blob) => {
-      const sizeBytes = await resolveLocalByteSize(uri, blob);
+      const uploadUri = kind === "audio" ? ensureFileUri(uri) : uri;
+      const sizeBytes = await resolveLocalByteSize(uploadUri, blob);
       const overLimit = rejectIfOverUploadLimit(sizeBytes, hi);
       if (overLimit) {
         Alert.alert(hi ? "फ़ाइल बहुत बड़ी" : "File too large", overLimit);
@@ -184,14 +190,14 @@ export function NiyamProofPicker({
         localId,
         kind,
         url: "",
-        previewUri: uri,
+        previewUri: uploadUri,
         status: "uploading",
         mime,
       };
       onChange([...valueRef.current, placeholder]);
       try {
         const uploaded = await apiUpload({
-          uri,
+          uri: uploadUri,
           name,
           type: mime,
           ...(blob ? { blob } : {}),
@@ -235,7 +241,7 @@ export function NiyamProofPicker({
           : item.kind === "video"
             ? "proof.mp4"
             : "proof.jpg";
-      const uploaded = await uploadUri(item.previewUri, name, mime);
+      const uploaded = await uploadUri(ensureFileUri(item.previewUri), name, mime);
       patch(item.localId, {
         url: uploaded.url,
         mime: uploaded.mime,
@@ -469,11 +475,12 @@ export function NiyamProofPicker({
     try {
       if (recorderState.isRecording) {
         await audioRecorder.stop();
-        const uri = audioRecorder.uri;
-        if (!uri) {
+        const rawUri = audioRecorder.uri;
+        if (!rawUri) {
           Alert.alert(hi ? "त्रुटि" : "Error", hi ? "रिकॉर्डिंग सहेजी नहीं गई।" : "Recording was not saved.");
           return;
         }
+        const uri = ensureFileUri(rawUri);
         // Switch out of recording session before preview so Play is audible.
         await setPlaybackAudioMode();
         setPendingAudio({ uri, name: "recording.m4a", mime: "audio/mp4" });
@@ -484,8 +491,10 @@ export function NiyamProofPicker({
           /* ignore */
         }
         await setRecordingAudioMode();
-        await audioRecorder.prepareToRecordAsync();
-        audioRecorder.record();
+        // Pass presets explicitly — prepareToRecordAsync() without options drops
+        // extension/format on some expo-audio versions (empty/wrong container).
+        await audioRecorder.prepareToRecordAsync(RecordingPresets.HIGH_QUALITY);
+        await audioRecorder.record();
       }
     } catch (err) {
       Alert.alert(
@@ -507,9 +516,10 @@ export function NiyamProofPicker({
     );
   }
 
-  const isRecording = recorderState.isRecording || webRecording;
-  const recordingMs =
-    Platform.OS === "web" ? webElapsedMs : recorderState.durationMillis ?? 0;
+  const recordingMs = Math.max(
+    recordingElapsedMs,
+    isRecordingNative ? recorderState.durationMillis ?? 0 : 0,
+  );
 
   return (
     <View style={{ marginTop: 12 }}>

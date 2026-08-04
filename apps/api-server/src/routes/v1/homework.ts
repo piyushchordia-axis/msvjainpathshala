@@ -580,7 +580,10 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
     metadata: { fields: Object.keys(patch) },
   });
 
-  ok(res, updated);
+  ok(res, {
+    ...updated,
+    attachment_url: signUploadUrl(updated.attachment_url),
+  });
 });
 
 const deleteAssignmentSchema = z.object({
@@ -833,6 +836,8 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
     return {
       ...r,
       ...counts,
+      // Worksheet files live under gated /uploads — sign before the admin UI links them.
+      attachment_url: signUploadUrl(r.attachment_url),
       created_at: r.created_at.toISOString(),
     };
   });

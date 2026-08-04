@@ -58,7 +58,7 @@ export default function ParentHome() {
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <AppHeader
-        title={hi ? `नमस्ते, ${firstName}` : `Namaste, ${firstName}`}
+        title={hi ? `जय जिनेन्द्र, ${firstName}` : `Jai Jinendra, ${firstName}`}
         subtitle={hi ? "अपने बच्चे की प्रगति देखें" : "Track your child's progress"}
       />
       <Screen

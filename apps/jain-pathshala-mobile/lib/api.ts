@@ -387,8 +387,9 @@ export async function apiUpload(
     } as unknown as Blob);
   }
 
-  // Videos / longer audio need more than the default JSON timeout.
-  const timeoutMs = mime.startsWith("video/") ? 120_000 : REQUEST_TIMEOUT_MS;
+  // Videos and longer audio need more than the default JSON timeout.
+  const timeoutMs =
+    mime.startsWith("video/") || mime.startsWith("audio/") ? 120_000 : REQUEST_TIMEOUT_MS;
 
   let res: Response;
   try {

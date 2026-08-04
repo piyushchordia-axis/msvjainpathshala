@@ -61,7 +61,7 @@ export default function DashboardPage() {
     <div className="space-y-6">
       <div>
         <div className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">{todayString()}</div>
-        <h2 className="mt-1 font-display text-3xl text-secondary">Good morning, {firstName}</h2>
+        <h2 className="mt-1 font-display text-3xl text-secondary">Jai Jinendra, {firstName}</h2>
         <p className="text-sm text-muted-foreground">Here's a snapshot of what's waiting for you.</p>
       </div>
 

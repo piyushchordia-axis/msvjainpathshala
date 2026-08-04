@@ -14,6 +14,13 @@ export function scopedCentreFilter(scope: AdminScope, column: PgColumn) {
   return inArray(column, scope.centreIds);
 }
 
+/** Batch write-scope filter (shikshak assigned batches). null = no extra filter. */
+export function scopedBatchFilter(scope: AdminScope, column: PgColumn) {
+  if (scope.batchIds === null) return undefined;
+  if (scope.batchIds.length === 0) return sql`false`;
+  return inArray(column, scope.batchIds);
+}
+
 export function inScope(scope: AdminScope, centreId: string | null): boolean {
   if (scope.centreIds === null) return true;
   if (!centreId) return false;

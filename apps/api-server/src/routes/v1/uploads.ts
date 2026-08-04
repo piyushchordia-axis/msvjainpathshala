@@ -97,11 +97,14 @@ router.post("/", uploadMultipart.single("file"), async (req: Request, res: Respo
     // as image/heic. Accept either detected or declared when both are allowlisted
     // and the buffer is non-empty (declared alone is never enough for unknown magic).
     //
-    // audio/webm vs video/webm share the same EBML signature — file-type always
-    // reports video/webm. Prefer the client's declared audio/webm so we store
-    // `.weba` and serve audio/* (an <audio> element cannot play video/webm).
+    // Shared-container collisions — prefer the client's declared *audio* MIME:
+    //   • audio/webm vs video/webm (same EBML) — file-type always reports video/webm
+    //   • audio/mp4 vs video/mp4 (ISO BMFF) — Android MediaRecorder mpeg4/AAC often
+    //     uses ftyp mp42/isom, which file-type reports as video/mp4. Storing that as
+    //     video breaks niyam proof_type=audio (kind derived from content_type).
     const contentMime =
-      declared === "audio/webm" && detectedMime === "video/webm"
+      ((declared === "audio/webm" && detectedMime === "video/webm") ||
+        (declared === "audio/mp4" && detectedMime === "video/mp4"))
         ? declared
         : detectedMime && ALLOWED_MIME_TYPES.has(detectedMime)
           ? detectedMime

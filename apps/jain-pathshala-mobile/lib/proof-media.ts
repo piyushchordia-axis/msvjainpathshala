@@ -63,6 +63,16 @@ export function guessMime(kind: MediaKind, declared?: string | null): string {
   return "image/jpeg";
 }
 
+/** RN FormData on Android needs an explicit file:// scheme. */
+export function ensureFileUri(uri: string): string {
+  if (!uri) return uri;
+  if (uri.startsWith("file://") || uri.startsWith("content://") || uri.startsWith("blob:")) {
+    return uri;
+  }
+  if (uri.startsWith("/")) return `file://${uri}`;
+  return uri;
+}
+
 export function mediaReady(items: ProofMediaItem[]): boolean {
   return items.every((m) => m.status === "ready") && !items.some((m) => m.status === "uploading");
 }

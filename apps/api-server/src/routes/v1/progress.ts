@@ -23,7 +23,7 @@ import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
-import { resolveAdminScope, type AdminScope } from "../../lib/scope";
+import { resolveAdminScope, inBatchWriteScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { storage, makeKey } from "../../lib/storage";
 import { signUploadUrl } from "../../lib/file-tokens";
@@ -118,7 +118,7 @@ async function buildHomeworkSnapshot(
   };
 }
 
-/** Fetch a student row (id, name, code, centre) by id, or null if missing. */
+/** Fetch a student row (id, name, code, centre, batch) by id, or null if missing. */
 async function fetchStudent(id: string) {
   const [row] = await db
     .select({
@@ -126,11 +126,23 @@ async function fetchStudent(id: string) {
       full_name: students.full_name,
       student_code: students.student_code,
       centre_id: students.centre_id,
+      batch_id: students.batch_id,
     })
     .from(students)
     .where(eq(students.id, id))
     .limit(1);
   return row ?? null;
+}
+
+/** Shikshak: assigned batches only; city_admin+: centre membership. */
+function studentInProgressScope(
+  scope: AdminScope,
+  student: { centre_id: string | null; batch_id: string | null },
+): boolean {
+  if (scope.batchIds !== null) {
+    return inBatchWriteScope(scope, student.batch_id, student.centre_id);
+  }
+  return inScope(scope, student.centre_id);
 }
 
 /** The city of a student via their centre, or null (no centre / unassigned). */
@@ -158,7 +170,7 @@ router.get(
     }
     const scope = await resolveAdminScope(req.authUser!);
     const student = await fetchStudent(id);
-    if (!student || !inScope(scope, student.centre_id)) {
+    if (!student || !studentInProgressScope(scope, student)) {
       fail(res, 404, "ERR_NOT_FOUND", "Student not found in your scope.");
       return;
     }
@@ -266,7 +278,7 @@ router.post(
 
     const scope = await resolveAdminScope(req.authUser!);
     const student = await fetchStudent(id);
-    if (!student || !inScope(scope, student.centre_id)) {
+    if (!student || !studentInProgressScope(scope, student)) {
       fail(res, 404, "ERR_NOT_FOUND", "Student not found in your scope.");
       return;
     }
@@ -335,7 +347,7 @@ router.post(
     }
     const scope = await resolveAdminScope(req.authUser!);
     const student = await fetchStudent(id);
-    if (!student || !inScope(scope, student.centre_id)) {
+    if (!student || !studentInProgressScope(scope, student)) {
       fail(res, 404, "ERR_NOT_FOUND", "Student not found in your scope.");
       return;
     }
@@ -527,7 +539,7 @@ router.get("/students/:id/reports", async (req: Request, res: Response) => {
   if (ADMIN_ROLES.includes(user.role)) {
     const scope = await resolveAdminScope(user);
     const student = await fetchStudent(id);
-    if (student && inScope(scope, student.centre_id)) isAdmin = true;
+    if (student && studentInProgressScope(scope, student)) isAdmin = true;
   }
 
   if (!isOwner && !isAdmin) {

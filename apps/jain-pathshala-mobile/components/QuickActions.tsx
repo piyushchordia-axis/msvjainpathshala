@@ -11,9 +11,14 @@ import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { Card, Body, Title } from "@/components/ui";
 
-type Action = { href: string; icon: keyof typeof Ionicons.glyphMap; en: string; hi: string };
+export type QuickAction = {
+  href: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  en: string;
+  hi: string;
+};
 
-const ACTIONS: Action[] = [
+const PARENT_ACTIONS: QuickAction[] = [
   { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "सूचनाएँ" },
   { href: "/my-attendance", icon: "checkmark-done-outline", en: "Attendance", hi: "उपस्थिति" },
   { href: "/niyam-submit", icon: "sparkles-outline", en: "Submit Niyam", hi: "नियम भेजें" },
@@ -23,7 +28,19 @@ const ACTIONS: Action[] = [
   { href: "/competitions", icon: "trophy-outline", en: "Competitions", hi: "प्रतियोगिताएँ" },
 ];
 
-function ActionTile({ action }: { action: Action }) {
+/** Guruji shortcuts — mirrors web admin items that exist on mobile. */
+export const SHIKSHAK_ACTIONS: QuickAction[] = [
+  { href: "/shikshak/students", icon: "people-outline", en: "Students", hi: "विद्यार्थी" },
+  { href: "/shikshak/batches", icon: "grid-outline", en: "Batches", hi: "बैच" },
+  { href: "/shikshak/homework", icon: "book-outline", en: "Homework", hi: "गृहकार्य" },
+  { href: "/shikshak/niyam-review", icon: "clipboard-outline", en: "Niyam review", hi: "नियम समीक्षा" },
+  { href: "/shikshak/niyams", icon: "sparkles-outline", en: "Niyam catalog", hi: "नियम सूची" },
+  { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "सूचनाएँ" },
+  { href: "/gallery", icon: "images-outline", en: "Punya Wall", hi: "पुण्य दीवार" },
+  { href: "/shikshak/profile", icon: "person-circle-outline", en: "Profile", hi: "प्रोफ़ाइल" },
+];
+
+function ActionTile({ action }: { action: QuickAction }) {
   const c = useColors();
   const { hi } = useLocale();
   const router = useRouter();
@@ -66,17 +83,35 @@ function ActionTile({ action }: { action: Action }) {
   );
 }
 
-/** A grid of quick links to the student/parent activity screens. */
-export function QuickActions() {
+/** A grid of quick links — parent/student Activities by default. */
+export function QuickActions({
+  actions = PARENT_ACTIONS,
+  titleEn = "Activities",
+  titleHi = "गतिविधियाँ",
+}: {
+  actions?: QuickAction[];
+  titleEn?: string;
+  titleHi?: string;
+}) {
   const { hi } = useLocale();
   return (
     <Card>
-      <Title style={{ fontSize: 16, marginBottom: 12 }}>{hi ? "गतिविधियाँ" : "Activities"}</Title>
+      <Title style={{ fontSize: 16, marginBottom: 12 }}>{hi ? titleHi : titleEn}</Title>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
-        {ACTIONS.map((a) => (
+        {actions.map((a) => (
           <ActionTile key={a.href} action={a} />
         ))}
       </View>
     </Card>
+  );
+}
+
+export function ShikshakQuickActions() {
+  return (
+    <QuickActions
+      actions={SHIKSHAK_ACTIONS}
+      titleEn="Guruji menu"
+      titleHi="गुरुजी मेनू"
+    />
   );
 }

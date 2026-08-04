@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { FileText } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Check, ChevronsUpDown, FileText } from 'lucide-react';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminError } from '@/components/admin/AdminPageShell';
@@ -12,11 +12,22 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import { cn } from '@/lib/utils';
 
 interface StudentOption {
   id: string;
-  full_name: string;
+  full_name: string | null;
   student_code: string;
+  status?: string;
 }
 
 interface ProgressItem {
@@ -44,8 +55,84 @@ function levelLabel(level: ProgressLevel): string {
   return level.replace(/_/g, ' ');
 }
 
+function studentLabel(s: StudentOption): string {
+  return `${s.full_name ?? '—'} · ${s.student_code}`;
+}
+
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className="space-y-1"><Label className="text-xs font-medium">{label}</Label>{children}</div>;
+}
+
+function StudentSearchSelect({
+  students,
+  value,
+  onChange,
+  disabled,
+  loading,
+}: {
+  students: StudentOption[];
+  value: string;
+  onChange: (id: string) => void;
+  disabled?: boolean;
+  loading?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = useMemo(() => students.find((s) => s.id === value) ?? null, [students, value]);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          disabled={disabled || loading}
+          className="mt-1 h-9 w-full justify-between font-normal"
+        >
+          <span className="truncate text-left">
+            {loading
+              ? 'Loading…'
+              : selected
+                ? studentLabel(selected)
+                : 'Search by name or student code…'}
+          </span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="z-[100] w-[var(--radix-popover-trigger-width)] p-0" align="start">
+        <Command>
+          <CommandInput placeholder="Type a student name or code…" />
+          <CommandList>
+            <CommandEmpty>No matching student.</CommandEmpty>
+            <CommandGroup>
+              {students.map((s) => {
+                const label = studentLabel(s);
+                return (
+                  <CommandItem
+                    key={s.id}
+                    value={label}
+                    onSelect={() => {
+                      onChange(s.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <Check
+                      className={cn(
+                        'mr-2 h-4 w-4',
+                        value === s.id ? 'opacity-100' : 'opacity-0',
+                      )}
+                    />
+                    <span className="truncate">{label}</span>
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 function GenerateReportDialog({ studentId, onGenerated }: { studentId: string; onGenerated: () => void }) {
@@ -156,8 +243,12 @@ export default function ProgressPage() {
   const [reports, setReports] = useState<ReportRow[]>([]);
 
   useEffect(() => {
-    apiGet<{ items: StudentOption[] }>('/v1/admin/students?limit=300')
-      .then((r) => setStudents(r?.items ?? []))
+    setStudentsLoading(true);
+    apiGet<{ items: StudentOption[] }>('/v1/admin/students?limit=500')
+      .then((r) => {
+        const list = (r?.items ?? []).filter((s) => s.status !== 'inactive');
+        setStudents(list);
+      })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load students.'))
       .finally(() => setStudentsLoading(false));
   }, []);
@@ -219,23 +310,23 @@ export default function ProgressPage() {
 
       <div className="mb-6 max-w-md">
         <Label className="text-xs font-medium">Student</Label>
-        <Select value={studentId} onValueChange={onSelectStudent} disabled={studentsLoading}>
-          <SelectTrigger className="mt-1">
-            <SelectValue placeholder={studentsLoading ? 'Loading students…' : 'Select a student'} />
-          </SelectTrigger>
-          <SelectContent>
-            {students.map((s) => (
-              <SelectItem key={s.id} value={s.id}>
-                {s.full_name} — {s.student_code}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        <StudentSearchSelect
+          students={students}
+          value={studentId}
+          onChange={onSelectStudent}
+          loading={studentsLoading}
+          disabled={studentsLoading}
+        />
+        {!studentsLoading && students.length === 0 ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            No active students in your scope. Assign a batch, or check that children are enrolled in your batches.
+          </p>
+        ) : null}
       </div>
 
       {!studentId ? (
         <div className="rounded-md border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-          Select a student to view and edit their curriculum progress.
+          Search for a student by name to view and edit their curriculum progress.
         </div>
       ) : (
         <div className="space-y-8">
@@ -254,7 +345,12 @@ export default function ProgressPage() {
                   {itemsLoading ? (
                     <tr><td colSpan={3} className="px-4 py-8 text-center text-muted-foreground">Loading…</td></tr>
                   ) : items.length === 0 ? (
-                    <tr><td colSpan={3} className="px-4 py-8 text-center text-muted-foreground">No curriculum items found.</td></tr>
+                    <tr>
+                      <td colSpan={3} className="px-4 py-8 text-center text-muted-foreground">
+                        No curriculum items for this student&apos;s city.
+                        Ask a city admin to publish a curriculum, then refresh.
+                      </td>
+                    </tr>
                   ) : items.map((it) => (
                     <tr key={it.item_id} className="hover:bg-muted/30">
                       <td className="px-4 py-3 font-medium">{it.title_en}</td>

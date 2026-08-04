@@ -85,7 +85,9 @@ function RootLayoutNav() {
       {/* Wave 4 — new student/parent flows */}
       <Stack.Screen name="notifications" options={{ title: "Notifications" }} />
       <Stack.Screen name="niyam-submit" options={{ title: "Submit Niyam" }} />
+      <Stack.Screen name="niyam-submissions" options={{ title: "All submissions" }} />
       <Stack.Screen name="homework" options={{ title: "Homework" }} />
+      <Stack.Screen name="homework-assignment/[id]" options={{ title: "Review homework" }} />
       <Stack.Screen name="my-attendance" options={{ title: "Attendance" }} />
       <Stack.Screen name="quizzes" options={{ title: "Quizzes" }} />
       <Stack.Screen name="competitions" options={{ title: "Competitions" }} />

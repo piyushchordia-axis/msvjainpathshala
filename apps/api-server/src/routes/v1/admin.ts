@@ -33,7 +33,7 @@ import adminResourcesRouter from "./admin-resources";
 import adminModulesRouter from "./admin-modules";
 import adminStaffingRouter from "./admin-staffing";
 import { canTransitionEnrolment } from "./enrolments";
-import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
+import { clampLimit, inScope, scopedCentreFilter, scopedBatchFilter } from "../../lib/route-helpers";
 import { getCentresAttendanceRate, rateToPercent1 } from "../../lib/attendance-rate";
 
 const router: IRouter = Router();
@@ -338,6 +338,9 @@ router.get("/students", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
   const limit = clampLimit(req.query.limit, 100, 500);
   const centreFilter = scopedCentreFilter(scope, students.centre_id);
+  // Shikshak: students in assigned batches only (progress / roster picks).
+  // Centre membership alone would list every child at their tagged centres.
+  const batchFilter = scopedBatchFilter(scope, students.batch_id);
 
   const rows = await db
     .select({
@@ -348,10 +351,12 @@ router.get("/students", async (req: Request, res: Response) => {
       dob: students.dob,
       msv_status: students.msv_status,
       status: students.status,
+      batch_id: students.batch_id,
+      centre_id: students.centre_id,
     })
     .from(students)
-    .where(and(isNull(students.deleted_at), centreFilter))
-    .orderBy(desc(students.created_at))
+    .where(and(isNull(students.deleted_at), centreFilter, batchFilter))
+    .orderBy(asc(students.full_name), desc(students.created_at))
     .limit(limit);
 
   ok(res, { items: rows }, { count: rows.length });
@@ -396,6 +401,9 @@ router.post("/students/:id/status", async (req: Request, res: Response) => {
 router.get("/batches", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
   const centreFilter = scopedCentreFilter(scope, batches.centre_id);
+  // Shikshak: assigned batches only (homework setup, roster picks). Centre
+  // membership alone would list every batch at their tagged centres.
+  const batchFilter = scopedBatchFilter(scope, batches.id);
 
   const primaryUser = users;
   const rows = await db
@@ -422,7 +430,7 @@ router.get("/batches", async (req: Request, res: Response) => {
       ),
     )
     .leftJoin(primaryUser, eq(primaryUser.id, shikshak_batch_assignments.user_id))
-    .where(and(isNull(batches.deleted_at), centreFilter))
+    .where(and(isNull(batches.deleted_at), centreFilter, batchFilter))
     .orderBy(asc(centres.name), asc(batches.name));
 
   ok(res, { items: rows }, { count: rows.length });
