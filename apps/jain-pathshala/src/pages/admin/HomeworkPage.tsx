@@ -179,6 +179,10 @@ function EditAssignmentDialog({
       await apiPatch(`/v1/homework/assignments/${assignment.id}`, {
         title: title.trim(),
         due_date: dueDate,
+        // Correcting a due date backwards is allowed with an explicit flag (FIX #19).
+        ...(dueDate < new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })
+          ? { allow_past_due_date: true }
+          : {}),
         description: description.trim() || null,
         attachment_url: attachmentUrl.trim() || null,
         is_msv: isMsv,

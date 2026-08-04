@@ -1945,4 +1945,49 @@ describe("homework", () => {
     await pool.query(`update homework_assignments set deleted_at = now() where id = $1`, [zeroId]);
     await pool.query(`update batches set deleted_at = now() where id = $1`, [emptyBatchId]);
   });
+
+  it("creating an assignment with a past due date is rejected", async () => {
+    const admin = await loginAs("super_admin");
+    const batchesRes = await request(app).get("/v1/admin/batches").set(auth(admin.token));
+    const batchId = batchesRes.body.data.items[0].id as string;
+
+    const { kolkataDateString } = await import("../src/services/attendance-mark");
+    // Far enough in the past that Asia/Kolkata "today" cannot collide.
+    const pastDate = "2020-01-15";
+    expect(pastDate < kolkataDateString(new Date())).toBe(true);
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `Past due ${Date.now()}`,
+        due_date: pastDate,
+      });
+    expect(create.status).toBe(422);
+    expect(create.body.error.code).toBe("ERR_VALIDATION_FAILED");
+    expect(create.body.error.message).toBe(
+      "That due date has already passed — pick today or a later date.",
+    );
+  });
+
+  it("today's date is accepted", async () => {
+    const admin = await loginAs("super_admin");
+    const batchesRes = await request(app).get("/v1/admin/batches").set(auth(admin.token));
+    const batchId = batchesRes.body.data.items[0].id as string;
+
+    const { kolkataDateString } = await import("../src/services/attendance-mark");
+    const today = kolkataDateString(new Date());
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `Due today ${Date.now()}`,
+        due_date: today,
+      });
+    expect(create.status).toBe(200);
+    expect(create.body.data.id).toBeTruthy();
+  });
 });

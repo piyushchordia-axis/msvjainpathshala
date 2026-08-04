@@ -32,13 +32,19 @@ import {
 import { auditFromReq } from "../../lib/audit";
 
 import { clampLimit, ownedStudentId, scopedCentreFilter } from "../../lib/route-helpers";
+import { kolkataDateString } from "../../services/attendance-mark";
 
 const router: IRouter = Router();
 router.use(requireAuth);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const DUE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+function isPastDueDate(dueDate: string): boolean {
+  return dueDate < kolkataDateString(new Date());
+}
 
 /** Keyset cursor: `value|uuid` base64url — matches admin niyam-submissions. */
 function encodeKeysetCursor(value: string, id: string): string {
@@ -113,7 +119,7 @@ const createAssignmentSchema = z.object({
   batch_id: z.string().uuid(),
   title: z.string().min(1).max(300),
   description: z.string().max(5000).optional(),
-  due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  due_date: z.string().regex(DUE_DATE_RE),
   attachment_url: httpUrl(1000).optional(),
   is_msv: z.boolean().optional(),
   // Create-time subset only — not persisted (FIX #14 dropped the column).
@@ -142,6 +148,15 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
   }
   if (!inBatchWriteScope(scope, batch.id, batch.centre_id)) {
     fail(res, 403, "ERR_FORBIDDEN", "Batch not in your scope.");
+    return;
+  }
+  if (isPastDueDate(body.due_date)) {
+    fail(
+      res,
+      422,
+      "ERR_VALIDATION_FAILED",
+      "That due date has already passed — pick today or a later date.",
+    );
     return;
   }
 
@@ -237,11 +252,15 @@ const patchAssignmentSchema = z
   .object({
     title: z.string().min(1).max(300).optional(),
     description: z.string().max(5000).nullable().optional(),
-    due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    due_date: z.string().regex(DUE_DATE_RE).optional(),
     attachment_url: httpUrl(1000).nullable().optional(),
     is_msv: z.boolean().optional(),
+    /** Required when PATCH sets due_date to a past Kolkata calendar day. */
+    allow_past_due_date: z.boolean().optional(),
   })
-  .refine((b) => Object.keys(b).length > 0, { message: "empty patch" });
+  .refine((b) => Object.keys(b).filter((k) => k !== "allow_past_due_date").length > 0, {
+    message: "empty patch",
+  });
 
 /* PATCH /v1/homework/assignments/:id — partial update; out-of-scope → 404 */
 router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Response) => {
@@ -293,6 +312,15 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
     patch.description = body.description ?? null;
   }
   if (Object.prototype.hasOwnProperty.call(body, "due_date") && body.due_date !== undefined) {
+    if (isPastDueDate(body.due_date) && body.allow_past_due_date !== true) {
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        "That due date has already passed — pick today or a later date, or pass allow_past_due_date to correct backwards.",
+      );
+      return;
+    }
     patch.due_date = body.due_date;
   }
   if (Object.prototype.hasOwnProperty.call(body, "attachment_url")) {
