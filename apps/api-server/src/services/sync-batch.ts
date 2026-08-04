@@ -430,6 +430,7 @@ async function handleAcknowledgement(
   actor: User,
   submissionOpId: string,
   payload: unknown,
+  clientTimestamp?: string,
 ): Promise<SyncResult> {
   const p = z
     .object({
@@ -449,6 +450,33 @@ async function handleAcknowledgement(
       server_id: p.entity_id,
       data: { kind: p.kind, entity_id: p.entity_id },
     };
+  }
+
+  if (p.kind === "homework" || p.kind === "homework.mark_done") {
+    const { applyHomeworkSubmit, HomeworkSubmitError } = await import("./homework-submit-sync");
+    try {
+      const data = await applyHomeworkSubmit({
+        actor,
+        submissionId: p.entity_id,
+        markDone: true,
+        clientTimestamp,
+      });
+      return {
+        submission_op_id: submissionOpId,
+        status: "success",
+        server_id: data.id,
+        data,
+      };
+    } catch (err) {
+      if (err instanceof HomeworkSubmitError) {
+        return {
+          submission_op_id: submissionOpId,
+          status: err.httpStatus === 409 ? "conflict" : "failed",
+          error: { code: err.code, message: err.message },
+        };
+      }
+      throw err;
+    }
   }
 
   return {
@@ -482,7 +510,7 @@ async function executeOp(
     case "homework_submission":
       return handleHomeworkSubmission(actor, submissionOpId, payload, clientTimestamp);
     case "acknowledgement":
-      return handleAcknowledgement(actor, submissionOpId, payload);
+      return handleAcknowledgement(actor, submissionOpId, payload, clientTimestamp);
     default:
       return {
         submission_op_id: submissionOpId,

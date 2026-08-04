@@ -1,6 +1,10 @@
 /**
  * Single homework-submit implementation for the online route and sync/batch.
  * CLAUDE.md offline sync §4 — no parallel offline-only path.
+ *
+ * Modes:
+ *   - upload (default): parent/student provides a submission_url → submitted|late
+ *   - markDone: acknowledgement without an artefact → acknowledged (F1)
  */
 import {
   db,
@@ -26,6 +30,15 @@ export class HomeworkSubmitError extends Error {
 
 const submissionUrlSchema = httpUrl(1000);
 
+function resolveClientWhen(clientTimestamp?: Date | string): Date {
+  if (clientTimestamp instanceof Date) return clientTimestamp;
+  if (typeof clientTimestamp === "string" && clientTimestamp.length > 0) {
+    const d = new Date(clientTimestamp);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+  return new Date();
+}
+
 export async function applyHomeworkSubmit(opts: {
   actor: User;
   submissionId: string;
@@ -36,6 +49,12 @@ export async function applyHomeworkSubmit(opts: {
    * an offline op drained days later is still judged by when the parent acted.
    */
   clientTimestamp?: Date | string;
+  /**
+   * Parent mark-done without an upload (F1). Sets status='acknowledged'.
+   * Mutually exclusive with providing a new fileUrl for the acknowledgement path;
+   * upload submit still uses fileUrl as today.
+   */
+  markDone?: boolean;
 }): Promise<{ id: string; status: string; late: boolean }> {
   const [sub] = await db
     .select({
@@ -43,6 +62,7 @@ export async function applyHomeworkSubmit(opts: {
       student_id: homework_submissions.student_id,
       status: homework_submissions.status,
       submission_url: homework_submissions.submission_url,
+      late: homework_submissions.late,
       due_date: homework_assignments.due_date,
       is_msv: homework_assignments.is_msv,
       parent_id: students.parent_id,
@@ -87,6 +107,35 @@ export async function applyHomeworkSubmit(opts: {
     throw new HomeworkSubmitError(409, "ERR_CONFLICT", "Submission already graded.");
   }
 
+  const when = resolveClientWhen(opts.clientTimestamp);
+  const today = kolkataDateString(when);
+  const isLate = !!sub.due_date && sub.due_date < today;
+
+  if (opts.markDone) {
+    // Idempotent replay: already acknowledged → return current row.
+    if (sub.status === "acknowledged") {
+      return { id: sub.id, status: sub.status, late: sub.late };
+    }
+    // Work already uploaded — mark-done is the no-artefact path only.
+    if (sub.status === "submitted" || sub.status === "late") {
+      throw new HomeworkSubmitError(
+        409,
+        "ERR_CONFLICT",
+        "Work was already uploaded for this homework — no need to mark it done.",
+      );
+    }
+
+    await db
+      .update(homework_submissions)
+      .set({
+        status: "acknowledged",
+        late: isLate,
+      })
+      .where(eq(homework_submissions.id, sub.id));
+
+    return { id: sub.id, status: "acknowledged", late: isLate };
+  }
+
   let nextUrl: string | undefined;
   if (opts.fileUrl !== undefined) {
     const parsed = submissionUrlSchema.safeParse(opts.fileUrl);
@@ -108,14 +157,6 @@ export async function applyHomeworkSubmit(opts: {
 
   // AT26: lateness is Asia/Kolkata calendar day vs due_date, using the client's
   // clock when provided (offline drain must not be judged by server receipt).
-  const when =
-    opts.clientTimestamp instanceof Date
-      ? opts.clientTimestamp
-      : typeof opts.clientTimestamp === "string" && opts.clientTimestamp.length > 0
-        ? new Date(opts.clientTimestamp)
-        : new Date();
-  const today = kolkataDateString(Number.isNaN(when.getTime()) ? new Date() : when);
-  const isLate = !!sub.due_date && sub.due_date < today;
   const nextStatus = isLate ? ("late" as const) : ("submitted" as const);
 
   await db

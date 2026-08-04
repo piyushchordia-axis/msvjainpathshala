@@ -100,7 +100,17 @@ export const SHIVIR_ATTENDANCE_MODES = ["in_out", "present_only"] as const;
 export const SHIVIR_SCAN_KINDS = ["check_in", "check_out", "present"] as const;
 export const LIBRARY_CONTENT_TYPES = ["pdf", "video", "audio", "image"] as const;
 export const LIBRARY_ACCESS_TIERS = ["public", "student", "msv", "shikshak"] as const;
-export const HOMEWORK_STATUSES = ["pending", "submitted", "approved", "starred", "late"] as const;
+// acknowledged = parent mark-done without upload (F1); returned = Guruji sent
+// work back for rework (F9). Both added in migration 0023.
+export const HOMEWORK_STATUSES = [
+  "pending",
+  "submitted",
+  "approved",
+  "starred",
+  "late",
+  "acknowledged",
+  "returned",
+] as const;
 export const SERVICE_REQUEST_STATUSES = ["submitted", "in_review", "resolved"] as const;
 export const CURRICULUM_LEVELS = ["not_started", "in_progress", "completed", "mastered"] as const;
 export const QUIZ_SCOPES = ["national", "state", "city", "centre", "batch"] as const;

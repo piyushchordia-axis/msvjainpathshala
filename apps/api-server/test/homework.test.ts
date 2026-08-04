@@ -2196,4 +2196,141 @@ describe("homework", () => {
       await pool.query(`update batches set deleted_at = now() where id = $1`, [emptyBatchId]);
     }
   });
+
+  /* ─── F1 — mark-done acknowledgement ─── */
+
+  it("a parent can mark a homework item done without a url", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    const res = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/mark-done`)
+      .set(auth(parent.token))
+      .send({});
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe("acknowledged");
+    expect(res.body.data.late).toBe(false);
+
+    const row = await pool.query<{ status: string; submission_url: string | null }>(
+      `select status, submission_url from homework_submissions where id = $1`,
+      [submissionId],
+    );
+    expect(row.rows[0]!.status).toBe("acknowledged");
+    expect(row.rows[0]!.submission_url).toBeNull();
+  });
+
+  it("marking done does not award Punya", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+    const before = await totalPunya(parent.token, studentId);
+
+    const res = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/mark-done`)
+      .set(auth(parent.token))
+      .send({});
+    expect(res.status).toBe(200);
+
+    const after = await totalPunya(parent.token, studentId);
+    expect(after).toBe(before);
+  });
+
+  it("a graded submission cannot be marked done", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/graded-then-mark.jpg" });
+    const grade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(admin.token))
+      .send({ status: "approved" });
+    expect(grade.status).toBe(200);
+
+    const res = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/mark-done`)
+      .set(auth(parent.token))
+      .send({});
+    expect(res.status).toBe(409);
+    expect(res.body.error.code).toBe("ERR_CONFLICT");
+  });
+
+  it("mark-done replays idempotently through /v1/sync/batch", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+    const opId = ulid();
+
+    const first = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(parent.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: opId,
+            op_type: "acknowledgement",
+            payload: { kind: "homework.mark_done", entity_id: submissionId },
+            client_timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    expect(first.status).toBe(200);
+    expect(first.body.data.results[0].status).toBe("success");
+    expect(first.body.data.results[0].data.status).toBe("acknowledged");
+
+    const replay = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(parent.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: opId,
+            op_type: "acknowledgement",
+            payload: { kind: "homework.mark_done", entity_id: submissionId },
+            client_timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    expect(replay.status).toBe(200);
+    expect(replay.body.data.results[0].status).toBe("success");
+    expect(replay.body.data.results[0].data.status).toBe("acknowledged");
+  });
+
+  it("an acknowledgement op with kind 'homework' resolves the right submission", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    const sync = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(parent.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: ulid(),
+            op_type: "acknowledgement",
+            payload: { kind: "homework", entity_id: submissionId },
+            client_timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    expect(sync.status).toBe(200);
+    expect(sync.body.data.results[0].status).toBe("success");
+    expect(sync.body.data.results[0].server_id).toBe(submissionId);
+
+    const row = await pool.query<{ status: string }>(
+      `select status from homework_submissions where id = $1`,
+      [submissionId],
+    );
+    expect(row.rows[0]!.status).toBe("acknowledged");
+  });
 });

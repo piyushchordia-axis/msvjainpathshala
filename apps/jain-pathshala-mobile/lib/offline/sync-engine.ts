@@ -7,6 +7,7 @@ import { planDrain } from "./drain";
 import { DRAIN_ORDER, QUEUE_OP_TYPE, QUEUE_KEYS, type QueueKey } from "./queue-keys";
 import { readAllQueues, removeOp, updateOp, enqueueOp } from "./storage";
 import type {
+  PendingAcknowledgementOp,
   PendingAttendanceOp,
   PendingCheckInOp,
   PendingCheckOutOp,
@@ -133,6 +134,29 @@ export async function enqueueHomeworkSubmission(input: {
     attempts: 0,
     next_attempt_at: 0,
     created_at: payload.client_timestamp,
+  });
+  return submission_op_id;
+}
+
+/** Parent mark-done acknowledgement — drains via jp.queue.acknowledgements (F1). */
+export async function enqueueHomeworkMarkDone(input: {
+  submission_id: string;
+}): Promise<string> {
+  const submission_op_id = ulid();
+  const client_timestamp = new Date().toISOString();
+  const payload: PendingAcknowledgementOp = {
+    submission_op_id,
+    kind: "homework.mark_done",
+    entity_id: input.submission_id,
+    client_timestamp,
+  };
+  await enqueueOp(QUEUE_KEYS.acknowledgements, {
+    submission_op_id,
+    payload,
+    state: "queued",
+    attempts: 0,
+    next_attempt_at: 0,
+    created_at: client_timestamp,
   });
   return submission_op_id;
 }

@@ -588,6 +588,31 @@ export function useSubmitHomework() {
   });
 }
 
+/** Parent mark-done without an upload — acknowledgements queue (F1). */
+export function useMarkHomeworkDone() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      studentId,
+      submissionId,
+    }: {
+      studentId: string;
+      submissionId: string;
+    }) => {
+      const { enqueueHomeworkMarkDone, drainQueues } = await import(
+        "@/lib/offline/sync-engine"
+      );
+      const submission_op_id = await enqueueHomeworkMarkDone({
+        submission_id: submissionId,
+      });
+      await drainQueues();
+      return { submission_op_id, queued: true as const };
+    },
+    onSuccess: (_data, vars) =>
+      qc.invalidateQueries({ queryKey: qk.homework(vars.studentId) }),
+  });
+}
+
 // --- Quizzes (scheduled events) ---
 // Field shapes mirror /v1/quizzes responses exactly. Option text_hi is nullable
 // in the bank; questions are returned WITHOUT correct_indices (student-safe).

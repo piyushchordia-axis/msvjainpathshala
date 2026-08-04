@@ -39,7 +39,7 @@ interface SubmissionRow {
   student_id: string;
   student_name: string;
   student_code: string;
-  status: 'pending' | 'submitted' | 'approved' | 'starred' | 'late';
+  status: 'pending' | 'submitted' | 'approved' | 'starred' | 'late' | 'acknowledged' | 'returned';
   submission_url: string | null;
   feedback_note: string | null;
   late: boolean;
@@ -59,13 +59,19 @@ function StatusPill({ status }: { status: string }) {
   const cls: Record<string, string> = {
     pending: 'bg-muted text-muted-foreground',
     submitted: 'bg-sky-500/10 text-sky-700',
+    acknowledged: 'bg-amber-500/10 text-amber-800',
     approved: 'bg-emerald-500/10 text-emerald-700',
     starred: 'bg-amber-500/10 text-amber-700',
     late: 'bg-rose-500/10 text-rose-700',
+    returned: 'bg-orange-500/10 text-orange-800',
   };
+  const label =
+    status === 'acknowledged' ? 'Marked done'
+    : status === 'returned' ? 'Returned'
+    : status;
   return (
     <span className={`rounded-full px-2 py-0.5 text-xs font-semibold capitalize ${cls[status] ?? 'bg-muted text-muted-foreground'}`}>
-      {status}
+      {label}
     </span>
   );
 }
@@ -403,6 +409,8 @@ function SubmissionsDialog({ assignment }: { assignment: AssignmentRow }) {
                     <td className="px-3 py-3 text-xs">
                       {safeHref(s.submission_url) ? (
                         <a href={safeHref(s.submission_url)} target="_blank" rel="noreferrer" className="text-primary underline">View</a>
+                      ) : s.status === 'acknowledged' ? (
+                        <span className="text-amber-800">Parent marked done</span>
                       ) : '—'}
                     </td>
                     <td className="px-3 py-3">

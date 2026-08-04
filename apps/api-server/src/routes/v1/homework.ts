@@ -526,7 +526,7 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
         select
           count(*)::int as total,
           count(*) filter (
-            where hs.status in ('submitted', 'approved', 'starred', 'late')
+            where hs.status in ('submitted', 'approved', 'starred', 'late', 'acknowledged', 'returned')
           )::int as submitted,
           count(*) filter (
             where hs.status in ('approved', 'starred')
@@ -649,14 +649,16 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     return;
   }
 
-  // Pending has no work uploaded — refuse before the claim so the client gets a
-  // clear fix. Already-graded rows still enter the tx for AT18 re-grades.
-  if (sub.status === "pending") {
+  // Pending / returned have no work ready to grade — refuse before the claim.
+  // Already-graded rows still enter the tx for AT18 re-grades.
+  if (sub.status === "pending" || sub.status === "returned") {
     fail(
       res,
       409,
       "ERR_CONFLICT",
-      "Nothing has been submitted yet — ask the student to upload their work first.",
+      sub.status === "returned"
+        ? "This work was returned — wait for the family to resubmit before grading."
+        : "Nothing has been submitted yet — ask the student to upload their work or mark it done first.",
     );
     return;
   }
@@ -680,7 +682,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       .where(
         and(
           eq(homework_submissions.id, sub.id),
-          sql`${homework_submissions.status} in ('submitted', 'late')`,
+          sql`${homework_submissions.status} in ('submitted', 'late', 'acknowledged')`,
         ),
       )
       .returning({
@@ -862,6 +864,7 @@ router.post("/submissions/:id/ungrade", requireAdminPanel, async (req: Request, 
       student_id: homework_submissions.student_id,
       status: homework_submissions.status,
       late: homework_submissions.late,
+      submission_url: homework_submissions.submission_url,
       revision: homework_submissions.revision,
       batch_id: homework_assignments.batch_id,
       centre_id: batches.centre_id,
@@ -880,7 +883,12 @@ router.post("/submissions/:id/ungrade", requireAdminPanel, async (req: Request, 
     return;
   }
 
-  const restoredStatus = sub.late ? ("late" as const) : ("submitted" as const);
+  // Restore to the pre-grade shape: acknowledgement (no url) vs uploaded work.
+  const restoredStatus = !sub.submission_url
+    ? ("acknowledged" as const)
+    : sub.late
+      ? ("late" as const)
+      : ("submitted" as const);
 
   const outcome = await db.transaction(async (tx) => {
     const prior = await findLatestUnreversedHomeworkAward(tx, sub.id, sub.student_id);
@@ -1032,6 +1040,29 @@ router.post("/submissions/:id/submit", async (req: Request, res: Response) => {
       actor: req.authUser!,
       submissionId: String(req.params.id),
       fileUrl: body.submission_url,
+    });
+    ok(res, { id: data.id, status: data.status, late: data.late });
+  } catch (err) {
+    if (err instanceof HomeworkSubmitError) {
+      fail(res, err.httpStatus, err.code, err.message);
+      return;
+    }
+    throw err;
+  }
+});
+
+/**
+ * POST /v1/homework/submissions/:id/mark-done — parent acknowledgement without
+ * an upload (F1). SPEC §6.12 keyed this on the assignment id; we key on the
+ * submission id to match every other route in this module.
+ */
+router.post("/submissions/:id/mark-done", async (req: Request, res: Response) => {
+  const { applyHomeworkSubmit, HomeworkSubmitError } = await import("../../services/homework-submit-sync");
+  try {
+    const data = await applyHomeworkSubmit({
+      actor: req.authUser!,
+      submissionId: String(req.params.id),
+      markDone: true,
     });
     ok(res, { id: data.id, status: data.status, late: data.late });
   } catch (err) {

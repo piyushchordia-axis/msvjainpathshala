@@ -3,7 +3,7 @@ import { Alert, TextInput, View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
-import { useHomework, useSubmitHomework } from "@/lib/queries";
+import { useHomework, useSubmitHomework, useMarkHomeworkDone } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { bodyFamily } from "@/constants/typography";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
@@ -17,9 +17,10 @@ function statusTone(status: string): Tone {
   const s = status.toLowerCase();
   if (s === "approved") return "success";
   if (s === "starred") return "primary";
-  if (s === "submitted") return "info";
+  if (s === "submitted" || s === "acknowledged") return "info";
   if (s === "pending") return "warning";
   if (s === "late") return "error";
+  if (s === "returned") return "warning";
   return "neutral";
 }
 
@@ -28,8 +29,10 @@ function statusLabel(status: string, hi: boolean): string {
   if (s === "approved") return hi ? "स्वीकृत" : "Approved";
   if (s === "starred") return hi ? "विशेष" : "Starred";
   if (s === "submitted") return hi ? "प्रस्तुत" : "Submitted";
+  if (s === "acknowledged") return hi ? "पूर्ण बताया" : "Marked done";
   if (s === "pending") return hi ? "लंबित" : "Pending";
   if (s === "late") return hi ? "विलंबित" : "Late";
+  if (s === "returned") return hi ? "पुनः करें" : "Returned";
   return status;
 }
 
@@ -52,14 +55,12 @@ function SubmitForm({
 
   if (!open) {
     return (
-      <Row style={{ marginTop: 12 }}>
-        <Button
-          label={hi ? "कार्य प्रस्तुत करें" : "Submit work"}
-          variant="outline"
-          icon="cloud-upload-outline"
-          onPress={() => setOpen(true)}
-        />
-      </Row>
+      <Button
+        label={hi ? "कार्य प्रस्तुत करें" : "Submit work"}
+        variant="outline"
+        icon="cloud-upload-outline"
+        onPress={() => setOpen(true)}
+      />
     );
   }
 
@@ -189,6 +190,53 @@ function SubmitForm({
   );
 }
 
+/** Mark-done without an upload — for recitation / reading work with no artefact (F1). */
+function MarkDoneButton({
+  submissionId,
+  studentId,
+}: {
+  submissionId: string;
+  studentId: string;
+}) {
+  const { hi } = useLocale();
+  const markDone = useMarkHomeworkDone();
+
+  return (
+    <Button
+      label={hi ? "पूर्ण बताएँ" : "Mark as done"}
+      variant="ghost"
+      icon="checkmark-circle-outline"
+      loading={markDone.isPending}
+      disabled={markDone.isPending}
+      onPress={() =>
+        markDone.mutate(
+          { submissionId, studentId },
+          {
+            onSuccess: () => {
+              Alert.alert(
+                hi ? "पूर्ण बताया" : "Marked done",
+                hi
+                  ? "गुरुजी को बता दिया गया है कि कार्य पूरा हो गया।"
+                  : "Guruji will see that the work is done.",
+              );
+            },
+            onError: (err) => {
+              Alert.alert(
+                hi ? "सहेजा नहीं जा सका" : "Could not save",
+                err instanceof Error
+                  ? err.message
+                  : hi
+                    ? "फिर से प्रयास करें।"
+                    : "Please try again.",
+              );
+            },
+          },
+        )
+      }
+    />
+  );
+}
+
 export default function HomeworkScreen() {
   const c = useColors();
   const { hi } = useLocale();
@@ -244,6 +292,7 @@ export default function HomeworkScreen() {
         rows.map((row) => {
           const status = row.status.toLowerCase();
           const canSubmit = status !== "approved" && status !== "starred";
+          const canMarkDone = status === "pending" || status === "returned";
           return (
             <Card key={row.id}>
               <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -277,13 +326,20 @@ export default function HomeworkScreen() {
                 <View
                   style={{
                     marginTop: 12,
-                    backgroundColor: c.muted,
+                    backgroundColor: status === "returned" ? c.warningSoft : c.muted,
                     borderRadius: c.radius,
                     padding: 12,
+                    ...(status === "returned"
+                      ? { borderWidth: 1, borderColor: c.warningText }
+                      : {}),
                   }}
                 >
                   <Body
-                    style={{ fontSize: 11, color: c.mutedForeground, marginBottom: 2 }}
+                    style={{
+                      fontSize: 11,
+                      color: status === "returned" ? c.warningText : c.mutedForeground,
+                      marginBottom: 2,
+                    }}
                   >
                     {hi ? "प्रतिक्रिया" : "Feedback"}
                   </Body>
@@ -292,11 +348,16 @@ export default function HomeworkScreen() {
               ) : null}
 
               {canSubmit ? (
-                <SubmitForm
-                  assignmentId={row.assignment_id}
-                  submissionId={row.id}
-                  studentId={activeStudentId}
-                />
+                <View style={{ marginTop: 12, gap: 8 }}>
+                  <SubmitForm
+                    assignmentId={row.assignment_id}
+                    submissionId={row.id}
+                    studentId={activeStudentId}
+                  />
+                  {canMarkDone ? (
+                    <MarkDoneButton submissionId={row.id} studentId={activeStudentId} />
+                  ) : null}
+                </View>
               ) : null}
             </Card>
           );
