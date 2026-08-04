@@ -1193,7 +1193,6 @@ async function main(): Promise<void> {
       description: "Memorise and recite the Navkar Mantra; upload a short video.",
       due_date: "2026-06-30",
       is_msv: false,
-      target_student_ids: null,
       created_by: shikshak.id,
     })
     .returning();

@@ -18,8 +18,6 @@ export const homework_assignments = pgTable(
     due_date: date("due_date").notNull(),
     attachment_url: text("attachment_url"),
     is_msv: boolean("is_msv").notNull().default(false),
-    // NULL = every active student in the batch; otherwise a subset.
-    target_student_ids: uuid("target_student_ids").array(),
     created_by: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     ...softDelete(),
     ...timestamps(),

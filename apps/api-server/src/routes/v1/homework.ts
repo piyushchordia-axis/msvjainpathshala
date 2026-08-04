@@ -90,6 +90,7 @@ const createAssignmentSchema = z.object({
   due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   attachment_url: httpUrl(1000).optional(),
   is_msv: z.boolean().optional(),
+  // Create-time subset only — not persisted (FIX #14 dropped the column).
   target_student_ids: z.array(z.string().uuid()).max(500).optional(),
 });
 
@@ -162,7 +163,6 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
           due_date: body.due_date,
           attachment_url: body.attachment_url ?? null,
           is_msv: body.is_msv ?? false,
-          target_student_ids: body.target_student_ids && body.target_student_ids.length > 0 ? targetIds : null,
           created_by: req.authUser!.id,
         })
         .returning({ id: homework_assignments.id });

@@ -1617,4 +1617,167 @@ describe("homework", () => {
       ]);
     }
   });
+
+  it("a student moved into a batch receives its not-yet-due assignments", async () => {
+    const { materialiseHomeworkOnBatchJoin } = await import("../src/lib/homework-materialise");
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+
+    const home = await pool.query<{ batch_id: string; centre_id: string }>(
+      `select batch_id, centre_id from students where id = $1`,
+      [studentId],
+    );
+    const homeBatch = home.rows[0]!.batch_id;
+
+    // Pick a different active batch at the same centre.
+    const other = await pool.query<{ id: string }>(
+      `select id from batches
+        where centre_id = $1 and id <> $2 and deleted_at is null
+        limit 1`,
+      [home.rows[0]!.centre_id, homeBatch],
+    );
+    expect(other.rows[0]).toBeTruthy();
+    const otherBatch = other.rows[0]!.id;
+
+    const title = `Late-join open ${Date.now()}`;
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({ batch_id: otherBatch, title, due_date: tomorrow() });
+    expect(create.status).toBe(200);
+    const assignmentId = create.body.data.id as string;
+
+    // Student is still on homeBatch — should not see the other batch's work yet.
+    const before = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
+      .set(auth(parent.token));
+    expect(before.body.data.items.some((r: { assignment_id: string }) => r.assignment_id === assignmentId)).toBe(
+      false,
+    );
+
+    await pool.query(`update students set batch_id = $1 where id = $2`, [otherBatch, studentId]);
+    const n = await materialiseHomeworkOnBatchJoin(studentId, otherBatch);
+    expect(n).toBeGreaterThanOrEqual(1);
+
+    try {
+      const after = await request(app)
+        .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
+        .set(auth(parent.token));
+      expect(after.body.data.items.some((r: { assignment_id: string }) => r.assignment_id === assignmentId)).toBe(
+        true,
+      );
+    } finally {
+      await pool.query(`update students set batch_id = $1 where id = $2`, [homeBatch, studentId]);
+    }
+  });
+
+  it("a student moved out does not receive new ones and keeps their history", async () => {
+    const { materialiseHomeworkOnBatchJoin } = await import("../src/lib/homework-materialise");
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+
+    const home = await pool.query<{ batch_id: string; centre_id: string }>(
+      `select batch_id, centre_id from students where id = $1`,
+      [studentId],
+    );
+    const homeBatch = home.rows[0]!.batch_id;
+
+    const { assignmentId, submissionId } = await freshAssignmentTargeting(admin.token, studentId);
+
+    const other = await pool.query<{ id: string }>(
+      `select id from batches
+        where centre_id = $1 and id <> $2 and deleted_at is null
+        limit 1`,
+      [home.rows[0]!.centre_id, homeBatch],
+    );
+    const otherBatch = other.rows[0]!.id;
+
+    await pool.query(`update students set batch_id = $1 where id = $2`, [otherBatch, studentId]);
+    await materialiseHomeworkOnBatchJoin(studentId, otherBatch);
+
+    try {
+      // History from the old batch remains.
+      const mine = await request(app)
+        .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
+        .set(auth(parent.token));
+      expect(mine.body.data.items.some((r: { id: string }) => r.id === submissionId)).toBe(true);
+
+      // New work on the old batch must not appear for the departed student.
+      const create = await request(app)
+        .post("/v1/homework/assignments")
+        .set(auth(admin.token))
+        .send({
+          batch_id: homeBatch,
+          title: `After move ${Date.now()}`,
+          due_date: tomorrow(),
+        });
+      expect(create.status).toBe(200);
+      const newId = create.body.data.id as string;
+
+      const after = await request(app)
+        .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
+        .set(auth(parent.token));
+      expect(after.body.data.items.some((r: { assignment_id: string }) => r.assignment_id === newId)).toBe(
+        false,
+      );
+      // Original assignment still present.
+      expect(after.body.data.items.some((r: { assignment_id: string }) => r.assignment_id === assignmentId)).toBe(
+        true,
+      );
+    } finally {
+      await pool.query(`update students set batch_id = $1 where id = $2`, [homeBatch, studentId]);
+    }
+  });
+
+  it("past-due assignments are NOT back-created for a late joiner", async () => {
+    const { materialiseHomeworkOnBatchJoin } = await import("../src/lib/homework-materialise");
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+
+    const home = await pool.query<{ batch_id: string; centre_id: string }>(
+      `select batch_id, centre_id from students where id = $1`,
+      [studentId],
+    );
+    const homeBatch = home.rows[0]!.batch_id;
+    const other = await pool.query<{ id: string }>(
+      `select id from batches
+        where centre_id = $1 and id <> $2 and deleted_at is null
+        limit 1`,
+      [home.rows[0]!.centre_id, homeBatch],
+    );
+    const otherBatch = other.rows[0]!.id;
+
+    const yesterday = (() => {
+      const d = new Date();
+      d.setUTCDate(d.getUTCDate() - 2);
+      return d.toISOString().slice(0, 10);
+    })();
+
+    // Bypass API past-date guard (FIX #19) — plant a past-due row directly.
+    const planted = await pool.query<{ id: string }>(
+      `insert into homework_assignments (batch_id, title, due_date, is_msv)
+       values ($1, $2, $3, false)
+       returning id`,
+      [otherBatch, `Past due late-join ${Date.now()}`, yesterday],
+    );
+    const pastId = planted.rows[0]!.id;
+
+    await pool.query(`update students set batch_id = $1 where id = $2`, [otherBatch, studentId]);
+    await materialiseHomeworkOnBatchJoin(studentId, otherBatch);
+
+    try {
+      const mine = await request(app)
+        .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
+        .set(auth(parent.token));
+      expect(mine.body.data.items.some((r: { assignment_id: string }) => r.assignment_id === pastId)).toBe(
+        false,
+      );
+    } finally {
+      await pool.query(`update students set batch_id = $1 where id = $2`, [homeBatch, studentId]);
+      await pool.query(`update homework_assignments set deleted_at = now() where id = $1`, [pastId]);
+    }
+  });
 });

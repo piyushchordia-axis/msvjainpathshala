@@ -26,6 +26,7 @@ import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
+import { materialiseHomeworkForStudentBatch } from "../../lib/homework-materialise";
 import { signAccessToken, generateRefreshToken, verifyAccessToken, hashSecret } from "../../lib/tokens";
 import { setAuthCookies, setImpersonationCookies, clearAuthCookies } from "../../lib/cookies";
 import adminResourcesRouter from "./admin-resources";
@@ -612,6 +613,11 @@ router.post("/enrolments/:id/:action", async (req: Request, res: Response) => {
           status: "active",
         })
         .where(eq(students.id, enrolment.student_id));
+      await materialiseHomeworkForStudentBatch(
+        enrolment.student_id,
+        enrolment.requested_batch_id,
+        tx,
+      );
     }
 
     return { kind: "done" as const };

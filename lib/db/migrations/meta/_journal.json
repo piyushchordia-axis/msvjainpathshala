@@ -155,6 +155,13 @@
       "when": 1787481600000,
       "tag": "0021_homework_punya_features",
       "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1787568000000,
+      "tag": "0022_drop_homework_target_student_ids",
+      "breakpoints": true
     }
   ]
 }

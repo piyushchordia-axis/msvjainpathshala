@@ -30,6 +30,7 @@ import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
+import { materialiseHomeworkForStudentBatch } from "../../lib/homework-materialise";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -229,6 +230,7 @@ router.post("/", async (req: Request, res: Response) => {
         .update(students)
         .set({ centre_id: batch.centre_id, batch_id: body.requested_batch_id, status: "active" })
         .where(eq(students.id, body.student_id));
+      await materialiseHomeworkForStudentBatch(body.student_id, body.requested_batch_id, tx);
     }
 
     return { kind: "created" as const, row };
