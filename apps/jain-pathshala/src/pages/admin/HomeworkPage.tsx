@@ -298,15 +298,20 @@ function DeleteAssignmentButton({
 function GradeButtons({ submission, onGraded }: { submission: SubmissionRow; onGraded: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [feedback, setFeedback] = useState(submission.feedback_note ?? '');
+  // Only send feedback_note when the Guruji actually edits the box — an empty
+  // unedited field must not wipe existing feedback (FIX #13).
+  const [feedbackEdited, setFeedbackEdited] = useState(false);
 
   async function grade(status: 'approved' | 'starred') {
     if (busy) return;
     setBusy(status);
     try {
-      await apiPost(`/v1/homework/submissions/${submission.id}/grade`, {
-        status,
-        feedback_note: feedback.trim() || undefined,
-      });
+      const body: { status: 'approved' | 'starred'; feedback_note?: string | null } = { status };
+      if (feedbackEdited) {
+        // Empty after edit → explicit clear (null); otherwise the trimmed text.
+        body.feedback_note = feedback.trim() || null;
+      }
+      await apiPost(`/v1/homework/submissions/${submission.id}/grade`, body);
       toast.success(status === 'starred' ? 'Submission starred.' : 'Submission approved.');
       onGraded();
     } catch (err) {
@@ -320,7 +325,10 @@ function GradeButtons({ submission, onGraded }: { submission: SubmissionRow; onG
     <div className="space-y-2">
       <Input
         value={feedback}
-        onChange={(e) => setFeedback(e.target.value)}
+        onChange={(e) => {
+          setFeedback(e.target.value);
+          setFeedbackEdited(true);
+        }}
         placeholder="Feedback (optional)"
         className="h-8 text-xs"
       />

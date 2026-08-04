@@ -1361,4 +1361,104 @@ describe("homework", () => {
       clearHomeworkPointsCache();
     }
   });
+
+  it("re-grading without a feedback_note key preserves existing feedback", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/keep-feedback.jpg" });
+
+    const approve = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved", feedback_note: "Keep this note." });
+    expect(approve.status).toBe(200);
+
+    const regrade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved" }); // no feedback_note key
+    expect(regrade.status).toBe(200);
+
+    const feed = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
+      .set(auth(parent.token));
+    const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
+    expect(row.feedback_note).toBe("Keep this note.");
+  });
+
+  it("re-grading with feedback_note: null explicitly clears it", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/clear-feedback.jpg" });
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved", feedback_note: "Will be cleared." });
+
+    const clear = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved", feedback_note: null });
+    expect(clear.status).toBe(200);
+
+    const feed = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
+      .set(auth(parent.token));
+    const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
+    expect(row.feedback_note).toBeNull();
+  });
+
+  it("the original grader is retained on the submission", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/keep-grader.jpg" });
+
+    const first = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved", feedback_note: "First look." });
+    expect(first.status).toBe(200);
+
+    const before = await pool.query<{ marked_by: string; marked_at: Date }>(
+      `select marked_by, marked_at from homework_submissions where id = $1`,
+      [submissionId],
+    );
+    expect(before.rows[0]!.marked_by).toBe(shikshak.user.id);
+
+    // Re-grade as super_admin (different actor) without touching feedback.
+    const second = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(admin.token))
+      .send({ status: "starred" });
+    expect(second.status).toBe(200);
+
+    const after = await pool.query<{ marked_by: string; status: string }>(
+      `select marked_by, status from homework_submissions where id = $1`,
+      [submissionId],
+    );
+    expect(after.rows[0]!.status).toBe("starred");
+    expect(after.rows[0]!.marked_by).toBe(shikshak.user.id);
+  });
 });

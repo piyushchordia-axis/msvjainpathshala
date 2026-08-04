@@ -484,7 +484,8 @@ router.get("/assignments/:id/submissions", requireAdminPanel, async (req: Reques
 
 const gradeSchema = z.object({
   status: z.enum(["approved", "starred"]),
-  feedback_note: z.string().max(2000).optional(),
+  // .nullable() allows explicit clear; absence is detected on req.body (not via ??).
+  feedback_note: z.string().max(2000).nullable().optional(),
 });
 
 /* POST /v1/homework/submissions/:id/grade — grade + award punya (AT18 / AT20) */
@@ -496,6 +497,12 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid grade data.");
     return;
   }
+
+  // Partial update: only write feedback_note when the key is present on the wire.
+  const feedbackPresent = Object.prototype.hasOwnProperty.call(req.body ?? {}, "feedback_note");
+  const feedbackPatch = feedbackPresent
+    ? { feedback_note: body.feedback_note ?? null }
+    : ({} as { feedback_note?: string | null });
 
   const id = String(req.params.id);
   const scope = await resolveAdminScope(req.authUser!);
@@ -542,7 +549,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       .update(homework_submissions)
       .set({
         status: body.status,
-        feedback_note: body.feedback_note ?? null,
+        ...feedbackPatch,
         marked_by: req.authUser!.id,
         marked_at: new Date(),
         revision: sql`${homework_submissions.revision} + 1`,
@@ -607,13 +614,12 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     );
     if (oldPoints === points) {
       // Identical award value — metadata only, do NOT bump revision (AT18).
+      // Preserve original marked_by/marked_at; audit records who re-graded.
       await tx
         .update(homework_submissions)
         .set({
           status: body.status,
-          feedback_note: body.feedback_note ?? null,
-          marked_by: req.authUser!.id,
-          marked_at: new Date(),
+          ...feedbackPatch,
         })
         .where(eq(homework_submissions.id, sub.id));
       const [bal] = await tx
@@ -644,9 +650,8 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       .update(homework_submissions)
       .set({
         status: body.status,
-        feedback_note: body.feedback_note ?? null,
-        marked_by: req.authUser!.id,
-        marked_at: new Date(),
+        ...feedbackPatch,
+        // Keep the original grader; audit log carries the re-grader.
         revision: sql`${homework_submissions.revision} + 1`,
       })
       .where(eq(homework_submissions.id, sub.id))
