@@ -15,7 +15,7 @@
  * detail/action is a 404; an out-of-scope batch on create is a 403.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, homework_assignments, homework_submissions, batches, centres, students, punya_balances } from "@workspace/db";
+import { db, homework_assignments, homework_submissions, batches, centres, students, punya_balances, punya_transactions } from "@workspace/db";
 import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
@@ -23,7 +23,7 @@ import { httpUrl } from "../../lib/validation";
 import { signUploadUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
-import { awardPunya } from "../../lib/punya";
+import { awardPunya, reversePunya } from "../../lib/punya";
 import { auditFromReq } from "../../lib/audit";
 import { clampLimit, ownedStudentId, scopedCentreFilter } from "../../lib/route-helpers";
 
@@ -160,6 +160,211 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
   ok(res, { id: assignmentId, submissions_created: submissionsCreated });
 });
 
+const patchAssignmentSchema = z
+  .object({
+    title: z.string().min(1).max(300).optional(),
+    description: z.string().max(5000).nullable().optional(),
+    due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    attachment_url: httpUrl(1000).nullable().optional(),
+    is_msv: z.boolean().optional(),
+  })
+  .refine((b) => Object.keys(b).length > 0, { message: "empty patch" });
+
+/* PATCH /v1/homework/assignments/:id — partial update; out-of-scope → 404 */
+router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Response) => {
+  let body: z.infer<typeof patchAssignmentSchema>;
+  try {
+    body = patchAssignmentSchema.parse(req.body);
+  } catch {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid assignment update.");
+    return;
+  }
+
+  const id = String(req.params.id);
+  const scope = await resolveAdminScope(req.authUser!);
+  const [assignment] = await db
+    .select({
+      id: homework_assignments.id,
+      batch_id: homework_assignments.batch_id,
+      centre_id: batches.centre_id,
+      title: homework_assignments.title,
+      description: homework_assignments.description,
+      due_date: homework_assignments.due_date,
+      attachment_url: homework_assignments.attachment_url,
+      is_msv: homework_assignments.is_msv,
+    })
+    .from(homework_assignments)
+    .innerJoin(batches, eq(batches.id, homework_assignments.batch_id))
+    .where(and(eq(homework_assignments.id, id), isNull(homework_assignments.deleted_at)))
+    .limit(1);
+  if (!assignment || !inBatchWriteScope(scope, assignment.batch_id, assignment.centre_id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Assignment not found.");
+    return;
+  }
+
+  // Partial update: only keys present in the body. Do not coalesce absent keys
+  // to null — that is the wipe bug FIX #13 addresses on feedback.
+  // Changing due_date must NOT retroactively re-evaluate `late` on rows already
+  // submitted; lateness is a point-in-time fact captured at submit (AT26).
+  const patch: {
+    title?: string;
+    description?: string | null;
+    due_date?: string;
+    attachment_url?: string | null;
+    is_msv?: boolean;
+  } = {};
+  if (Object.prototype.hasOwnProperty.call(body, "title") && body.title !== undefined) {
+    patch.title = body.title;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "description")) {
+    patch.description = body.description ?? null;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "due_date") && body.due_date !== undefined) {
+    patch.due_date = body.due_date;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "attachment_url")) {
+    patch.attachment_url = body.attachment_url ?? null;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "is_msv") && body.is_msv !== undefined) {
+    patch.is_msv = body.is_msv;
+  }
+
+  const [updated] = await db
+    .update(homework_assignments)
+    .set(patch)
+    .where(eq(homework_assignments.id, assignment.id))
+    .returning({
+      id: homework_assignments.id,
+      title: homework_assignments.title,
+      description: homework_assignments.description,
+      due_date: homework_assignments.due_date,
+      attachment_url: homework_assignments.attachment_url,
+      is_msv: homework_assignments.is_msv,
+      batch_id: homework_assignments.batch_id,
+    });
+
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "homework_assignment",
+    entityId: assignment.id,
+    summary: `Updated homework "${updated.title}".`,
+    metadata: { fields: Object.keys(patch) },
+  });
+
+  ok(res, updated);
+});
+
+const deleteAssignmentSchema = z.object({
+  force_delete: z.boolean().optional(),
+});
+
+/**
+ * DELETE /v1/homework/assignments/:id — soft-delete only.
+ * Graded submissions imply awarded Punya: require force_delete (AT25 shape) and
+ * reverse each award before hiding the assignment. Full revision-scoped keys
+ * land in FIX #12; until then we reverse against homework-grade:{submission_id}.
+ */
+router.delete("/assignments/:id", requireAdminPanel, async (req: Request, res: Response) => {
+  let body: z.infer<typeof deleteAssignmentSchema> = {};
+  try {
+    if (req.body && typeof req.body === "object" && Object.keys(req.body as object).length > 0) {
+      body = deleteAssignmentSchema.parse(req.body);
+    }
+  } catch {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid delete request.");
+    return;
+  }
+
+  const id = String(req.params.id);
+  const scope = await resolveAdminScope(req.authUser!);
+  const [assignment] = await db
+    .select({
+      id: homework_assignments.id,
+      title: homework_assignments.title,
+      batch_id: homework_assignments.batch_id,
+      centre_id: batches.centre_id,
+    })
+    .from(homework_assignments)
+    .innerJoin(batches, eq(batches.id, homework_assignments.batch_id))
+    .where(and(eq(homework_assignments.id, id), isNull(homework_assignments.deleted_at)))
+    .limit(1);
+  if (!assignment || !inBatchWriteScope(scope, assignment.batch_id, assignment.centre_id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Assignment not found.");
+    return;
+  }
+
+  const graded = await db
+    .select({
+      id: homework_submissions.id,
+      student_id: homework_submissions.student_id,
+      status: homework_submissions.status,
+    })
+    .from(homework_submissions)
+    .where(
+      and(
+        eq(homework_submissions.assignment_id, assignment.id),
+        inArray(homework_submissions.status, ["approved", "starred"]),
+      ),
+    );
+
+  if (graded.length > 0 && body.force_delete !== true) {
+    fail(
+      res,
+      409,
+      "ERR_CONFLICT",
+      `This assignment has ${graded.length} graded submission(s). Pass force_delete=true to reverse their Punya and remove it.`,
+    );
+    return;
+  }
+
+  await db.transaction(async (tx) => {
+    for (const sub of graded) {
+      const awardKey = `homework-grade:${sub.id}`;
+      const [award] = await tx
+        .select({ points: punya_transactions.points })
+        .from(punya_transactions)
+        .where(
+          and(
+            eq(punya_transactions.student_id, sub.student_id),
+            eq(punya_transactions.idempotency_key, awardKey),
+          ),
+        )
+        .limit(1);
+      if (award && award.points > 0) {
+        await reversePunya(
+          {
+            studentId: sub.student_id,
+            featureKey: "homework",
+            points: award.points,
+            note: "Homework assignment deleted",
+            awardedBy: req.authUser!.id,
+            idempotencyKey: `${awardKey}:reversal`,
+          },
+          tx,
+        );
+      }
+    }
+
+    await tx
+      .update(homework_assignments)
+      .set({ deleted_at: new Date() })
+      .where(eq(homework_assignments.id, assignment.id));
+  });
+
+  await auditFromReq(req, {
+    action: "delete",
+    entityKind: "homework_assignment",
+    entityId: assignment.id,
+    summary: `Soft-deleted homework "${assignment.title}"${graded.length > 0 ? ` (force; ${graded.length} Punya reversal(s))` : ""}.`,
+    metadata: {
+      force_delete: body.force_delete === true,
+      graded_reversed: graded.length,
+    },
+  });
+
+  ok(res, { id: assignment.id, deleted: true, graded_reversed: graded.length });
+});
+
 /* GET /v1/homework/assignments?batch_id=&limit= — scoped list + counts */
 router.get("/assignments", requireAdminPanel, async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
@@ -185,7 +390,9 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
     .select({
       id: homework_assignments.id,
       title: homework_assignments.title,
+      description: homework_assignments.description,
       due_date: homework_assignments.due_date,
+      attachment_url: homework_assignments.attachment_url,
       is_msv: homework_assignments.is_msv,
       batch_id: homework_assignments.batch_id,
       batch_name: batches.name,

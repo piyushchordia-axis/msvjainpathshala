@@ -100,6 +100,11 @@ export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   return unwrap<T>(res);
 }
 
+export async function apiDelete<T>(path: string, body?: unknown): Promise<T> {
+  const res = await del<{ data: T } | T>(path, body);
+  return unwrap<T>(res);
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
   const res = await get<{ data: T } | T>(path);
   return unwrap<T>(res);

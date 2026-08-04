@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Plus, ClipboardList } from 'lucide-react';
-import { apiGet, apiPost, ApiError } from '@/lib/api-client';
+import { Plus, ClipboardList, Pencil, Trash2 } from 'lucide-react';
+import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow } from '@/components/admin/AdminPageShell';
@@ -19,7 +19,9 @@ import {
 interface AssignmentRow {
   id: string;
   title: string;
+  description: string | null;
   due_date: string;
+  attachment_url: string | null;
   is_msv: boolean;
   batch_id: string;
   batch_name: string | null;
@@ -140,6 +142,154 @@ function NewAssignmentDialog({ onAdded }: { onAdded: () => void }) {
             </Button>
           </div>
         </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditAssignmentDialog({
+  assignment,
+  onSaved,
+}: {
+  assignment: AssignmentRow;
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [title, setTitle] = useState(assignment.title);
+  const [dueDate, setDueDate] = useState(assignment.due_date);
+  const [description, setDescription] = useState(assignment.description ?? '');
+  const [attachmentUrl, setAttachmentUrl] = useState(assignment.attachment_url ?? '');
+  const [isMsv, setIsMsv] = useState(assignment.is_msv);
+
+  useEffect(() => {
+    if (!open) return;
+    setTitle(assignment.title);
+    setDueDate(assignment.due_date);
+    setDescription(assignment.description ?? '');
+    setAttachmentUrl(assignment.attachment_url ?? '');
+    setIsMsv(assignment.is_msv);
+  }, [open, assignment]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim() || !dueDate) return;
+    setBusy(true);
+    try {
+      await apiPatch(`/v1/homework/assignments/${assignment.id}`, {
+        title: title.trim(),
+        due_date: dueDate,
+        description: description.trim() || null,
+        attachment_url: attachmentUrl.trim() || null,
+        is_msv: isMsv,
+      });
+      toast.success('Assignment updated.');
+      setOpen(false);
+      onSaved();
+    } catch (err) {
+      toast.error('Could not update assignment.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="ghost" aria-label="Edit assignment">
+          <Pencil className="h-3.5 w-3.5" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Edit homework assignment</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="Title *">
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} required />
+          </FormRow>
+          <FormRow label="Due date *">
+            <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} required />
+          </FormRow>
+          <FormRow label="Description">
+            <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
+          </FormRow>
+          <FormRow label="Attachment URL">
+            <Input
+              value={attachmentUrl}
+              onChange={(e) => setAttachmentUrl(e.target.value)}
+              placeholder="https://…"
+              inputMode="url"
+            />
+          </FormRow>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={isMsv} onChange={(e) => setIsMsv(e.target.checked)} />
+            MSV assignment
+          </label>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !title.trim() || !dueDate}>
+              {busy ? 'Saving…' : 'Save changes'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function DeleteAssignmentButton({
+  assignment,
+  onDeleted,
+}: {
+  assignment: AssignmentRow;
+  onDeleted: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const graded = assignment.graded;
+
+  async function confirmDelete(force: boolean) {
+    setBusy(true);
+    try {
+      await apiDelete(`/v1/homework/assignments/${assignment.id}`, force ? { force_delete: true } : {});
+      toast.success('Assignment removed.');
+      setOpen(false);
+      onDeleted();
+    } catch (err) {
+      if (err instanceof ApiError && err.statusCode === 409 && !force) {
+        toast.error('Graded work on this assignment.', err.message);
+        return;
+      }
+      toast.error('Could not delete assignment.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="ghost" aria-label="Delete assignment">
+          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Delete assignment?</DialogTitle></DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          “{assignment.title}” will be hidden from parents and the admin list.
+          {graded > 0
+            ? ` ${graded} graded submission(s) already awarded Punya — deleting will reverse those awards.`
+            : ' No graded submissions yet, so no Punya will be reversed.'}
+        </p>
+        <div className="flex justify-end gap-2 pt-2">
+          <DialogClose asChild><Button type="button" variant="outline" disabled={busy}>Cancel</Button></DialogClose>
+          <Button
+            variant="destructive"
+            disabled={busy}
+            onClick={() => void confirmDelete(graded > 0)}
+          >
+            {busy ? 'Deleting…' : graded > 0 ? 'Delete and reverse Punya' : 'Delete'}
+          </Button>
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -289,7 +439,13 @@ export default function HomeworkPage() {
             <td className="px-4 py-3 text-xs text-muted-foreground">{fmtDate(a.due_date)}</td>
             <td className="px-4 py-3 text-xs">{a.submitted}/{a.total}</td>
             <td className="px-4 py-3 text-xs">{a.graded}/{a.total}</td>
-            <td className="px-4 py-3"><SubmissionsDialog assignment={a} /></td>
+            <td className="px-4 py-3">
+              <div className="flex items-center gap-1">
+                <SubmissionsDialog assignment={a} />
+                <EditAssignmentDialog assignment={a} onSaved={reload} />
+                <DeleteAssignmentButton assignment={a} onDeleted={reload} />
+              </div>
+            </td>
           </tr>
         ))}
       </AdminTable>

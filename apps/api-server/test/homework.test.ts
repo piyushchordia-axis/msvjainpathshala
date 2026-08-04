@@ -1,9 +1,15 @@
-import { describe, it, expect, afterAll, vi } from "vitest";
+import { describe, it, expect, afterAll, beforeAll, vi } from "vitest";
 import request from "supertest";
 import app from "../src/app";
 import { pool } from "@workspace/db";
 import { loginAs, auth } from "./helpers";
 import { ulid } from "../src/lib/ulid";
+
+beforeAll(async () => {
+  // Soft-delete leftover assignments from prior runs so /mine (max limit 200)
+  // can still see rows minted by this suite.
+  await pool.query(`update homework_assignments set deleted_at = now() where deleted_at is null`);
+});
 
 afterAll(async () => {
   await pool.end(); // close the shared pg pool so vitest exits cleanly
@@ -134,7 +140,7 @@ describe("homework", () => {
 
     // Parent sees the assignment in the student's feed.
     const feed = await request(app)
-      .get(`/v1/homework/mine?student_id=${studentId}`)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
       .set(auth(parent.token));
     expect(feed.status).toBe(200);
     const feedRow = feed.body.data.items.find((r: { assignment_id: string }) => r.assignment_id === assignmentId);
@@ -164,7 +170,7 @@ describe("homework", () => {
 
     // The starred status surfaces in the parent feed.
     const feed2 = await request(app)
-      .get(`/v1/homework/mine?student_id=${studentId}`)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
       .set(auth(parent.token));
     const graded = feed2.body.data.items.find((r: { id: string }) => r.id === submissionId);
     expect(graded.status).toBe("starred");
@@ -241,7 +247,7 @@ describe("homework", () => {
 
     // The new status/feedback still persisted despite no re-award.
     const feed = await request(app)
-      .get(`/v1/homework/mine?student_id=${studentId}`)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
       .set(auth(parent.token));
     const graded = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
     expect(graded.status).toBe("starred");
@@ -268,7 +274,7 @@ describe("homework", () => {
     expect(await totalPunya(parent.token, studentId)).toBe(before);
 
     const feed = await request(app)
-      .get(`/v1/homework/mine?student_id=${studentId}`)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
       .set(auth(parent.token));
     const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
     expect(row.status).toBe("pending");
@@ -305,7 +311,7 @@ describe("homework", () => {
 
     // The grade survived: status stays approved, url not clobbered.
     const feed = await request(app)
-      .get(`/v1/homework/mine?student_id=${studentId}`)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
       .set(auth(parent.token));
     const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
     expect(row.status).toBe("approved");
@@ -415,7 +421,7 @@ describe("homework", () => {
       expect(deact.body.data.status).toBe("inactive");
 
       const feed = await request(app)
-        .get(`/v1/homework/mine?student_id=${studentId}`)
+        .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
         .set(auth(parent.token));
       expect(feed.status).toBe(404);
       expect(feed.body.error.code).toBe("ERR_NOT_FOUND");
@@ -512,7 +518,7 @@ describe("homework", () => {
     expect(sync.body.data.results[0].status).toBe("success");
 
     const feed = await request(app)
-      .get(`/v1/homework/mine?student_id=${studentId}`)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
       .set(auth(parent.token));
     const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
     expect(row.submission_url).toBe(url);
@@ -811,5 +817,141 @@ describe("homework", () => {
       .set(auth(parent.token));
     const row = feed.body.data.items.find((r: { id: string }) => r.id === submissionId);
     expect(row.submission_url).toBe(url);
+  });
+
+  it("an assignment can be edited within scope", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const { assignmentId } = await freshAssignmentTargeting(admin.token, studentId);
+
+    const patch = await request(app)
+      .patch(`/v1/homework/assignments/${assignmentId}`)
+      .set(auth(admin.token))
+      .send({
+        title: "Edited title",
+        description: "Edited description",
+        due_date: tomorrow(),
+        is_msv: true,
+      });
+    expect(patch.status).toBe(200);
+    expect(patch.body.data.title).toBe("Edited title");
+    expect(patch.body.data.description).toBe("Edited description");
+    expect(patch.body.data.is_msv).toBe(true);
+
+    const list = await request(app).get("/v1/homework/assignments?limit=200").set(auth(admin.token));
+    const row = list.body.data.items.find((a: { id: string }) => a.id === assignmentId);
+    expect(row).toBeTruthy();
+    expect(row.title).toBe("Edited title");
+  });
+
+  it("an out-of-scope shikshak cannot edit", async () => {
+    const admin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+
+    const allBatches = await request(app).get("/v1/admin/batches").set(auth(admin.token));
+    expect(allBatches.status).toBe(200);
+    const batchList: Array<{ id: string; name: string }> = allBatches.body.data.items;
+
+    const assignedIds = new Set<string>();
+    for (const b of batchList) {
+      const probe = await request(app)
+        .post("/v1/homework/assignments")
+        .set(auth(shikshak.token))
+        .send({ batch_id: b.id, title: `edit-probe ${b.id.slice(0, 8)}`, due_date: tomorrow() });
+      if (probe.status === 200) assignedIds.add(b.id);
+    }
+
+    const outsider = batchList.find(
+      (b) => !assignedIds.has(b.id) && b.name === "Tarun Batch - Unassigned Scope Fixture",
+    );
+    expect(outsider).toBeTruthy();
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: outsider!.id,
+        title: `Out-of-scope edit ${Date.now()}`,
+        due_date: tomorrow(),
+      });
+    expect(create.status).toBe(200);
+
+    const patch = await request(app)
+      .patch(`/v1/homework/assignments/${create.body.data.id}`)
+      .set(auth(shikshak.token))
+      .send({ title: "Should not apply" });
+    expect(patch.status).toBe(404);
+    expect(patch.body.error.code).toBe("ERR_NOT_FOUND");
+  });
+
+  it("a deleted assignment disappears from /mine and the admin list", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const { assignmentId } = await freshAssignmentTargeting(admin.token, studentId);
+
+    const beforeMine = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
+      .set(auth(parent.token));
+    expect(beforeMine.body.data.items.some((r: { assignment_id: string }) => r.assignment_id === assignmentId)).toBe(
+      true,
+    );
+
+    const delRes = await request(app)
+      .delete(`/v1/homework/assignments/${assignmentId}`)
+      .set(auth(admin.token))
+      .send({});
+    expect(delRes.status).toBe(200);
+
+    const afterMine = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=200`)
+      .set(auth(parent.token));
+    expect(afterMine.body.data.items.some((r: { assignment_id: string }) => r.assignment_id === assignmentId)).toBe(
+      false,
+    );
+
+    const list = await request(app).get("/v1/homework/assignments?limit=200").set(auth(admin.token));
+    expect(list.body.data.items.some((a: { id: string }) => a.id === assignmentId)).toBe(false);
+  });
+
+  it("deleting an assignment with graded submissions is blocked without force", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const { assignmentId, submissionId } = await freshAssignmentTargeting(admin.token, studentId);
+
+    const submit = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: "https://example.com/graded-then-delete.jpg" });
+    expect(submit.status).toBe(200);
+
+    const grade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved" });
+    expect(grade.status).toBe(200);
+
+    const blocked = await request(app)
+      .delete(`/v1/homework/assignments/${assignmentId}`)
+      .set(auth(admin.token))
+      .send({});
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error.code).toBe("ERR_CONFLICT");
+    expect(String(blocked.body.error.message)).toMatch(/1/);
+
+    const stillThere = await request(app).get("/v1/homework/assignments?limit=200").set(auth(admin.token));
+    expect(stillThere.body.data.items.some((a: { id: string }) => a.id === assignmentId)).toBe(true);
+
+    const forced = await request(app)
+      .delete(`/v1/homework/assignments/${assignmentId}`)
+      .set(auth(admin.token))
+      .send({ force_delete: true });
+    expect(forced.status).toBe(200);
+
+    const gone = await request(app).get("/v1/homework/assignments?limit=200").set(auth(admin.token));
+    expect(gone.body.data.items.some((a: { id: string }) => a.id === assignmentId)).toBe(false);
   });
 });
