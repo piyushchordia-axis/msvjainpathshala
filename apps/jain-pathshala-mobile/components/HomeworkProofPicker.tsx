@@ -1,6 +1,6 @@
 /**
- * Homework proof picker — photo/camera primary path shared with Niyam helpers.
- * Upload goes through jp.queue.media_uploads then homework_submissions (FIX #5/#20).
+ * Homework proof picker — camera/gallery select a local photo for preview;
+ * Submit uploads via jp.queue.media_uploads then homework_submissions.
  */
 import { useState } from "react";
 import { Alert, Image, View } from "react-native";
@@ -21,12 +21,19 @@ import { Body, Button, Row } from "@/components/ui";
 
 export { resumeHomeworkProofUploads } from "@/lib/offline/media-upload-queue";
 
+type LocalProof = {
+  uri: string;
+  name: string;
+  mime: string;
+};
+
 type Props = {
   assignmentId: string;
   submissionId: string;
   studentId: string;
   disabled?: boolean;
-  onQueued?: () => void;
+  /** Fired after Submit queues the proof. `offline` when upload did not complete now. */
+  onQueued?: (info: { offline: boolean }) => void;
 };
 
 export function HomeworkProofPicker({
@@ -39,20 +46,25 @@ export function HomeworkProofPicker({
   const c = useColors();
   const { hi } = useLocale();
   const [busy, setBusy] = useState(false);
-  const [previewUri, setPreviewUri] = useState<string | null>(null);
+  const [local, setLocal] = useState<LocalProof | null>(null);
   const [statusText, setStatusText] = useState<string | null>(null);
 
-  async function runUpload(uri: string, name: string, mime: string) {
+  function setPicked(uri: string, name: string, mime: string) {
+    setLocal({ uri, name, mime });
+    setStatusText(null);
+  }
+
+  async function submitProof() {
+    if (!local || disabled || busy) return;
     setBusy(true);
-    setPreviewUri(uri);
-    setStatusText(hi ? "अपलोड कतार में…" : "Queued for upload…");
+    setStatusText(hi ? "अपलोड हो रहा है…" : "Uploading…");
     try {
-      const sizeBytes = await resolveLocalByteSize(uri);
+      const sizeBytes = await resolveLocalByteSize(local.uri);
       const result = await enqueueHomeworkProofUpload(
         {
-          uri,
-          name,
-          mime,
+          uri: local.uri,
+          name: local.name,
+          mime: local.mime,
           sizeBytes,
           hi,
           assignment_id: assignmentId,
@@ -67,23 +79,22 @@ export function HomeworkProofPicker({
       );
 
       if (result.status === "rejected") {
-        setPreviewUri(null);
         setStatusText(null);
         Alert.alert(hi ? "फ़ाइल बहुत बड़ी" : "File too large", result.message);
         return;
       }
 
-      if (result.remote_url) {
-        setStatusText(hi ? "सहेज लिया गया — समन्वयित होगा।" : "Saved — will sync.");
-        onQueued?.();
-      } else {
-        setStatusText(
-          hi
+      const offline = !result.remote_url;
+      setStatusText(
+        offline
+          ? hi
             ? "ऑफ़लाइन सहेजा गया — कनेक्ट होने पर अपलोड होगा।"
-            : "Saved offline — will upload when you reconnect.",
-        );
-        onQueued?.();
-      }
+            : "Saved offline — will upload when you reconnect."
+          : hi
+            ? "प्रस्तुत हो गया।"
+            : "Submitted.",
+      );
+      onQueued?.({ offline });
     } catch (err) {
       setStatusText(null);
       Alert.alert(
@@ -118,7 +129,7 @@ export function HomeworkProofPicker({
     const asset = result.assets[0];
     const mime = guessMime("photo", asset.mimeType);
     const name = asset.fileName ?? "homework.jpg";
-    await runUpload(asset.uri, name, mime);
+    setPicked(asset.uri, name, mime);
   }
 
   async function captureCamera() {
@@ -140,13 +151,13 @@ export function HomeworkProofPicker({
     const asset = result.assets[0];
     const mime = guessMime("photo", asset.mimeType);
     const name = asset.fileName ?? "homework.jpg";
-    await runUpload(asset.uri, name, mime);
+    setPicked(asset.uri, name, mime);
   }
 
   return (
     <View style={{ gap: 10 }}>
       <Body style={{ fontSize: 13 }}>
-        {hi ? "फ़ोटो या फ़ाइल से प्रस्तुत करें" : "Submit with a photo or file"}
+        {hi ? "फ़ोटो से प्रस्तुत करें" : "Submit with a photo"}
       </Body>
       <Row style={{ gap: 10, flexWrap: "wrap" }}>
         <Button
@@ -154,7 +165,6 @@ export function HomeworkProofPicker({
           variant="primary"
           icon="camera-outline"
           disabled={disabled || busy}
-          loading={busy}
           onPress={() => void captureCamera()}
           style={{ minWidth: 110 }}
         />
@@ -167,16 +177,38 @@ export function HomeworkProofPicker({
           style={{ minWidth: 110 }}
         />
       </Row>
-      {previewUri ? (
-        <Image
-          source={{ uri: previewUri }}
-          style={{
-            width: 96,
-            height: 96,
-            borderRadius: c.radius,
-            backgroundColor: c.muted,
-          }}
-        />
+      {local ? (
+        <View style={{ gap: 10 }}>
+          <Image
+            source={{ uri: local.uri }}
+            style={{
+              width: "100%",
+              height: 220,
+              borderRadius: c.radius,
+              backgroundColor: c.muted,
+            }}
+            resizeMode="contain"
+          />
+          <Row style={{ gap: 10, flexWrap: "wrap" }}>
+            <Button
+              label={hi ? "भेजें" : "Submit"}
+              icon="checkmark"
+              loading={busy}
+              disabled={disabled || busy}
+              style={{ flex: 1, minWidth: 120 }}
+              onPress={() => void submitProof()}
+            />
+            <Button
+              label={hi ? "फोटो बदलें" : "Change photo"}
+              variant="ghost"
+              disabled={disabled || busy}
+              onPress={() => {
+                setLocal(null);
+                setStatusText(null);
+              }}
+            />
+          </Row>
+        </View>
       ) : null}
       {statusText ? (
         <Body muted style={{ fontSize: 12 }}>

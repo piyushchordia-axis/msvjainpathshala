@@ -65,7 +65,7 @@ function statusLabel(status: string, hi: boolean): string {
   return status;
 }
 
-/** Inline "submit work" form — photo/file primary, URL secondary. */
+/** Inline submit panel — photo primary, URL secondary, mark-done demoted (F1). */
 function SubmitForm({
   assignmentId,
   submissionId,
@@ -87,7 +87,7 @@ function SubmitForm({
   if (!open) {
     return (
       <Button
-        label={hi ? "कार्य प्रस्तुत करें" : "Submit work"}
+        label={hi ? "गृहकार्य प्रस्तुत करें" : "Submit homework"}
         variant="outline"
         icon="cloud-upload-outline"
         onPress={() => setOpen(true)}
@@ -103,17 +103,19 @@ function SubmitForm({
         submissionId={submissionId}
         studentId={studentId}
         disabled={submit.isPending}
-        onQueued={() => {
+        onQueued={({ offline }) => {
           setOpen(false);
           setShowUrl(false);
           setUrl("");
           onQueued?.();
-          Alert.alert(
-            hi ? "ऑफ़लाइन सहेजा गया" : "Saved offline",
-            hi
-              ? "आपका गृहकार्य सहेज लिया गया है और समन्वयित होगा।"
-              : "Your homework was saved and will sync.",
-          );
+          if (offline) {
+            Alert.alert(
+              hi ? "ऑफ़लाइन सहेजा गया" : "Saved offline",
+              hi
+                ? "आपका गृहकार्य सहेज लिया गया है और समन्वयित होगा।"
+                : "Your homework was saved and will sync.",
+            );
+          }
         }}
       />
 
@@ -209,6 +211,17 @@ function SubmitForm({
         </View>
       )}
 
+      <MarkDoneButton
+        submissionId={submissionId}
+        studentId={studentId}
+        onDone={() => {
+          setOpen(false);
+          setShowUrl(false);
+          setUrl("");
+          onQueued?.();
+        }}
+      />
+
       <Button
         label={hi ? "बंद करें" : "Close"}
         variant="ghost"
@@ -238,7 +251,7 @@ function MarkDoneButton({
 
   return (
     <Button
-      label={hi ? "पूर्ण बताएँ" : "Mark as done"}
+      label={hi ? "बिना फ़ोटो — पूर्ण बताएँ" : "Finished without a photo"}
       variant="ghost"
       icon="checkmark-circle-outline"
       loading={markDone.isPending}
@@ -419,17 +432,12 @@ function HomeworkCard({
       ) : null}
 
       {canSubmit ? (
-        <View style={{ marginTop: 12, gap: 8 }}>
+        <View style={{ marginTop: 12 }}>
           <SubmitForm
             assignmentId={row.assignment_id}
             submissionId={row.id}
             studentId={rowStudentId}
             onQueued={onSubmitted}
-          />
-          <MarkDoneButton
-            submissionId={row.id}
-            studentId={rowStudentId}
-            onDone={onSubmitted}
           />
         </View>
       ) : null}

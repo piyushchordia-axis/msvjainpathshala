@@ -5,7 +5,7 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useNiyamCatalog, useStudentNiyams } from "@/lib/queries";
 import { dateRangeLabel, endsInDaysLabel } from "@/lib/niyam-badges";
-import { AppHeader } from "@/components/AppHeader";
+import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { NiyamListRow } from "@/components/NiyamListRow";
 import { NiyamBadgeRow } from "@/components/NiyamBadgeRow";
@@ -29,6 +29,13 @@ export default function StudentNiyams() {
       <AppHeader
         title={hi ? "नियम" : "Niyams"}
         subtitle={hi ? "आपके संकल्प और नियम सूची" : "Your resolutions and the niyam catalog"}
+        right={
+          <ProfileAvatarButton
+            name={activeChild?.full_name}
+            photoUrl={activeChild?.photo_url}
+            href="/student/profile"
+          />
+        }
       />
       <Screen
         refreshing={submissions.isRefetching || catalog.isRefetching}

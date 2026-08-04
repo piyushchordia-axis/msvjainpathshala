@@ -3,8 +3,11 @@ import { View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSessionView } from "@/contexts/SessionViewContext";
 import { AppHeader, LanguageToggle } from "@/components/AppHeader";
+import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { DeleteAccountButton } from "@/components/DeleteAccountButton";
+import { StudentPhotoEditor } from "@/components/StudentPhotoEditor";
 import { Body, Button, Card, Kicker, Pill, Row, Screen, Title } from "@/components/ui";
 
 const ROLE_LABELS: Record<string, { en: string; hi: string }> = {
@@ -23,6 +26,7 @@ export default function ParentProfile() {
   const { hi } = useLocale();
   const { user, logout } = useAuth();
   const router = useRouter();
+  const { activeStudentId, activeChild } = useSessionView();
 
   const roleLabel = user
     ? hi
@@ -49,6 +53,22 @@ export default function ParentProfile() {
             </Body>
           ) : null}
         </Card>
+
+        {activeStudentId && activeChild ? (
+          <>
+            <ChildSwitcher />
+            <StudentPhotoEditor
+              studentId={activeStudentId}
+              name={activeChild.full_name}
+              photoUrl={activeChild.photo_url}
+              helperText={
+                hi
+                  ? "यह फोटो बच्चे की प्रोफ़ाइल और डिजिटल पहचान पत्र पर दिखेगी।"
+                  : "This photo appears on your child's profile and digital ID card."
+              }
+            />
+          </>
+        ) : null}
 
         <Card>
           <Row style={{ justifyContent: "space-between", alignItems: "center" }}>

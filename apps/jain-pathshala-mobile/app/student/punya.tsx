@@ -4,7 +4,7 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { usePunya } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
-import { AppHeader } from "@/components/AppHeader";
+import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { Body, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
@@ -30,8 +30,22 @@ export default function StudentPunya() {
       <AppHeader
         title={hi ? "पुण्य" : "Punya"}
         subtitle={hi ? "आपके अर्जित पुण्य अंक" : "Your earned punya points"}
+        right={
+          <ProfileAvatarButton
+            name={activeChild?.full_name}
+            photoUrl={activeChild?.photo_url}
+            href="/student/profile"
+          />
+        }
       />
-      <Screen refreshing={punya.isRefetching} onRefresh={() => { refetch(); punya.refetch(); }}>
+      <Screen
+        refreshing={punya.isRefetching}
+        onRefresh={() => {
+          refetch();
+          punya.refetch();
+        }}
+        contentStyle={{ paddingBottom: 110 }}
+      >
         {loading ? (
           <StateView status="loading" emptyText="" />
         ) : !activeStudentId || !activeChild ? (

@@ -6,7 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useAttendance, usePunya } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
-import { AppHeader } from "@/components/AppHeader";
+import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
@@ -47,8 +47,23 @@ export default function StudentHome() {
       <AppHeader
         title={`${hi ? "जय जिनेन्द्र" : "Jai Jinendra"}, ${firstName}`}
         subtitle={hi ? "आपकी पाठशाला यात्रा" : "Your pathshala journey"}
+        right={
+          <ProfileAvatarButton
+            name={activeChild?.full_name ?? user?.full_name}
+            photoUrl={activeChild?.photo_url}
+            href="/student/profile"
+          />
+        }
       />
-      <Screen refreshing={attendance.isRefetching} onRefresh={() => { refetch(); attendance.refetch(); punya.refetch(); }}>
+      <Screen
+        refreshing={attendance.isRefetching}
+        onRefresh={() => {
+          refetch();
+          attendance.refetch();
+          punya.refetch();
+        }}
+        contentStyle={{ paddingBottom: 110 }}
+      >
         {loading ? (
           <StateView status="loading" emptyText="" />
         ) : isError ? (

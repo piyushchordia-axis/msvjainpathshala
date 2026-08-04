@@ -6,9 +6,9 @@ import { loginAs, auth } from "./helpers";
 import { ulid } from "../src/lib/ulid";
 
 beforeAll(async () => {
-  // Soft-delete leftover active assignments from prior unclean runs so /mine
-  // (max limit 200) can still see rows minted by this suite.
-  await pool.query(`update homework_assignments set deleted_at = now() where deleted_at is null`);
+  // Do NOT soft-delete all active homework here — that wiped real shikshak
+  // assignments whenever this suite ran against the shared local seed DB.
+  // Suite fixtures are hard-deleted in afterEach by created_at watermark.
   // AT21 catalogue rows (migration 0021) — idempotent for DBs that have not migrated yet.
   await pool.query(`
     INSERT INTO punya_features (key, label, min_points, max_points, is_active)
@@ -31,6 +31,7 @@ beforeEach(() => {
 afterEach(async () => {
   // Suite fixtures only (created_at watermark). Hard-delete so the shared seed
   // DB does not accumulate soft-deleted junk forever; CASCADE clears submissions.
+  // Avoid creating real homework while this suite is running on a shared DB.
   await pool.query(
     `delete from homework_assignments
       where created_at >= $1::timestamptz`,
@@ -2726,6 +2727,33 @@ describe("homework", () => {
       (r: { id: string }) => r.id === create.body.data.id,
     );
     expect(listed?.attachment_url).toMatch(/[?&]sig=/);
+  });
+
+  it("GET submissions returns a signed submission_url for grading", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const { assignmentId, submissionId } = await freshAssignmentTargeting(admin.token, studentId);
+
+    const url = await ownedHomeworkUrl(parent.user.id, { ext: "jpg" });
+    const submit = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: url });
+    expect(submit.status).toBe(200);
+
+    const subs = await request(app)
+      .get(`/v1/homework/assignments/${assignmentId}/submissions`)
+      .set(auth(admin.token));
+    expect(subs.status).toBe(200);
+    const row = (subs.body.data.items as Array<{ id: string; submission_url: string | null }>).find(
+      (s) => s.id === submissionId,
+    );
+    expect(row?.submission_url).toBeTruthy();
+    expect(row!.submission_url).toContain("/uploads/homework/");
+    // Guruji grades via <img>/<a> — Bearer cannot ride, so se+sig must be present.
+    expect(row!.submission_url).toMatch(/[?&]se=\d+/);
+    expect(row!.submission_url).toMatch(/[?&]sig=/);
   });
 
   it("the attachment is rejected if it is not an admin-owned upload", async () => {

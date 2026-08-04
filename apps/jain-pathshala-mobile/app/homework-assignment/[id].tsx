@@ -4,9 +4,10 @@
  */
 import { useMemo, useState } from "react";
 import { Alert, Linking, Pressable, Text, TextInput, View } from "react-native";
-import { resolveUploadUrl } from "@/lib/api";
+import { Image } from "expo-image";
 import { useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { resolveUploadUrl, ApiError } from "@/lib/api";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import {
@@ -16,12 +17,33 @@ import {
   useHomeworkSubmissions,
   type HomeworkSubmissionAdminRow,
 } from "@/lib/queries";
-import { ApiError } from "@/lib/api";
 import { bodyFamily } from "@/constants/typography";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 type Tone = "success" | "warning" | "error" | "info" | "primary" | "neutral";
 type SubFilter = "review" | "graded" | "waiting" | "all";
+
+function isImageUploadUrl(url: string): boolean {
+  const path = url.split("?")[0]?.toLowerCase() ?? "";
+  return /\.(jpe?g|png|webp|gif)$/.test(path);
+}
+
+function openSubmissionUrl(raw: string | null | undefined, hi: boolean) {
+  const url = resolveUploadUrl(raw);
+  if (!url) {
+    Alert.alert(
+      hi ? "खोल नहीं सके" : "Could not open",
+      hi ? "लिंक काम नहीं कर रहा।" : "That link could not be opened.",
+    );
+    return;
+  }
+  void Linking.openURL(url).catch(() => {
+    Alert.alert(
+      hi ? "खोल नहीं सके" : "Could not open",
+      hi ? "लिंक काम नहीं कर रहा।" : "That link could not be opened.",
+    );
+  });
+}
 
 function statusTone(status: string): Tone {
   const s = status.toLowerCase();
@@ -56,6 +78,57 @@ function isGraded(status: string): boolean {
 
 function isWaiting(status: string): boolean {
   return status === "pending" || status === "returned";
+}
+
+/** Inline image when the upload is a photo; otherwise a clear Open link. */
+function SubmissionWorkPreview({ url, hi }: { url: string; hi: boolean }) {
+  const c = useColors();
+  const resolved = resolveUploadUrl(url);
+  const showImage = Boolean(resolved && isImageUploadUrl(url));
+
+  return (
+    <View style={{ marginTop: 10, gap: 8 }}>
+      {showImage ? (
+        <Pressable
+          onPress={() => openSubmissionUrl(url, hi)}
+          accessibilityRole="imagebutton"
+          accessibilityLabel={hi ? "प्रस्तुत कार्य देखें" : "View submitted work"}
+        >
+          <Image
+            source={{ uri: resolved! }}
+            style={{
+              width: "100%",
+              height: 200,
+              borderRadius: c.radius,
+              backgroundColor: c.muted,
+            }}
+            contentFit="contain"
+          />
+        </Pressable>
+      ) : null}
+      <Pressable
+        onPress={() => openSubmissionUrl(url, hi)}
+        style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
+        accessibilityRole="link"
+        accessibilityLabel={hi ? "प्रस्तुत कार्य खोलें" : "Open submitted work"}
+      >
+        <Ionicons
+          name={showImage ? "open-outline" : "document-attach-outline"}
+          size={16}
+          color={c.primary}
+        />
+        <Body style={{ color: c.primary, fontSize: 13 }}>
+          {showImage
+            ? hi
+              ? "पूर्ण आकार में खोलें"
+              : "Open full size"
+            : hi
+              ? "प्रस्तुत कार्य देखें"
+              : "Open submitted work"}
+        </Body>
+      </Pressable>
+    </View>
+  );
 }
 
 function SubmissionCard({
@@ -134,24 +207,7 @@ function SubmissionCard({
       ) : null}
 
       {submission.submission_url ? (
-        <Pressable
-          onPress={() => {
-            const url = resolveUploadUrl(submission.submission_url);
-            if (!url) return;
-            void Linking.openURL(url).catch(() => {
-              Alert.alert(
-                hi ? "खोल नहीं सके" : "Could not open",
-                hi ? "लिंक काम नहीं कर रहा।" : "That link could not be opened.",
-              );
-            });
-          }}
-          style={{ marginTop: 10, flexDirection: "row", alignItems: "center", gap: 6 }}
-        >
-          <Ionicons name="document-attach-outline" size={16} color={c.primary} />
-          <Body style={{ color: c.primary, fontSize: 13 }}>
-            {hi ? "प्रस्तुत कार्य देखें" : "Open submitted work"}
-          </Body>
-        </Pressable>
+        <SubmissionWorkPreview url={submission.submission_url} hi={hi} />
       ) : isNeedsReview(submission.status) ? (
         <Body muted style={{ marginTop: 10, fontSize: 12 }}>
           {hi ? "पूर्ण बताया — कोई फ़ाइल नहीं।" : "Marked done — no file attached."}

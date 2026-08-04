@@ -4,8 +4,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSessionView } from "@/contexts/SessionViewContext";
 import { apiGet, apiPost } from "@/lib/api";
-import { AppHeader } from "@/components/AppHeader";
+import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 const ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
@@ -57,6 +58,7 @@ export default function StudentLibrary() {
   const c = useColors();
   const { hi } = useLocale();
   const { user } = useAuth();
+  const { activeChild } = useSessionView();
   const authed = !!user;
 
   const { data, isLoading, isError, refetch, isRefetching } = useQuery({
@@ -89,6 +91,13 @@ export default function StudentLibrary() {
       <AppHeader
         title={hi ? "पुस्तकालय" : "Digital library"}
         subtitle={hi ? "ग्रंथ, वीडियो और श्रव्य सामग्री" : "Scriptures, videos and audio resources"}
+        right={
+          <ProfileAvatarButton
+            name={activeChild?.full_name ?? user?.full_name}
+            photoUrl={activeChild?.photo_url}
+            href="/student/profile"
+          />
+        }
       />
       <Screen refreshing={isRefetching} onRefresh={refetch} contentStyle={{ paddingBottom: 110 }}>
         {isLoading ? (

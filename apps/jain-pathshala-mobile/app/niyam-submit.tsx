@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { Alert, TextInput, View } from "react-native";
+import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useNiyamCatalog, useSubmitNiyam } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
@@ -18,6 +20,10 @@ import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/compo
 import { NiyamBadgeRow } from "@/components/NiyamBadgeRow";
 import { badgeLabel, moreToNextBadge } from "@/lib/niyam-badges";
 import type { NiyamCatalogRow } from "@/lib/types";
+
+function niyamsTabHref(role: string | undefined): "/student/niyams" | "/parent/niyams" {
+  return role === "parent" ? "/parent/niyams" : "/student/niyams";
+}
 
 function periodDupMessage(niyamType: string, hi: boolean): string {
   if (niyamType === "weekly") {
@@ -38,6 +44,8 @@ function periodDupMessage(niyamType: string, hi: boolean): string {
 export default function NiyamSubmit() {
   const c = useColors();
   const { hi } = useLocale();
+  const router = useRouter();
+  const { user } = useAuth();
   const { activeStudentId, activeChild, loading, refetch } = useSessionView();
 
   const catalog = useNiyamCatalog(!!activeStudentId, activeStudentId);
@@ -195,6 +203,16 @@ export default function NiyamSubmit() {
         ) : (
           <>
             <ChildSwitcher />
+
+            <Row style={{ justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <Title style={{ fontSize: 17 }}>{hi ? "नियम प्रस्तुत करें" : "Submit Niyam"}</Title>
+              <Button
+                label={hi ? "प्रस्तुत नियम देखें" : "View submitted Niyams"}
+                icon="list-outline"
+                variant="outline"
+                onPress={() => router.push(niyamsTabHref(user?.role))}
+              />
+            </Row>
 
             {selectedId && !selected && catalog.isFetching ? (
               <StateView status="loading" emptyText="" />

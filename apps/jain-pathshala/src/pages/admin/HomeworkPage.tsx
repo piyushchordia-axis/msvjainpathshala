@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { safeHref } from '@/lib/safe-url';
+import { useLocale } from '@/lib/locale-context';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
 } from '@/components/ui/dialog';
@@ -19,6 +20,16 @@ import {
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
 
 type UploadResult = { url: string; key: string };
+
+function t(hi: boolean, en: string, hin: string) {
+  return hi ? hin : en;
+}
+
+/** Path-only image check — query strings (signed se/sig) must not hide the extension. */
+function isImageSubmissionUrl(url: string): boolean {
+  const path = url.split('?')[0]?.toLowerCase() ?? '';
+  return /\.(jpe?g|png|webp|gif)$/.test(path);
+}
 
 /** Multipart upload to /v1/uploads (folder=homework). */
 async function uploadHomeworkFile(file: File): Promise<UploadResult> {
@@ -115,6 +126,62 @@ function StatusPill({ status }: { status: string }) {
       {label}
     </span>
   );
+}
+
+/** Show submitted image inline; otherwise a clear Open link; no-file for acknowledgements. */
+function SubmissionWorkCell({ submission }: { submission: SubmissionRow }) {
+  const locale = useLocale();
+  const hi = locale === 'hi';
+  const href = safeHref(submission.submission_url);
+  if (href) {
+    const isImage = isImageSubmissionUrl(submission.submission_url!);
+    if (isImage) {
+      return (
+        <div className="flex flex-col gap-1.5">
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className="block w-fit overflow-hidden rounded-md border border-border"
+            title={t(hi, 'Open submitted work', 'प्रस्तुत कार्य खोलें')}
+          >
+            <img
+              src={href}
+              alt=""
+              className="h-16 w-16 object-cover bg-muted"
+              loading="lazy"
+            />
+          </a>
+          <a
+            href={href}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs font-medium text-primary underline-offset-2 hover:underline"
+          >
+            {t(hi, 'Open full size', 'पूर्ण आकार में खोलें')}
+          </a>
+        </div>
+      );
+    }
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noreferrer"
+        className="text-xs font-medium text-primary underline-offset-2 hover:underline"
+      >
+        {t(hi, 'Open submitted work', 'प्रस्तुत कार्य देखें')}
+      </a>
+    );
+  }
+  if (submission.status === 'acknowledged') {
+    return (
+      <span className="text-xs text-muted-foreground">
+        {t(hi, 'Marked done — no file attached.', 'पूर्ण बताया — कोई फ़ाइल नहीं।')}
+      </span>
+    );
+  }
+  return <span className="text-xs text-muted-foreground">—</span>;
 }
 
 function NewAssignmentDialog({ onAdded }: { onAdded: () => void }) {
@@ -707,12 +774,8 @@ function SubmissionsDialog({ assignment }: { assignment: AssignmentRow }) {
                       <div className="font-mono text-xs text-muted-foreground">{s.student_code}</div>
                     </td>
                     <td className="px-3 py-3"><StatusPill status={s.status} /></td>
-                    <td className="px-3 py-3 text-xs">
-                      {safeHref(s.submission_url) ? (
-                        <a href={safeHref(s.submission_url)} target="_blank" rel="noreferrer" className="text-primary underline">View</a>
-                      ) : s.status === 'acknowledged' ? (
-                        <span className="text-amber-800">Parent marked done</span>
-                      ) : '—'}
+                    <td className="px-3 py-3">
+                      <SubmissionWorkCell submission={s} />
                     </td>
                     <td className="px-3 py-3">
                       <GradeButtons submission={s} onGraded={load} />
