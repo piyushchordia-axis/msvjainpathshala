@@ -91,7 +91,28 @@ async function findLatestUnreversedHomeworkAward(
   tx: Tx,
   submissionId: string,
   studentId: string,
+  preferredTxnId?: string | null,
 ): Promise<{ id: string; points: number; idempotency_key: string } | null> {
+  // F3 — prefer the pointer on the submission when still unreversed.
+  if (preferredTxnId) {
+    const preferred = await tx.execute(sql`
+      select t.id, t.points, t.idempotency_key
+      from punya_transactions t
+      where t.id = ${preferredTxnId}
+        and t.student_id = ${studentId}
+        and t.points > 0
+        and not exists (
+          select 1 from punya_transactions r where r.reversal_of = t.id
+        )
+      limit 1
+    `);
+    const preferredRows =
+      (preferred as unknown as {
+        rows?: Array<{ id: string; points: number; idempotency_key: string }>;
+      }).rows ?? [];
+    if (preferredRows[0]) return preferredRows[0];
+  }
+
   const legacy = `homework-grade:${submissionId}`;
   const prefix = `homework-grade:${submissionId}:`;
   const result = await tx.execute(sql`
@@ -131,7 +152,10 @@ async function claimAndAwardFirstHomeworkGrade(opts: {
   gradeStatus: "approved" | "starred";
   points: number;
   feedbackPatch: { feedback_note?: string | null };
-}): Promise<{ awarded: true; points: number; total_points: number } | { awarded: false }> {
+}): Promise<
+  | { awarded: true; points: number; total_points: number; transaction_id: string | null }
+  | { awarded: false }
+> {
   const claimedRows = await opts.tx
     .update(homework_submissions)
     .set({
@@ -171,7 +195,21 @@ async function claimAndAwardFirstHomeworkGrade(opts: {
     },
     opts.tx,
   );
-  return { awarded: true, points: opts.points, total_points: award.total_points };
+
+  // F3 — store the ledger pointer in the same transaction as the claim/award.
+  if (award.transaction_id) {
+    await opts.tx
+      .update(homework_submissions)
+      .set({ punya_transaction_id: award.transaction_id })
+      .where(eq(homework_submissions.id, opts.submissionId));
+  }
+
+  return {
+    awarded: true,
+    points: opts.points,
+    total_points: award.total_points,
+    transaction_id: award.transaction_id,
+  };
 }
 
 /* ═══════════════════════════ Admin / shikshak ═══════════════════════════ */
@@ -494,6 +532,7 @@ router.delete("/assignments/:id", requireAdminPanel, async (req: Request, res: R
       id: homework_submissions.id,
       student_id: homework_submissions.student_id,
       status: homework_submissions.status,
+      punya_transaction_id: homework_submissions.punya_transaction_id,
     })
     .from(homework_submissions)
     .where(
@@ -515,7 +554,12 @@ router.delete("/assignments/:id", requireAdminPanel, async (req: Request, res: R
 
   await db.transaction(async (tx) => {
     for (const sub of graded) {
-      const prior = await findLatestUnreversedHomeworkAward(tx, sub.id, sub.student_id);
+      const prior = await findLatestUnreversedHomeworkAward(
+        tx,
+        sub.id,
+        sub.student_id,
+        sub.punya_transaction_id,
+      );
       if (prior && prior.points > 0) {
         await reversePunya(
           {
@@ -997,6 +1041,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       status: homework_submissions.status,
       late: homework_submissions.late,
       revision: homework_submissions.revision,
+      punya_transaction_id: homework_submissions.punya_transaction_id,
       assignment_id: homework_submissions.assignment_id,
       batch_id: homework_assignments.batch_id,
       centre_id: batches.centre_id,
@@ -1030,7 +1075,12 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     const outcome = await db.transaction(async (tx) => {
       let reversedPoints = 0;
       if (sub.status === "approved" || sub.status === "starred") {
-        const prior = await findLatestUnreversedHomeworkAward(tx, sub.id, sub.student_id);
+        const prior = await findLatestUnreversedHomeworkAward(
+          tx,
+          sub.id,
+          sub.student_id,
+          sub.punya_transaction_id,
+        );
         if (prior && prior.points > 0) {
           const rev = await reversePunya(
             {
@@ -1055,6 +1105,8 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
           marked_by: req.authUser!.id,
           marked_at: new Date(),
           revision: sql`${homework_submissions.revision} + 1`,
+          // F3 — clear award pointer (do not point at the reversal debit).
+          punya_transaction_id: null,
         })
         .where(eq(homework_submissions.id, sub.id));
 
@@ -1136,6 +1188,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       .select({
         status: homework_submissions.status,
         revision: homework_submissions.revision,
+        punya_transaction_id: homework_submissions.punya_transaction_id,
       })
       .from(homework_submissions)
       .where(eq(homework_submissions.id, sub.id))
@@ -1155,7 +1208,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     );
     if (oldPoints === points) {
       // Identical award value — metadata only, do NOT bump revision (AT18).
-      // Preserve original marked_by/marked_at; audit records who re-graded.
+      // Preserve original marked_by/marked_at and punya_transaction_id (F3).
       await tx
         .update(homework_submissions)
         .set({
@@ -1172,7 +1225,12 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     }
 
     // Different point value: reverse old, award new, bump revision.
-    const prior = await findLatestUnreversedHomeworkAward(tx, sub.id, sub.student_id);
+    const prior = await findLatestUnreversedHomeworkAward(
+      tx,
+      sub.id,
+      sub.student_id,
+      fresh.punya_transaction_id,
+    );
     if (prior && prior.points > 0) {
       await reversePunya(
         {
@@ -1213,6 +1271,14 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       },
       tx,
     );
+
+    if (award.transaction_id) {
+      await tx
+        .update(homework_submissions)
+        .set({ punya_transaction_id: award.transaction_id })
+        .where(eq(homework_submissions.id, sub.id));
+    }
+
     return {
       kind: "regrade" as const,
       total_points: award.total_points,
@@ -1282,6 +1348,7 @@ router.post("/submissions/:id/ungrade", requireAdminPanel, async (req: Request, 
       late: homework_submissions.late,
       submission_url: homework_submissions.submission_url,
       revision: homework_submissions.revision,
+      punya_transaction_id: homework_submissions.punya_transaction_id,
       batch_id: homework_assignments.batch_id,
       centre_id: batches.centre_id,
     })
@@ -1307,7 +1374,12 @@ router.post("/submissions/:id/ungrade", requireAdminPanel, async (req: Request, 
       : ("submitted" as const);
 
   const outcome = await db.transaction(async (tx) => {
-    const prior = await findLatestUnreversedHomeworkAward(tx, sub.id, sub.student_id);
+    const prior = await findLatestUnreversedHomeworkAward(
+      tx,
+      sub.id,
+      sub.student_id,
+      sub.punya_transaction_id,
+    );
     let reversedPoints = 0;
     if (prior && prior.points > 0) {
       const rev = await reversePunya(
@@ -1333,6 +1405,8 @@ router.post("/submissions/:id/ungrade", requireAdminPanel, async (req: Request, 
         marked_by: null,
         marked_at: null,
         revision: sql`${homework_submissions.revision} + 1`,
+        // F3 — clear award pointer (do not point at the reversal debit).
+        punya_transaction_id: null,
       })
       .where(eq(homework_submissions.id, sub.id));
 

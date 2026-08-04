@@ -169,6 +169,13 @@
       "when": 1787654400000,
       "tag": "0023_homework_status_acknowledged_returned",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1787740800000,
+      "tag": "0024_homework_punya_transaction_id",
+      "breakpoints": true
     }
   ]
 }

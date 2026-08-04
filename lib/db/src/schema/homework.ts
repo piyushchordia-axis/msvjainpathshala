@@ -5,6 +5,7 @@ import { homeworkStatusEnum } from "./enums";
 import { batches } from "./centres";
 import { students } from "./students";
 import { users } from "./identity";
+import { punya_transactions } from "./punya";
 
 export const homework_assignments = pgTable(
   "homework_assignments",
@@ -45,6 +46,13 @@ export const homework_submissions = pgTable(
     late: boolean("late").notNull().default(false),
     /** Bumped on every award-worthiness / point-value transition (AT18). */
     revision: integer("revision").notNull().default(0),
+    /**
+     * Current award ledger row for this grade (F3). Cleared on un-grade / return;
+     * not pointed at the reversal debit.
+     */
+    punya_transaction_id: uuid("punya_transaction_id").references(() => punya_transactions.id, {
+      onDelete: "set null",
+    }),
     ...timestamps(),
   },
   (t) => ({

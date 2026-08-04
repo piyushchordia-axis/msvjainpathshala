@@ -264,6 +264,119 @@ describe("homework", () => {
     expect(await totalPunya(parent.token, studentId)).toBe(afterApprove);
   });
 
+  // F3 — pointer on the submission to the award ledger row.
+  // Decision (b): un-grading CLEARS punya_transaction_id (null). It does not
+  // point at the reversal debit — the pointer means "current award that paid
+  // for this grade".
+  it("grading stores the punya transaction id on the submission", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
+
+    const grade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved" });
+    expect(grade.status).toBe(200);
+
+    const row = await pool.query<{
+      punya_transaction_id: string | null;
+      txn_points: number | null;
+      txn_key: string | null;
+    }>(
+      `select hs.punya_transaction_id,
+              pt.points as txn_points,
+              pt.idempotency_key as txn_key
+         from homework_submissions hs
+         left join punya_transactions pt on pt.id = hs.punya_transaction_id
+        where hs.id = $1`,
+      [submissionId],
+    );
+    expect(row.rows[0]?.punya_transaction_id).toBeTruthy();
+    expect(row.rows[0]?.txn_points).toBeGreaterThan(0);
+    expect(row.rows[0]?.txn_key).toMatch(/^homework-grade:/);
+  });
+
+  it("un-grading clears the punya transaction id", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved" });
+
+    const before = await pool.query<{ punya_transaction_id: string | null }>(
+      `select punya_transaction_id from homework_submissions where id = $1`,
+      [submissionId],
+    );
+    expect(before.rows[0]?.punya_transaction_id).toBeTruthy();
+
+    const ungrade = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/ungrade`)
+      .set(auth(shikshak.token));
+    expect(ungrade.status).toBe(200);
+
+    const after = await pool.query<{ punya_transaction_id: string | null }>(
+      `select punya_transaction_id from homework_submissions where id = $1`,
+      [submissionId],
+    );
+    expect(after.rows[0]?.punya_transaction_id).toBeNull();
+  });
+
+  it("a re-grade that awards nothing leaves the punya transaction id unchanged", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/submit`)
+      .set(auth(parent.token))
+      .send({ submission_url: await ownedHomeworkUrl(parent.user.id) });
+
+    await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved", feedback_note: "Good." });
+
+    const before = await pool.query<{ punya_transaction_id: string | null }>(
+      `select punya_transaction_id from homework_submissions where id = $1`,
+      [submissionId],
+    );
+    const pointer = before.rows[0]?.punya_transaction_id;
+    expect(pointer).toBeTruthy();
+
+    // Same status / same points → metadata-only (AT18); pointer must stay.
+    const again = await request(app)
+      .post(`/v1/homework/submissions/${submissionId}/grade`)
+      .set(auth(shikshak.token))
+      .send({ status: "approved", feedback_note: "Still good." });
+    expect(again.status).toBe(200);
+
+    const after = await pool.query<{ punya_transaction_id: string | null }>(
+      `select punya_transaction_id from homework_submissions where id = $1`,
+      [submissionId],
+    );
+    expect(after.rows[0]?.punya_transaction_id).toBe(pointer);
+  });
+
   it("un-grading reverses the awarded Punya exactly once", async () => {
     const admin = await loginAs("super_admin");
     const parent = await loginAs("parent");
