@@ -2542,4 +2542,55 @@ describe("homework", () => {
     expect(res.status).toBe(422);
     expect(res.body.error.code).toBe("ERR_VALIDATION_FAILED");
   });
+
+  /* ─── F13 — assignment attachments ─── */
+
+  it("an assignment created with an attachment returns a signed url in /mine", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const batchId = await studentBatchId(studentId);
+    const attachmentUrl = await ownedHomeworkUrl(admin.user.id, { ext: "pdf" });
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `Worksheet HW ${Date.now()}`,
+        due_date: tomorrow(),
+        attachment_url: attachmentUrl,
+      });
+    expect(create.status).toBe(200);
+
+    const feed = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=50`)
+      .set(auth(parent.token));
+    expect(feed.status).toBe(200);
+    const row = feed.body.data.items.find(
+      (r: { assignment_id: string }) => r.assignment_id === create.body.data.id,
+    );
+    expect(row).toBeTruthy();
+    expect(row.attachment_url).toContain("/uploads/homework/");
+  });
+
+  it("the attachment is rejected if it is not an admin-owned upload", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const batchId = await studentBatchId(studentId);
+    const foreign = await ownedHomeworkUrl(parent.user.id);
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: `Bad attachment HW ${Date.now()}`,
+        due_date: tomorrow(),
+        attachment_url: foreign,
+      });
+    expect(create.status).toBe(422);
+    expect(create.body.error.code).toBe("ERR_VALIDATION_FAILED");
+  });
 });

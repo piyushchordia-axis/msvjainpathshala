@@ -526,7 +526,9 @@ export interface HomeworkRow {
   id: string;
   assignment_id: string;
   title: string;
+  description?: string | null;
   due_date: string;
+  attachment_url?: string | null;
   status: string;
   submission_url: string | null;
   feedback_note: string | null;

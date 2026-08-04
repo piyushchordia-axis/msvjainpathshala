@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, ClipboardList, Pencil, Trash2 } from 'lucide-react';
+import { Plus, ClipboardList, Pencil, Trash2, Paperclip } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
@@ -16,6 +16,36 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 
+const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
+
+type UploadResult = { url: string; key: string };
+
+/** Multipart upload to /v1/uploads (folder=homework). */
+async function uploadHomeworkFile(file: File): Promise<UploadResult> {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('folder', 'homework');
+  const res = await fetch(`${API_BASE}/v1/uploads`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { Accept: 'application/json' },
+    body: form,
+  });
+  if (!res.ok) {
+    let code = 'ERR_UPLOAD';
+    let message = res.statusText;
+    try {
+      const j = (await res.json()) as { error?: { code?: string; message?: string } };
+      code = j.error?.code ?? code;
+      message = j.error?.message ?? message;
+    } catch {
+      /* ignore */
+    }
+    throw new ApiError(code, message, res.status);
+  }
+  const json = (await res.json()) as { data: UploadResult };
+  return json.data;
+}
 interface AssignmentRow {
   id: string;
   title: string;
@@ -79,16 +109,32 @@ function StatusPill({ status }: { status: string }) {
 function NewAssignmentDialog({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [batches, setBatches] = useState<BatchOption[]>([]);
   const [batchId, setBatchId] = useState('');
   const [title, setTitle] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [description, setDescription] = useState('');
+  const [attachmentUrl, setAttachmentUrl] = useState('');
 
   useEffect(() => {
     if (!open) return;
     void apiGet<{ items: BatchOption[] }>('/v1/admin/batches').then((r) => setBatches(r?.items ?? []));
   }, [open]);
+
+  async function onPickAttachment(file: File | null) {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const uploaded = await uploadHomeworkFile(file);
+      setAttachmentUrl(uploaded.url);
+      toast.success('Worksheet uploaded.');
+    } catch (err) {
+      toast.error('Could not upload worksheet.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setUploading(false);
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -100,10 +146,11 @@ function NewAssignmentDialog({ onAdded }: { onAdded: () => void }) {
         title: title.trim(),
         due_date: dueDate,
         description: description.trim() || undefined,
+        ...(attachmentUrl.trim() ? { attachment_url: attachmentUrl.trim() } : {}),
       });
       toast.success('Assignment created.', `${res?.submissions_created ?? 0} student(s) assigned.`);
       setOpen(false);
-      setBatchId(''); setTitle(''); setDueDate(''); setDescription('');
+      setBatchId(''); setTitle(''); setDueDate(''); setDescription(''); setAttachmentUrl('');
       onAdded();
     } catch (err) {
       toast.error('Failed to create assignment.', err instanceof ApiError ? err.message : undefined);
@@ -141,9 +188,22 @@ function NewAssignmentDialog({ onAdded }: { onAdded: () => void }) {
           <FormRow label="Description">
             <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} placeholder="Optional instructions" />
           </FormRow>
+          <FormRow label="Worksheet (optional)">
+            <Input
+              type="file"
+              accept="image/*,application/pdf"
+              disabled={uploading || busy}
+              onChange={(e) => void onPickAttachment(e.target.files?.[0] ?? null)}
+            />
+            {attachmentUrl ? (
+              <p className="truncate text-xs text-muted-foreground">
+                Attached — families will see this on their homework feed.
+              </p>
+            ) : null}
+          </FormRow>
           <div className="flex justify-end gap-2 pt-2">
             <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
-            <Button type="submit" disabled={busy || !batchId || !title.trim() || !dueDate}>
+            <Button type="submit" disabled={busy || uploading || !batchId || !title.trim() || !dueDate}>
               {busy ? 'Saving…' : 'Create'}
             </Button>
           </div>
@@ -162,6 +222,7 @@ function EditAssignmentDialog({
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [title, setTitle] = useState(assignment.title);
   const [dueDate, setDueDate] = useState(assignment.due_date);
   const [description, setDescription] = useState(assignment.description ?? '');
@@ -176,6 +237,20 @@ function EditAssignmentDialog({
     setAttachmentUrl(assignment.attachment_url ?? '');
     setIsMsv(assignment.is_msv);
   }, [open, assignment]);
+
+  async function onPickAttachment(file: File | null) {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const uploaded = await uploadHomeworkFile(file);
+      setAttachmentUrl(uploaded.url);
+      toast.success('Worksheet uploaded.');
+    } catch (err) {
+      toast.error('Could not upload worksheet.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setUploading(false);
+    }
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -222,13 +297,36 @@ function EditAssignmentDialog({
           <FormRow label="Description">
             <Textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
           </FormRow>
-          <FormRow label="Attachment URL">
+          <FormRow label="Worksheet">
             <Input
-              value={attachmentUrl}
-              onChange={(e) => setAttachmentUrl(e.target.value)}
-              placeholder="https://…"
-              inputMode="url"
+              type="file"
+              accept="image/*,application/pdf"
+              disabled={uploading || busy}
+              onChange={(e) => void onPickAttachment(e.target.files?.[0] ?? null)}
             />
+            {attachmentUrl ? (
+              <div className="flex items-center gap-2 text-xs">
+                <a
+                  href={safeHref(attachmentUrl) ?? undefined}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="truncate text-primary underline"
+                >
+                  Current worksheet
+                </a>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2"
+                  onClick={() => setAttachmentUrl('')}
+                >
+                  Remove
+                </Button>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">No worksheet attached.</p>
+            )}
           </FormRow>
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={isMsv} onChange={(e) => setIsMsv(e.target.checked)} />
@@ -236,7 +334,7 @@ function EditAssignmentDialog({
           </label>
           <div className="flex justify-end gap-2 pt-2">
             <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
-            <Button type="submit" disabled={busy || !title.trim() || !dueDate}>
+            <Button type="submit" disabled={busy || uploading || !title.trim() || !dueDate}>
               {busy ? 'Saving…' : 'Save changes'}
             </Button>
           </div>
@@ -481,6 +579,18 @@ export default function HomeworkPage() {
                 {a.title}
               </span>
               {a.is_msv ? <span className="ml-2 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary">MSV</span> : null}
+              {a.attachment_url ? (
+                <a
+                  href={safeHref(a.attachment_url) ?? undefined}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="ml-2 inline-flex items-center gap-1 text-xs text-primary underline"
+                  title="Worksheet attached"
+                >
+                  <Paperclip className="h-3 w-3" />
+                  Worksheet
+                </a>
+              ) : null}
             </td>
             <td className="px-4 py-3 text-xs text-muted-foreground">
               {a.batch_name || '—'}<span className="block">{a.centre_name}</span>

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Alert, TextInput, View } from "react-native";
+import { Alert, Linking, TextInput, View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
@@ -312,14 +312,40 @@ export default function HomeworkScreen() {
                 </Row>
               ) : null}
 
+              {row.attachment_url ? (
+                <Button
+                  label={hi ? "कार्यपत्रक खोलें" : "Open worksheet"}
+                  variant="outline"
+                  icon="document-outline"
+                  style={{ marginTop: 10 }}
+                  onPress={() => {
+                    void Linking.openURL(row.attachment_url!).catch(() => {
+                      Alert.alert(
+                        hi ? "खोल नहीं सके" : "Could not open",
+                        hi
+                          ? "कार्यपत्रक लिंक काम नहीं कर रहा — गुरुजी से पूछें।"
+                          : "That worksheet link could not be opened — ask your Guruji.",
+                      );
+                    });
+                  }}
+                />
+              ) : null}
+
               {row.submission_url ? (
-                <Body
-                  muted
-                  numberOfLines={1}
-                  style={{ marginTop: 10, fontSize: 13, color: c.infoText }}
-                >
-                  {row.submission_url}
-                </Body>
+                <Button
+                  label={hi ? "प्रस्तुत कार्य देखें" : "View your submission"}
+                  variant="ghost"
+                  icon="link-outline"
+                  style={{ marginTop: 4 }}
+                  onPress={() => {
+                    void Linking.openURL(row.submission_url!).catch(() => {
+                      Alert.alert(
+                        hi ? "खोल नहीं सके" : "Could not open",
+                        hi ? "लिंक काम नहीं कर रहा।" : "That link could not be opened.",
+                      );
+                    });
+                  }}
+                />
               ) : null}
 
               {row.feedback_note ? (
