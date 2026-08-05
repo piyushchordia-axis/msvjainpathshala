@@ -57,6 +57,27 @@ jobs:
       - name: Build API bundle
         run: pnpm --filter @workspace/api-server run build
 
+      # PERF #1: every package the bundle imports that is listed in build.mjs
+      # `external` must resolve in the runtime image. smoke-externals.mjs derives
+      # the import checklist from that array + dist — a hand-written list of
+      # three would drift the next time someone externalizes a new dep. Package
+      # versions are read from the Dockerfile install line so CI and the image
+      # cannot diverge.
+      - name: Smoke externalized runtime deps
+        run: |
+          set -euo pipefail
+          pkgs=$(grep -oE '@?[A-Za-z0-9/_.-]+@[0-9]+\.[0-9]+\.[0-9]+' apps/api-server/Dockerfile | tr '\n' ' ')
+          echo "Installing runtime externals from Dockerfile: $pkgs"
+          docker run --rm \
+            -v "$PWD/apps/api-server/build.mjs:/smoke/build.mjs:ro" \
+            -v "$PWD/apps/api-server/dist/index.mjs:/smoke/dist/index.mjs:ro" \
+            -v "$PWD/apps/api-server/scripts/smoke-externals.mjs:/tmp/smoke-externals.mjs:ro" \
+            -e SMOKE_BUILD_MJS=/smoke/build.mjs \
+            -e SMOKE_DIST_MJS=/smoke/dist/index.mjs \
+            -w /tmp \
+            node:22-alpine \
+            sh -c "npm init -y >/dev/null 2>&1 && npm install --omit=dev --no-audit --no-fund $pkgs && node /tmp/smoke-externals.mjs"
+
   test:
     name: API tests
     runs-on: ubuntu-latest

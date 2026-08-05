@@ -1,9 +1,9 @@
 # syntax=docker/dockerfile:1.7
 # Slim, multi-stage build for the Jain Pathshala API server.
-# The whole server esbuild-bundles to a single dist/index.mjs; the ONLY native
-# runtime dependency is `sharp` (QR rendering). Everything else (express, pg,
-# drizzle, ioredis, aws-sdk, razorpay, pdf-lib …) is inlined into the bundle.
-# Result: a tiny runtime image (alpine + node + the bundle + sharp).
+# The whole server esbuild-bundles to a single dist/index.mjs. Native / heavy
+# packages listed in build.mjs `external` that the bundle actually imports must
+# be installed here (sharp, argon2, @aws-sdk/*). Everything else is inlined.
+# Result: a tiny runtime image (alpine + node + the bundle + externals).
 
 ########################## Builder ##########################
 FROM node:22-alpine AS builder
@@ -40,10 +40,16 @@ ENV NODE_ENV=production \
 # under NODE_ENV=development). Keeping the path identical makes that resolve.
 WORKDIR /repo/apps/api-server
 
-# Only the externalized native module. sharp 0.34 ships prebuilt musl binaries,
-# so no compiler/vips toolchain is needed.
+# Externalized runtime deps (versions pinned to pnpm-lock.yaml). sharp 0.34
+# and argon2 ship prebuilt musl binaries, so no compiler toolchain is needed.
+# CI smoke (scripts/smoke-externals.mjs) imports every externalized module the
+# bundle references — keep this list in sync when build.mjs externals change.
 RUN npm init -y >/dev/null 2>&1 \
- && npm install --omit=dev --no-audit --no-fund sharp@0.34.5 \
+ && npm install --omit=dev --no-audit --no-fund \
+      sharp@0.34.5 \
+      argon2@0.45.1 \
+      @aws-sdk/client-s3@3.1068.0 \
+      @aws-sdk/s3-request-presigner@3.1068.0 \
  && npm cache clean --force
 
 # The bundle (includes the generated pino worker files).
