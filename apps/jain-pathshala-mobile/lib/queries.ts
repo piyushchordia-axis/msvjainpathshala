@@ -133,12 +133,15 @@ export function useHomeGallery(limit = 12) {
   });
 }
 
-/** Punya Wall surface (`featured_gallery`). Default limit 60. */
-export function useWallGallery(limit = 60) {
+/** Punya Wall surface (`featured_gallery`). Default limit 60.
+ * Pass `enabled: false` for staff shells that use a separate admin gallery query
+ * so both hooks are not in flight at once (PERF #24). */
+export function useWallGallery(limit = 60, enabled = true) {
   return useQuery({
     queryKey: qk.galleryWall(limit),
     queryFn: () =>
       apiGet<List<GalleryMediaItem>>(`/v1/gallery?surface=wall&limit=${limit}`),
+    enabled,
   });
 }
 

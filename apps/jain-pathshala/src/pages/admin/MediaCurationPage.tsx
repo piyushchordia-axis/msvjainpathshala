@@ -386,7 +386,7 @@ export default function MediaCurationPage() {
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
             {items.map((item) => {
               const flags = resolved(item);
-              const src = item.thumbnail_url ?? item.image_url;
+              const src = item.thumbnail_url;
               const optedOut = item.student_id != null && !item.can_publish;
               const niyamTitle =
                 locale === 'hi'
@@ -440,6 +440,10 @@ export default function MediaCurationPage() {
                       <img
                         src={src}
                         alt=""
+                        width={400}
+                        height={300}
+                        loading="lazy"
+                        decoding="async"
                         className="h-full w-full object-cover"
                       />
                     ) : (

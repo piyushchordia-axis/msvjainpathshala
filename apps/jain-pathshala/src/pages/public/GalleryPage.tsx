@@ -67,7 +67,7 @@ export default function GalleryPage() {
               const niyam =
                 (hi ? g.niyam_title_hi : g.niyam_title_en) || g.niyam_title_en;
               const caption = (hi ? g.caption_hi : g.caption) || g.caption || niyam;
-              const src = g.thumbnail_url ?? g.image_url;
+              const src = g.thumbnail_url;
               const label = g.first_name || (hi ? 'गैलरी' : 'Gallery');
               return (
                 <Card key={g.id} className="overflow-hidden p-0">
@@ -76,7 +76,10 @@ export default function GalleryPage() {
                       <img
                         src={src}
                         alt={caption ?? label}
+                        width={400}
+                        height={300}
                         loading="lazy"
+                        decoding="async"
                         className="h-full w-full object-cover"
                         onError={(e) => {
                           e.currentTarget.style.display = 'none';
@@ -84,7 +87,9 @@ export default function GalleryPage() {
                       />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center">
-                        <span className="font-display text-2xl text-primary">{label}</span>
+                        <span className="font-display text-2xl text-primary">
+                          {(g.first_name ?? label).slice(0, 1).toUpperCase()}
+                        </span>
                       </div>
                     )}
                     {g.is_featured ? (

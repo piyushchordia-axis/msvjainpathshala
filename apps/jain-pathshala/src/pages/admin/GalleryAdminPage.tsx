@@ -282,16 +282,24 @@ export default function GalleryAdminPage() {
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {items.map((g) => {
-                const src = g.thumbnail_url ?? g.image_url;
+                const src = g.thumbnail_url;
                 const consentPending = g.student_id && g.consent_opt_in === false;
                 return (
                   <Card key={g.id} className="overflow-hidden p-0">
                     <div className="relative aspect-[4/3] bg-muted">
                       {src ? (
-                        <img src={src} alt={g.caption ?? g.first_name} className="h-full w-full object-cover" />
+                        <img
+                          src={src}
+                          alt={g.caption ?? g.first_name ?? ''}
+                          width={400}
+                          height={300}
+                          loading="lazy"
+                          decoding="async"
+                          className="h-full w-full object-cover"
+                        />
                       ) : (
-                        <div className="flex h-full w-full items-center justify-center text-muted-foreground">
-                          {g.first_name || '—'}
+                        <div className="flex h-full w-full items-center justify-center text-2xl font-semibold text-muted-foreground">
+                          {(g.first_name ?? 'G').slice(0, 1).toUpperCase()}
                         </div>
                       )}
                       {!g.is_public ? (
