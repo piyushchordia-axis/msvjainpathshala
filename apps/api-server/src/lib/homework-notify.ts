@@ -94,6 +94,43 @@ export async function notifyParentHomeworkGraded(opts: {
   }
 }
 
+/** After bulk grade — one inbox/push per parent for the assignment (not per child). */
+export async function notifyParentsHomeworkBulkGraded(opts: {
+  studentIds: string[];
+  status: "approved" | "starred";
+  assignmentId: string;
+}): Promise<void> {
+  try {
+    const parentIds = await parentUserIdsForStudents(opts.studentIds);
+    if (parentIds.length === 0) return;
+
+    let assignmentTitle = "homework";
+    const [a] = await db
+      .select({ title: homework_assignments.title })
+      .from(homework_assignments)
+      .where(eq(homework_assignments.id, opts.assignmentId))
+      .limit(1);
+    if (a?.title) assignmentTitle = a.title;
+
+    const starred = opts.status === "starred";
+    const n = opts.studentIds.length;
+    await notifyUsers({
+      userIds: parentIds,
+      kind: "homework",
+      title_en: starred ? "Homework starred" : "Homework approved",
+      title_hi: starred ? "गृहकार्य विशेष" : "गृहकार्य स्वीकृत",
+      body_en: starred
+        ? `Guruji starred work on "${assignmentTitle}" (${n} submission${n === 1 ? "" : "s"}).`
+        : `Guruji approved work on "${assignmentTitle}" (${n} submission${n === 1 ? "" : "s"}).`,
+      body_hi: starred
+        ? `गुरुजी ने "${assignmentTitle}" के कार्य को विशेष बनाया (${n}).`
+        : `गुरुजी ने "${assignmentTitle}" के कार्य को स्वीकार किया (${n}).`,
+    });
+  } catch (err) {
+    logger.warn({ err }, "notifyParentsHomeworkBulkGraded failed");
+  }
+}
+
 /** After Guruji returns work for rework — parent must act (F9). */
 export async function notifyParentHomeworkReturned(opts: {
   studentId: string;

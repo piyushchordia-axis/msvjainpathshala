@@ -29,9 +29,12 @@ import { resolveHomeworkAwardPoints } from "../../lib/homework-points";
 import {
   notifyParentsHomeworkAssigned,
   notifyParentHomeworkGraded,
+  notifyParentsHomeworkBulkGraded,
   notifyParentHomeworkReturned,
 } from "../../lib/homework-notify";
-import { auditFromReq } from "../../lib/audit";
+import { auditFromReq, writeAudit, writeAudits, type AuditInput } from "../../lib/audit";
+import { enqueueJob } from "../../lib/queues";
+import { QUEUE_NAMES } from "@jp/shared/constants";
 
 import { clampLimit, ownedStudentRow, listOwnedStudents, scopedCentreFilter } from "../../lib/route-helpers";
 import { kolkataDateString } from "../../services/attendance-mark";
@@ -945,6 +948,8 @@ router.post("/assignments/:id/grade-all", requireAdminPanel, async (req: Request
 
   const points = await resolveHomeworkAwardPoints(body.status, assignment.centre_id);
 
+  // Cap the working set — unbounded candidates held the request open for minutes.
+  const BULK_GRADE_CAP = 200;
   const candidates = await db
     .select({
       id: homework_submissions.id,
@@ -953,13 +958,15 @@ router.post("/assignments/:id/grade-all", requireAdminPanel, async (req: Request
       submission_url: homework_submissions.submission_url,
     })
     .from(homework_submissions)
-    .where(eq(homework_submissions.assignment_id, assignment.id));
+    .where(eq(homework_submissions.assignment_id, assignment.id))
+    .limit(BULK_GRADE_CAP);
 
   const results: BulkGradeRowResult[] = [];
   let awardedTotal = 0;
   let gradedCount = 0;
   let skippedCount = 0;
   let failedCount = 0;
+  const toGrade: Array<{ id: string; student_id: string }> = [];
 
   for (const sub of candidates) {
     if (exclude.has(sub.id)) {
@@ -1028,9 +1035,19 @@ router.post("/assignments/:id/grade-all", requireAdminPanel, async (req: Request
       continue;
     }
 
-    try {
-      const outcome = await db.transaction(async (tx) =>
-        claimAndAwardFirstHomeworkGrade({
+    toGrade.push({ id: sub.id, student_id: sub.student_id });
+  }
+
+  const gradedStudentIds: string[] = [];
+  const pendingAudits: AuditInput[] = [];
+
+  await db.transaction(async (tx) => {
+    let i = 0;
+    for (const sub of toGrade) {
+      const sp = `bg_${i++}`;
+      await tx.execute(sql.raw(`savepoint ${sp}`));
+      try {
+        const outcome = await claimAndAwardFirstHomeworkGrade({
           tx,
           actorId: req.authUser!.id,
           submissionId: sub.id,
@@ -1038,50 +1055,69 @@ router.post("/assignments/:id/grade-all", requireAdminPanel, async (req: Request
           gradeStatus: body.status,
           points,
           feedbackPatch,
-        }),
-      );
+        });
 
-      if (!outcome.awarded) {
+        if (!outcome.awarded) {
+          await tx.execute(sql.raw(`release savepoint ${sp}`));
+          results.push({
+            submission_id: sub.id,
+            status: "skipped",
+            awarded: 0,
+            error: { code: "ERR_SKIPPED", message: "Could not claim — already graded or not ready." },
+          });
+          skippedCount += 1;
+          continue;
+        }
+
+        await tx.execute(sql.raw(`release savepoint ${sp}`));
+
         results.push({
           submission_id: sub.id,
-          status: "skipped",
-          awarded: 0,
-          error: { code: "ERR_SKIPPED", message: "Could not claim — already graded or not ready." },
+          status: "success",
+          awarded: outcome.points,
         });
-        skippedCount += 1;
-        continue;
+        awardedTotal += outcome.points;
+        gradedCount += 1;
+        gradedStudentIds.push(sub.student_id);
+        pendingAudits.push({
+          actorId: req.authUser!.id,
+          actorRole: req.authUser!.role,
+          action: "grade",
+          entityKind: "homework_submission",
+          entityId: sub.id,
+          summary: `Bulk-graded homework submission as ${body.status} (+${outcome.points}).`,
+          metadata: { status: body.status, points: outcome.points, bulk: true },
+          ip: req.ip ?? null,
+        });
+      } catch (err) {
+        await tx.execute(sql.raw(`rollback to savepoint ${sp}`));
+        const message = err instanceof Error ? err.message : "Unexpected grade error.";
+        results.push({
+          submission_id: sub.id,
+          status: "failed",
+          awarded: 0,
+          error: { code: "ERR_INTERNAL", message },
+        });
+        failedCount += 1;
       }
-
-      results.push({
-        submission_id: sub.id,
-        status: "success",
-        awarded: outcome.points,
-      });
-      awardedTotal += outcome.points;
-      gradedCount += 1;
-
-      await auditFromReq(req, {
-        action: "grade",
-        entityKind: "homework_submission",
-        entityId: sub.id,
-        summary: `Bulk-graded homework submission as ${body.status} (+${outcome.points}).`,
-        metadata: { status: body.status, points: outcome.points, bulk: true },
-      });
-      await notifyParentHomeworkGraded({
-        studentId: sub.student_id,
-        status: body.status,
-        assignmentId: assignment.id,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : "Unexpected grade error.";
-      results.push({
-        submission_id: sub.id,
-        status: "failed",
-        awarded: 0,
-        error: { code: "ERR_INTERNAL", message },
-      });
-      failedCount += 1;
     }
+
+    // One INSERT for all successful grades (PERF #11) — after savepoints so a
+    // mid-roster claim failure cannot leave an orphaned audit row.
+    await writeAudits(pendingAudits, tx);
+  });
+
+  // Notify once per parent after commit; push runs on the queue so Expo RTT
+  // does not block the HTTP response (PERF #11).
+  if (gradedStudentIds.length > 0) {
+    void enqueueJob(QUEUE_NAMES.PARENT_NOTIFY, {
+      kind: "homework_bulk_graded",
+      student_ids: gradedStudentIds,
+      status: body.status,
+      assignment_id: assignment.id,
+    }).catch(() => {
+      // Best-effort: grades already committed.
+    });
   }
 
   ok(res, {
@@ -1092,6 +1128,7 @@ router.post("/assignments/:id/grade-all", requireAdminPanel, async (req: Request
       failed: failedCount,
       points_awarded: awardedTotal,
       points_per_student: points,
+      capped_at: BULK_GRADE_CAP,
     },
   });
 });
@@ -1556,6 +1593,89 @@ router.post("/submissions/:id/ungrade", requireAdminPanel, async (req: Request, 
 });
 
 /* ═══════════════════════════ Student / parent ═══════════════════════════ */
+
+/**
+ * GET /v1/homework/students/:id/submissions — Guruji history for one student.
+ * Only submissions whose assignment batch is in the caller's batch write scope.
+ */
+router.get("/students/:id/submissions", requireAdminPanel, async (req: Request, res: Response) => {
+  const studentId = String(req.params.id);
+  if (!isUuid(studentId)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
+    return;
+  }
+  const scope = await resolveAdminScope(req.authUser!);
+  const [stu] = await db
+    .select({
+      id: students.id,
+      batch_id: students.batch_id,
+      centre_id: students.centre_id,
+    })
+    .from(students)
+    .where(and(eq(students.id, studentId), isNull(students.deleted_at)))
+    .limit(1);
+  if (!stu || !inBatchWriteScope(scope, stu.batch_id, stu.centre_id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
+    return;
+  }
+
+  const limit = clampLimit(req.query.limit, 50, 200);
+  const filters = [
+    eq(homework_submissions.student_id, studentId),
+    isNull(homework_assignments.deleted_at),
+  ];
+  if (scope.batchIds !== null) {
+    filters.push(
+      scope.batchIds.length === 0
+        ? sql`false`
+        : inArray(homework_assignments.batch_id, scope.batchIds),
+    );
+  }
+
+  const rows = await db
+    .select({
+      id: homework_submissions.id,
+      assignment_id: homework_assignments.id,
+      title: homework_assignments.title,
+      due_date: homework_assignments.due_date,
+      status: homework_submissions.status,
+      late: homework_submissions.late,
+      marked_at: homework_submissions.marked_at,
+      submission_url: homework_submissions.submission_url,
+      feedback_note: homework_submissions.feedback_note,
+      batch_name: batches.name,
+    })
+    .from(homework_submissions)
+    .innerJoin(
+      homework_assignments,
+      eq(homework_assignments.id, homework_submissions.assignment_id),
+    )
+    .innerJoin(batches, eq(batches.id, homework_assignments.batch_id))
+    .where(and(...filters))
+    .orderBy(desc(homework_assignments.due_date), desc(homework_submissions.id))
+    .limit(limit);
+
+  const todayKolkata = kolkataDateString(new Date());
+  ok(
+    res,
+    {
+      items: rows.map((r) => ({
+        id: r.id,
+        assignment_id: r.assignment_id,
+        title: r.title,
+        due_date: r.due_date,
+        status: r.status,
+        late: r.late,
+        overdue: isOverdueHomework(r.due_date, r.status, todayKolkata),
+        marked_at: r.marked_at ? r.marked_at.toISOString() : null,
+        submission_url: r.submission_url ? signUploadUrl(r.submission_url) : null,
+        feedback_note: r.feedback_note,
+        batch_name: r.batch_name,
+      })),
+    },
+    { count: rows.length },
+  );
+});
 
 /* GET /v1/homework/mine?student_id=&limit=&cursor=
  * Per-student feed when student_id is set; combined feed across every owned

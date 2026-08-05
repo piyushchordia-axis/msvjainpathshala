@@ -75,6 +75,22 @@ export function registerDerivedDataJobs(): void {
       await notifyParentsOfGalleryWallFeature(ids);
       return;
     }
+    if (kind === "homework_bulk_graded") {
+      const raw = (data as { student_ids?: unknown }).student_ids;
+      const studentIds = Array.isArray(raw)
+        ? raw.map((id) => String(id)).filter(Boolean)
+        : [];
+      const status = String((data as { status?: string }).status ?? "approved");
+      const assignmentId = String((data as { assignment_id?: string }).assignment_id ?? "");
+      if (studentIds.length === 0 || !assignmentId) return;
+      const { notifyParentsHomeworkBulkGraded } = await import("../lib/homework-notify");
+      await notifyParentsHomeworkBulkGraded({
+        studentIds,
+        status: status === "starred" ? "starred" : "approved",
+        assignmentId,
+      });
+      return;
+    }
     // timetable_change etc. — push already sent inline by the producer.
     logger.debug({ data }, "parent notify job acknowledged");
   });
