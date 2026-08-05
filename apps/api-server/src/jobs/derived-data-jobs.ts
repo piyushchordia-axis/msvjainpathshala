@@ -153,6 +153,17 @@ export function registerDerivedDataJobs(): void {
       where expires_at < now()
          or (revoked_at is not null and revoked_at < now() - interval '30 days')
     `);
+    const { runRetentionPrune } = await import("../lib/retention");
+    const pruned = await runRetentionPrune();
+    if (pruned.sync_operations_deleted > 0 || pruned.notifications_deleted > 0) {
+      logger.info(
+        {
+          sync_operations_deleted: pruned.sync_operations_deleted,
+          notifications_deleted: pruned.notifications_deleted,
+        },
+        "retention prune",
+      );
+    }
   });
 
   registerCron(

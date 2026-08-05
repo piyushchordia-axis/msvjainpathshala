@@ -200,6 +200,10 @@ export const sync_operations = pgTable(
       "sync_operations_submission_op_id_ulid_check",
       sql`${t.submission_op_id} ~ ${sql.raw(`'${ULID_RE}'`)}`,
     ),
+    // Retention prune (PERF #8) — only success/duplicate are eligible to age out.
+    applied_idx: index("idx_sync_operations_applied")
+      .on(t.applied_at)
+      .where(sql`${t.status} in ('success', 'duplicate')`),
   }),
 );
 
