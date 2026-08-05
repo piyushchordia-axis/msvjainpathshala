@@ -27,7 +27,7 @@ export default function ParentHome() {
     refetch,
   } = useSessionView();
 
-  const attendance = useAttendance(activeStudentId ?? undefined);
+  const attendance = useAttendance(activeStudentId ?? undefined, true, 5);
   const punya = usePunya(activeStudentId ?? undefined);
 
   const firstName = user?.full_name?.split(" ")[0] ?? "";

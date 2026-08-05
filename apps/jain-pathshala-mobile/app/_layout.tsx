@@ -18,7 +18,7 @@ import {
 } from "@expo-google-fonts/mukta";
 import { TiroDevanagariSanskrit_400Regular } from "@expo-google-fonts/tiro-devanagari-sanskrit";
 import { useFonts } from "expo-font";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
 import { router, Stack } from "expo-router";
 import type { Href } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
@@ -29,7 +29,9 @@ import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { OfflineSyncLoop } from "@/components/OfflineSyncLoop";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { persistOptions, queryClient } from "@/lib/query-client";
 import { LocaleProvider } from "@/contexts/LocaleContext";
 import { SessionViewProvider } from "@/contexts/SessionViewContext";
 import { API_BASE } from "@/lib/api";
@@ -51,8 +53,6 @@ function routeForNotificationData(data: unknown): Href {
   }
   return "/notifications";
 }
-
-const queryClient = new QueryClient();
 
 function RootLayoutNav() {
   return (
@@ -88,6 +88,7 @@ function RootLayoutNav() {
       <Stack.Screen name="niyam-submissions" options={{ title: "All submissions" }} />
       <Stack.Screen name="homework" options={{ title: "Homework" }} />
       <Stack.Screen name="homework-assignment/[id]" options={{ title: "Review homework" }} />
+      <Stack.Screen name="student-detail/[id]" options={{ title: "Student" }} />
       <Stack.Screen name="my-attendance" options={{ title: "Attendance" }} />
       <Stack.Screen name="quizzes" options={{ title: "Quizzes" }} />
       <Stack.Screen name="competitions" options={{ title: "Competitions" }} />
@@ -127,15 +128,6 @@ export default function RootLayout() {
     if (__DEV__) {
       console.log("[Jain Pathshala] API_BASE =", API_BASE, "isExpoGo =", isExpoGo);
     }
-  }, []);
-
-  // Offline sync drain loop — sole transport POST /v1/sync/batch.
-  useEffect(() => {
-    let stop: (() => void) | undefined;
-    void import("@/lib/offline/sync-engine").then(({ startSyncLoop }) => {
-      stop = startSyncLoop(5_000);
-    });
-    return () => stop?.();
   }, []);
 
   // Configure the foreground handler and deep-link into the relevant screen
@@ -191,19 +183,20 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <ErrorBoundary>
-        <QueryClientProvider client={queryClient}>
+        <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
           <GestureHandlerRootView style={{ flex: 1 }}>
             <KeyboardProvider>
               <LocaleProvider>
                 <AuthProvider>
                   <SessionViewProvider>
+                    <OfflineSyncLoop />
                     <RootLayoutNav />
                   </SessionViewProvider>
                 </AuthProvider>
               </LocaleProvider>
             </KeyboardProvider>
           </GestureHandlerRootView>
-        </QueryClientProvider>
+        </PersistQueryClientProvider>
       </ErrorBoundary>
     </SafeAreaProvider>
   );

@@ -179,12 +179,18 @@ export type StudentAttendancePayload = List<AttendanceRow> & {
   attendance_percent?: number | null;
 };
 
-export function useAttendance(studentId?: string) {
+export function useAttendance(studentId?: string, enabled = true, limit?: number) {
+  const baseKey = qk.attendance(studentId ?? "");
+  const queryKey =
+    limit != null ? ([...baseKey, { limit }] as const) : baseKey;
+  const path =
+    limit != null
+      ? `/v1/students/${studentId}/attendance?limit=${limit}`
+      : `/v1/students/${studentId}/attendance`;
   return useQuery({
-    queryKey: qk.attendance(studentId ?? ""),
-    queryFn: () =>
-      apiGet<StudentAttendancePayload>(`/v1/students/${studentId}/attendance`),
-    enabled: !!studentId,
+    queryKey,
+    queryFn: () => apiGet<StudentAttendancePayload>(path),
+    enabled: enabled && !!studentId,
   });
 }
 

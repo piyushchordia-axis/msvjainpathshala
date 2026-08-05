@@ -17,6 +17,19 @@ vi.mock("@react-native-async-storage/async-storage", () => ({
   },
 }));
 
+vi.mock("@react-native-community/netinfo", () => ({
+  default: {
+    addEventListener: () => () => {},
+  },
+}));
+
+vi.mock("react-native", () => ({
+  AppState: {
+    currentState: "active",
+    addEventListener: () => ({ remove: () => {} }),
+  },
+}));
+
 const apiPost = vi.fn();
 vi.mock("@/lib/api", () => ({
   apiPost: (...args: unknown[]) => apiPost(...args),
