@@ -2,7 +2,7 @@
  * PERF #10 safety net — AT17–AT20 / AT4 attendance mark invariants.
  * Run against CURRENT code before any batching changes.
  */
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   pool,
   db,
@@ -230,6 +230,14 @@ describe("AT20 attendance mark invariants (PERF #10 safety net)", () => {
     await wipeSessionLedger(fx.sessionId, fx.studentIds);
     const sid = fx.studentIds[0]!;
 
+    // Isolate AT20 ledger from AT22 streak awards on the post_process queue.
+    const queues = await import("../src/lib/queues");
+    const enqueueSpy = vi
+      .spyOn(queues, "enqueueDebouncedJob")
+      .mockResolvedValue(undefined);
+
+    const before = await balanceOf(sid);
+
     const mark = async (status: "present" | "absent", hour: number) => {
       await markAttendance({
         sessionId: fx.sessionId,
@@ -270,9 +278,11 @@ describe("AT20 attendance mark invariants (PERF #10 safety net)", () => {
     expect(rows[2]!.points).toBeGreaterThan(0);
     expect(rows[2]!.reversal_of).toBeNull();
 
-    const awards = rows.filter((r) => r.points > 0);
-    expect(await balanceOf(sid)).toBe(awards[awards.length - 1]!.points);
-    expect(await sumAttendanceLedger(sid)).toBe(await balanceOf(sid));
+    const sessionNet = rows.reduce((s, r) => s + r.points, 0);
+    expect(sessionNet).toBe(rows[2]!.points);
+    expect(await balanceOf(sid)).toBe(before + sessionNet);
+
+    enqueueSpy.mockRestore();
   });
 
   it("a partially-failing roster does not half-apply (per-item reject, siblings commit)", async () => {
