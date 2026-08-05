@@ -1,9 +1,9 @@
 import type { NextFunction, Request, Response } from "express";
-import { db, users, type User } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import type { User } from "@workspace/db";
 import { canAccessAdminPanel, type Role } from "@workspace/api-zod";
 import { verifyAccessToken } from "../lib/tokens";
 import { fail } from "../lib/envelope";
+import { loadAuthUser } from "../lib/auth-user-cache";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -32,12 +32,12 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     fail(res, 401, "ERR_TOKEN_INVALID", "Session expired or invalid. Please sign in again.");
     return;
   }
-  const [user] = await db.select().from(users).where(eq(users.id, verified.uid)).limit(1);
+  const user = await loadAuthUser(verified.uid);
   if (!user || !user.is_active || user.deleted_at) {
     fail(res, 401, "ERR_USER_INACTIVE", "Account is not active.");
     return;
   }
-  req.authUser = user;
+  req.authUser = user as User;
   next();
 }
 

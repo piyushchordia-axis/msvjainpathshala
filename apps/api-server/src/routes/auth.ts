@@ -414,6 +414,9 @@ async function handleDeleteAccount(req: Request, res: Response): Promise<void> {
     .where(and(eq(users.id, uid), isNull(users.deleted_at)))
     .returning({ id: users.id });
 
+  const { invalidateAuthUserCache } = await import("../lib/auth-user-cache");
+  await invalidateAuthUserCache(uid);
+
   // Already deleted (idempotent) — still revoke sessions + clear cookies below.
   await db
     .update(device_sessions)
