@@ -1,4 +1,3 @@
-import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { View } from "react-native";
 import { useColors } from "@/hooks/useColors";
@@ -6,6 +5,7 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { AppHeader, LanguageToggle } from "@/components/AppHeader";
 import { DeleteAccountButton } from "@/components/DeleteAccountButton";
+import { UserPhotoEditor } from "@/components/UserPhotoEditor";
 import { Body, Button, Card, Row, Screen, Title } from "@/components/ui";
 
 const ROLE_LABELS: Record<string, { en: string; hi: string }> = {
@@ -30,28 +30,24 @@ export default function ProfileScreen() {
         subtitle={hi ? "आपका खाता" : "Your account"}
       />
       <Screen>
-        <Card>
-          <Row style={{ gap: 14 }}>
-            <View
-              style={{
-                width: 56,
-                height: 56,
-                borderRadius: 28,
-                backgroundColor: c.accent,
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Ionicons name="person" size={28} color={c.primary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Title style={{ fontSize: 19 }}>{user?.full_name ?? "—"}</Title>
-              {roleLabel ? (
-                <Body muted style={{ fontSize: 13, marginTop: 2 }}>{hi ? roleLabel.hi : roleLabel.en}</Body>
-              ) : null}
-            </View>
-          </Row>
-        </Card>
+        <UserPhotoEditor
+          name={user?.full_name ?? "—"}
+          photoUrl={user?.photo_url}
+          helperText={
+            roleLabel
+              ? hi
+                ? `यह फोटो आपकी ${roleLabel.hi} प्रोफ़ाइल पर दिखेगी।`
+                : `This photo appears on your ${roleLabel.en} profile.`
+              : undefined
+          }
+        />
+
+        {roleLabel ? (
+          <Card>
+            <Body muted style={{ fontSize: 12 }}>{hi ? "भूमिका" : "Role"}</Body>
+            <Body style={{ marginTop: 2 }}>{hi ? roleLabel.hi : roleLabel.en}</Body>
+          </Card>
+        ) : null}
 
         <Card>
           <Body muted style={{ fontSize: 12 }}>{hi ? "फ़ोन" : "Phone"}</Body>

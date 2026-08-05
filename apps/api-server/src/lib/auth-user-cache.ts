@@ -21,6 +21,7 @@ const AUTH_USER_COLUMNS = {
   is_active: users.is_active,
   last_login_at: users.last_login_at,
   gallery_visibility_opt_in: users.gallery_visibility_opt_in,
+  photo_url: users.photo_url,
   deleted_at: users.deleted_at,
   created_at: users.created_at,
   updated_at: users.updated_at,

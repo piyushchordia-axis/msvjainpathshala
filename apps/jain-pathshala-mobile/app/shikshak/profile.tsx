@@ -5,6 +5,7 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { AppHeader, LanguageToggle } from "@/components/AppHeader";
 import { DeleteAccountButton } from "@/components/DeleteAccountButton";
+import { UserPhotoEditor } from "@/components/UserPhotoEditor";
 import { Body, Button, Card, Kicker, Pill, Row, Screen, Title } from "@/components/ui";
 
 export default function ProfileScreen() {
@@ -17,6 +18,15 @@ export default function ProfileScreen() {
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <AppHeader title={hi ? "प्रोफ़ाइल" : "Profile"} />
       <Screen>
+        <UserPhotoEditor
+          name={user?.full_name ?? "—"}
+          photoUrl={user?.photo_url}
+          helperText={
+            hi
+              ? "यह फोटो गुरुजी प्रोफ़ाइल पर दिखेगी।"
+              : "This photo appears on your Guruji profile."
+          }
+        />
         <Card>
           <Kicker>{hi ? "शिक्षक" : "Shikshak"}</Kicker>
           <Title style={{ fontSize: 20, marginTop: 6 }}>{user?.full_name ?? "—"}</Title>

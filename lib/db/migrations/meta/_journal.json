@@ -226,5 +226,13 @@
       "tag": "0038_drop_redundant_indexes",
       "breakpoints": true
     }
-  ]
+  ,
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1789123200000,
+      "tag": "0039_user_photo",
+      "breakpoints": true
+    }
+]
 }

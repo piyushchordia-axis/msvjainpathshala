@@ -8,6 +8,7 @@ import { AppHeader, LanguageToggle } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { DeleteAccountButton } from "@/components/DeleteAccountButton";
 import { StudentPhotoEditor } from "@/components/StudentPhotoEditor";
+import { UserPhotoEditor } from "@/components/UserPhotoEditor";
 import { Body, Button, Card, Kicker, Pill, Row, Screen, Title } from "@/components/ui";
 
 const ROLE_LABELS: Record<string, { en: string; hi: string }> = {
@@ -41,6 +42,16 @@ export default function ParentProfile() {
         subtitle={hi ? "खाता और सेटिंग्स" : "Account & settings"}
       />
       <Screen contentStyle={{ paddingBottom: 110 }}>
+        <UserPhotoEditor
+          name={user?.full_name ?? "—"}
+          photoUrl={user?.photo_url}
+          helperText={
+            hi
+              ? "यह आपकी अभिभावक प्रोफ़ाइल फोटो है।"
+              : "This is your parent profile photo."
+          }
+        />
+
         <Card>
           <Kicker>{hi ? "खाता" : "Account"}</Kicker>
           <Title style={{ fontSize: 20, marginTop: 4 }}>{user?.full_name ?? "—"}</Title>

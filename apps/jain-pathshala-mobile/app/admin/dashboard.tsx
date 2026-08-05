@@ -6,7 +6,7 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useOverview } from "@/lib/queries";
 import { formatPaise } from "@/lib/format";
-import { AppHeader } from "@/components/AppHeader";
+import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
 import { Body, Button, Card, Numeric, Row, Screen, StateView, Title } from "@/components/ui";
@@ -34,6 +34,13 @@ export default function DashboardScreen() {
       <AppHeader
         title={`${hi ? "जय जिनेन्द्र" : "Jai Jinendra"}, ${firstName}`}
         subtitle={hi ? "संगठन का अवलोकन" : "Organisation overview"}
+        right={
+          <ProfileAvatarButton
+            name={user?.full_name}
+            photoUrl={user?.photo_url}
+            href="/admin/profile"
+          />
+        }
       />
       <Screen refreshing={isRefetching} onRefresh={refetch}>
         <AnimatedMount delay={0}>

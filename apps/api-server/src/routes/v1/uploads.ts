@@ -32,7 +32,7 @@ const MAGIC_SAMPLE_BYTES = 4096;
 
 // Folders that hold admin-published content — students/parents must not be able
 // to plant files under these paths. (niyam-proof/homework/registration/
-// student-photos/misc stay open to any authenticated user for their own files.)
+// student-photos/user-photos/misc stay open to any authenticated user.)
 const ADMIN_FOLDERS = new Set(["gallery", "library", "id-cards", "competitions", "shivirs"]);
 
 const folderSchema = z.enum([
@@ -43,6 +43,7 @@ const folderSchema = z.enum([
   "id-cards",
   "registration",
   "student-photos",
+  "user-photos",
   "competitions",
   "shivirs",
   "misc",

@@ -22,6 +22,8 @@ interface AuthContextValue {
   user: SessionUser | null;
   loading: boolean;
   signIn: (user: SessionUser, tokens: AuthTokens) => Promise<void>;
+  /** Update persisted session user (e.g. after profile photo change). */
+  updateUser: (user: SessionUser) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -29,6 +31,7 @@ const AuthContext = createContext<AuthContextValue>({
   user: null,
   loading: true,
   signIn: async () => {},
+  updateUser: async () => {},
   logout: async () => {},
 });
 
@@ -88,6 +91,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [queryClient],
   );
 
+  const updateUser = useCallback(async (nextUser: SessionUser) => {
+    setUser(nextUser);
+    await AsyncStorage.setItem(USER_KEY, JSON.stringify(nextUser));
+  }, []);
+
   const logout = useCallback(async () => {
     // Send the refresh token so the server revokes the session (mobile has no
     // cookie); short access TTL means the access token also lapses quickly.
@@ -107,8 +115,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [queryClient]);
 
   const value = useMemo(
-    () => ({ user, loading, signIn, logout }),
-    [user, loading, signIn, logout],
+    () => ({ user, loading, signIn, updateUser, logout }),
+    [user, loading, signIn, updateUser, logout],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

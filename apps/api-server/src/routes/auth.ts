@@ -4,7 +4,6 @@ import { db, users, otp_codes, device_sessions, settings } from "@workspace/db";
 import { and, eq, isNull } from "drizzle-orm";
 import {
   loginRequestSchema,
-  type SessionUser,
 } from "@workspace/api-zod";
 import { fail } from "../lib/envelope";
 import {
@@ -25,6 +24,7 @@ import { logger } from "../lib/logger";
 import { rateLimit } from "../lib/ratelimit";
 import { auditFromReq } from "../lib/audit";
 import { requireAuth } from "../middlewares/auth";
+import { toSessionUser } from "../lib/session-user";
 
 const router: IRouter = Router();
 
@@ -38,18 +38,6 @@ const isProd = process.env.NODE_ENV === "production";
 function maskPhone(phone: string): string {
   const digits = phone.replace(/\D/g, "");
   return digits.length <= 4 ? "****" : `****${digits.slice(-4)}`;
-}
-
-function toSessionUser(u: typeof users.$inferSelect): SessionUser {
-  return {
-    id: u.id,
-    phone: u.phone,
-    role: u.role,
-    full_name: u.full_name,
-    preferred_language: u.preferred_language,
-    state_id: u.state_id ?? null,
-    city_id: u.city_id ?? null,
-  };
 }
 
 router.post("/login", async (req: Request, res: Response) => {

@@ -14,6 +14,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import {
   db,
+  users,
   students,
   centres,
   batches,
@@ -40,12 +41,79 @@ import { auditFromReq } from "../../lib/audit";
 import { storage } from "../../lib/storage";
 import { clampLimit, ownedStudentId } from "../../lib/route-helpers";
 import { studentCanAccessNiyam } from "../../lib/niyam-audience";
+import { toSessionUser } from "../../lib/session-user";
+import { invalidateAuthUserCache } from "../../lib/auth-user-cache";
 
 const router: IRouter = Router();
 
 router.use(requireAuth);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+const userPhotoSchema = z.object({
+  photo_url: z.string().min(1).max(1000).nullable(),
+});
+
+/**
+ * PUT /v1/me/photo — set or clear the caller's profile avatar.
+ * Accepts a previously uploaded /uploads URL (folder user-photos) or null to clear.
+ */
+router.put("/photo", async (req: Request, res: Response) => {
+  let body: z.infer<typeof userPhotoSchema>;
+  try {
+    body = userPhotoSchema.parse(req.body);
+  } catch {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "photo_url must be a URL string or null.");
+    return;
+  }
+
+  if (body.photo_url !== null) {
+    const key = uploadKeyFromUrl(body.photo_url);
+    if (!key || !key.startsWith("user-photos/")) {
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        "photo_url must be an uploaded file under user-photos.",
+      );
+      return;
+    }
+  }
+
+  const uid = req.authUser!.id;
+  const [row] = await db
+    .select()
+    .from(users)
+    .where(and(eq(users.id, uid), isNull(users.deleted_at)))
+    .limit(1);
+  if (!row) {
+    fail(res, 404, "ERR_NOT_FOUND", "User not found.");
+    return;
+  }
+
+  const previousKey = row.photo_url ? uploadKeyFromUrl(row.photo_url) : null;
+
+  const [updated] = await db
+    .update(users)
+    .set({ photo_url: body.photo_url, updated_at: new Date() })
+    .where(eq(users.id, uid))
+    .returning();
+
+  if (previousKey && previousKey !== uploadKeyFromUrl(body.photo_url ?? "")) {
+    await storage.remove(previousKey);
+  }
+
+  await invalidateAuthUserCache(uid);
+
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "user",
+    entityId: uid,
+    summary: body.photo_url ? "Profile photo updated." : "Profile photo cleared.",
+  });
+
+  ok(res, { user: toSessionUser(updated!) });
+});
 
 /* GET /v1/me/children — students owned by the caller (parent: kids; student: self) */
 router.get("/children", async (req: Request, res: Response) => {

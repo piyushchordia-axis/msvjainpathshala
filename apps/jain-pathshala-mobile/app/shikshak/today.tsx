@@ -6,7 +6,7 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToday } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
-import { AppHeader } from "@/components/AppHeader";
+import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
 import { ShikshakQuickActions } from "@/components/QuickActions";
@@ -25,6 +25,13 @@ export default function TodayScreen() {
       <AppHeader
         title={hi ? `जय जिनेन्द्र, ${firstName}` : `Jai Jinendra, ${firstName}`}
         subtitle={hi ? "आज के सत्र और गुरुजी मेनू" : "Today's sessions and Guruji menu"}
+        right={
+          <ProfileAvatarButton
+            name={user?.full_name}
+            photoUrl={user?.photo_url}
+            href="/shikshak/profile"
+          />
+        }
       />
       <Screen
         refreshing={isRefetching}

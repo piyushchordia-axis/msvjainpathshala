@@ -6,7 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useAttendance, usePunya } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
-import { AppHeader } from "@/components/AppHeader";
+import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
@@ -60,6 +60,13 @@ export default function ParentHome() {
       <AppHeader
         title={hi ? `जय जिनेन्द्र, ${firstName}` : `Jai Jinendra, ${firstName}`}
         subtitle={hi ? "अपने बच्चे की प्रगति देखें" : "Track your child's progress"}
+        right={
+          <ProfileAvatarButton
+            name={user?.full_name}
+            photoUrl={user?.photo_url}
+            href="/parent/profile"
+          />
+        }
       />
       <Screen
         refreshing={attendance.isRefetching || punya.isRefetching}

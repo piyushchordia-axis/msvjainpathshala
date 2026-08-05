@@ -27,6 +27,7 @@ import type {
   ShivirDetail,
   ShivirRow,
 } from "@/lib/types";
+import type { SessionUser } from "@/lib/auth";
 import { galleryHomeKey, galleryWallKey } from "@/lib/gallery-query-keys";
 
 type List<T> = ListResponse<T>;
@@ -952,5 +953,13 @@ export function useSetStudentPhoto() {
       void qc.invalidateQueries({ queryKey: qk.idCard(vars.studentId) });
       void qc.invalidateQueries({ queryKey: qk.children });
     },
+  });
+}
+
+/** Set the logged-in user's profile avatar (`users.photo_url`). */
+export function useSetUserPhoto() {
+  return useMutation({
+    mutationFn: (photo_url: string | null) =>
+      apiPut<{ user: SessionUser }>("/v1/me/photo", { photo_url }),
   });
 }

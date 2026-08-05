@@ -218,6 +218,7 @@ export const sessionUserSchema = z.object({
   preferred_language: languageSchema,
   state_id: z.string().nullable().optional(),
   city_id: z.string().nullable().optional(),
+  photo_url: z.string().nullable().optional(),
 });
 export type SessionUser = z.infer<typeof sessionUserSchema>;
 

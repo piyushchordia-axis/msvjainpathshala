@@ -94,6 +94,7 @@ describe("auth / OTP login", () => {
     expect(verify.status).toBe(200);
     expect(verify.body.data.user.phone).toBe(phone);
     expect(verify.body.data.user.role).toBe("parent");
+    expect(verify.body.data.user).toHaveProperty("photo_url");
     expect(typeof verify.body.data.tokens.access_token).toBe("string");
     expect(typeof verify.body.data.tokens.refresh_token).toBe("string");
 

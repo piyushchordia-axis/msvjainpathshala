@@ -19,7 +19,6 @@ import {
   studentStatusActionSchema,
   enrolmentStatusSchema,
   type Role,
-  type SessionUser,
 } from "@workspace/api-zod";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
@@ -29,6 +28,7 @@ import { auditFromReq } from "../../lib/audit";
 import { materialiseHomeworkForStudentBatch } from "../../lib/homework-materialise";
 import { signAccessToken, generateRefreshToken, verifyAccessToken, hashSecret } from "../../lib/tokens";
 import { setAuthCookies, setImpersonationCookies, clearAuthCookies } from "../../lib/cookies";
+import { toSessionUser } from "../../lib/session-user";
 import adminResourcesRouter from "./admin-resources";
 import adminModulesRouter from "./admin-modules";
 import adminStaffingRouter from "./admin-staffing";
@@ -120,18 +120,6 @@ router.use(adminStaffingRouter);
 
 /** Returns a Drizzle condition limiting `column` to the user's scope, or undefined for unrestricted. */
 
-
-function toSessionUser(u: typeof users.$inferSelect): SessionUser {
-  return {
-    id: u.id,
-    phone: u.phone,
-    role: u.role,
-    full_name: u.full_name,
-    preferred_language: u.preferred_language,
-    state_id: u.state_id ?? null,
-    city_id: u.city_id ?? null,
-  };
-}
 
 /* POST /v1/admin/impersonate/:userId — start impersonating another account.
  *

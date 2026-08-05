@@ -39,6 +39,7 @@ export interface SessionUser {
   preferred_language: 'en' | 'hi';
   state_id?: string | null;
   city_id?: string | null;
+  photo_url?: string | null;
 }
 
 export interface AuthTokens {
@@ -60,6 +61,11 @@ export interface OtpVerifyResponse {
 
 const COOKIE_USER = 'jp_user';
 const COOKIE_ACCESS = 'jp_access';
+
+/** Persist session user in the readable jp_user cookie (matches server setAuthCookies). */
+export function writeSessionUserCookie(user: SessionUser, maxAgeSeconds = 30 * 24 * 60 * 60): void {
+  document.cookie = `${COOKIE_USER}=${encodeURIComponent(JSON.stringify(user))}; path=/; max-age=${maxAgeSeconds}; SameSite=Lax`;
+}
 
 export function readSessionUserFromCookie(): SessionUser | null {
   const match = document.cookie

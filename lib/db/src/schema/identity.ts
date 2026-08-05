@@ -32,6 +32,8 @@ export const users = pgTable(
     is_active: boolean("is_active").notNull().default(true),
     last_login_at: timestamp("last_login_at", { withTimezone: true }),
     gallery_visibility_opt_in: boolean("gallery_visibility_opt_in").notNull().default(false),
+    /** Profile avatar for any persona (not the student ID-card headshot). */
+    photo_url: text("photo_url"),
     /** Per-kind opt-outs; honour before enqueueing pushes (AT31). */
     notification_preferences: jsonb("notification_preferences").notNull().default({}),
     ...softDelete(),
