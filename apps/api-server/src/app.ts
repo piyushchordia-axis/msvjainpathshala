@@ -14,6 +14,11 @@ import { MIME_BY_EXT } from "./lib/upload";
 import { fail } from "./lib/envelope";
 import { handleMulterError } from "./middlewares/multer-error";
 import { corsOriginDelegate } from "./lib/cors-origins";
+import {
+  metricsMiddleware,
+  requireMetricsAccess,
+  metricsHandler,
+} from "./lib/metrics";
 
 const isProd = process.env.NODE_ENV === "production";
 
@@ -49,12 +54,15 @@ app.use(
       res(res) {
         return {
           statusCode: res.statusCode,
+          // PERF #19 — was stripped; needed to diagnose p95 regressions.
+          responseTime: (res as { responseTime?: number }).responseTime,
         };
       },
     },
   }),
 );
 app.use(compression());
+app.use(metricsMiddleware);
 app.use(
   cors({
     credentials: true,
@@ -79,6 +87,8 @@ app.use((_req, res, next) => {
   next();
 });
 app.use(cookieParser());
+// Internal scrape path — not under /api so public reverse-proxy rules can omit it.
+app.get("/metrics", requireMetricsAccess, metricsHandler);
 app.use(
   express.json({
     limit: "2mb",
