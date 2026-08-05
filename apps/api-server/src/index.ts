@@ -98,6 +98,20 @@ const server = app.listen(port, host, () => {
   warmTestOtpNumbers();
 });
 
+// PERF #18 — nginx upstream keepalive defaults to 60s; Node's keepAliveTimeout
+// must exceed it or the proxy races a closing socket and returns 502.
+// requestTimeout excludes the upload path carve-out below (multer streams).
+server.keepAliveTimeout = 65_000;
+server.headersTimeout = 70_000;
+server.requestTimeout = 30_000;
+server.on("request", (req, res) => {
+  // Large homework/proof uploads legitimately exceed 30s on slow links.
+  if (req.url?.startsWith("/v1/uploads")) {
+    req.setTimeout(10 * 60_000);
+    res.setTimeout(10 * 60_000);
+  }
+});
+
 // Graceful shutdown: stop accepting new connections, let in-flight requests
 // drain, then exit. A timeout guards against connections that never close.
 let shuttingDown = false;
