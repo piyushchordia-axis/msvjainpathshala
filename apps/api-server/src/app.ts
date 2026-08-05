@@ -129,13 +129,27 @@ app.get(/^\/uploads\/.+/, (req: Request, res) => {
 
 // Admin web SPA (apps/jain-pathshala, built with BASE_PATH=/admin/). Served
 // same-origin so its relative /api + /v1 calls and HttpOnly auth cookies just
-// work. Static assets first; any other /admin/* path falls back to index.html
-// for client-side (wouter) routing. ADMIN_WEB_DIR points at the copied build.
+// work. Hashed Vite assets: long immutable cache. index.html: no-cache so
+// clients always pick up a new shell that points at fresh hashed chunks.
 const ADMIN_WEB_DIR =
   process.env["ADMIN_WEB_DIR"] ?? path.join(process.cwd(), "admin-web");
-app.use("/admin", express.static(ADMIN_WEB_DIR));
+app.use(
+  "/admin",
+  express.static(ADMIN_WEB_DIR, {
+    maxAge: "1y",
+    immutable: true,
+    index: false,
+  }),
+);
 app.get(/^\/admin(?:\/.*)?$/, (_req: Request, res) => {
+  res.setHeader("Cache-Control", "no-cache");
   res.sendFile(path.join(ADMIN_WEB_DIR, "index.html"));
+});
+
+// PERF #18 — short public-route cache (marketing first paint).
+app.use("/v1/public", (_req, res, next) => {
+  res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
+  next();
 });
 
 app.use("/api", router);
