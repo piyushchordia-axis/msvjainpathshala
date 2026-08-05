@@ -21,6 +21,12 @@ export interface AdminScope {
 }
 
 /**
+ * Per-request memoization: the same User object (req.authUser / sync actor)
+ * is reused across multiple resolveAdminScope calls in one request/batch.
+ */
+const scopeByUser = new WeakMap<User, Promise<AdminScope>>();
+
+/**
  * Resolve centre + batch scope for an admin-panel user.
  * - super_admin: all centres / all batches
  * - state_admin: centres in their state
@@ -29,6 +35,19 @@ export interface AdminScope {
  * - shikshak: tagged centres (read); assigned batches (write)
  */
 export async function resolveAdminScope(user: User): Promise<AdminScope> {
+  const cached = scopeByUser.get(user);
+  if (cached) return cached;
+  const pending = resolveAdminScopeUncached(user);
+  scopeByUser.set(user, pending);
+  try {
+    return await pending;
+  } catch (err) {
+    scopeByUser.delete(user);
+    throw err;
+  }
+}
+
+async function resolveAdminScopeUncached(user: User): Promise<AdminScope> {
   switch (user.role) {
     case "super_admin":
       return { centreIds: null, batchIds: null };
@@ -65,24 +84,26 @@ export async function resolveAdminScope(user: User): Promise<AdminScope> {
     }
 
     case "shikshak": {
-      const centreRows = await db
-        .select({ id: shikshak_centre_assignments.centre_id })
-        .from(shikshak_centre_assignments)
-        .where(
-          and(
-            eq(shikshak_centre_assignments.user_id, user.id),
-            eq(shikshak_centre_assignments.is_active, true),
+      const [centreRows, batchRows] = await Promise.all([
+        db
+          .select({ id: shikshak_centre_assignments.centre_id })
+          .from(shikshak_centre_assignments)
+          .where(
+            and(
+              eq(shikshak_centre_assignments.user_id, user.id),
+              eq(shikshak_centre_assignments.is_active, true),
+            ),
           ),
-        );
-      const batchRows = await db
-        .select({ id: shikshak_batch_assignments.batch_id })
-        .from(shikshak_batch_assignments)
-        .where(
-          and(
-            eq(shikshak_batch_assignments.user_id, user.id),
-            eq(shikshak_batch_assignments.is_active, true),
+        db
+          .select({ id: shikshak_batch_assignments.batch_id })
+          .from(shikshak_batch_assignments)
+          .where(
+            and(
+              eq(shikshak_batch_assignments.user_id, user.id),
+              eq(shikshak_batch_assignments.is_active, true),
+            ),
           ),
-        );
+      ]);
       return {
         centreIds: centreRows.map((r) => r.id),
         batchIds: batchRows.map((r) => r.id),
@@ -93,7 +114,6 @@ export async function resolveAdminScope(user: User): Promise<AdminScope> {
       return { centreIds: [], batchIds: [] };
   }
 }
-
 /** Centre-level read/write gate (roster, notices, centre staffing views). */
 export function inCentreScope(scope: AdminScope, centreId: string | null | undefined): boolean {
   if (!centreId) return false;
