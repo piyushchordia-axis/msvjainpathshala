@@ -3,7 +3,7 @@ import { Plus, Megaphone, Pencil, Trash2 } from 'lucide-react';
 import { apiGet, apiPost, del, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
-import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow } from '@/components/admin/AdminPageShell';
+import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow, AdminLoadMore } from '@/components/admin/AdminPageShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -346,7 +346,9 @@ function AudiencePill({ n }: { n: NoticeRow }) {
 }
 
 export default function NoticesAdminPage() {
-  const { items, loading, error, reload } = useAdminList<NoticeRow>('/v1/notices/admin?limit=200');
+  const { items, loading, loadingMore, error, reload, hasMore, loadMore } = useAdminList<NoticeRow>(
+    '/v1/notices/admin?limit=200',
+  );
 
   return (
     <AdminPageShell
@@ -360,6 +362,9 @@ export default function NoticesAdminPage() {
         loading={loading}
         empty=""
         colSpan={5}
+        footer={
+          <AdminLoadMore hasMore={hasMore} loadingMore={loadingMore} onLoadMore={() => void loadMore()} />
+        }
       >
         {items.length === 0 && !loading ? <AdminEmptyRow colSpan={5} message="No notices yet." /> : null}
         {items.map((n) => (

@@ -8,6 +8,7 @@ import {
   AdminTable,
   AdminError,
   AdminEmptyRow,
+  AdminLoadMore,
 } from '@/components/admin/AdminPageShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -389,7 +390,9 @@ function DeleteButton({ row, onDeleted }: { row: LibraryRow; onDeleted: () => vo
 }
 
 export default function LibraryAdminPage() {
-  const { items, loading, error, reload } = useAdminList<LibraryRow>('/v1/library/admin?limit=200');
+  const { items, loading, loadingMore, error, reload, hasMore, loadMore } = useAdminList<LibraryRow>(
+    '/v1/library/admin?limit=200',
+  );
   // can_edit comes per-row; super_admin only. We read it off the first row, but
   // since every row carries it identically, default to false until loaded.
   const canEdit = items.some((i) => (i as LibraryRow & { can_edit?: boolean }).can_edit) ||
@@ -421,6 +424,9 @@ export default function LibraryAdminPage() {
         loading={loading}
         empty=""
         colSpan={7}
+        footer={
+          <AdminLoadMore hasMore={hasMore} loadingMore={loadingMore} onLoadMore={() => void loadMore()} />
+        }
       >
         {items.length === 0 && !loading ? (
           <AdminEmptyRow colSpan={7} message="No library items yet." />

@@ -3,7 +3,7 @@ import { ImagePlus, Trash2, Star, Eye, EyeOff } from 'lucide-react';
 import { apiPost, del, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
-import { AdminPageShell, AdminError } from '@/components/admin/AdminPageShell';
+import { AdminPageShell, AdminError, AdminLoadMore } from '@/components/admin/AdminPageShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -82,7 +82,8 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
 }
 
 export default function GalleryAdminPage() {
-  const { items, loading, error, reload } = useAdminList<AdminGalleryItem>('/v1/gallery/admin?limit=200');
+  const { items, loading, loadingMore, error, reload, hasMore, loadMore } =
+    useAdminList<AdminGalleryItem>('/v1/gallery/admin?limit=200');
   const { items: students } = useAdminList<AdminStudentRow>('/v1/admin/students?limit=500');
 
   const [file, setFile] = useState<File | null>(null);
@@ -356,6 +357,11 @@ export default function GalleryAdminPage() {
               })}
             </div>
           )}
+          <AdminLoadMore
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            onLoadMore={() => void loadMore()}
+          />
         </div>
       </div>
     </AdminPageShell>

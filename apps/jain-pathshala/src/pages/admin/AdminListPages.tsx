@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge';
 import {
   AdminEmptyRow,
   AdminError,
+  AdminLoadMore,
   AdminPageShell,
   AdminTable,
 } from '@/components/admin/AdminPageShell';
@@ -999,7 +1000,9 @@ interface PunyaTxnRow {
 }
 
 function PunyaAuditTable({ title, subtitle }: { title: string; subtitle: string }) {
-  const { items, loading, error } = useAdminList<PunyaTxnRow>('/v1/admin/punya/transactions?limit=200');
+  const { items, loading, loadingMore, error, hasMore, loadMore } = useAdminList<PunyaTxnRow>(
+    '/v1/admin/punya/transactions?limit=200',
+  );
   return (
     <AdminPageShell title={title} subtitle={subtitle}>
       {error ? <AdminError message={error} /> : null}
@@ -1008,6 +1011,9 @@ function PunyaAuditTable({ title, subtitle }: { title: string; subtitle: string 
         loading={loading}
         empty=""
         colSpan={6}
+        footer={
+          <AdminLoadMore hasMore={hasMore} loadingMore={loadingMore} onLoadMore={() => void loadMore()} />
+        }
       >
         {items.length === 0 && !loading ? <AdminEmptyRow colSpan={6} message="No transactions." /> : null}
         {items.map((t) => (

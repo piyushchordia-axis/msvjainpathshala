@@ -86,3 +86,28 @@ export function AdminEmptyRow({ colSpan, message }: { colSpan: number; message: 
     </tr>
   );
 }
+
+/** PERF #21 — explicit next-page control (lists no longer auto-collect 50 pages). */
+export function AdminLoadMore({
+  hasMore,
+  loadingMore,
+  onLoadMore,
+}: {
+  hasMore: boolean;
+  loadingMore: boolean;
+  onLoadMore: () => void;
+}) {
+  if (!hasMore) return null;
+  return (
+    <div className="border-t border-border p-3 text-center">
+      <button
+        type="button"
+        className="rounded-md border border-border bg-background px-4 py-2 text-sm hover:bg-muted disabled:opacity-50"
+        disabled={loadingMore}
+        onClick={onLoadMore}
+      >
+        {loadingMore ? 'Loading…' : 'Load more'}
+      </button>
+    </div>
+  );
+}

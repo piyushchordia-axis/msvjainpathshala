@@ -3,7 +3,7 @@ import { CreditCard } from 'lucide-react';
 import { apiPost, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
-import { AdminPageShell, AdminError } from '@/components/admin/AdminPageShell';
+import { AdminPageShell, AdminError, AdminLoadMore } from '@/components/admin/AdminPageShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -33,7 +33,8 @@ interface BulkGenerateResult {
 }
 
 export default function IdCardsPage() {
-  const { items, loading, error, reload } = useAdminList<AdminStudentRow>('/v1/admin/students?limit=500');
+  const { items, loading, loadingMore, error, reload, hasMore, loadMore } =
+    useAdminList<AdminStudentRow>('/v1/admin/students?limit=500');
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -151,6 +152,11 @@ export default function IdCardsPage() {
               ))
             )}
           </div>
+          <AdminLoadMore
+            hasMore={hasMore}
+            loadingMore={loadingMore}
+            onLoadMore={() => void loadMore()}
+          />
 
           <div className="mt-4 flex items-center gap-3">
             <Button onClick={generate} disabled={!selectedId || busy || bulkBusy}>

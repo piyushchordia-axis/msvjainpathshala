@@ -67,8 +67,8 @@ async function request<T>(path: string, init: RequestInit = {}, retry = true): P
   return res.json() as Promise<T>;
 }
 
-export function get<T>(path: string): Promise<T> {
-  return request<T>(path);
+export function get<T>(path: string, init?: RequestInit): Promise<T> {
+  return request<T>(path, init ?? {});
 }
 
 export function post<T>(path: string, body: unknown): Promise<T> {
@@ -77,6 +77,10 @@ export function post<T>(path: string, body: unknown): Promise<T> {
 
 export function patch<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: 'PATCH', body: JSON.stringify(body) });
+}
+
+export function put<T>(path: string, body: unknown): Promise<T> {
+  return request<T>(path, { method: 'PUT', body: JSON.stringify(body) });
 }
 
 export function del<T>(path: string, body?: unknown): Promise<T> {
@@ -97,6 +101,11 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
 
 export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
   const res = await patch<{ data: T } | T>(path, body);
+  return unwrap<T>(res);
+}
+
+export async function apiPut<T>(path: string, body: unknown): Promise<T> {
+  const res = await put<{ data: T } | T>(path, body);
   return unwrap<T>(res);
 }
 
