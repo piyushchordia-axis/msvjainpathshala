@@ -23,7 +23,7 @@ import {
 } from "../../lib/upload";
 import { storage, makeKey } from "../../lib/storage";
 import { fileTypeFromBuffer } from "file-type";
-import { stripImageMetadata, ImageNormaliseError } from "../../lib/image-normalise";
+import { stripImageMetadataToFile, ImageNormaliseError } from "../../lib/image-normalise";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -83,7 +83,17 @@ router.post("/", uploadMultipart.single("file"), async (req: Request, res: Respo
       return;
     }
     const folderParse = folderSchema.safeParse(req.body?.folder ?? "misc");
-    const folder = folderParse.success ? folderParse.data : "misc";
+    if (!folderParse.success) {
+      // Never silently downgrade to misc — that hid the homework-proof folder bug.
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        `Unknown upload folder "${String(req.body?.folder)}".`,
+      );
+      return;
+    }
+    const folder = folderParse.data;
     if (ADMIN_FOLDERS.has(folder) && !canAccessAdminPanel(req.authUser!.role)) {
       fail(res, 403, "ERR_FORBIDDEN", "You may not upload to this folder.");
       return;
@@ -123,15 +133,19 @@ router.post("/", uploadMultipart.single("file"), async (req: Request, res: Respo
       return;
     }
 
-    // Strip EXIF/GPS from images before disk/S3. Videos are NOT stripped here —
-    // TODO(ffmpeg-video-exif): strip QuickTime/ISO6709 location with ffmpeg when
-    // we add it as a dependency. Until then gallery must never publish video.
+    // Strip EXIF/GPS from images before disk/S3. Stream to a sibling temp file
+    // so the normalised bytes never sit in heap (PERF #18). Videos are NOT
+    // stripped here — TODO(ffmpeg-video-exif).
     let storeBody: Buffer | string = tempPath;
     let storeMime = contentMime;
     if (contentMime.startsWith("image/")) {
       try {
-        const normalised = await stripImageMetadata(tempPath, contentMime);
-        storeBody = normalised.buffer;
+        const normalised = await stripImageMetadataToFile(
+          tempPath,
+          contentMime,
+          `${tempPath}.norm`,
+        );
+        storeBody = normalised.path;
         storeMime = normalised.mime;
       } catch (err) {
         const message =
@@ -155,6 +169,8 @@ router.post("/", uploadMultipart.single("file"), async (req: Request, res: Respo
     ok(res, stored);
   } finally {
     await safeUnlink(tempPath);
+    // normalised sibling may exist even when put failed mid-flight
+    await safeUnlink(`${tempPath}.norm`);
   }
 });
 

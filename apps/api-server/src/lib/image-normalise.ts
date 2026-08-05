@@ -11,7 +11,7 @@
  * not a dependency yet. Gallery publishing must never accept video; see
  * maybeInsertGalleryFromSubmission + TODO(ffmpeg-video-exif).
  */
-import { readFile } from "node:fs/promises";
+import { copyFile, readFile } from "node:fs/promises";
 import sharp from "sharp";
 
 export class ImageNormaliseError extends Error {
@@ -25,9 +25,68 @@ const ROTATABLE = new Set(["image/jpeg", "image/png", "image/webp"]);
 const HEIC = new Set(["image/heic", "image/heif"]);
 
 /**
- * Normalise an allowlisted image (buffer or temp path): apply EXIF orientation,
- * drop all metadata. HEIC/HEIF are converted to JPEG when libheif is available.
- * Fail closed — never return the original bytes for image/* types (except GIF).
+ * Normalise an allowlisted image to an output path (PERF #18): apply EXIF
+ * orientation, drop metadata, never hold the whole result in heap.
+ * HEIC/HEIF → JPEG when libheif is available.
+ * Fail closed — never copy the original for image/* types (except GIF).
+ *
+ * mozjpeg is intentionally OFF on the request path (3–5× slower); worker
+ * pipelines that need it can call sharp directly.
+ */
+export async function stripImageMetadataToFile(
+  inputPath: string,
+  mime: string,
+  outputPath: string,
+): Promise<{ path: string; mime: string }> {
+  const base = mime.split(";")[0]!.trim().toLowerCase();
+
+  if (base === "image/gif") {
+    await copyFile(inputPath, outputPath);
+    return { path: outputPath, mime: base };
+  }
+
+  if (HEIC.has(base)) {
+    try {
+      await sharp(inputPath).rotate().jpeg({ quality: 88 }).toFile(outputPath);
+      return { path: outputPath, mime: "image/jpeg" };
+    } catch {
+      throw new ImageNormaliseError(
+        "Could not process this HEIC/HEIF photo. Please retry with a JPEG (iOS: use Compatible photo mode).",
+      );
+    }
+  }
+
+  if (ROTATABLE.has(base)) {
+    try {
+      const pipeline = sharp(inputPath).rotate();
+      if (base === "image/png") {
+        await pipeline.png().toFile(outputPath);
+      } else if (base === "image/webp") {
+        await pipeline.webp().toFile(outputPath);
+      } else {
+        await pipeline.jpeg({ quality: 90 }).toFile(outputPath);
+      }
+      return { path: outputPath, mime: base };
+    } catch {
+      throw new ImageNormaliseError(
+        "Could not process this image. The file may be corrupt — please try another photo.",
+      );
+    }
+  }
+
+  if (base.startsWith("image/")) {
+    throw new ImageNormaliseError(
+      "Could not process this image. Please try another photo.",
+    );
+  }
+
+  await copyFile(inputPath, outputPath);
+  return { path: outputPath, mime: base };
+}
+
+/**
+ * Buffer-based variant kept for callers that already hold bytes (tests, small
+ * assets). Prefer stripImageMetadataToFile on the upload request path.
  */
 export async function stripImageMetadata(
   input: Buffer | string,
@@ -35,8 +94,6 @@ export async function stripImageMetadata(
 ): Promise<{ buffer: Buffer; mime: string }> {
   const base = mime.split(";")[0]!.trim().toLowerCase();
 
-  // Animated GIFs: sharp would flatten frames — leave bytes alone.
-  // GIF has no EXIF GPS in practice; privacy risk is on JPEG/HEIC.
   if (base === "image/gif") {
     const buffer = typeof input === "string" ? await readFile(input) : input;
     return { buffer, mime: base };
@@ -55,14 +112,13 @@ export async function stripImageMetadata(
 
   if (ROTATABLE.has(base)) {
     try {
-      // .rotate() with no argument: honour Orientation, then strip all metadata.
       const pipeline = sharp(input).rotate();
       const buffer =
         base === "image/png"
           ? await pipeline.png().toBuffer()
           : base === "image/webp"
             ? await pipeline.webp().toBuffer()
-            : await pipeline.jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+            : await pipeline.jpeg({ quality: 90 }).toBuffer();
       return { buffer, mime: base };
     } catch {
       throw new ImageNormaliseError(
@@ -71,7 +127,6 @@ export async function stripImageMetadata(
     }
   }
 
-  // Unknown image/* — fail closed rather than store unstripped bytes.
   if (base.startsWith("image/")) {
     throw new ImageNormaliseError(
       "Could not process this image. Please try another photo.",
