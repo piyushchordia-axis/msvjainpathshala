@@ -775,6 +775,48 @@ describe("homework", () => {
     expect(result.error.code).toBe("ERR_VALIDATION_FAILED");
   });
 
+  it("upload folder=homework then sync homework_submission succeeds (proof folder regression)", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const submissionId = await freshSubmissionFor(admin.token, studentId);
+
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const fixturesDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures");
+    const buf = fs.readFileSync(path.join(fixturesDir, "sample.jpg"));
+
+    const upload = await request(app)
+      .post("/v1/uploads")
+      .set(auth(parent.token))
+      .field("folder", "homework")
+      .attach("file", buf, { filename: "proof.jpg", contentType: "image/jpeg" });
+    expect(upload.status, JSON.stringify(upload.body)).toBe(200);
+    expect(upload.body.data.key).toMatch(/^homework\//);
+    const proofUrl = upload.body.data.url as string;
+
+    const sync = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(parent.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: ulid(),
+            op_type: "homework_submission",
+            payload: {
+              submission_id: submissionId,
+              proof_asset_id: proofUrl,
+            },
+            client_timestamp: new Date().toISOString(),
+          },
+        ],
+      });
+    expect(sync.status).toBe(200);
+    const result = sync.body.data.results[0];
+    expect(result.status).toBe("success");
+  });
+
   it("an offline homework op without a url does not erase an existing submission", async () => {
     const admin = await loginAs("super_admin");
     const parent = await loginAs("parent");
@@ -2217,7 +2259,7 @@ describe("homework", () => {
 
     // Pune student is active, but not in this Mumbai batch.
     const pune = await pool.query<{ id: string }>(
-      `select id from students where student_code = 'STU000004' limit 1`,
+      `select id from students where student_code = 'PUN-STU-00001' limit 1`,
     );
     expect(pune.rows[0]).toBeTruthy();
 
@@ -2239,7 +2281,7 @@ describe("homework", () => {
     const cityAdmin = await loginAs("city_admin"); // Mumbai
 
     const pune = await pool.query<{ id: string; batch_id: string }>(
-      `select id, batch_id from students where student_code = 'STU000004' limit 1`,
+      `select id, batch_id from students where student_code = 'PUN-STU-00001' limit 1`,
     );
     expect(pune.rows[0]?.batch_id).toBeTruthy();
 

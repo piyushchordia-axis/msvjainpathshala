@@ -6,55 +6,13 @@ import { pool, db, sessions, students, attendance, punya_transactions, users } f
 import { and, eq, isNull } from "drizzle-orm";
 import { ulid } from "../src/lib/ulid";
 import { markAttendance } from "../src/services/attendance-mark";
+import { withQueryCount } from "./helpers";
 
 afterAll(async () => {
   const { workerPool } = await import("@workspace/db");
   await Promise.all([pool.end(), workerPool.end()]);
 });
 
-async function withQueryCount<T>(fn: () => Promise<T>): Promise<{ result: T; queries: number }> {
-  let queries = 0;
-  const origConnect = pool.connect.bind(pool);
-  const origQuery = pool.query.bind(pool);
-
-  const wrapClient = (client: {
-    query: typeof pool.query;
-    __perf10_orig?: typeof pool.query;
-  }) => {
-    if (!client) return client;
-    if (!client.__perf10_orig) {
-      client.__perf10_orig = client.query.bind(client);
-    }
-    const oq = client.__perf10_orig;
-    client.query = ((...args: unknown[]) => {
-      queries += 1;
-      return (oq as (...a: unknown[]) => unknown)(...args);
-    }) as typeof client.query;
-    return client;
-  };
-
-  pool.connect = ((arg?: unknown) => {
-    if (typeof arg === "function") {
-      return origConnect((err: Error | undefined, client: unknown, release: unknown) => {
-        if (client) wrapClient(client as { query: typeof pool.query });
-        return (arg as (e: unknown, c: unknown, r: unknown) => void)(err, client, release);
-      });
-    }
-    return (origConnect as () => Promise<{ query: typeof pool.query }>)().then(wrapClient);
-  }) as typeof pool.connect;
-
-  pool.query = ((...args: unknown[]) => {
-    queries += 1;
-    return (origQuery as (...a: unknown[]) => unknown)(...args);
-  }) as typeof pool.query;
-
-  try {
-    return { result: await fn(), queries };
-  } finally {
-    pool.connect = origConnect;
-    pool.query = origQuery;
-  }
-}
 
 describe("PERF #10 mark statement count", () => {
   it("records statement count for 30-student fresh + correction", async () => {
@@ -105,7 +63,7 @@ describe("PERF #10 mark statement count", () => {
       const marks = (status: "present" | "absent") =>
         planted.map((id) => ({ student_id: id, status, client_op_id: ulid() }));
 
-      const { queries: fresh } = await withQueryCount(() =>
+      const { count: fresh } = await withQueryCount(() =>
         markAttendance({
           sessionId: session!.id,
           userId: user!.id,
@@ -115,7 +73,7 @@ describe("PERF #10 mark statement count", () => {
         }),
       );
 
-      const { queries: correction } = await withQueryCount(() =>
+      const { count: correction } = await withQueryCount(() =>
         markAttendance({
           sessionId: session!.id,
           userId: user!.id,

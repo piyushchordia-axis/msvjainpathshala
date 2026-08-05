@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import type { Role } from '@/lib/auth';
 import { ROLE_PRECEDENCE } from '@/lib/auth';
-import { canFeatureMedia } from '@workspace/api-zod';
+import { canFeatureMedia, canAdministerExams } from '@workspace/api-zod';
 import type { ComponentType } from 'react';
 
 export interface NavItem {
@@ -39,8 +39,8 @@ export interface NavItem {
   label: string;
   icon: ComponentType<{ className?: string }>;
   min: Role;
-  /** When set, visibility uses canFeatureMedia instead of min alone. */
-  gate?: 'featureMedia';
+  /** When set, visibility uses a narrower capability gate instead of min alone. */
+  gate?: 'featureMedia' | 'administerExams';
 }
 
 export interface NavGroup {
@@ -68,8 +68,9 @@ export const ADMIN_NAV: NavGroup[] = [
     items: [
       { href: '/admin/batches', label: 'Batches', icon: CalendarDays, min: 'sanchalak' },
       { href: '/admin/curriculum', label: 'Curriculum', icon: ScrollText, min: 'city_admin' },
-      { href: '/admin/exams', label: 'Exams', icon: ListChecks, min: 'city_admin' },
-      { href: '/admin/exam-builder', label: 'Exam builder', icon: ClipboardList, min: 'city_admin' },
+      { href: '/admin/exams', label: 'Exams', icon: ListChecks, min: 'city_admin', gate: 'administerExams' },
+      { href: '/admin/exam-builder', label: 'Exam builder', icon: ClipboardList, min: 'city_admin', gate: 'administerExams' },
+      { href: '/admin/exam-grading', label: 'Exam grading', icon: ClipboardCheck, min: 'city_admin', gate: 'administerExams' },
       { href: '/admin/niyams', label: 'Niyams', icon: Flame, min: 'shikshak' },
       { href: '/admin/niyam-review', label: 'Niyam Review', icon: ClipboardCheck, min: 'shikshak' },
       { href: '/admin/homework', label: 'Homework', icon: BookOpen, min: 'shikshak' },
@@ -132,6 +133,7 @@ export function filterNavForRole(role: Role): NavGroup[] {
     heading: group.heading,
     items: group.items.filter((i) => {
       if (i.gate === 'featureMedia') return canFeatureMedia(role);
+      if (i.gate === 'administerExams') return canAdministerExams(role);
       return roleSatisfies(role, i.min);
     }),
   })).filter((g) => g.items.length > 0);

@@ -30,6 +30,7 @@ import {
 } from "@workspace/db";
 import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { z } from "zod";
+import type { ErrorCode } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState, type AdminScope } from "../../lib/scope";
@@ -316,7 +317,7 @@ async function resolveTargetColumns(
   body: NoticeBody,
 ): Promise<
   | { ok: true; cols: { state_id: string | null; city_id: string | null; centre_id: string | null; batch_id: string | null }; effectiveCentreId: string | null }
-  | { ok: false; status: number; code: string; message: string }
+  | { ok: false; status: number; code: ErrorCode; message: string }
 > {
   const cols = { state_id: null as string | null, city_id: null as string | null, centre_id: null as string | null, batch_id: null as string | null };
   let effectiveCentreId: string | null = null;
@@ -364,7 +365,7 @@ async function authorizeWrite(
   body: NoticeBody,
   effectiveCentreId: string | null,
   scope: AdminScope,
-): Promise<{ ok: true } | { ok: false; status: number; code: string; message: string }> {
+): Promise<{ ok: true } | { ok: false; status: number; code: ErrorCode; message: string }> {
   const role = req.authUser!.role;
   if (role === "super_admin") return { ok: true };
 

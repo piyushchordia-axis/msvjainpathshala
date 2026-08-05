@@ -9,8 +9,12 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { rejectIfOverUploadLimit } from "@/lib/upload-size-guard";
 import type { UploadFileInput, UploadResult } from "@/lib/api";
+import type { DrainOpResult } from "./sync-engine";
 
 export const MEDIA_UPLOAD_QUEUE_KEY = "jp.queue.media_uploads";
+
+/** Folder accepted by POST /v1/uploads and resolveOwnedUpload(folderPrefix: "homework/"). */
+export const HOMEWORK_UPLOAD_FOLDER = "homework";
 
 export type HomeworkFollowUp = {
   type: "homework_submission";
@@ -18,6 +22,8 @@ export type HomeworkFollowUp = {
   student_id: string;
   submission_id?: string;
 };
+
+export type HomeworkProofSyncState = "queued" | "synced" | "conflict" | "failed";
 
 export type PendingMediaUpload = {
   id: string;
@@ -42,7 +48,7 @@ export type MediaUploadDeps = {
     submission_id?: string;
     proof_asset_id?: string;
   }) => Promise<string>;
-  drainSync?: () => Promise<void>;
+  drainSync?: () => Promise<DrainOpResult[]>;
 };
 
 async function readQueue(): Promise<PendingMediaUpload[]> {
@@ -67,6 +73,30 @@ function newId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/** Legacy client typo — map onto the real uploads enum value. */
+function resolveHomeworkFolder(folder: string): string {
+  return folder === "homework-proof" ? HOMEWORK_UPLOAD_FOLDER : folder;
+}
+
+function syncStateFromResult(
+  result: DrainOpResult | undefined,
+): { sync_state: HomeworkProofSyncState; error_message?: string } {
+  if (!result) return { sync_state: "queued" };
+  if (result.status === "success" || result.status === "duplicate") {
+    return { sync_state: "synced" };
+  }
+  if (result.status === "conflict") {
+    return {
+      sync_state: "conflict",
+      error_message: result.error?.message,
+    };
+  }
+  return {
+    sync_state: "failed",
+    error_message: result.error?.message,
+  };
+}
+
 /**
  * Size-guard, enqueue a local file, then best-effort drain.
  * Returns `rejected` without touching the queue when the file is oversized.
@@ -86,7 +116,14 @@ export async function enqueueHomeworkProofUpload(
   deps: MediaUploadDeps,
 ): Promise<
   | { status: "rejected"; message: string }
-  | { status: "queued"; id: string; remote_url?: string; homework_op_id?: string }
+  | {
+      status: "queued";
+      id: string;
+      remote_url?: string;
+      homework_op_id?: string;
+      sync_state: HomeworkProofSyncState;
+      error_message?: string;
+    }
 > {
   const over = rejectIfOverUploadLimit(input.sizeBytes, input.hi === true);
   if (over) {
@@ -99,7 +136,7 @@ export async function enqueueHomeworkProofUpload(
     uri: input.uri,
     name: input.name,
     mime: input.mime,
-    folder: input.folder ?? "homework-proof",
+    folder: resolveHomeworkFolder(input.folder ?? HOMEWORK_UPLOAD_FOLDER),
     follow_up: {
       type: "homework_submission",
       assignment_id: input.assignment_id,
@@ -117,11 +154,25 @@ export async function enqueueHomeworkProofUpload(
 
   const drained = await drainMediaUploads(deps);
   const done = drained.completed.find((c) => c.id === id);
+  if (done) {
+    return {
+      status: "queued",
+      id,
+      remote_url: done.remote_url,
+      homework_op_id: done.homework_op_id,
+      sync_state: done.sync_state,
+      error_message: done.error_message,
+    };
+  }
+
+  // Still sitting in the media queue (upload offline / in progress).
+  const pending = (await listMediaUploads()).find((o) => o.id === id);
   return {
     status: "queued",
     id,
-    remote_url: done?.remote_url,
-    homework_op_id: done?.homework_op_id,
+    remote_url: pending?.remote_url,
+    sync_state: "queued",
+    error_message: pending?.last_error,
   };
 }
 
@@ -134,9 +185,21 @@ export async function drainMediaUploads(
 ): Promise<{
   uploaded: number;
   attached: number;
-  completed: Array<{ id: string; remote_url: string; homework_op_id?: string }>;
+  completed: Array<{
+    id: string;
+    remote_url: string;
+    homework_op_id?: string;
+    sync_state: HomeworkProofSyncState;
+    error_message?: string;
+  }>;
 }> {
-  const completed: Array<{ id: string; remote_url: string; homework_op_id?: string }> = [];
+  const completed: Array<{
+    id: string;
+    remote_url: string;
+    homework_op_id?: string;
+    sync_state: HomeworkProofSyncState;
+    error_message?: string;
+  }> = [];
   let uploaded = 0;
   let attached = 0;
 
@@ -155,15 +218,19 @@ export async function drainMediaUploads(
     let remoteUrl = current.remote_url;
     try {
       if (!remoteUrl) {
+        const folder = resolveHomeworkFolder(current.folder);
         const result = await deps.upload(
           { uri: current.uri, name: current.name, type: current.mime },
-          current.folder,
+          folder,
         );
         remoteUrl = result.url;
         uploaded += 1;
       }
 
       let homework_op_id: string | undefined;
+      let sync_state: HomeworkProofSyncState = "queued";
+      let error_message: string | undefined;
+
       if (current.follow_up?.type === "homework_submission") {
         homework_op_id = await deps.enqueueHomework({
           assignment_id: current.follow_up.assignment_id,
@@ -173,13 +240,40 @@ export async function drainMediaUploads(
         });
         attached += 1;
         if (deps.drainSync) {
-          await deps.drainSync();
+          const results = await deps.drainSync();
+          const mine = results.find((r) => r.submission_op_id === homework_op_id);
+          ({ sync_state, error_message } = syncStateFromResult(mine));
         }
+      } else {
+        // No follow-up — upload alone counts as done.
+        sync_state = "synced";
       }
 
       const after = await readQueue();
-      await writeQueue(after.filter((o) => o.id !== op.id));
-      completed.push({ id: op.id, remote_url: remoteUrl, homework_op_id });
+      // Keep media on domain failure so the parent can retry; dequeue on success/conflict.
+      if (sync_state === "failed") {
+        await writeQueue(
+          after.map((o) =>
+            o.id === op.id
+              ? {
+                  ...o,
+                  state: "failed" as const,
+                  remote_url: remoteUrl,
+                  last_error: error_message,
+                }
+              : o,
+          ),
+        );
+      } else {
+        await writeQueue(after.filter((o) => o.id !== op.id));
+      }
+      completed.push({
+        id: op.id,
+        remote_url: remoteUrl,
+        homework_op_id,
+        sync_state,
+        error_message,
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Upload failed.";
       const after = await readQueue();

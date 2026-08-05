@@ -447,6 +447,9 @@ export function CurriculumPage() {
 interface ExamRow {
   id: string;
   title_en: string;
+  title_hi: string;
+  description_en: string | null;
+  description_hi: string | null;
   city_name: string;
   window_start: string;
   window_end: string;
@@ -455,6 +458,17 @@ interface ExamRow {
   requires_otp?: boolean;
   results_released: boolean;
   attempt_count: number;
+  max_attempts: number;
+  total_marks: number;
+  pass_mark: number;
+}
+
+/** ISO → value for `<input type="datetime-local">` in local time. */
+function toDatetimeLocalValue(iso: string): string {
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function AddExamDialog({ onAdded }: { onAdded: () => void }) {
@@ -462,65 +476,422 @@ function AddExamDialog({ onAdded }: { onAdded: () => void }) {
   const [busy, setBusy] = useState(false);
   const [cities, setCities] = useState<GeoCity[]>([]);
   const [title, setTitle] = useState('');
+  const [titleHi, setTitleHi] = useState('');
+  const [descriptionEn, setDescriptionEn] = useState('');
+  const [descriptionHi, setDescriptionHi] = useState('');
   const [cityId, setCityId] = useState('');
   const [windowStart, setWindowStart] = useState('');
   const [windowEnd, setWindowEnd] = useState('');
   const [totalMarks, setTotalMarks] = useState('100');
   const [passMark, setPassMark] = useState('40');
+  const [maxAttempts, setMaxAttempts] = useState('1');
   const [otp, setOtp] = useState('');
+  const [fieldError, setFieldError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
+    setFieldError(null);
     void apiGet<{ cities: GeoCity[] }>('/v1/admin/geography').then((r) => setCities(r?.cities ?? []));
   }, [open]);
 
+  function validateClient(): string | null {
+    const startMs = new Date(windowStart).getTime();
+    const endMs = new Date(windowEnd).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs >= endMs) {
+      return 'The exam must end after it starts — check the window dates.';
+    }
+    const total = Number(totalMarks);
+    const pass = Number(passMark);
+    if (!Number.isFinite(total) || !Number.isFinite(pass) || pass > total) {
+      return 'Pass mark cannot be higher than total marks.';
+    }
+    const attempts = Number(maxAttempts);
+    if (!Number.isInteger(attempts) || attempts < 1 || attempts > 10) {
+      return 'Attempts allowed must be between 1 and 10.';
+    }
+    return null;
+  }
+
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!title.trim() || !cityId || !windowStart || !windowEnd) return;
+    if (!title.trim() || !titleHi.trim() || !cityId || !windowStart || !windowEnd) return;
+    const localError = validateClient();
+    if (localError) {
+      setFieldError(localError);
+      return;
+    }
+    setFieldError(null);
     setBusy(true);
     try {
       const res = await apiPost<{ exam_otp: string }>('/v1/admin/exams', {
-        title_en: title.trim(), city_id: cityId,
+        title_en: title.trim(),
+        title_hi: titleHi.trim(),
+        description_en: descriptionEn.trim() || undefined,
+        description_hi: descriptionHi.trim() || undefined,
+        city_id: cityId,
         window_start: new Date(windowStart).toISOString(),
         window_end: new Date(windowEnd).toISOString(),
-        total_marks: Number(totalMarks), pass_mark: Number(passMark),
+        total_marks: Number(totalMarks),
+        pass_mark: Number(passMark),
+        max_attempts: Number(maxAttempts),
         exam_otp: otp.trim() || undefined,
       });
       toast.success(res.exam_otp ? `Exam created. OTP: ${res.exam_otp}` : 'Exam created.');
-      setOpen(false); setTitle(''); setCityId(''); setWindowStart(''); setWindowEnd(''); setOtp('');
+      setOpen(false);
+      setTitle('');
+      setTitleHi('');
+      setDescriptionEn('');
+      setDescriptionHi('');
+      setCityId('');
+      setWindowStart('');
+      setWindowEnd('');
+      setTotalMarks('100');
+      setPassMark('40');
+      setMaxAttempts('1');
+      setOtp('');
+      setFieldError(null);
       onAdded();
     } catch (err) {
       toast.error('Failed.', err instanceof ApiError ? err.message : undefined);
-    } finally { setBusy(false); }
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild><Button size="sm"><Plus className="mr-1 h-4 w-4" />New exam</Button></DialogTrigger>
+      <DialogTrigger asChild>
+        <Button size="sm">
+          <Plus className="mr-1 h-4 w-4" />
+          New exam
+        </Button>
+      </DialogTrigger>
       <DialogContent className="max-w-md">
-        <DialogHeader><DialogTitle>Create exam</DialogTitle></DialogHeader>
+        <DialogHeader>
+          <DialogTitle>Create exam</DialogTitle>
+        </DialogHeader>
         <form className="space-y-4 pt-2" onSubmit={submit}>
-          <FormRow label="Title *"><Input value={title} onChange={(e) => setTitle(e.target.value)} required /></FormRow>
+          <FormRow label="Title (English) *">
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} required />
+          </FormRow>
+          <FormRow label="Title (Hindi) *">
+            <Input
+              value={titleHi}
+              onChange={(e) => setTitleHi(e.target.value)}
+              required
+              placeholder="शीर्षक"
+            />
+          </FormRow>
+          <FormRow label="Description (English)">
+            <Textarea value={descriptionEn} onChange={(e) => setDescriptionEn(e.target.value)} rows={2} />
+          </FormRow>
+          <FormRow label="Description (Hindi)">
+            <Textarea
+              value={descriptionHi}
+              onChange={(e) => setDescriptionHi(e.target.value)}
+              rows={2}
+              placeholder="विवरण"
+            />
+          </FormRow>
           <FormRow label="City *">
             <Select value={cityId} onValueChange={setCityId}>
-              <SelectTrigger><SelectValue placeholder="Select city" /></SelectTrigger>
+              <SelectTrigger>
+                <SelectValue placeholder="Select city" />
+              </SelectTrigger>
               <SelectContent>
-                {cities.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}{c.state_name ? ` (${c.state_name})` : ''}</SelectItem>)}
+                {cities.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                    {c.state_name ? ` (${c.state_name})` : ''}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
           </FormRow>
           <div className="grid grid-cols-2 gap-3">
-            <FormRow label="Window start *"><Input type="datetime-local" value={windowStart} onChange={(e) => setWindowStart(e.target.value)} required /></FormRow>
-            <FormRow label="Window end *"><Input type="datetime-local" value={windowEnd} onChange={(e) => setWindowEnd(e.target.value)} required /></FormRow>
+            <FormRow label="Window start *">
+              <Input
+                type="datetime-local"
+                value={windowStart}
+                onChange={(e) => {
+                  setWindowStart(e.target.value);
+                  setFieldError(null);
+                }}
+                required
+              />
+            </FormRow>
+            <FormRow label="Window end *">
+              <Input
+                type="datetime-local"
+                value={windowEnd}
+                onChange={(e) => {
+                  setWindowEnd(e.target.value);
+                  setFieldError(null);
+                }}
+                required
+              />
+            </FormRow>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <FormRow label="Total marks"><Input type="number" value={totalMarks} onChange={(e) => setTotalMarks(e.target.value)} /></FormRow>
-            <FormRow label="Pass mark"><Input type="number" value={passMark} onChange={(e) => setPassMark(e.target.value)} /></FormRow>
+          <div className="grid grid-cols-3 gap-3">
+            <FormRow label="Total marks">
+              <Input
+                type="number"
+                min={1}
+                value={totalMarks}
+                onChange={(e) => {
+                  setTotalMarks(e.target.value);
+                  setFieldError(null);
+                }}
+              />
+            </FormRow>
+            <FormRow label="Pass mark">
+              <Input
+                type="number"
+                min={0}
+                value={passMark}
+                onChange={(e) => {
+                  setPassMark(e.target.value);
+                  setFieldError(null);
+                }}
+              />
+            </FormRow>
+            <FormRow label="Attempts allowed">
+              <Input
+                type="number"
+                min={1}
+                max={10}
+                value={maxAttempts}
+                onChange={(e) => {
+                  setMaxAttempts(e.target.value);
+                  setFieldError(null);
+                }}
+              />
+            </FormRow>
           </div>
-          <FormRow label="OTP (auto-generated if blank)"><Input value={otp} onChange={(e) => setOtp(e.target.value)} placeholder="e.g. ABC123" className="font-mono" /></FormRow>
+          <FormRow label="OTP (auto-generated if blank)">
+            <Input
+              value={otp}
+              onChange={(e) => setOtp(e.target.value)}
+              placeholder="e.g. ABC123"
+              className="font-mono"
+            />
+          </FormRow>
+          {fieldError ? <p className="text-sm text-destructive">{fieldError}</p> : null}
           <div className="flex justify-end gap-2 pt-2">
-            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
-            <Button type="submit" disabled={busy || !title.trim() || !cityId || !windowStart || !windowEnd}>{busy ? 'Saving…' : 'Create'}</Button>
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button
+              type="submit"
+              disabled={busy || !title.trim() || !titleHi.trim() || !cityId || !windowStart || !windowEnd}
+            >
+              {busy ? 'Saving…' : 'Create'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditExamDialog({ exam, onSaved }: { exam: ExamRow; onSaved: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [title, setTitle] = useState(exam.title_en);
+  const [titleHi, setTitleHi] = useState(exam.title_hi);
+  const [descriptionEn, setDescriptionEn] = useState(exam.description_en ?? '');
+  const [descriptionHi, setDescriptionHi] = useState(exam.description_hi ?? '');
+  const [windowStart, setWindowStart] = useState(toDatetimeLocalValue(exam.window_start));
+  const [windowEnd, setWindowEnd] = useState(toDatetimeLocalValue(exam.window_end));
+  const [totalMarks, setTotalMarks] = useState(String(exam.total_marks));
+  const [passMark, setPassMark] = useState(String(exam.pass_mark));
+  const [maxAttempts, setMaxAttempts] = useState(String(exam.max_attempts));
+  const [fieldError, setFieldError] = useState<string | null>(null);
+  const marksLocked = exam.results_released;
+
+  useEffect(() => {
+    if (!open) return;
+    setTitle(exam.title_en);
+    setTitleHi(exam.title_hi);
+    setDescriptionEn(exam.description_en ?? '');
+    setDescriptionHi(exam.description_hi ?? '');
+    setWindowStart(toDatetimeLocalValue(exam.window_start));
+    setWindowEnd(toDatetimeLocalValue(exam.window_end));
+    setTotalMarks(String(exam.total_marks));
+    setPassMark(String(exam.pass_mark));
+    setMaxAttempts(String(exam.max_attempts));
+    setFieldError(null);
+  }, [open, exam]);
+
+  function validateClient(): string | null {
+    const startMs = new Date(windowStart).getTime();
+    const endMs = new Date(windowEnd).getTime();
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs >= endMs) {
+      return 'The exam must end after it starts — check the window dates.';
+    }
+    const total = Number(totalMarks);
+    const pass = Number(passMark);
+    if (!Number.isFinite(total) || !Number.isFinite(pass) || pass > total) {
+      return 'Pass mark cannot be higher than total marks.';
+    }
+    const attempts = Number(maxAttempts);
+    if (!Number.isInteger(attempts) || attempts < 1 || attempts > 10) {
+      return 'Attempts allowed must be between 1 and 10.';
+    }
+    return null;
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!title.trim() || !titleHi.trim() || !windowStart || !windowEnd) return;
+    const localError = validateClient();
+    if (localError) {
+      setFieldError(localError);
+      return;
+    }
+    setFieldError(null);
+    setBusy(true);
+    try {
+      const body: Record<string, unknown> = {
+        title_en: title.trim(),
+        title_hi: titleHi.trim(),
+        description_en: descriptionEn.trim() || null,
+        description_hi: descriptionHi.trim() || null,
+        window_start: new Date(windowStart).toISOString(),
+        window_end: new Date(windowEnd).toISOString(),
+        max_attempts: Number(maxAttempts),
+      };
+      if (!marksLocked) {
+        body.total_marks = Number(totalMarks);
+        body.pass_mark = Number(passMark);
+      }
+      await apiPatch(`/v1/admin/exams/${exam.id}`, body);
+      toast.success('Exam updated.');
+      setOpen(false);
+      onSaved();
+    } catch (err) {
+      toast.error('Failed.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="icon" variant="ghost" className="h-8 w-8" aria-label="Edit exam">
+          <Pencil className="h-4 w-4" />
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>Edit exam</DialogTitle>
+        </DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="Title (English) *">
+            <Input value={title} onChange={(e) => setTitle(e.target.value)} required />
+          </FormRow>
+          <FormRow label="Title (Hindi) *">
+            <Input
+              value={titleHi}
+              onChange={(e) => setTitleHi(e.target.value)}
+              required
+              placeholder="शीर्षक"
+            />
+          </FormRow>
+          <FormRow label="Description (English)">
+            <Textarea value={descriptionEn} onChange={(e) => setDescriptionEn(e.target.value)} rows={2} />
+          </FormRow>
+          <FormRow label="Description (Hindi)">
+            <Textarea
+              value={descriptionHi}
+              onChange={(e) => setDescriptionHi(e.target.value)}
+              rows={2}
+              placeholder="विवरण"
+            />
+          </FormRow>
+          <div className="grid grid-cols-2 gap-3">
+            <FormRow label="Window start *">
+              <Input
+                type="datetime-local"
+                value={windowStart}
+                onChange={(e) => {
+                  setWindowStart(e.target.value);
+                  setFieldError(null);
+                }}
+                required
+              />
+            </FormRow>
+            <FormRow label="Window end *">
+              <Input
+                type="datetime-local"
+                value={windowEnd}
+                onChange={(e) => {
+                  setWindowEnd(e.target.value);
+                  setFieldError(null);
+                }}
+                required
+              />
+            </FormRow>
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <FormRow label="Total marks">
+              <Input
+                type="number"
+                min={1}
+                value={totalMarks}
+                disabled={marksLocked}
+                onChange={(e) => {
+                  setTotalMarks(e.target.value);
+                  setFieldError(null);
+                }}
+              />
+            </FormRow>
+            <FormRow label="Pass mark">
+              <Input
+                type="number"
+                min={0}
+                value={passMark}
+                disabled={marksLocked}
+                onChange={(e) => {
+                  setPassMark(e.target.value);
+                  setFieldError(null);
+                }}
+              />
+            </FormRow>
+            <FormRow label="Attempts allowed">
+              <Input
+                type="number"
+                min={1}
+                max={10}
+                value={maxAttempts}
+                onChange={(e) => {
+                  setMaxAttempts(e.target.value);
+                  setFieldError(null);
+                }}
+              />
+            </FormRow>
+          </div>
+          {marksLocked ? (
+            <p className="text-xs text-muted-foreground">
+              Total marks and pass mark are locked after results are released.
+            </p>
+          ) : null}
+          {fieldError ? <p className="text-sm text-destructive">{fieldError}</p> : null}
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild>
+              <Button type="button" variant="outline">
+                Cancel
+              </Button>
+            </DialogClose>
+            <Button
+              type="submit"
+              disabled={busy || !title.trim() || !titleHi.trim() || !windowStart || !windowEnd}
+            >
+              {busy ? 'Saving…' : 'Save'}
+            </Button>
           </div>
         </form>
       </DialogContent>
@@ -546,15 +917,19 @@ export function ExamsPage() {
   }
 
   return (
-    <AdminPageShell title="Exams" subtitle="Online exams, OTP codes, and result release." actions={<AddExamDialog onAdded={reload} />}>
+    <AdminPageShell
+      title="Exams"
+      subtitle="Online exams, OTP codes, and result release."
+      actions={<AddExamDialog onAdded={reload} />}
+    >
       {error ? <AdminError message={error} /> : null}
       <AdminTable
-        columns={['Exam', 'City', 'Window', 'OTP', 'Attempts', 'Results', 'Actions']}
+        columns={['Exam', 'City', 'Window', 'OTP', 'Attempts', 'Allowed', 'Results', 'Actions']}
         loading={loading}
         empty=""
-        colSpan={7}
+        colSpan={8}
       >
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={7} message="No exams." /> : null}
+        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={8} message="No exams." /> : null}
         {items.map((e) => (
           <tr key={e.id} className="hover:bg-muted/30">
             <td className="px-4 py-3 font-medium">{e.title_en}</td>
@@ -564,22 +939,20 @@ export function ExamsPage() {
               {new Date(e.window_end).toLocaleDateString('en-GB')}
             </td>
             <td className="px-4 py-3 font-mono text-xs">
-              {e.exam_otp
-                ? e.exam_otp
-                : e.requires_otp
-                  ? 'Set'
-                  : '—'}
+              {e.exam_otp ? e.exam_otp : e.requires_otp ? 'Set' : '—'}
             </td>
             <td className="px-4 py-3">{e.attempt_count}</td>
+            <td className="px-4 py-3">{e.max_attempts}</td>
             <td className="px-4 py-3">{e.results_released ? 'Released' : 'Pending'}</td>
             <td className="px-4 py-3">
-              {!e.results_released ? (
-                <Button size="sm" disabled={busy === e.id} onClick={() => releaseResults(e.id)}>
-                  Release
-                </Button>
-              ) : (
-                '—'
-              )}
+              <div className="flex items-center gap-1">
+                <EditExamDialog exam={e} onSaved={reload} />
+                {!e.results_released ? (
+                  <Button size="sm" disabled={busy === e.id} onClick={() => releaseResults(e.id)}>
+                    Release
+                  </Button>
+                ) : null}
+              </div>
             </td>
           </tr>
         ))}

@@ -52,6 +52,13 @@ const colors = {
     saffron: "#D4621A",
     maroon: "#6B1212",
 
+    // Punya spiritual tiers (CLAUDE.md locked colours)
+    tierJigyasu: "#8B6F5E",
+    tierShravak: "#166534",
+    tierSadhak: "#1E3A8A",
+    tierShraman: "#7A1818",
+    tierTirthankar: "#C8941F",
+
     // Status tokens
     successText: "#157A37",
     successSoft: "#E6F6EC",

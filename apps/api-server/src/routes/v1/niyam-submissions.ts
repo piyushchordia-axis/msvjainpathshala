@@ -13,6 +13,7 @@ import {
   niyam_streaks,
   students,
   centres,
+  batches,
   gallery_items,
   notifications,
   device_push_tokens,
@@ -26,9 +27,9 @@ import { ok, fail } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
 import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
-import { resolveAdminScope } from "../../lib/scope";
+import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
 import { awardPunya, reversePunya } from "../../lib/punya";
-import { auditFromReq } from "../../lib/audit";
+import { auditFromReq, writeAudit } from "../../lib/audit";
 import {
   clampLimit,
   inScope,
@@ -54,8 +55,15 @@ import {
   SUBMISSION_BACKDATE_DAYS,
   type NiyamPeriodType,
 } from "../../lib/niyam-period";
+import {
+  approveNiyamSubmission,
+  maybeInsertGalleryFromSubmission,
+} from "../../services/niyam-approve";
+import type { Role } from "@workspace/api-zod";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -139,59 +147,6 @@ async function resolveSubmissionMedia(
     });
   }
   return { ok: true, items: resolved };
-}
-
-/**
- * Insert a gallery row from the first *image* proof only.
- *
- * Videos are a KNOWN REMAINING GAP: QuickTime embeds
- * com.apple.quicktime.location.ISO6709 and we do not strip it yet (no ffmpeg).
- * TODO(ffmpeg-video-exif): once ffmpeg is a dependency, strip video location
- * metadata on upload — until then never publish video to the public gallery.
- * Consent for gallery visibility remains a query-time join.
- */
-async function maybeInsertGalleryFromSubmission(
-  tx: Tx,
-  opts: {
-    submissionId: string;
-    studentId: string;
-    niyamId: string;
-    media: Array<{ url: string; kind: string; mime?: string | null }>;
-  },
-): Promise<void> {
-  const photo = opts.media.find((m) => m.kind === "photo" && mediaLooksLikeImage(m));
-  if (!photo) return;
-
-  const [centreRow] = await tx
-    .select({ city_id: centres.city_id })
-    .from(students)
-    .innerJoin(centres, eq(centres.id, students.centre_id))
-    .where(eq(students.id, opts.studentId))
-    .limit(1);
-
-  await tx.insert(gallery_items).values({
-    submission_id: opts.submissionId,
-    student_id: opts.studentId,
-    niyam_id: opts.niyamId,
-    city_id: centreRow?.city_id ?? null,
-    image_url: photo.url,
-    is_public: true,
-    featured_gallery: false,
-    featured_home: false,
-    created_by: null,
-  });
-}
-
-/** kind === photo is necessary but not sufficient — also require image/* type. */
-function mediaLooksLikeImage(m: { url: string; kind: string; mime?: string | null }): boolean {
-  const declared = (m.mime ?? "").split(";")[0]!.trim().toLowerCase();
-  if (declared.startsWith("image/")) return true;
-  const key = uploadKeyFromUrl(m.url);
-  if (!key) return false;
-  const dot = key.lastIndexOf(".");
-  if (dot < 0) return false;
-  const fromExt = MIME_BY_EXT[key.slice(dot + 1).toLowerCase()];
-  return !!fromExt?.startsWith("image/");
 }
 
 /**
@@ -770,9 +725,40 @@ router.post("/", async (req: Request, res: Response) => {
 /* GET /v1/niyam-submissions/pending */
 router.get("/pending", requireAdminPanel, async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
-  const limit = clampLimit(req.query.limit, 100, 300);
+  const limit = clampLimit(req.query.limit, 30, 300);
   const centreFilter = scopedCentreFilter(scope, students.centre_id);
   const cursor = decodeSubmissionCursor(req.query.cursor);
+
+  const batchIdRaw = typeof req.query.batch_id === "string" ? req.query.batch_id.trim() : "";
+  const niyamTypeRaw =
+    typeof req.query.niyam_type === "string" ? req.query.niyam_type.trim() : "";
+
+  let batchFilter: ReturnType<typeof eq> | undefined;
+  if (batchIdRaw) {
+    if (!UUID_RE.test(batchIdRaw)) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "batch_id must be a UUID.");
+      return;
+    }
+    const [batch] = await db
+      .select({ id: batches.id, centre_id: batches.centre_id })
+      .from(batches)
+      .where(eq(batches.id, batchIdRaw))
+      .limit(1);
+    if (!batch || !inBatchWriteScope(scope, batch.id, batch.centre_id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Batch not found in your scope.");
+      return;
+    }
+    batchFilter = eq(students.batch_id, batch.id);
+  }
+
+  let typeFilter: ReturnType<typeof eq> | undefined;
+  if (niyamTypeRaw) {
+    if (!["daily", "weekly", "monthly"].includes(niyamTypeRaw)) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "niyam_type must be daily, weekly, or monthly.");
+      return;
+    }
+    typeFilter = eq(niyams.niyam_type, niyamTypeRaw as "daily" | "weekly" | "monthly");
+  }
 
   const rows = await db
     .select({
@@ -780,9 +766,12 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
       student_id: niyam_submissions.student_id,
       student_name: students.full_name,
       student_code: students.student_code,
+      batch_id: students.batch_id,
+      batch_name: batches.name,
       niyam_id: niyam_submissions.niyam_id,
       niyam_title_en: niyams.title_en,
       niyam_title_hi: niyams.title_hi,
+      niyam_type: niyams.niyam_type,
       proof_url: niyam_submissions.proof_url,
       notes: niyam_submissions.notes,
       submission_date: niyam_submissions.submission_date,
@@ -793,10 +782,13 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
     .from(niyam_submissions)
     .innerJoin(students, eq(students.id, niyam_submissions.student_id))
     .innerJoin(niyams, eq(niyams.id, niyam_submissions.niyam_id))
+    .leftJoin(batches, eq(batches.id, students.batch_id))
     .where(
       and(
         eq(niyam_submissions.status, "pending"),
         centreFilter,
+        batchFilter,
+        typeFilter,
         cursor ? cursorWhere(cursor) : undefined,
       ),
     )
@@ -829,9 +821,12 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
     student_id: r.student_id,
     student_name: r.student_name,
     student_code: r.student_code,
+    batch_id: r.batch_id,
+    batch_name: r.batch_name,
     niyam_id: r.niyam_id,
     niyam_title_en: r.niyam_title_en,
     niyam_title_hi: r.niyam_title_hi,
+    niyam_type: r.niyam_type,
     proof_url: signUploadUrl(r.proof_url),
     notes: r.notes,
     submission_date: r.submission_date,
@@ -855,138 +850,121 @@ const rejectSchema = z.object({
   reason: z.string().trim().min(20).max(300),
 });
 
+const bulkApproveSchema = z.object({
+  submission_ids: z.array(z.string().uuid()).min(1).max(50),
+});
+
+/* POST /v1/niyam-submissions/bulk-approve — before /:id/approve so "bulk-approve" is not an id */
+router.post("/bulk-approve", requireAdminPanel, async (req: Request, res: Response) => {
+  let body: z.infer<typeof bulkApproveSchema>;
+  try {
+    body = bulkApproveSchema.parse(req.body);
+  } catch {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid bulk approve payload.");
+    return;
+  }
+
+  const scope = await resolveAdminScope(req.authUser!);
+  const actor = req.authUser!;
+  const results: Array<{
+    id: string;
+    status: "approved" | "skipped" | "failed";
+    error?: { code: string; message: string };
+  }> = [];
+  const approvedIds: string[] = [];
+
+  for (const id of body.submission_ids) {
+    try {
+      const outcome = await approveNiyamSubmission({
+        submissionId: id,
+        actor,
+        scope,
+        ip: req.ip ?? null,
+      });
+      if (outcome.status === "approved") {
+        approvedIds.push(id);
+        results.push({ id, status: "approved" });
+        await notifyBadgesPush({
+          parentUserId: outcome.parent_id,
+          studentName: outcome.student_name,
+          badges: outcome.newBadges,
+        });
+      } else if (outcome.status === "not_pending") {
+        results.push({
+          id,
+          status: "skipped",
+          error: { code: "ERR_INVALID_STATE", message: "Submission is not pending." },
+        });
+      } else {
+        results.push({
+          id,
+          status: "failed",
+          error: { code: "ERR_NOT_FOUND", message: "Submission not found." },
+        });
+      }
+    } catch (err) {
+      logger.warn({ err, submissionId: id }, "bulk niyam approve item failed");
+      results.push({
+        id,
+        status: "failed",
+        error: {
+          code: "ERR_INTERNAL",
+          message: err instanceof Error ? err.message : "Approve failed.",
+        },
+      });
+    }
+  }
+
+  await writeAudit({
+    actorId: actor.id,
+    actorRole: actor.role as Role,
+    action: "approve",
+    entityKind: "niyam_submission_bulk",
+    entityId: null,
+    summary: `Bulk approved ${approvedIds.length} of ${body.submission_ids.length} niyam submission(s).`,
+    metadata: {
+      approved_count: approvedIds.length,
+      approved_ids: approvedIds,
+      requested_ids: body.submission_ids,
+    },
+    ip: req.ip ?? null,
+  });
+
+  ok(res, { results });
+});
+
 /* POST /v1/niyam-submissions/:id/approve */
 router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
-  const [sub] = await db
-    .select({
-      id: niyam_submissions.id,
-      status: niyam_submissions.status,
-      student_id: niyam_submissions.student_id,
-      niyam_id: niyam_submissions.niyam_id,
-      submission_date: niyam_submissions.submission_date,
-      period_key: niyam_submissions.period_key,
-      notes: niyam_submissions.notes,
-      created_at: niyam_submissions.created_at,
-      centre_id: students.centre_id,
-      parent_id: students.parent_id,
-      student_name: students.full_name,
-      city_id: centres.city_id,
-      points: niyams.points,
-      niyam_type: niyams.niyam_type,
-    })
-    .from(niyam_submissions)
-    .innerJoin(students, eq(students.id, niyam_submissions.student_id))
-    .leftJoin(centres, eq(centres.id, students.centre_id))
-    .innerJoin(niyams, eq(niyams.id, niyam_submissions.niyam_id))
-    .where(eq(niyam_submissions.id, String(req.params.id)))
-    .limit(1);
-  if (!sub || !inScope(scope, sub.centre_id)) {
-    fail(res, 404, "ERR_NOT_FOUND", "Submission not found."); return;
-  }
-
-  const awardPoints = await resolveNiyamAwardPoints(sub.points, sub.city_id);
-
-  const award = await db.transaction(async (tx) => {
-    const now = new Date();
-    const updated = await tx
-      .update(niyam_submissions)
-      .set({
-        status: "approved",
-        points_awarded: awardPoints,
-        reviewed_by: req.authUser!.id,
-        reviewed_at: now,
-        approved_at: now,
-      })
-      .where(and(eq(niyam_submissions.id, sub.id), eq(niyam_submissions.status, "pending")))
-      .returning({ id: niyam_submissions.id });
-    if (updated.length === 0) return null;
-
-    const result = await awardPunya(
-      {
-        studentId: sub.student_id,
-        featureKey: "niyam_submission",
-        points: awardPoints,
-        note: sub.notes ?? null,
-        awardedBy: req.authUser!.id,
-        idempotencyKey: `submission:${sub.id}`,
-      },
-      tx,
-    );
-
-    if (result.transaction_id) {
-      await tx
-        .update(niyam_submissions)
-        .set({ punya_transaction_id: result.transaction_id })
-        .where(eq(niyam_submissions.id, sub.id));
-    }
-
-    const mediaRows = await tx
-      .select({
-        url: niyam_submission_media.url,
-        kind: niyam_submission_media.kind,
-        mime: niyam_submission_media.mime,
-      })
-      .from(niyam_submission_media)
-      .where(eq(niyam_submission_media.submission_id, sub.id))
-      .orderBy(asc(niyam_submission_media.ordinal));
-    await maybeInsertGalleryFromSubmission(tx, {
-      submissionId: sub.id,
-      studentId: sub.student_id,
-      niyamId: sub.niyam_id,
-      media: mediaRows,
-    });
-
-    const streak = await recomputeStreak(
-      sub.student_id,
-      sub.niyam_id,
-      sub.niyam_type as NiyamPeriodType,
-      tx,
-    );
-    const newBadges = await awardNewlyReachedBadges(
-      {
-        studentId: sub.student_id,
-        niyamId: sub.niyam_id,
-        niyamType: sub.niyam_type as NiyamPeriodType,
-        currentStreak: streak.current,
-        awardedBy: req.authUser!.id,
-      },
-      tx,
-    );
-
-    return { result, newBadges };
+  const outcome = await approveNiyamSubmission({
+    submissionId: String(req.params.id),
+    actor: req.authUser!,
+    scope,
+    ip: req.ip ?? null,
   });
 
-  if (!award) {
-    fail(res, 409, "ERR_INVALID_STATE", "Submission is not pending."); return;
+  if (outcome.status === "not_found") {
+    fail(res, 404, "ERR_NOT_FOUND", "Submission not found.");
+    return;
   }
-
-  await auditFromReq(req, {
-    action: "approve",
-    entityKind: "niyam_submission",
-    entityId: sub.id,
-    summary: `Approved niyam submission (+${awardPoints}).`,
-    metadata: {
-      niyam_id: sub.niyam_id,
-      student_id: sub.student_id,
-      points: awardPoints,
-      submission_date: sub.submission_date,
-    },
-  });
+  if (outcome.status === "not_pending") {
+    fail(res, 409, "ERR_INVALID_STATE", "Submission is not pending.");
+    return;
+  }
 
   await notifyBadgesPush({
-    parentUserId: sub.parent_id,
-    studentName: sub.student_name,
-    badges: award.newBadges,
+    parentUserId: outcome.parent_id,
+    studentName: outcome.student_name,
+    badges: outcome.newBadges,
   });
 
   ok(res, {
-    id: sub.id,
+    id: outcome.submissionId,
     status: "approved",
-    total_points: award.result.total_points,
-    tier: award.result.tier,
-    new_badges: award.newBadges,
-    ...rejectionWindowFields("approved", sub.created_at),
+    total_points: outcome.total_points,
+    tier: outcome.tier,
+    new_badges: outcome.newBadges,
+    ...rejectionWindowFields("approved", outcome.created_at),
   });
 });
 

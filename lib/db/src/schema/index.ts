@@ -2,6 +2,7 @@ export * from "./enums";
 export * from "./geography";
 export * from "./identity";
 export * from "./centres";
+export * from "./entity-codes";
 export * from "./students";
 export * from "./attendance";
 export * from "./punya";

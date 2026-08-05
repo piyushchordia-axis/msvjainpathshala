@@ -23,9 +23,9 @@ async function mumbaiStudentWithCurriculum(token: string): Promise<string> {
     .set(auth(token));
   expect(students.status).toBe(200);
   const items = students.body.data.items as Array<{ id: string; student_code: string }>;
-  // Prefer the seeded Mumbai child (STU000001 Aarav) — newest Indore seed rows
+  // Prefer the seeded Mumbai child (MUM-STU-00001 Aarav) — newest Indore seed rows
   // sort first by created_at and have no city curriculum items.
-  const aarav = items.find((s) => s.student_code === "STU000001");
+  const aarav = items.find((s) => s.student_code === "MUM-STU-00001");
   if (aarav) return aarav.id;
 
   for (const s of items) {

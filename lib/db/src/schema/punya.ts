@@ -44,6 +44,23 @@ export const punya_configs = pgTable(
   }),
 );
 
+/**
+ * Per-role ceilings for POST /v1/admin/punya/award (manual_award).
+ * Tunable without a deploy — max_points_per_day NULL = unlimited.
+ */
+export const punya_award_limits = pgTable(
+  "punya_award_limits",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    role: text("role").notNull().unique(),
+    max_points_per_award: integer("max_points_per_award").notNull(),
+    /** Null = no daily cap for this role. */
+    max_points_per_day: integer("max_points_per_day"),
+    is_active: boolean("is_active").notNull().default(true),
+    ...timestamps(),
+  },
+);
+
 /** Registry of uploaded storage keys → owning user (proof URL ownership). */
 export const upload_objects = pgTable(
   "upload_objects",
@@ -150,3 +167,5 @@ export type NewPunyaTransaction = typeof punya_transactions.$inferInsert;
 export type PunyaBalance = typeof punya_balances.$inferSelect;
 export type NewPunyaBalance = typeof punya_balances.$inferInsert;
 export type MonthlyLeaderboardSnapshot = typeof monthly_leaderboard_snapshots.$inferSelect;
+export type PunyaAwardLimit = typeof punya_award_limits.$inferSelect;
+export type NewPunyaAwardLimit = typeof punya_award_limits.$inferInsert;

@@ -33,6 +33,12 @@ export const SHIKSHAK_ACTIONS: QuickAction[] = [
   { href: "/shikshak/students", icon: "people-outline", en: "Students", hi: "विद्यार्थी" },
   { href: "/shikshak/batches", icon: "grid-outline", en: "Batches", hi: "बैच" },
   { href: "/shikshak/homework", icon: "book-outline", en: "Homework", hi: "गृहकार्य" },
+  {
+    href: "/shikshak/punya",
+    icon: "trophy-outline",
+    en: "Punya standings",
+    hi: "पुण्य स्थिति",
+  },
   { href: "/shikshak/niyam-review", icon: "clipboard-outline", en: "Niyam review", hi: "नियम समीक्षा" },
   { href: "/shikshak/niyams", icon: "sparkles-outline", en: "Niyam catalog", hi: "नियम सूची" },
   { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "सूचनाएँ" },

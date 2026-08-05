@@ -29,8 +29,8 @@ export default function NiyamsScreen() {
           <StateView status="empty" emptyText={hi ? "कोई नियम नहीं मिला।" : "No niyams found."} />
         ) : (
           items.map((n) => {
-            const title = hi ? n.title_hi : n.title_en;
-            const desc = hi ? n.description_hi : n.description_en;
+            const title = hi ? n.title_hi ?? n.title_en : n.title_en;
+            const desc = hi ? n.description_hi ?? n.description_en : n.description_en;
             return (
               <Card key={n.id}>
                 <Row style={{ justifyContent: "space-between" }}>

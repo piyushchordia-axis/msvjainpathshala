@@ -41,7 +41,7 @@ export function NiyamSubmissionsList({ items, hi, preview = false }: Props) {
   return (
     <View style={{ gap: 8 }}>
       {rows.map((n) => {
-        const title = hi ? n.niyam_title_hi : n.niyam_title_en;
+        const title = hi ? n.niyam_title_hi ?? n.niyam_title_en : n.niyam_title_en;
         const featured = n.is_featured ? (hi ? "विशेष" : "Featured") : null;
         const meta = [n.niyam_type, formatDate(n.submission_date), featured]
           .filter(Boolean)

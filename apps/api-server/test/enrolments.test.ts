@@ -51,8 +51,8 @@ beforeAll(async () => {
   BAL_BATCH = await batchByName("Bal Batch - Sunday Morning");
   KISHOR_BATCH = await batchByName("Kishor Batch - Sunday Morning");
   KOTHRUD_BATCH = await batchByName("Tarun Batch - Saturday Evening");
-  AARAV = await studentByCode("STU000001"); // Aarav Shah, Ghatkopar, owned by parent
-  ANAYA = await studentByCode("STU000004"); // Anaya Doshi, Kothrud, not owned by parent
+  AARAV = await studentByCode("MUM-STU-00001"); // Aarav Shah, Ghatkopar, owned by parent
+  ANAYA = await studentByCode("PUN-STU-00001"); // Anaya Doshi, Kothrud, not owned by parent
 });
 
 // Track rows we create so we can tear them down precisely.

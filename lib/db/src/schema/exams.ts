@@ -1,6 +1,6 @@
 import { boolean, index, integer, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { timestamps } from "./_helpers";
-import { examQuestionTypeEnum } from "./enums";
+import { examAttemptStatusEnum, examQuestionTypeEnum } from "./enums";
 import { cities } from "./geography";
 import { students } from "./students";
 import { users } from "./identity";
@@ -21,6 +21,9 @@ export const online_exams = pgTable(
     max_attempts: integer("max_attempts").notNull().default(1),
     total_marks: integer("total_marks").notNull().default(100),
     pass_mark: integer("pass_mark").notNull().default(40),
+    // SPEC §5.14 — per-exam overrides; NULL means use punya_features (AT21).
+    completion_points: integer("completion_points"),
+    top_score_points: integer("top_score_points"),
     // Legacy plaintext — NULL for new rows; kept one release for pre-hash exams.
     exam_otp: text("exam_otp"),
     // argon2id hash of the class-wide access code (SPEC 8.9).
@@ -29,7 +32,8 @@ export const online_exams = pgTable(
     ...timestamps(),
   },
   (t) => ({
-    city_idx: index("idx_online_exams_city").on(t.city_id),
+    // SPEC §5.14 — list/filter by city + window; subsumes standalone city_id.
+    city_window_idx: index("idx_online_exams_city_window").on(t.city_id, t.window_start),
   }),
 );
 
@@ -90,13 +94,15 @@ export const exam_attempts = pgTable(
     auto_score: integer("auto_score"),
     manual_score: integer("manual_score"),
     needs_grading: boolean("needs_grading").notNull().default(false),
-    status: text("status").notNull().default("in_progress"),
+    status: examAttemptStatusEnum("status").notNull().default("in_progress"),
     graded_by: uuid("graded_by").references(() => users.id, { onDelete: "set null" }),
     graded_at: timestamp("graded_at", { withTimezone: true }),
     ...timestamps(),
   },
   (t) => ({
-    exam_idx: index("idx_exam_attempts_exam").on(t.exam_id),
+    // SPEC §5.14 — (exam_id, student_id) for attempt-cap counts; keeps student_id
+    // alone for student history. Standalone exam_id index dropped (prefix of this).
+    exam_student_idx: index("idx_exam_attempts_exam_student").on(t.exam_id, t.student_id),
     student_idx: index("idx_exam_attempts_student").on(t.student_id),
   }),
 );
@@ -116,6 +122,9 @@ export const exam_answers = pgTable(
     text_answer: text("text_answer"),
     is_correct: boolean("is_correct"),
     marks_awarded: integer("marks_awarded"),
+    // SPEC §5.14 — grader feedback on subjective answers.
+    admin_comment: text("admin_comment"),
+    graded_by_user_id: uuid("graded_by_user_id").references(() => users.id, { onDelete: "set null" }),
     ...timestamps(),
   },
   (t) => ({

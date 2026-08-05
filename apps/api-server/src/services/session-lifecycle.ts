@@ -13,6 +13,7 @@ import {
   type User,
 } from "@workspace/db";
 import { and, eq, sql, isNull, inArray } from "drizzle-orm";
+import type { ErrorCode } from "@workspace/api-zod";
 import { haversineMeters } from "../lib/haversine";
 import { logger } from "../lib/logger";
 import { writeAudit } from "../lib/audit";
@@ -32,7 +33,7 @@ const ACCURACY_UNVERIFIED_M = 100;
 export class SessionLifecycleError extends Error {
   constructor(
     public readonly httpStatus: number,
-    public readonly code: string,
+    public readonly code: ErrorCode,
     message: string,
   ) {
     super(message);

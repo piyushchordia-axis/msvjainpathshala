@@ -75,7 +75,8 @@ function SubmitForm({
   assignmentId: string;
   submissionId: string;
   studentId: string;
-  onQueued?: () => void;
+  /** `confirmed` when the server accepted the submission (synced). */
+  onQueued?: (confirmed: boolean) => void;
 }) {
   const c = useColors();
   const { hi } = useLocale();
@@ -103,11 +104,15 @@ function SubmitForm({
         submissionId={submissionId}
         studentId={studentId}
         disabled={submit.isPending}
-        onQueued={({ offline }) => {
+        onQueued={({ offline, sync_state }) => {
+          if (sync_state === "failed" || sync_state === "conflict") {
+            // Keep the submit panel open so the parent can retry.
+            return;
+          }
           setOpen(false);
           setShowUrl(false);
           setUrl("");
-          onQueued?.();
+          onQueued?.(sync_state === "synced");
           if (offline) {
             Alert.alert(
               hi ? "ऑफ़लाइन सहेजा गया" : "Saved offline",
@@ -174,7 +179,7 @@ function SubmitForm({
                       setUrl("");
                       setShowUrl(false);
                       setOpen(false);
-                      onQueued?.();
+                      onQueued?.(!res.queued);
                       if (res.queued) {
                         Alert.alert(
                           hi ? "ऑफ़लाइन सहेजा गया" : "Saved offline",
@@ -218,7 +223,7 @@ function SubmitForm({
           setOpen(false);
           setShowUrl(false);
           setUrl("");
-          onQueued?.();
+          onQueued?.(true);
         }}
       />
 
@@ -295,6 +300,7 @@ function HomeworkCard({
   row: HomeworkRow;
   allChildren: boolean;
   activeStudentId: string;
+  /** Called when a submission is confirmed synced (not merely queued offline). */
   onSubmitted?: () => void;
 }) {
   const c = useColors();
@@ -315,9 +321,9 @@ function HomeworkCard({
             </Body>
           ) : null}
           <Title style={{ fontSize: 16 }}>{row.title}</Title>
-          {(hi ? row.curriculum_topic_hi : row.curriculum_topic_en) ? (
+          {(hi ? row.curriculum_topic_hi ?? row.curriculum_topic_en : row.curriculum_topic_en) ? (
             <Body muted style={{ fontSize: 12, marginTop: 2 }}>
-              {hi ? row.curriculum_topic_hi : row.curriculum_topic_en}
+              {hi ? row.curriculum_topic_hi ?? row.curriculum_topic_en : row.curriculum_topic_en}
             </Body>
           ) : null}
           <Body muted style={{ fontSize: 12, marginTop: 2 }}>
@@ -437,7 +443,9 @@ function HomeworkCard({
             assignmentId={row.assignment_id}
             submissionId={row.id}
             studentId={rowStudentId}
-            onQueued={onSubmitted}
+            onQueued={(confirmed) => {
+              if (confirmed) onSubmitted?.();
+            }}
           />
         </View>
       ) : null}
@@ -581,7 +589,10 @@ export default function HomeworkScreen() {
                 row={row}
                 allChildren={allChildren}
                 activeStudentId={activeStudentId}
-                onSubmitted={() => setTab("submitted")}
+                onSubmitted={() => {
+                  void homework.refetch();
+                  setTab("submitted");
+                }}
               />
             ))
           )}

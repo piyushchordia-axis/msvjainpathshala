@@ -45,7 +45,7 @@ const QUESTION_TYPES = [
   { value: 'text', label: 'Text (manual grading)' },
 ] as const;
 
-interface DraftOption { option_en: string; is_correct: boolean; }
+interface DraftOption { option_en: string; option_hi: string; is_correct: boolean; }
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className="space-y-1"><Label className="text-xs font-medium">{label}</Label>{children}</div>;
@@ -55,28 +55,31 @@ function AddQuestionDialog({ examId, onAdded }: { examId: string; onAdded: () =>
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [text, setText] = useState('');
+  const [textHi, setTextHi] = useState('');
   const [type, setType] = useState<'single_choice' | 'multi_choice' | 'text'>('single_choice');
   const [marks, setMarks] = useState('1');
   const [options, setOptions] = useState<DraftOption[]>([
-    { option_en: '', is_correct: false },
-    { option_en: '', is_correct: false },
+    { option_en: '', option_hi: '', is_correct: false },
+    { option_en: '', option_hi: '', is_correct: false },
   ]);
 
   const isChoice = type === 'single_choice' || type === 'multi_choice';
 
   function reset() {
-    setText(''); setType('single_choice'); setMarks('1');
-    setOptions([{ option_en: '', is_correct: false }, { option_en: '', is_correct: false }]);
+    setText(''); setTextHi(''); setType('single_choice'); setMarks('1');
+    setOptions([
+      { option_en: '', option_hi: '', is_correct: false },
+      { option_en: '', option_hi: '', is_correct: false },
+    ]);
   }
 
-  function setOptionText(i: number, value: string) {
-    setOptions((prev) => prev.map((o, idx) => (idx === i ? { ...o, option_en: value } : o)));
+  function setOptionText(i: number, field: 'option_en' | 'option_hi', value: string) {
+    setOptions((prev) => prev.map((o, idx) => (idx === i ? { ...o, [field]: value } : o)));
   }
 
   function toggleCorrect(i: number) {
     setOptions((prev) => prev.map((o, idx) => {
       if (idx !== i) {
-        // single_choice: clear other correct flags
         return type === 'single_choice' ? { ...o, is_correct: false } : o;
       }
       return { ...o, is_correct: !o.is_correct };
@@ -84,7 +87,7 @@ function AddQuestionDialog({ examId, onAdded }: { examId: string; onAdded: () =>
   }
 
   function addOption() {
-    setOptions((prev) => [...prev, { option_en: '', is_correct: false }]);
+    setOptions((prev) => [...prev, { option_en: '', option_hi: '', is_correct: false }]);
   }
 
   function removeOption(i: number) {
@@ -92,7 +95,8 @@ function AddQuestionDialog({ examId, onAdded }: { examId: string; onAdded: () =>
   }
 
   function validate(): string | null {
-    if (!text.trim()) return 'Question text is required.';
+    if (!text.trim()) return 'Question text (English) is required.';
+    if (!textHi.trim()) return 'Question text (Hindi) is required.';
     if (!isChoice) return null;
     const filled = options.filter((o) => o.option_en.trim());
     if (filled.length < 2) return 'Choice questions need at least two options.';
@@ -110,13 +114,18 @@ function AddQuestionDialog({ examId, onAdded }: { examId: string; onAdded: () =>
     try {
       const payload: Record<string, unknown> = {
         question_en: text.trim(),
+        question_hi: textHi.trim(),
         question_type: type,
         marks: Number(marks) || 1,
       };
       if (isChoice) {
         payload.options = options
           .filter((o) => o.option_en.trim())
-          .map((o) => ({ option_en: o.option_en.trim(), is_correct: o.is_correct }));
+          .map((o) => ({
+            option_en: o.option_en.trim(),
+            option_hi: o.option_hi.trim() || undefined,
+            is_correct: o.is_correct,
+          }));
       }
       await apiPost(`/v1/exams/${examId}/questions`, payload);
       toast.success('Question added.');
@@ -141,6 +150,9 @@ function AddQuestionDialog({ examId, onAdded }: { examId: string; onAdded: () =>
           <FormRow label="Question (English) *">
             <Textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} required />
           </FormRow>
+          <FormRow label="Question (Hindi) *">
+            <Textarea value={textHi} onChange={(e) => setTextHi(e.target.value)} rows={2} required placeholder="प्रश्न…" />
+          </FormRow>
           <div className="grid grid-cols-2 gap-3">
             <FormRow label="Type *">
               <Select value={type} onValueChange={(v) => setType(v as typeof type)}>
@@ -159,29 +171,37 @@ function AddQuestionDialog({ examId, onAdded }: { examId: string; onAdded: () =>
             <div className="space-y-2">
               <Label className="text-xs font-medium">Options ({type === 'single_choice' ? 'one correct' : 'one or more correct'})</Label>
               {options.map((o, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => toggleCorrect(i)}
-                    className={`flex h-8 w-8 shrink-0 items-center justify-center rounded border transition-colors ${o.is_correct ? 'bg-emerald-500/10 border-emerald-500 text-emerald-700' : 'border-input bg-background text-muted-foreground hover:bg-muted'}`}
-                    aria-label="Mark correct"
-                  >
-                    <Check className="h-4 w-4" />
-                  </button>
+                <div key={i} className="space-y-1.5 rounded-md border border-border p-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleCorrect(i)}
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded border transition-colors ${o.is_correct ? 'bg-status-success-soft border-[hsl(var(--status-success))] text-status-success' : 'border-input bg-background text-muted-foreground hover:bg-muted'}`}
+                      aria-label="Mark correct"
+                    >
+                      <Check className="h-4 w-4" />
+                    </button>
+                    <Input
+                      value={o.option_en}
+                      onChange={(e) => setOptionText(i, 'option_en', e.target.value)}
+                      placeholder={`Option ${i + 1} (English)`}
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      disabled={options.length <= 2}
+                      onClick={() => removeOption(i)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
                   <Input
-                    value={o.option_en}
-                    onChange={(e) => setOptionText(i, e.target.value)}
-                    placeholder={`Option ${i + 1}`}
+                    value={o.option_hi}
+                    onChange={(e) => setOptionText(i, 'option_hi', e.target.value)}
+                    placeholder={`विकल्प ${i + 1} (हिंदी)`}
+                    className="ml-10"
                   />
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    disabled={options.length <= 2}
-                    onClick={() => removeOption(i)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
                 </div>
               ))}
               <Button type="button" size="sm" variant="outline" onClick={addOption}>
@@ -192,7 +212,7 @@ function AddQuestionDialog({ examId, onAdded }: { examId: string; onAdded: () =>
 
           <div className="flex justify-end gap-2 pt-2">
             <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
-            <Button type="submit" disabled={busy || !text.trim()}>{busy ? 'Saving…' : 'Add question'}</Button>
+            <Button type="submit" disabled={busy || !text.trim() || !textHi.trim()}>{busy ? 'Saving…' : 'Add question'}</Button>
           </div>
         </form>
       </DialogContent>
@@ -229,14 +249,20 @@ function QuestionCard({ examId, q, onChanged }: { examId: string; q: QuestionRow
             <span className="text-xs text-muted-foreground">{q.marks} {q.marks === 1 ? 'mark' : 'marks'}</span>
           </div>
           <p className="mt-2 text-sm font-medium">{q.question_en}</p>
+          {q.question_hi ? (
+            <p className="mt-0.5 text-sm text-muted-foreground">{q.question_hi}</p>
+          ) : null}
           {q.question_type !== 'text' ? (
             <ul className="mt-2 space-y-1">
               {q.options.map((o) => (
                 <li key={o.id} className="flex items-center gap-2 text-sm">
-                  <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full border text-[10px] ${o.is_correct ? 'border-emerald-500 bg-emerald-500/10 text-emerald-700' : 'border-input text-transparent'}`}>
+                  <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full border text-[10px] ${o.is_correct ? 'border-[hsl(var(--status-success))] bg-status-success-soft text-status-success' : 'border-input text-transparent'}`}>
                     <Check className="h-3 w-3" />
                   </span>
-                  <span className={o.is_correct ? 'font-medium' : ''}>{o.option_en}</span>
+                  <span className={o.is_correct ? 'font-medium' : ''}>
+                    {o.option_en}
+                    {o.option_hi ? <span className="text-muted-foreground"> / {o.option_hi}</span> : null}
+                  </span>
                 </li>
               ))}
             </ul>

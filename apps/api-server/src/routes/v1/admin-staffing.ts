@@ -20,6 +20,7 @@ import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, inCentreScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
+import { allocateSanchalakCode, allocateShikshakCode } from "../../lib/entity-codes";
 import type { Role } from "@workspace/api-zod";
 
 const phoneSchema = z.string().regex(/^\+[1-9]\d{6,14}$/, "Phone must be E.164 (+91…)");
@@ -869,8 +870,8 @@ async function insertStaffUser(opts: {
   state_id?: string | null;
   centre_id_default?: string | null;
 }): Promise<
-  | { ok: true; user: { id: string; phone: string; full_name: string; role: string; gender: string | null } }
-  | { ok: false; code: "ERR_DUPLICATE" }
+  | { ok: true; user: { id: string; phone: string; full_name: string; role: string; gender: string | null; display_code: string | null } }
+  | { ok: false; code: "ERR_DUPLICATE" | "ERR_VALIDATION_FAILED"; message?: string }
 > {
   const [dup] = await db
     .select({ id: users.id })
@@ -879,12 +880,38 @@ async function insertStaffUser(opts: {
     .limit(1);
   if (dup) return { ok: false, code: "ERR_DUPLICATE" };
 
+  if (!opts.centre_id_default) {
+    return {
+      ok: false,
+      code: "ERR_VALIDATION_FAILED",
+      message: "A Pathshala is required to issue a staff ID.",
+    };
+  }
+  const [centre] = await db
+    .select({ code: centres.code })
+    .from(centres)
+    .where(and(eq(centres.id, opts.centre_id_default), isNull(centres.deleted_at)))
+    .limit(1);
+  if (!centre?.code) {
+    return {
+      ok: false,
+      code: "ERR_VALIDATION_FAILED",
+      message: "Pathshala has no code yet — set the centre code first.",
+    };
+  }
+
+  const display_code =
+    opts.role === "shikshak"
+      ? await allocateShikshakCode(db, centre.code)
+      : await allocateSanchalakCode(db, centre.code);
+
   const [row] = await db
     .insert(users)
     .values({
       phone: opts.phone,
       full_name: opts.full_name.trim(),
       role: opts.role,
+      display_code,
       gender: opts.gender ?? null,
       city_id: opts.city_id ?? null,
       state_id: opts.state_id ?? null,
@@ -898,6 +925,7 @@ async function insertStaffUser(opts: {
       full_name: users.full_name,
       role: users.role,
       gender: users.gender,
+      display_code: users.display_code,
     });
   return { ok: true, user: row };
 }
@@ -1124,6 +1152,10 @@ router.post("/users/staff", async (req: Request, res: Response) => {
     centre_id_default: centreDefault,
   });
   if (!created.ok) {
+    if (created.code === "ERR_VALIDATION_FAILED") {
+      fail(res, 422, "ERR_VALIDATION_FAILED", created.message ?? "Could not create staff user.");
+      return;
+    }
     fail(res, 409, "ERR_DUPLICATE", "A user with this phone already exists.");
     return;
   }
@@ -1132,8 +1164,8 @@ router.post("/users/staff", async (req: Request, res: Response) => {
     action: "create",
     entityKind: "user",
     entityId: created.user.id,
-    summary: `Created ${body.role} ${created.user.full_name} (${created.user.phone}).`,
-    metadata: { role: body.role, phone: created.user.phone },
+    summary: `Created ${body.role} ${created.user.full_name} (${created.user.display_code ?? created.user.phone}).`,
+    metadata: { role: body.role, phone: created.user.phone, display_code: created.user.display_code },
   });
   ok(res, created.user);
 });
@@ -1210,6 +1242,10 @@ router.post("/centres/:id/staff", async (req: Request, res: Response) => {
       centre_id_default: centre.id,
     });
     if (!inserted.ok) {
+      if (inserted.code === "ERR_VALIDATION_FAILED") {
+        fail(res, 422, "ERR_VALIDATION_FAILED", inserted.message ?? "Could not create staff user.");
+        return;
+      }
       fail(res, 409, "ERR_DUPLICATE", "A user with this phone already exists.");
       return;
     }

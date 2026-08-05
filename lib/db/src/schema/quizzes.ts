@@ -61,8 +61,9 @@ export const quiz_events = pgTable(
     title_hi: text("title_hi"),
     start_at: timestamp("start_at", { withTimezone: true }).notNull(),
     end_at: timestamp("end_at", { withTimezone: true }).notNull(),
-    participation_points: integer("participation_points").notNull().default(0),
-    win_points: integer("win_points").notNull().default(0),
+    // SPEC §5.14 / AT21 — null = use punya_features default; 0 disables.
+    participation_points: integer("participation_points"),
+    win_points: integer("win_points"),
     age_groups: ageGroupEnum("age_groups").array().notNull().default([]),
     created_by: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     ...timestamps(),
@@ -133,7 +134,8 @@ export const push_quizzes = pgTable(
     shikshak_user_id: uuid("shikshak_user_id").references(() => users.id, { onDelete: "set null" }),
     started_at: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
     expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
-    completion_points: integer("completion_points").notNull().default(0),
+    // SPEC §5.14 / AT21 — null = use punya_features default; 0 disables.
+    completion_points: integer("completion_points"),
     ...timestamps(),
   },
   (t) => ({

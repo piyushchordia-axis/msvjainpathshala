@@ -208,31 +208,79 @@
     {
       "idx": 29,
       "version": "7",
+      "when": 1788172800000,
+      "tag": "0029_exam_cleanup",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1788259200000,
+      "tag": "0030_exam_punya",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1788432000000,
+      "tag": "0031_quiz_punya",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1788518400000,
+      "tag": "0032_quiz_scope_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1788604800000,
+      "tag": "0033_manual_award_limits",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1788691200000,
+      "tag": "0034_entity_display_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1788777600000,
+      "tag": "0035_drop_experimental_centre_codes",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
       "when": 1788864000000,
       "tag": "0036_perf_hot_indexes",
       "breakpoints": true
     },
     {
-      "idx": 30,
+      "idx": 37,
       "version": "7",
       "when": 1788950400000,
       "tag": "0037_sync_operations_applied_at",
       "breakpoints": true
     },
     {
-      "idx": 31,
+      "idx": 38,
       "version": "7",
       "when": 1789036800000,
       "tag": "0038_drop_redundant_indexes",
       "breakpoints": true
-    }
-  ,
+    },
     {
-      "idx": 32,
+      "idx": 39,
       "version": "7",
       "when": 1789123200000,
       "tag": "0039_user_photo",
       "breakpoints": true
     }
-]
+  ]
 }

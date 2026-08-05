@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import request from "supertest";
 import app from "../src/app";
 import { pool } from "@workspace/db";
-import { loginAs, auth } from "./helpers";
+import { loginAs, auth, withQueryCount } from "./helpers";
 import * as queues from "../src/lib/queues";
 import * as push from "../src/lib/push";
 
@@ -32,50 +32,6 @@ function tomorrow(): string {
   const d = new Date();
   d.setUTCDate(d.getUTCDate() + 1);
   return d.toISOString().slice(0, 10);
-}
-
-async function withQueryCount<T>(fn: () => Promise<T>): Promise<{ result: T; queries: number }> {
-  let queries = 0;
-  const origConnect = pool.connect.bind(pool);
-  const origQuery = pool.query.bind(pool);
-
-  const wrapClient = (client: {
-    query: typeof pool.query;
-    __perf11_orig?: typeof pool.query;
-  }) => {
-    if (!client) return client;
-    if (!client.__perf11_orig) {
-      client.__perf11_orig = client.query.bind(client);
-    }
-    const oq = client.__perf11_orig;
-    client.query = ((...args: unknown[]) => {
-      queries += 1;
-      return (oq as (...a: unknown[]) => unknown)(...args);
-    }) as typeof client.query;
-    return client;
-  };
-
-  pool.connect = ((arg?: unknown) => {
-    if (typeof arg === "function") {
-      return origConnect((err: Error | undefined, client: unknown, release: unknown) => {
-        if (client) wrapClient(client as { query: typeof pool.query });
-        return (arg as (e: unknown, c: unknown, r: unknown) => void)(err, client, release);
-      });
-    }
-    return (origConnect as () => Promise<{ query: typeof pool.query }>)().then(wrapClient);
-  }) as typeof pool.connect;
-
-  pool.query = ((...args: unknown[]) => {
-    queries += 1;
-    return (origQuery as (...a: unknown[]) => unknown)(...args);
-  }) as typeof pool.query;
-
-  try {
-    return { result: await fn(), queries };
-  } finally {
-    pool.connect = origConnect;
-    pool.query = origQuery;
-  }
 }
 
 /** Plant N submitted homework rows on one assignment (same parent batch). */
@@ -161,7 +117,7 @@ describe("PERF #11 homework bulk grade", () => {
     vi.spyOn(queues, "enqueueJob").mockResolvedValue(undefined);
 
     const plant10 = await plantSubmittedAssignment(admin.token, 10);
-    const { queries: q10 } = await withQueryCount(async () => {
+    const { count: q10 } = await withQueryCount(async () => {
       const bulk = await request(app)
         .post(`/v1/homework/assignments/${plant10.assignmentId}/grade-all`)
         .set(auth(admin.token))
@@ -172,7 +128,7 @@ describe("PERF #11 homework bulk grade", () => {
     });
 
     const plant40 = await plantSubmittedAssignment(admin.token, 40);
-    const { queries: q40 } = await withQueryCount(async () => {
+    const { count: q40 } = await withQueryCount(async () => {
       const bulk = await request(app)
         .post(`/v1/homework/assignments/${plant40.assignmentId}/grade-all`)
         .set(auth(admin.token))

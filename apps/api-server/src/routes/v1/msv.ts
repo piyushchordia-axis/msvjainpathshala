@@ -20,6 +20,7 @@ import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
+import { allocateMsvCode } from "../../lib/entity-codes";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -345,16 +346,27 @@ router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Respons
         ),
       )
       .returning({ id: msv_enrolments.id });
-    if (rows.length === 0) return false;
+    if (rows.length === 0) return null as string | null;
+
+    const [stu] = await tx
+      .select({ msv_code: students.msv_code })
+      .from(students)
+      .where(eq(students.id, enrolment.student_id))
+      .limit(1);
+
+    let msvCode = stu?.msv_code ?? null;
+    if (!msvCode) {
+      msvCode = await allocateMsvCode(tx);
+    }
 
     await tx
       .update(students)
-      .set({ msv_status: "approved" })
+      .set({ msv_status: "approved", msv_code: msvCode })
       .where(eq(students.id, enrolment.student_id));
-    return true;
+    return msvCode;
   });
 
-  if (!claimed) {
+  if (claimed === null) {
     fail(res, 409, "ERR_INVALID_STATE", "MSV application is not in a decidable state.");
     return;
   }
@@ -364,10 +376,14 @@ router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Respons
     entityKind: "msv_enrolment",
     entityId: enrolment.id,
     summary: "MSV application approved.",
-    metadata: { student_id: enrolment.student_id, note: body.note ?? null },
+    metadata: {
+      student_id: enrolment.student_id,
+      note: body.note ?? null,
+      msv_code: claimed,
+    },
   });
 
-  ok(res, { id: enrolment.id, status: "approved" });
+  ok(res, { id: enrolment.id, status: "approved", msv_code: claimed });
 });
 
 const rejectSchema = z.object({

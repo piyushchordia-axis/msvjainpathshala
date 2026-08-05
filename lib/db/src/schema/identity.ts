@@ -11,6 +11,7 @@ import {
   varchar,
   type AnyPgColumn,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 import { softDelete, timestamps } from "./_helpers";
 import { genderEnum, languageEnum, roleEnum } from "./enums";
@@ -24,6 +25,13 @@ export const users = pgTable(
     email: varchar("email", { length: 255 }),
     role: roleEnum("role").notNull(),
     full_name: text("full_name").notNull(),
+    /**
+     * Human-readable persona ID — permanent once issued.
+     * Parent: MUM-PAR-00012 · Shikshak: MUM-GHK-SHK-00003 · Sanchalak: MUM-GHK-SAN-00003
+     * City admin: MUM-CAD-00001 · State admin: MH-SAD-00001
+     * Null for super_admin / guest / student-login users (students use student_code).
+     */
+    display_code: varchar("display_code", { length: 32 }),
     gender: genderEnum("gender"),
     preferred_language: languageEnum("preferred_language").notNull().default("en"),
     state_id: uuid("state_id").references(() => states.id, { onDelete: "restrict" }),
@@ -41,6 +49,9 @@ export const users = pgTable(
   },
   (t) => ({
     uniquePhone: uniqueIndex("users_phone_unique").on(t.phone),
+    display_code_uq: uniqueIndex("users_display_code_uq")
+      .on(t.display_code)
+      .where(sql`${t.display_code} is not null`),
     city_idx: index("idx_users_city").on(t.city_id),
     state_idx: index("idx_users_state").on(t.state_id),
     role_idx: index("idx_users_role").on(t.role),

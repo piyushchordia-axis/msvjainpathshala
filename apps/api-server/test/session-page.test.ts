@@ -6,7 +6,7 @@ import request from "supertest";
 import app from "../src/app";
 import { pool, db, sessions, batches, centres, attendance, students } from "@workspace/db";
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { loginAs, auth } from "./helpers";
+import { loginAs, auth, withQueryCount } from "./helpers";
 import {
   pageSessionsWithAttendanceCounts,
   kolkataDateMinusDays,
@@ -16,23 +16,6 @@ afterAll(async () => {
   const { workerPool } = await import("@workspace/db");
   await Promise.all([pool.end(), workerPool.end()]);
 });
-
-/** Count SQL statements issued via pool.query while `fn` runs. */
-async function withQueryCount<T>(fn: () => Promise<T>): Promise<{ result: T; queries: number }> {
-  let queries = 0;
-  const origQuery = pool.query.bind(pool);
-  // drizzle-orm/node-postgres talks to the Pool via .query, not .connect.
-  (pool as { query: typeof pool.query }).query = ((...qArgs: unknown[]) => {
-    queries += 1;
-    return (origQuery as (...a: unknown[]) => unknown)(...qArgs);
-  }) as typeof pool.query;
-  try {
-    const result = await fn();
-    return { result, queries };
-  } finally {
-    pool.query = origQuery;
-  }
-}
 
 describe("session list LATERAL paging (PERF #7)", () => {
   it("the centre attendance log returns correct counts for the page", async () => {
@@ -197,7 +180,7 @@ describe("session list LATERAL paging (PERF #7)", () => {
 
     try {
       await plant(10);
-      const { queries: q10 } = await withQueryCount(() =>
+      const { count: q10 } = await withQueryCount(() =>
         pageSessionsWithAttendanceCounts({
           filters: [
             eq(batches.centre_id, ctx!.centre_id),
@@ -211,7 +194,7 @@ describe("session list LATERAL paging (PERF #7)", () => {
       );
 
       await plant(90); // 100 total
-      const { queries: q100 } = await withQueryCount(() =>
+      const { count: q100 } = await withQueryCount(() =>
         pageSessionsWithAttendanceCounts({
           filters: [
             eq(batches.centre_id, ctx!.centre_id),
@@ -273,7 +256,7 @@ describe("session list LATERAL paging (PERF #7)", () => {
 
     try {
       await ensureSessions(Math.min(5, siblingBatches.rows.length));
-      const { queries: q5 } = await withQueryCount(async () => {
+      const { count: q5 } = await withQueryCount(async () => {
         const res = await request(app)
           .get("/v1/sessions/today")
           .query({ centre_id: ctx!.centre_id, limit: 5 })
@@ -284,7 +267,7 @@ describe("session list LATERAL paging (PERF #7)", () => {
       });
 
       await ensureSessions(Math.min(50, siblingBatches.rows.length));
-      const { queries: q50 } = await withQueryCount(async () => {
+      const { count: q50 } = await withQueryCount(async () => {
         const res = await request(app)
           .get("/v1/sessions/today")
           .query({ centre_id: ctx!.centre_id, limit: 50 })

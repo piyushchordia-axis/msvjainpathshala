@@ -340,6 +340,7 @@ async function loadCardContext(studentId: string) {
       blood_group: students.blood_group,
       guardian_relation: students.guardian_relation,
       msv_status: students.msv_status,
+      msv_code: students.msv_code,
       centre_name: centres.name,
       city_name: cities.name,
       parent_name: parentUsers.full_name,
@@ -400,7 +401,7 @@ export async function upsertIdCardArt(opts: {
     .limit(1);
 
   const versionNo = existing ? (rotateQr ? existing.version_no + 1 : existing.version_no) : 1;
-  const cardNumber = existing?.card_number ?? `MSV-${studentCode}`;
+  const cardNumber = existing?.card_number ?? ctx?.msv_code ?? studentCode;
 
   let qr_payload = existing?.qr_payload ?? null;
   let qr_signature = existing?.qr_signature ?? null;

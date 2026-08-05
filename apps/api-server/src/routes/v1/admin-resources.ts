@@ -34,13 +34,26 @@ import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
-import { resolveAdminScope, cityIdsForState, type AdminScope } from "../../lib/scope";
+import { resolveAdminScope, cityIdsForState, inBatchWriteScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { awardPunya } from "../../lib/punya";
+import {
+  allocateParentCode,
+  allocateStudentCode,
+  composePathshalaCode,
+  localityToken,
+  normalizeCodePart,
+} from "../../lib/entity-codes";
+import {
+  resolveAwardLimit,
+  pointsAwardedTodayBy,
+  MANUAL_AWARD_FEATURE_KEY,
+} from "../../lib/punya-award-limits";
 import { isClientSettingKey } from "../../lib/client-settings";
 import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
 import { rejectionWindowFields } from "../../lib/niyam-constants";
 import { signUploadUrl } from "../../lib/file-tokens";
+import { ErrorCode } from "@workspace/api-zod";
 
 const phoneSchema = z.string().regex(/^\+[1-9]\d{6,14}$/, "Phone must be E.164 (+91…)");
 const bloodGroupSchema = z.enum(["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"]);
@@ -71,6 +84,7 @@ router.get("/centres", async (req: Request, res: Response) => {
   const rows = await db
     .select({
       id: centres.id,
+      code: centres.code,
       name: centres.name,
       locality: centres.locality,
       city_name: cities.name,
@@ -467,13 +481,29 @@ router.get("/punya/transactions", async (req: Request, res: Response) => {
 
 const punyaAwardSchema = z.object({
   student_id: z.string().uuid(),
-  points: z.coerce.number().int().positive().max(500),
+  points: z.coerce.number().int().positive(),
   note: z.string().max(500).optional(),
   // Optional client-supplied de-dupe token. When the same key is replayed (a
   // double-clicked submit, a retried request), the award is NOT credited twice
   // — awardPunya returns the original result. Backward compatible: callers that
   // omit it get the previous always-credit behaviour.
   idempotency_key: z.string().min(1).max(200).optional(),
+});
+
+/* GET /v1/admin/punya/award-limit */
+router.get("/punya/award-limit", async (req: Request, res: Response) => {
+  const role = req.authUser!.role;
+  const limit = await resolveAwardLimit(role);
+  const pointsAwardedToday = await pointsAwardedTodayBy(req.authUser!.id);
+  const remainingToday =
+    limit.maxPerDay == null ? null : Math.max(0, limit.maxPerDay - pointsAwardedToday);
+  ok(res, {
+    role,
+    max_points_per_award: limit.maxPerAward,
+    max_points_per_day: limit.maxPerDay,
+    points_awarded_today: pointsAwardedToday,
+    remaining_today: remainingToday,
+  });
 });
 
 /* POST /v1/admin/punya/award */
@@ -487,13 +517,52 @@ router.post("/punya/award", async (req: Request, res: Response) => {
   }
   const scope = await resolveAdminScope(req.authUser!);
   const [student] = await db
-    .select({ id: students.id, centre_id: students.centre_id })
+    .select({
+      id: students.id,
+      centre_id: students.centre_id,
+      batch_id: students.batch_id,
+    })
     .from(students)
     .where(and(eq(students.id, body.student_id), isNull(students.deleted_at)))
     .limit(1);
-  if (!student || !inScope(scope, student.centre_id)) {
+  if (!student || !inBatchWriteScope(scope, student.batch_id, student.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Student not found in your scope.");
     return;
+  }
+
+  const idemKey = body.idempotency_key?.trim() || null;
+  let isReplay = false;
+  if (idemKey) {
+    const [existing] = await db
+      .select({ id: punya_transactions.id })
+      .from(punya_transactions)
+      .where(eq(punya_transactions.idempotency_key, idemKey))
+      .limit(1);
+    isReplay = Boolean(existing);
+  }
+
+  const limit = await resolveAwardLimit(req.authUser!.role);
+  const pointsAwardedToday = await pointsAwardedTodayBy(req.authUser!.id);
+
+  if (!isReplay) {
+    if (body.points > limit.maxPerAward) {
+      fail(
+        res,
+        422,
+        ErrorCode.AWARD_LIMIT_EXCEEDED,
+        `That is more than you can award at once — the limit is ${limit.maxPerAward} Punya per award.`,
+      );
+      return;
+    }
+    if (limit.maxPerDay != null && pointsAwardedToday + body.points > limit.maxPerDay) {
+      fail(
+        res,
+        429,
+        ErrorCode.AWARD_DAILY_LIMIT_EXCEEDED,
+        `You have reached today's award limit (${limit.maxPerDay} Punya) — try again tomorrow or ask a higher role to award.`,
+      );
+      return;
+    }
   }
 
   // Atomic + idempotent: the ledger insert, balance upsert, and tier recompute
@@ -502,11 +571,11 @@ router.post("/punya/award", async (req: Request, res: Response) => {
   // select-then-insert here was both non-atomic AND non-idempotent).
   const result = await awardPunya({
     studentId: student.id,
-    featureKey: "manual_award",
+    featureKey: MANUAL_AWARD_FEATURE_KEY,
     points: body.points,
     note: body.note ?? null,
     awardedBy: req.authUser!.id,
-    idempotencyKey: body.idempotency_key ?? null,
+    idempotencyKey: idemKey,
   });
 
   // Only audit a real credit; an idempotent replay didn't change anything.
@@ -521,7 +590,9 @@ router.post("/punya/award", async (req: Request, res: Response) => {
         note: body.note ?? null,
         total_points: result.total_points,
         tier: result.tier,
-        idempotency_key: body.idempotency_key ?? null,
+        idempotency_key: idemKey,
+        max_per_award: limit.maxPerAward,
+        points_awarded_today: pointsAwardedToday + body.points,
       },
     });
   }
@@ -891,6 +962,8 @@ const createCentreSchema = z.object({
   name: z.string().min(2).max(200),
   city_id: z.string().uuid(),
   state_id: z.string().uuid(),
+  /** Locality token (GHK) or full Pathshala code (MUM-GHK). Auto-derived when omitted. */
+  code: z.string().min(2).max(16).optional(),
   locality: z.string().max(200).optional(),
   pincode: z.string().max(10).optional(),
   contact_phone: z.string().max(15).optional(),
@@ -915,19 +988,61 @@ router.post("/centres", async (req: Request, res: Response) => {
   let allowedCityIds: string[] | null = null;
   if (role === "city_admin") allowedCityIds = req.authUser!.city_id ? [req.authUser!.city_id] : [];
   else if (role === "state_admin") allowedCityIds = req.authUser!.state_id ? (await cityIdsForState(req.authUser!.state_id)) : [];
-  const [cityRow] = await db.select({ state_id: cities.state_id }).from(cities).where(eq(cities.id, body.city_id)).limit(1);
+  const [cityRow] = await db
+    .select({ state_id: cities.state_id, code: cities.code })
+    .from(cities)
+    .where(eq(cities.id, body.city_id))
+    .limit(1);
   if (!cityRow || (allowedCityIds !== null && !allowedCityIds.includes(body.city_id))) {
     fail(res, 403, "ERR_FORBIDDEN", "That city is outside your scope."); return;
   }
+
+  const cityCode = normalizeCodePart(cityRow.code);
+  let pathshalaCode: string;
+  try {
+    const raw = body.code?.trim();
+    if (raw && raw.includes("-")) {
+      pathshalaCode = normalizeCodePart(raw);
+      if (!pathshalaCode.startsWith(`${cityCode}-`)) {
+        fail(
+          res,
+          422,
+          "ERR_VALIDATION_FAILED",
+          `Pathshala code must start with ${cityCode}- (city code).`,
+        );
+        return;
+      }
+    } else {
+      const loc = raw
+        ? normalizeCodePart(raw)
+        : localityToken(body.locality?.trim() || body.name);
+      pathshalaCode = composePathshalaCode(cityCode, loc);
+    }
+  } catch {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Could not build a Pathshala code — set code or locality.");
+    return;
+  }
+
+  const [dup] = await db
+    .select({ id: centres.id })
+    .from(centres)
+    .where(and(eq(centres.code, pathshalaCode), isNull(centres.deleted_at)))
+    .limit(1);
+  if (dup) {
+    fail(res, 409, "ERR_DUPLICATE", `Pathshala code ${pathshalaCode} is already in use.`);
+    return;
+  }
+
   const [row] = await db.insert(centres).values({
     name: body.name,
+    code: pathshalaCode,
     city_id: body.city_id,
     state_id: cityRow.state_id,
     locality: body.locality ?? null,
     pincode: body.pincode ?? null,
     contact_phone: body.contact_phone ?? null,
     contact_email: body.contact_email ?? null,
-  }).returning({ id: centres.id, name: centres.name });
+  }).returning({ id: centres.id, name: centres.name, code: centres.code });
   ok(res, row);
 });
 
@@ -1080,12 +1195,26 @@ async function ensureParentLogin(opts: {
     return { ok: true, userId: existing.id, created: false };
   }
 
+  if (!opts.city_id) {
+    return { ok: false, message: "A city is required to issue a parent ID." };
+  }
+  const [city] = await db
+    .select({ code: cities.code })
+    .from(cities)
+    .where(eq(cities.id, opts.city_id))
+    .limit(1);
+  if (!city?.code) {
+    return { ok: false, message: "Could not resolve city code for parent ID." };
+  }
+
+  const display_code = await allocateParentCode(db, city.code);
   const [row] = await db
     .insert(users)
     .values({
       phone: opts.phone,
       full_name: opts.full_name.trim(),
       role: "parent",
+      display_code,
       city_id: opts.city_id,
       state_id: opts.state_id,
       centre_id_default: opts.centre_id,
@@ -1172,8 +1301,17 @@ router.post("/students", async (req: Request, res: Response) => {
     return;
   }
 
-  const [{ total }] = await db.select({ total: sql<number>`count(*)::int` }).from(students);
-  const student_code = `STU${String((total ?? 0) + 1).padStart(6, "0")}`;
+  const [city] = await db
+    .select({ code: cities.code })
+    .from(cities)
+    .where(eq(cities.id, centre.city_id))
+    .limit(1);
+  if (!city?.code) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Centre city has no code — cannot issue student ID.");
+    return;
+  }
+
+  const student_code = await allocateStudentCode(db, city.code);
   const [row] = await db
     .insert(students)
     .values({

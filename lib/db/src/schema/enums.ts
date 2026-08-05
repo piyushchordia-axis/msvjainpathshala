@@ -115,6 +115,13 @@ export const SERVICE_REQUEST_STATUSES = ["submitted", "in_review", "resolved"] a
 export const CURRICULUM_LEVELS = ["not_started", "in_progress", "completed", "mastered"] as const;
 export const QUIZ_SCOPES = ["national", "state", "city", "centre", "batch"] as const;
 export const COMPETITION_STATUSES = ["draft", "open", "closed", "results_published"] as const;
+/** Attempt lifecycle — abandoned frees a max_attempts slot. */
+export const EXAM_ATTEMPT_STATUSES = [
+  "in_progress",
+  "submitted",
+  "graded",
+  "abandoned",
+] as const;
 export const NOTIFICATION_KINDS = ["general", "birthday", "homework", "quiz", "competition", "service_request", "exam", "shivir", "niyam_rejected", "niyam_badge"] as const;
 export const DONATION_PAYMENT_STATUSES = ["created", "pending", "captured", "failed", "refunded"] as const;
 export const AUDIT_ACTIONS = [
@@ -169,6 +176,7 @@ export const niyamScopeEnum = pgEnum("niyam_scope_enum", NIYAM_SCOPES);
 export const niyamMsvAudienceEnum = pgEnum("niyam_msv_audience_enum", NIYAM_MSV_AUDIENCES);
 export const attendanceMethodEnum = pgEnum("attendance_method_enum", ATTENDANCE_METHODS);
 export const examQuestionTypeEnum = pgEnum("exam_question_type_enum", EXAM_QUESTION_TYPES);
+export const examAttemptStatusEnum = pgEnum("exam_attempt_status_enum", EXAM_ATTEMPT_STATUSES);
 export const noticeAudienceEnum = pgEnum("notice_audience_enum", NOTICE_AUDIENCES);
 export const shivirAttendanceModeEnum = pgEnum("shivir_attendance_mode_enum", SHIVIR_ATTENDANCE_MODES);
 export const shivirScanKindEnum = pgEnum("shivir_scan_kind_enum", SHIVIR_SCAN_KINDS);

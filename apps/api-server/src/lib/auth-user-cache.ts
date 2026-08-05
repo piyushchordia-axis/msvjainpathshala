@@ -12,6 +12,7 @@ const AUTH_USER_COLUMNS = {
   email: users.email,
   role: users.role,
   full_name: users.full_name,
+  display_code: users.display_code,
   gender: users.gender,
   preferred_language: users.preferred_language,
   state_id: users.state_id,

@@ -39,9 +39,10 @@ type CentreDef = {
   lng: string;
 };
 
-const CENTRE_DEFS: CentreDef[] = [
+const CENTRE_DEFS: (CentreDef & { code: string })[] = [
   {
     name: "Indore Jain Pathshala",
+    code: "IDR-SAP",
     locality: "Sapna Sangeeta",
     pincode: "452001",
     phone: "+917300000004",
@@ -51,6 +52,7 @@ const CENTRE_DEFS: CentreDef[] = [
   },
   {
     name: "Race Course Centre",
+    code: "IDR-RCR",
     locality: "Race Course Road",
     pincode: "452003",
     phone: "+917300000005",
@@ -60,6 +62,7 @@ const CENTRE_DEFS: CentreDef[] = [
   },
   {
     name: "Vijay Nagar Pathshala",
+    code: "IDR-VIJ",
     locality: "Vijay Nagar",
     pincode: "452010",
     phone: "+917300000006",
@@ -69,6 +72,7 @@ const CENTRE_DEFS: CentreDef[] = [
   },
   {
     name: "Palasia Pathshala",
+    code: "IDR-PAL",
     locality: "New Palasia",
     pincode: "452001",
     phone: "+917300000007",
@@ -78,11 +82,12 @@ const CENTRE_DEFS: CentreDef[] = [
   },
   {
     name: "Bhawarkua Pathshala",
+    code: "IDR-BHA",
     locality: "Bhawarkua",
     pincode: "452001",
     phone: "+917300000008",
     email: "bhawarkua@indore.jp.example.org",
-    lat: "22.6938000",
+    lat: "22.6942000",
     lng: "75.8671000",
   },
 ];
@@ -168,6 +173,7 @@ export async function seedIndoreNetwork(opts: {
       CENTRE_DEFS.map((c) => ({
         state_id: stateId,
         city_id: cityId,
+        code: c.code,
         name: c.name,
         locality: c.locality,
         pincode: c.pincode,
@@ -391,6 +397,7 @@ export async function seedIndoreNetwork(opts: {
     centre_id: string;
     batch_id: string;
     msv_status: "none" | "applied" | "approved";
+    msv_code: string | null;
     user_id: string | null;
     parent_id: string;
     dob: string;
@@ -399,8 +406,9 @@ export async function seedIndoreNetwork(opts: {
     guardian_relation: string;
   }> = [];
 
-  let studentSeq = 101; // STU000101+
+  let studentSeq = 1; // IDR-STU-00001+
   let childSalt = 0;
+  let msvSeq = 3; // MSV00001/2 used by Mumbai seed
 
   // Demo household names (stable for docs / ID card demos)
   const demoChildNames = ["Reyansh Jain", "Myra Sethi", "Arjun Porwal"];
@@ -419,19 +427,27 @@ export async function seedIndoreNetwork(opts: {
       const full_name = isDemoFirst
         ? demoChildNames[c]!
         : `${pickName(childSalt, FIRST_NAMES)} ${pickName(childSalt * 2 + h.centreIndex, SURNAMES)}`;
-      const code = `STU${String(studentSeq).padStart(6, "0")}`;
+      const code = `IDR-STU-${String(studentSeq).padStart(5, "0")}`;
       studentSeq += 1;
 
       let msv_status: "none" | "applied" | "approved" = "none";
-      if (isDemoFirst && c === 0) msv_status = "approved";
-      else if (isDemoFirst && c === 2) msv_status = "applied";
-      else if (childSalt % 11 === 0) msv_status = "approved";
-      else if (childSalt % 7 === 0) msv_status = "applied";
+      let msv_code: string | null = null;
+      if (isDemoFirst && c === 0) {
+        msv_status = "approved";
+        msv_code = `MSV${String(msvSeq).padStart(5, "0")}`;
+        msvSeq += 1;
+      } else if (isDemoFirst && c === 2) msv_status = "applied";
+      else if (childSalt % 11 === 0) {
+        msv_status = "approved";
+        msv_code = `MSV${String(msvSeq).padStart(5, "0")}`;
+        msvSeq += 1;
+      } else if (childSalt % 7 === 0) msv_status = "applied";
 
       studentValues.push({
         full_name,
         student_code: code,
         age_group,
+        msv_code,
         centre_id: centre.id,
         batch_id: batch.id,
         msv_status,
@@ -462,6 +478,7 @@ export async function seedIndoreNetwork(opts: {
         centre_id: s.centre_id,
         batch_id: s.batch_id,
         msv_status: s.msv_status,
+        msv_code: s.msv_code,
         user_id: s.user_id,
         parent_id: s.parent_id,
         dob: s.dob,

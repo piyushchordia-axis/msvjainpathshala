@@ -1340,4 +1340,194 @@ describe("niyam-submissions", () => {
     expect(submit.status).toBe(422);
     expect(submit.body.error?.message).toMatch(/owned|upload/i);
   });
+
+  it("reject with a reason under 20 chars returns 422", async () => {
+    const niyamId = await createNiyam(`reject-short-${Date.now()}`);
+    const submit = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({
+        niyam_id: niyamId,
+        student_id: child0,
+        submission_date: todayIst(),
+        proof_url: PROOF,
+      });
+    expect(submit.status).toBe(200);
+    const reject = await request(app)
+      .post(`/v1/niyam-submissions/${submit.body.data.id}/reject`)
+      .set(auth(shikshak.token))
+      .send({ reason: "too short" });
+    expect(reject.status).toBe(422);
+    expect(reject.body.error.code).toBe("ERR_VALIDATION_FAILED");
+  });
+
+  it("bulk-approve mixes pending / already-approved / out-of-scope and awards once on replay", async () => {
+    const niyamId = await createNiyam(`bulk-${Date.now()}`);
+    const d0 = daysAgoIst(1);
+    const d1 = todayIst();
+
+    const s0 = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({ niyam_id: niyamId, student_id: child0, submission_date: d0, proof_url: PROOF });
+    expect(s0.status).toBe(200);
+    const id0: string = s0.body.data.id;
+
+    const s1 = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({ niyam_id: niyamId, student_id: child0, submission_date: d1, proof_url: PROOF });
+    expect(s1.status).toBe(200);
+    const id1: string = s1.body.data.id;
+
+    // Pre-approve one so bulk sees a not-pending skip.
+    const pre = await request(app)
+      .post(`/v1/niyam-submissions/${id0}/approve`)
+      .set(auth(shikshak.token))
+      .send({});
+    expect(pre.status).toBe(200);
+
+    const fakeId = "00000000-0000-4000-8000-000000000099";
+    const bulk = await request(app)
+      .post("/v1/niyam-submissions/bulk-approve")
+      .set(auth(shikshak.token))
+      .send({ submission_ids: [id0, id1, fakeId] });
+    expect(bulk.status).toBe(200);
+    const results = bulk.body.data.results as Array<{
+      id: string;
+      status: string;
+      error?: { code: string };
+    }>;
+    expect(results).toHaveLength(3);
+    expect(results.find((r) => r.id === id0)?.status).toBe("skipped");
+    expect(results.find((r) => r.id === id1)?.status).toBe("approved");
+    expect(results.find((r) => r.id === fakeId)?.status).toBe("failed");
+
+    const ledgerBefore = await db
+      .select({ id: punya_transactions.id, points: punya_transactions.points })
+      .from(punya_transactions)
+      .where(eq(punya_transactions.idempotency_key, `submission:${id1}`));
+    expect(ledgerBefore).toHaveLength(1);
+
+    const replay = await request(app)
+      .post("/v1/niyam-submissions/bulk-approve")
+      .set(auth(shikshak.token))
+      .send({ submission_ids: [id1] });
+    expect(replay.status).toBe(200);
+    expect(replay.body.data.results[0].status).toBe("skipped");
+
+    const ledgerAfter = await db
+      .select({ id: punya_transactions.id })
+      .from(punya_transactions)
+      .where(eq(punya_transactions.idempotency_key, `submission:${id1}`));
+    expect(ledgerAfter).toHaveLength(1);
+  });
+
+  it("bulk-approve streaks match sequential single approvals", async () => {
+    const niyamBulk = await createNiyam(`bulk-streak-${Date.now()}`, { points: 5 });
+    const niyamSeq = await createNiyam(`seq-streak-${Date.now()}`, { points: 5 });
+    // Plant consecutive days via DB — API only allows today/yesterday.
+    const dates = [daysAgoIst(2), daysAgoIst(1), todayIst()];
+
+    const bulkIds: string[] = [];
+    for (const d of dates) {
+      const [row] = await db
+        .insert(niyam_submissions)
+        .values({
+          niyam_id: niyamBulk,
+          student_id: child0,
+          submission_date: d,
+          period_key: periodKey("daily", d),
+          status: "pending",
+          points_awarded: 0,
+          submitted_by: parent.user.id,
+          proof_url: PROOF,
+        })
+        .returning({ id: niyam_submissions.id });
+      bulkIds.push(row!.id);
+    }
+
+    const seqIds: string[] = [];
+    for (const d of dates) {
+      const [row] = await db
+        .insert(niyam_submissions)
+        .values({
+          niyam_id: niyamSeq,
+          student_id: child1,
+          submission_date: d,
+          period_key: periodKey("daily", d),
+          status: "pending",
+          points_awarded: 0,
+          submitted_by: parent.user.id,
+          proof_url: PROOF,
+        })
+        .returning({ id: niyam_submissions.id });
+      seqIds.push(row!.id);
+    }
+
+    const bulk = await request(app)
+      .post("/v1/niyam-submissions/bulk-approve")
+      .set(auth(shikshak.token))
+      .send({ submission_ids: bulkIds });
+    expect(bulk.status).toBe(200);
+    expect(bulk.body.data.results.every((r: { status: string }) => r.status === "approved")).toBe(
+      true,
+    );
+
+    for (const id of seqIds) {
+      const a = await request(app)
+        .post(`/v1/niyam-submissions/${id}/approve`)
+        .set(auth(shikshak.token))
+        .send({});
+      expect(a.status).toBe(200);
+    }
+
+    const [streakBulk] = await db
+      .select()
+      .from(niyam_streaks)
+      .where(and(eq(niyam_streaks.student_id, child0), eq(niyam_streaks.niyam_id, niyamBulk)))
+      .limit(1);
+    const [streakSeq] = await db
+      .select()
+      .from(niyam_streaks)
+      .where(and(eq(niyam_streaks.student_id, child1), eq(niyam_streaks.niyam_id, niyamSeq)))
+      .limit(1);
+    expect(streakBulk?.current_streak).toBe(streakSeq?.current_streak);
+    expect(streakBulk?.longest_streak).toBe(streakSeq?.longest_streak);
+
+    const badgesBulk = await db
+      .select({ badge_key: niyam_badges.badge_key })
+      .from(niyam_badges)
+      .where(and(eq(niyam_badges.student_id, child0), eq(niyam_badges.niyam_id, niyamBulk)));
+    const badgesSeq = await db
+      .select({ badge_key: niyam_badges.badge_key })
+      .from(niyam_badges)
+      .where(and(eq(niyam_badges.student_id, child1), eq(niyam_badges.niyam_id, niyamSeq)));
+    expect(badgesBulk.map((b) => b.badge_key).sort()).toEqual(
+      badgesSeq.map((b) => b.badge_key).sort(),
+    );
+  });
+
+  it("pending list returns batch fields and filters by batch_id / niyam_type", async () => {
+    const pending = await request(app)
+      .get("/v1/niyam-submissions/pending?limit=5")
+      .set(auth(shikshak.token));
+    expect(pending.status).toBe(200);
+    const item = pending.body.data.items[0] as
+      | { batch_id?: string; batch_name?: string; niyam_type?: string }
+      | undefined;
+    if (item) {
+      expect("batch_id" in item).toBe(true);
+      expect("batch_name" in item).toBe(true);
+      expect("niyam_type" in item).toBe(true);
+    }
+
+    const daily = await request(app)
+      .get("/v1/niyam-submissions/pending?niyam_type=daily&limit=5")
+      .set(auth(shikshak.token));
+    expect(daily.status).toBe(200);
+    for (const row of daily.body.data.items as Array<{ niyam_type: string }>) {
+      expect(row.niyam_type).toBe("daily");
+    }
+  });
 });

@@ -10,15 +10,22 @@ import {
 } from "react-native";
 import { router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import {
   useAdminBatches,
   useCreateHomeworkAssignment,
   useHomeworkAssignments,
+  useHomeworkCurriculumTopics,
 } from "@/lib/queries";
-import { ApiError } from "@/lib/api";
+import { ApiError, apiUpload } from "@/lib/api";
 import { formatDate } from "@/lib/format";
+import {
+  PREFERRED_ASSET_REPRESENTATION_MODE,
+  ensureFileUri,
+  guessMime,
+} from "@/lib/proof-media";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
@@ -55,7 +62,13 @@ function CreateAssignmentModal({
   const [title, setTitle] = useState("");
   const [dueDate, setDueDate] = useState(tomorrowKolkata());
   const [description, setDescription] = useState("");
+  const [curriculumItemId, setCurriculumItemId] = useState("");
+  const [attachmentUrl, setAttachmentUrl] = useState("");
+  const [attachmentLabel, setAttachmentLabel] = useState("");
+  const [uploading, setUploading] = useState(false);
 
+  const topics = useHomeworkCurriculumTopics(batchId || undefined, open);
+  const topicItems = topics.data?.items ?? [];
   const items = batches.data?.items ?? [];
 
   function reset() {
@@ -63,6 +76,66 @@ function CreateAssignmentModal({
     setTitle("");
     setDueDate(tomorrowKolkata());
     setDescription("");
+    setCurriculumItemId("");
+    setAttachmentUrl("");
+    setAttachmentLabel("");
+  }
+
+  function selectBatch(id: string) {
+    setBatchId(id);
+    setCurriculumItemId("");
+  }
+
+  async function uploadWorksheetAsset(uri: string, name: string, mime: string) {
+    setUploading(true);
+    try {
+      const uploaded = await apiUpload(
+        { uri: ensureFileUri(uri), name, type: mime },
+        "homework",
+      );
+      setAttachmentUrl(uploaded.url);
+      setAttachmentLabel(name);
+    } catch (err) {
+      Alert.alert(
+        hi ? "अपलोड नहीं हुआ" : "Could not upload worksheet",
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : hi
+              ? "फिर से प्रयास करें।"
+              : "Please try again.",
+      );
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function pickWorksheetFromLibrary() {
+    if (uploading || create.isPending) return;
+    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!perm.granted) {
+      Alert.alert(
+        hi ? "अनुमति आवश्यक" : "Permission needed",
+        hi ? "फोटो लाइब्रेरी की अनुमति दें।" : "Please allow photo library access.",
+      );
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.85,
+      preferredAssetRepresentationMode: PREFERRED_ASSET_REPRESENTATION_MODE,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    const asset = result.assets[0];
+    const mime = guessMime("photo", asset.mimeType);
+    const name = asset.fileName ?? "worksheet.jpg";
+    await uploadWorksheetAsset(asset.uri, name, mime);
+  }
+
+  function clearWorksheet() {
+    setAttachmentUrl("");
+    setAttachmentLabel("");
   }
 
   function submit() {
@@ -73,12 +146,15 @@ function CreateAssignmentModal({
       );
       return;
     }
+    if (uploading) return;
     create.mutate(
       {
         batch_id: batchId,
         title: title.trim(),
         due_date: dueDate.trim(),
         ...(description.trim() ? { description: description.trim() } : {}),
+        ...(attachmentUrl.trim() ? { attachment_url: attachmentUrl.trim() } : {}),
+        ...(curriculumItemId ? { curriculum_item_id: curriculumItemId } : {}),
       },
       {
         onSuccess: (res) => {
@@ -101,6 +177,18 @@ function CreateAssignmentModal({
       },
     );
   }
+
+  const fieldStyle = {
+    fontFamily: bodyFamily(hi),
+    fontSize: 15,
+    color: c.foreground,
+    borderWidth: 1,
+    borderColor: c.border,
+    borderRadius: c.radius,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    backgroundColor: c.card,
+  } as const;
 
   return (
     <Modal visible={open} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
@@ -137,7 +225,7 @@ function CreateAssignmentModal({
                 return (
                   <Pressable
                     key={b.id}
-                    onPress={() => setBatchId(b.id)}
+                    onPress={() => selectBatch(b.id)}
                     style={{
                       paddingVertical: 12,
                       paddingHorizontal: 14,
@@ -182,18 +270,91 @@ function CreateAssignmentModal({
               onChangeText={setTitle}
               placeholder={hi ? "उदा. नवकार मंत्र याद करें" : "e.g. Learn the Navkar Mantra"}
               placeholderTextColor={c.mutedForeground}
-              style={{
-                fontFamily: bodyFamily(hi),
-                fontSize: 15,
-                color: c.foreground,
-                borderWidth: 1,
-                borderColor: c.border,
-                borderRadius: c.radius,
-                paddingHorizontal: 14,
-                paddingVertical: 12,
-                backgroundColor: c.card,
-              }}
+              style={fieldStyle}
             />
+          </View>
+
+          <View style={{ gap: 6 }}>
+            <Body muted style={{ fontSize: 12 }}>
+              {hi ? "पाठ्यक्रम विषय (वैकल्पिक)" : "Curriculum topic (optional)"}
+            </Body>
+            {!batchId ? (
+              <Body muted style={{ fontSize: 13 }}>
+                {hi ? "पहले बैच चुनें।" : "Pick a batch first."}
+              </Body>
+            ) : topics.isLoading ? (
+              <Body muted>{hi ? "लोड हो रहा है…" : "Loading…"}</Body>
+            ) : topicItems.length === 0 ? (
+              <Body muted style={{ fontSize: 13 }}>
+                {hi ? "इस बैच के लिए कोई विषय नहीं।" : "No topics for this batch."}
+              </Body>
+            ) : (
+              <>
+                <Pressable
+                  onPress={() => setCurriculumItemId("")}
+                  style={{
+                    paddingVertical: 12,
+                    paddingHorizontal: 14,
+                    borderRadius: c.radius,
+                    borderWidth: 1,
+                    borderColor: !curriculumItemId ? c.primary : c.border,
+                    backgroundColor: !curriculumItemId ? c.primary + "14" : c.card,
+                    marginBottom: 6,
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontFamily: bodyFamily(hi, "semibold"),
+                      fontSize: 15,
+                      color: c.foreground,
+                    }}
+                  >
+                    {hi ? "कोई नहीं" : "None"}
+                  </Text>
+                </Pressable>
+                {topicItems.map((t) => {
+                  const active = t.id === curriculumItemId;
+                  const label = hi ? t.label_hi || t.label_en : t.label_en;
+                  return (
+                    <Pressable
+                      key={t.id}
+                      onPress={() => setCurriculumItemId(t.id)}
+                      style={{
+                        paddingVertical: 12,
+                        paddingHorizontal: 14,
+                        borderRadius: c.radius,
+                        borderWidth: 1,
+                        borderColor: active ? c.primary : c.border,
+                        backgroundColor: active ? c.primary + "14" : c.card,
+                        marginBottom: 6,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          fontFamily: bodyFamily(hi, "semibold"),
+                          fontSize: 15,
+                          color: c.foreground,
+                        }}
+                      >
+                        {label}
+                      </Text>
+                      {t.curriculum_name ? (
+                        <Text
+                          style={{
+                            fontFamily: bodyFamily(hi),
+                            fontSize: 12,
+                            color: c.mutedForeground,
+                            marginTop: 2,
+                          }}
+                        >
+                          {t.curriculum_name}
+                        </Text>
+                      ) : null}
+                    </Pressable>
+                  );
+                })}
+              </>
+            )}
           </View>
 
           <View style={{ gap: 6 }}>
@@ -206,17 +367,7 @@ function CreateAssignmentModal({
               autoCapitalize="none"
               placeholder="2026-08-10"
               placeholderTextColor={c.mutedForeground}
-              style={{
-                fontFamily: bodyFamily(hi),
-                fontSize: 15,
-                color: c.foreground,
-                borderWidth: 1,
-                borderColor: c.border,
-                borderRadius: c.radius,
-                paddingHorizontal: 14,
-                paddingVertical: 12,
-                backgroundColor: c.card,
-              }}
+              style={fieldStyle}
             />
           </View>
 
@@ -229,28 +380,70 @@ function CreateAssignmentModal({
               onChangeText={setDescription}
               multiline
               numberOfLines={3}
+              placeholder={hi ? "वैकल्पिक निर्देश" : "Optional instructions"}
               placeholderTextColor={c.mutedForeground}
               style={{
-                fontFamily: bodyFamily(hi),
-                fontSize: 15,
-                color: c.foreground,
-                borderWidth: 1,
-                borderColor: c.border,
-                borderRadius: c.radius,
-                paddingHorizontal: 14,
-                paddingVertical: 12,
-                backgroundColor: c.card,
+                ...fieldStyle,
                 minHeight: 88,
                 textAlignVertical: "top",
               }}
             />
           </View>
 
+          <View style={{ gap: 6 }}>
+            <Body muted style={{ fontSize: 12 }}>
+              {hi ? "वर्कशीट (वैकल्पिक)" : "Worksheet (optional)"}
+            </Body>
+            <Row style={{ gap: 10, flexWrap: "wrap" }}>
+              <Button
+                label={
+                  uploading
+                    ? hi
+                      ? "अपलोड…"
+                      : "Uploading…"
+                    : attachmentUrl
+                      ? hi
+                        ? "बदलें"
+                        : "Replace"
+                      : hi
+                        ? "फ़ोटो चुनें"
+                        : "Choose photo"
+                }
+                variant="outline"
+                icon="image-outline"
+                disabled={uploading || create.isPending}
+                onPress={() => void pickWorksheetFromLibrary()}
+                style={{ minWidth: 140 }}
+              />
+              {attachmentUrl ? (
+                <Button
+                  label={hi ? "हटाएँ" : "Remove"}
+                  variant="ghost"
+                  disabled={uploading || create.isPending}
+                  onPress={clearWorksheet}
+                />
+              ) : null}
+            </Row>
+            {attachmentUrl ? (
+              <Body muted style={{ fontSize: 12 }}>
+                {hi
+                  ? `संलग्न — परिवार गृहकार्य फ़ीड में देखेंगे${attachmentLabel ? ` (${attachmentLabel})` : ""}।`
+                  : `Attached — families will see this on their homework feed${attachmentLabel ? ` (${attachmentLabel})` : ""}.`}
+              </Body>
+            ) : (
+              <Body muted style={{ fontSize: 12 }}>
+                {hi
+                  ? "छवि अपलोड करें। PDF के लिए वेब व्यवस्थापक का उपयोग करें।"
+                  : "Upload an image. For PDF worksheets, use the web admin."}
+              </Body>
+            )}
+          </View>
+
           <Button
             label={hi ? "बनाएँ" : "Create"}
             onPress={submit}
             loading={create.isPending}
-            disabled={!batchId || !title.trim() || !dueDate.trim()}
+            disabled={!batchId || !title.trim() || !dueDate.trim() || uploading}
           />
         </ScrollView>
       </View>
@@ -356,6 +549,13 @@ export default function ShikshakHomeworkScreen() {
                         .filter(Boolean)
                         .join(" · ")}
                     </Body>
+                    {(hi ? a.curriculum_topic_hi ?? a.curriculum_topic_en : a.curriculum_topic_en) ? (
+                      <Body muted style={{ fontSize: 12, marginTop: 2 }}>
+                        {hi
+                          ? a.curriculum_topic_hi ?? a.curriculum_topic_en
+                          : a.curriculum_topic_en ?? a.curriculum_topic_hi}
+                      </Body>
+                    ) : null}
                   </View>
                   {a.overdue > 0 ? (
                     <Pill tone="error" label={hi ? "अतिदेय" : "Overdue"} />
@@ -376,6 +576,9 @@ export default function ShikshakHomeworkScreen() {
                     tone="success"
                     label={hi ? `${a.graded} जाँचे` : `${a.graded} graded`}
                   />
+                  {a.attachment_url ? (
+                    <Pill tone="neutral" label={hi ? "वर्कशीट" : "Worksheet"} />
+                  ) : null}
                 </Row>
                 <Row style={{ marginTop: 12, justifyContent: "space-between", alignItems: "center" }}>
                   <Body muted style={{ fontSize: 12 }}>

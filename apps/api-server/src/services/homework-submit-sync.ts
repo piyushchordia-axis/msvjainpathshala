@@ -17,11 +17,12 @@ import { and, eq, isNull } from "drizzle-orm";
 import { httpUrl } from "../lib/validation";
 import { kolkataDateString } from "./attendance-mark";
 import { resolveOwnedUpload } from "../lib/owned-upload";
+import type { ErrorCode } from "@workspace/api-zod";
 
 export class HomeworkSubmitError extends Error {
   constructor(
     public readonly httpStatus: number,
-    public readonly code: string,
+    public readonly code: ErrorCode,
     message: string,
   ) {
     super(message);

@@ -40,14 +40,14 @@ async function aaravId(parentToken: string): Promise<string> {
   return child.id as string;
 }
 
-/** A student outside the city_admin's (Mumbai) scope: STU000004 lives in Pune. */
+/** A student outside the city_admin's (Mumbai) scope: PUN-STU-00001 lives in Pune. */
 async function puneStudentId(superToken: string): Promise<string> {
   const res = await request(app).get("/v1/admin/students?limit=500").set(auth(superToken));
   expect(res.status).toBe(200);
   const anaya = res.body.data.items.find(
-    (s: { student_code: string }) => s.student_code === "STU000004",
+    (s: { student_code: string }) => s.student_code === "PUN-STU-00001",
   );
-  expect(anaya, "seeded Pune student STU000004 must exist").toBeTruthy();
+  expect(anaya, "seeded Pune student PUN-STU-00001 must exist").toBeTruthy();
   return anaya.id as string;
 }
 

@@ -41,15 +41,16 @@ interface ActiveAttempt {
   kind: "event" | "push";
   id: string;
   titleEn: string;
-  titleHi: string;
+  titleHi: string | null;
   attemptId: string | null; // event attempts carry an id; push quizzes don't
   questions: QuizQuestion[];
+  initialAnswers?: Record<string, number[]>;
 }
 
 /** Normalised result for the shared result card. */
 interface ResultView {
   titleEn: string;
-  titleHi: string;
+  titleHi: string | null;
   score: number;
   correctCount: number;
   totalCount: number;
@@ -64,7 +65,7 @@ function ResultCard({ result, hi, onDone, doneLabel }: { result: ResultView; hi:
       <Card>
         <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
           <View style={{ flex: 1, paddingRight: 10 }}>
-            <Title style={{ fontSize: 18 }}>{hi ? result.titleHi : result.titleEn}</Title>
+            <Title style={{ fontSize: 18 }}>{hi ? result.titleHi ?? result.titleEn : result.titleEn}</Title>
             <Body muted style={{ fontSize: 13, marginTop: 4 }}>{hi ? "आपका परिणाम" : "Your result"}</Body>
           </View>
           <Ionicons
@@ -142,6 +143,7 @@ export default function Quizzes() {
             titleHi: quiz.title_hi,
             attemptId: data.attempt_id,
             questions: data.questions ?? [],
+            initialAnswers: data.answers ?? {},
           });
         },
       },
@@ -223,9 +225,11 @@ export default function Quizzes() {
         ) : active ? (
           /* ---- In-progress attempt (event or push) --------------------- */
           <QuizRunner
+            key={active.attemptId ?? active.id}
             titleEn={active.titleEn}
             titleHi={active.titleHi}
             questions={active.questions}
+            initialAnswers={active.initialAnswers}
             submitting={submitQuiz.isPending || submitPush.isPending}
             onSubmit={submitAnswers}
             onCancel={() => setActive(null)}
@@ -251,7 +255,7 @@ export default function Quizzes() {
                     </Title>
                     <Body muted style={{ fontSize: 12, marginTop: 3 }}>
                       {push.questions.length} {hi ? "प्रश्न" : "questions"}
-                      {push.completion_points > 0
+                      {push.completion_points != null && push.completion_points > 0
                         ? ` · +${push.completion_points} ${hi ? "पुण्य" : "punya"}`
                         : ""}
                     </Body>
@@ -294,15 +298,16 @@ export default function Quizzes() {
             ) : (
               rows.map((quiz) => {
                 const done = quiz.already_attempted;
+                const inProgress = !!quiz.in_progress;
                 const isStarting = startQuiz.isPending && startQuiz.variables?.id === quiz.id;
-                const points = quiz.participation_points + quiz.win_points;
+                const points = (quiz.participation_points ?? 0) + (quiz.win_points ?? 0);
                 const isWinner = !!quiz.is_winner;
                 const pointsEarned = quiz.points_earned ?? 0;
                 return (
                   <Card key={quiz.id} style={done ? { opacity: 0.65 } : undefined}>
                     <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
                       <View style={{ flex: 1, paddingRight: 10 }}>
-                        <Title style={{ fontSize: 16 }}>{hi ? quiz.title_hi : quiz.title_en}</Title>
+                        <Title style={{ fontSize: 16 }}>{hi ? quiz.title_hi ?? quiz.title_en : quiz.title_en}</Title>
                         <Body muted style={{ fontSize: 12, marginTop: 3 }}>
                           {formatDateRange(quiz.start_at, quiz.end_at)}
                         </Body>
@@ -336,13 +341,16 @@ export default function Quizzes() {
                         </>
                       ) : (
                         <>
-                          {quiz.win_points > 0 ? (
+                          {inProgress ? (
+                            <Pill label={hi ? "जारी" : "In progress"} tone="info" />
+                          ) : null}
+                          {(quiz.win_points ?? 0) > 0 ? (
                             <Pill label={`${hi ? "जीत" : "Win"} +${quiz.win_points}`} tone="warning" />
                           ) : null}
-                          {quiz.participation_points > 0 ? (
+                          {(quiz.participation_points ?? 0) > 0 ? (
                             <Pill label={`${hi ? "भाग" : "Take"} +${quiz.participation_points}`} tone="info" />
                           ) : null}
-                          {points === 0 ? (
+                          {points === 0 && !inProgress ? (
                             <Pill label={hi ? "अभ्यास" : "Practice"} tone="neutral" />
                           ) : null}
                         </>
@@ -351,7 +359,15 @@ export default function Quizzes() {
                     {done ? null : (
                       <View style={{ marginTop: 14 }}>
                         <Button
-                          label={hi ? "प्रश्नोत्तरी शुरू करें" : "Start quiz"}
+                          label={
+                            inProgress
+                              ? hi
+                                ? "प्रश्नोत्तरी जारी रखें"
+                                : "Resume quiz"
+                              : hi
+                                ? "प्रश्नोत्तरी शुरू करें"
+                                : "Start quiz"
+                          }
                           icon="play"
                           loading={isStarting}
                           onPress={() => beginEvent(quiz)}

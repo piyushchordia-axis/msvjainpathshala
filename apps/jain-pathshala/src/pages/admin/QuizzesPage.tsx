@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Check } from 'lucide-react';
-import { apiGet, apiPost, ApiError } from '@/lib/api-client';
+import { Plus, Trash2, Check, X, ChevronLeft } from 'lucide-react';
+import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-context';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminError } from '@/components/admin/AdminPageShell';
@@ -41,14 +41,54 @@ interface EventRow {
   title_hi: string | null;
   start_at: string;
   end_at: string;
-  participation_points: number;
-  win_points: number;
+  participation_points: number | null;
+  win_points: number | null;
   question_count: number;
   created_at: string;
   state_ids?: string[];
   city_ids?: string[];
   centre_ids?: string[];
   batch_ids?: string[];
+}
+
+interface PushRow {
+  id: string;
+  scope: string;
+  started_at: string;
+  expires_at: string;
+  completion_points: number | null;
+  question_count: number;
+  submitted_count: number;
+  is_live: boolean;
+}
+
+interface AttemptQuestionResult {
+  question_id: string;
+  correct: boolean;
+}
+
+interface AttemptRow {
+  attempt_id: string;
+  student_id: string;
+  full_name: string;
+  centre_name: string | null;
+  batch_name: string | null;
+  started_at: string | null;
+  submitted_at: string | null;
+  correct_count: number | null;
+  total_count: number | null;
+  score: number | null;
+  points_awarded: number;
+  question_results: AttemptQuestionResult[];
+}
+
+interface AttemptsPayload {
+  items: AttemptRow[];
+  attempted_count: number;
+  submitted_count: number;
+  eligible_count: number;
+  average_score: number;
+  is_live?: boolean;
 }
 
 type QuizScope = 'national' | 'state' | 'city' | 'centre' | 'batch';
@@ -258,7 +298,7 @@ function QuestionEditor({
             <button
               type="button"
               onClick={() => toggle(i)}
-              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded border transition-colors ${draft.correct[i] ? 'bg-emerald-500/10 border-emerald-500 text-emerald-700' : 'border-input bg-background text-muted-foreground hover:bg-muted'}`}
+              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded border transition-colors ${draft.correct[i] ? 'bg-status-success-soft border-[hsl(var(--status-success))] text-status-success' : 'border-input bg-background text-muted-foreground hover:bg-muted'}`}
               aria-label="Mark correct"
             >
               <Check className="h-4 w-4" />
@@ -369,6 +409,88 @@ function AddQuestionDialog({ onAdded }: { onAdded: () => void }) {
       </DialogContent>
     </Dialog>
   );
+}
+
+// ─── Edit / deactivate question ─────────────────────────────────────────────
+function EditQuestionDialog({
+  question,
+  onSaved,
+}: {
+  question: QuestionRow;
+  onSaved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [topic, setTopic] = useState(question.topic ?? '');
+  const [draft, setDraft] = useState<DraftQ>(() => ({
+    question_en: question.question_en,
+    options: question.options.map((o) => ({ text_en: o.text_en })),
+    correct: question.options.map((_, i) => question.correct_indices.includes(i)),
+  }));
+
+  useEffect(() => {
+    if (!open) return;
+    setTopic(question.topic ?? '');
+    setDraft({
+      question_en: question.question_en,
+      options: question.options.map((o) => ({ text_en: o.text_en })),
+      correct: question.options.map((_, i) => question.correct_indices.includes(i)),
+    });
+  }, [open, question]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const err = validateDraft(draft);
+    if (err) { toast.error(err); return; }
+    setBusy(true);
+    try {
+      const p = draftToPayload(draft);
+      await apiPatch(`/v1/quizzes/questions/${question.id}`, {
+        question_en: p.question_en,
+        options: p.options,
+        correct_indices: p.correct_indices,
+        topic: topic.trim() || null,
+      });
+      toast.success('Question updated.');
+      setOpen(false);
+      onSaved();
+    } catch (er) {
+      toast.error('Could not update question.', er instanceof ApiError ? er.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="outline" disabled={!question.is_active}>Edit</Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader><DialogTitle>Edit question</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="Topic">
+            <Input value={topic} onChange={(e) => setTopic(e.target.value)} />
+          </FormRow>
+          <QuestionEditor draft={draft} onChange={setDraft} />
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy}>{busy ? 'Saving…' : 'Save changes'}</Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+async function deactivateQuestion(id: string, onDone: () => void) {
+  try {
+    await apiDelete(`/v1/quizzes/questions/${id}`);
+    toast.success('Question deactivated.');
+    onDone();
+  } catch (er) {
+    toast.error('Could not deactivate question.', er instanceof ApiError ? er.message : undefined);
+  }
 }
 
 // ─── Create event (pick questions from the bank) ────────────────────────────
@@ -610,26 +732,189 @@ function CreatePushDialog({ onAdded }: { onAdded: () => void }) {
   );
 }
 
+// ─── Results panel ──────────────────────────────────────────────────────────
+function AttemptsResultsPanel({
+  title,
+  kind,
+  id,
+  onBack,
+}: {
+  title: string;
+  kind: 'event' | 'push';
+  id: string;
+  onBack: () => void;
+}) {
+  const [data, setData] = useState<AttemptsPayload | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [resetting, setResetting] = useState<string | null>(null);
+
+  async function load() {
+    try {
+      const path =
+        kind === 'event'
+          ? `/v1/quizzes/events/${id}/attempts`
+          : `/v1/quizzes/push/${id}/attempts`;
+      const res = await apiGet<AttemptsPayload>(path);
+      setData(res);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not load attempts.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+  }, [kind, id]);
+
+  // Live push quizzes: refresh the roster every 5s.
+  useEffect(() => {
+    if (kind !== 'push' || !data?.is_live) return;
+    const t = window.setInterval(() => {
+      void load();
+    }, 5000);
+    return () => window.clearInterval(t);
+  }, [kind, id, data?.is_live]);
+
+  async function resetAttempt(attemptId: string) {
+    if (kind !== 'event') return;
+    setResetting(attemptId);
+    try {
+      await apiPost(`/v1/quizzes/events/${id}/attempts/${attemptId}/reset`, {});
+      toast.success('Attempt reset — Punya reversed where awarded.');
+      await load();
+    } catch (er) {
+      toast.error('Could not reset attempt.', er instanceof ApiError ? er.message : undefined);
+    } finally {
+      setResetting(null);
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <Button size="sm" variant="outline" onClick={onBack}>
+          <ChevronLeft className="mr-1 h-4 w-4" />Back
+        </Button>
+        <div>
+          <h2 className="text-sm font-medium">{title}</h2>
+          {data ? (
+            <p className="text-xs text-muted-foreground">
+              {data.submitted_count} submitted
+              {typeof data.eligible_count === 'number' ? ` / ${data.eligible_count} eligible` : ''}
+              {' · '}
+              avg score {Number(data.average_score ?? 0).toFixed(1)}
+              {data.is_live ? ' · Live' : ''}
+            </p>
+          ) : null}
+        </div>
+      </div>
+
+      {error ? <AdminError message={error} /> : null}
+      {loading && !data ? (
+        <Card className="p-6 text-sm text-muted-foreground">Loading results…</Card>
+      ) : !data || data.items.length === 0 ? (
+        <Card className="p-6 text-sm text-muted-foreground">No attempts yet.</Card>
+      ) : (
+        <div className="overflow-x-auto rounded-md border border-border">
+          <table className="w-full min-w-[640px] text-left text-sm">
+            <thead className="border-b border-border bg-muted/40 text-xs text-muted-foreground">
+              <tr>
+                <th className="px-3 py-2 font-medium">Student</th>
+                <th className="px-3 py-2 font-medium">Centre</th>
+                <th className="px-3 py-2 font-medium">Score</th>
+                <th className="px-3 py-2 font-medium">Punya</th>
+                <th className="px-3 py-2 font-medium">Questions</th>
+                <th className="px-3 py-2 font-medium">Submitted</th>
+                {kind === 'event' ? <th className="px-3 py-2 font-medium">Actions</th> : null}
+              </tr>
+            </thead>
+            <tbody>
+              {data.items.map((row) => (
+                <tr key={row.attempt_id} className="border-b border-border last:border-0">
+                  <td className="px-3 py-2 font-medium">{row.full_name}</td>
+                  <td className="px-3 py-2 text-muted-foreground">{row.centre_name ?? '—'}</td>
+                  <td className="px-3 py-2">
+                    {row.submitted_at
+                      ? `${row.correct_count ?? row.score ?? 0}/${row.total_count ?? row.question_results.length}`
+                      : 'In progress'}
+                  </td>
+                  <td className="px-3 py-2">{row.points_awarded}</td>
+                  <td className="px-3 py-2">
+                    <div className="flex flex-wrap gap-1">
+                      {row.question_results.map((q, i) => (
+                        <span
+                          key={q.question_id}
+                          title={q.correct ? 'Correct' : 'Incorrect'}
+                          className={`inline-flex h-5 w-5 items-center justify-center rounded-full border text-[10px] ${
+                            q.correct
+                              ? 'border-[hsl(var(--status-success))] bg-status-success-soft text-status-success'
+                              : 'border-input bg-muted/30 text-muted-foreground'
+                          }`}
+                        >
+                          {q.correct ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
+                          <span className="sr-only">Q{i + 1}</span>
+                        </span>
+                      ))}
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 text-xs text-muted-foreground">
+                    {row.submitted_at ? new Date(row.submitted_at).toLocaleString('en-GB') : '—'}
+                  </td>
+                  {kind === 'event' ? (
+                    <td className="px-3 py-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={resetting === row.attempt_id}
+                        onClick={() => void resetAttempt(row.attempt_id)}
+                      >
+                        {resetting === row.attempt_id ? 'Resetting…' : 'Reset'}
+                      </Button>
+                    </td>
+                  ) : null}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Page ───────────────────────────────────────────────────────────────────
-type Tab = 'bank' | 'events';
+type Tab = 'bank' | 'events' | 'push';
+
+type ResultsView =
+  | { kind: 'event'; id: string; title: string }
+  | { kind: 'push'; id: string; title: string }
+  | null;
 
 export default function QuizzesPage() {
   const [tab, setTab] = useState<Tab>('bank');
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
   const [events, setEvents] = useState<EventRow[]>([]);
+  const [pushes, setPushes] = useState<PushRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [results, setResults] = useState<ResultsView>(null);
+  const [activeFilter, setActiveFilter] = useState<'true' | 'false' | 'all'>('true');
 
-  async function loadAll() {
+  async function loadAll(filter: 'true' | 'false' | 'all' = activeFilter) {
     setLoading(true);
     setError(null);
     try {
-      const [q, ev] = await Promise.all([
-        apiGet<{ items: QuestionRow[] }>('/v1/quizzes/questions?limit=200'),
+      const [q, ev, pq] = await Promise.all([
+        apiGet<{ items: QuestionRow[] }>(`/v1/quizzes/questions?limit=200&is_active=${filter}`),
         apiGet<{ items: EventRow[] }>('/v1/quizzes/events?limit=200'),
+        apiGet<{ items: PushRow[] }>('/v1/quizzes/push?limit=200'),
       ]);
       setQuestions(q?.items ?? []);
       setEvents(ev?.items ?? []);
+      setPushes(pq?.items ?? []);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not load quizzes.');
     } finally {
@@ -637,15 +922,50 @@ export default function QuizzesPage() {
     }
   }
 
-  useEffect(() => { void loadAll(); }, []);
+  useEffect(() => { void loadAll(activeFilter); }, [activeFilter]);
+
+  async function deleteEvent(ev: EventRow, force: boolean) {
+    try {
+      await apiDelete(`/v1/quizzes/events/${ev.id}`, force ? { force: true } : {});
+      toast.success(force ? 'Event deleted (awards reversed).' : 'Event deleted.');
+      if (results?.kind === 'event' && results.id === ev.id) setResults(null);
+      await loadAll();
+    } catch (er) {
+      if (er instanceof ApiError && er.code === 'ERR_EVENT_HAS_ATTEMPTS') {
+        const okForce = window.confirm(
+          'This event has submitted attempts. Delete anyway and reverse awarded Punya?',
+        );
+        if (okForce) await deleteEvent(ev, true);
+        return;
+      }
+      toast.error('Could not delete event.', er instanceof ApiError ? er.message : undefined);
+    }
+  }
 
   const actions = (
     <div className="flex items-center gap-2">
-      <AddQuestionDialog onAdded={loadAll} />
-      <CreateEventDialog questions={questions} onAdded={loadAll} />
-      <CreatePushDialog onAdded={loadAll} />
+      <AddQuestionDialog onAdded={() => void loadAll()} />
+      <CreateEventDialog questions={questions.filter((q) => q.is_active)} onAdded={() => void loadAll()} />
+      <CreatePushDialog onAdded={() => void loadAll()} />
     </div>
   );
+
+  if (results) {
+    return (
+      <AdminPageShell
+        title="Quizzes"
+        subtitle="Question bank, scheduled quiz events, and live push quizzes for your scope."
+        actions={actions}
+      >
+        <AttemptsResultsPanel
+          title={results.title}
+          kind={results.kind}
+          id={results.id}
+          onBack={() => setResults(null)}
+        />
+      </AdminPageShell>
+    );
+  }
 
   return (
     <AdminPageShell
@@ -655,14 +975,36 @@ export default function QuizzesPage() {
     >
       {error ? <AdminError message={error} /> : null}
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <Button size="sm" variant={tab === 'bank' ? 'default' : 'outline'} onClick={() => setTab('bank')}>
           Question bank ({questions.length})
         </Button>
         <Button size="sm" variant={tab === 'events' ? 'default' : 'outline'} onClick={() => setTab('events')}>
           Quiz events ({events.length})
         </Button>
+        <Button size="sm" variant={tab === 'push' ? 'default' : 'outline'} onClick={() => setTab('push')}>
+          Push quizzes ({pushes.length})
+        </Button>
       </div>
+
+      {tab === 'bank' ? (
+        <div className="flex flex-wrap gap-2">
+          {([
+            ['true', 'Active'],
+            ['false', 'Inactive'],
+            ['all', 'All'],
+          ] as const).map(([value, label]) => (
+            <Button
+              key={value}
+              size="sm"
+              variant={activeFilter === value ? 'default' : 'outline'}
+              onClick={() => setActiveFilter(value)}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+      ) : null}
 
       {loading ? (
         <Card className="p-6 text-sm text-muted-foreground">Loading…</Card>
@@ -673,27 +1015,46 @@ export default function QuizzesPage() {
           <div className="space-y-3">
             {questions.map((q) => (
               <Card key={q.id} className="p-4">
-                <div className="flex items-center gap-2">
-                  <span className="rounded bg-muted px-2 py-0.5 text-xs font-medium capitalize text-muted-foreground">{q.scope}</span>
-                  {q.topic ? <span className="text-xs text-muted-foreground">{q.topic}</span> : null}
-                  <span className="text-xs capitalize text-muted-foreground">{q.difficulty}</span>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded bg-muted px-2 py-0.5 text-xs font-medium capitalize text-muted-foreground">{q.scope}</span>
+                      {q.topic ? <span className="text-xs text-muted-foreground">{q.topic}</span> : null}
+                      <span className="text-xs capitalize text-muted-foreground">{q.difficulty}</span>
+                      {!q.is_active ? (
+                        <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">Inactive</span>
+                      ) : null}
+                    </div>
+                    <p className="mt-2 text-sm font-medium">{q.question_en}</p>
+                    <ul className="mt-2 space-y-1">
+                      {q.options.map((o, i) => (
+                        <li key={i} className="flex items-center gap-2 text-sm">
+                          <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full border text-[10px] ${q.correct_indices.includes(i) ? 'border-[hsl(var(--status-success))] bg-status-success-soft text-status-success' : 'border-input text-transparent'}`}>
+                            <Check className="h-3 w-3" />
+                          </span>
+                          <span className={q.correct_indices.includes(i) ? 'font-medium' : ''}>{o.text_en}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="flex shrink-0 flex-col gap-2">
+                    <EditQuestionDialog question={q} onSaved={() => void loadAll()} />
+                    {q.is_active ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void deactivateQuestion(q.id, () => void loadAll())}
+                      >
+                        Deactivate
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
-                <p className="mt-2 text-sm font-medium">{q.question_en}</p>
-                <ul className="mt-2 space-y-1">
-                  {q.options.map((o, i) => (
-                    <li key={i} className="flex items-center gap-2 text-sm">
-                      <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full border text-[10px] ${q.correct_indices.includes(i) ? 'border-emerald-500 bg-emerald-500/10 text-emerald-700' : 'border-input text-transparent'}`}>
-                        <Check className="h-3 w-3" />
-                      </span>
-                      <span className={q.correct_indices.includes(i) ? 'font-medium' : ''}>{o.text_en}</span>
-                    </li>
-                  ))}
-                </ul>
               </Card>
             ))}
           </div>
         )
-      ) : (
+      ) : tab === 'events' ? (
         events.length === 0 ? (
           <Card className="p-6 text-sm text-muted-foreground">No quiz events yet. Create one.</Card>
         ) : (
@@ -701,22 +1062,76 @@ export default function QuizzesPage() {
             {events.map((ev) => (
               <Card key={ev.id} className="p-4">
                 <div className="flex items-start justify-between gap-3">
-                  <div>
+                  <button
+                    type="button"
+                    className="min-w-0 flex-1 text-left"
+                    onClick={() => setResults({ kind: 'event', id: ev.id, title: ev.title_en })}
+                  >
                     <p className="text-sm font-medium">{ev.title_en}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       <span className="capitalize">{ev.scope}</span> · {ev.question_count} questions ·{' '}
-                      {ev.participation_points} participation / {ev.win_points} win pts
+                      {ev.participation_points ?? '—'} participation / {ev.win_points ?? '—'} win pts
                     </p>
-                  </div>
-                  <div className="text-right text-xs text-muted-foreground">
-                    <div>{new Date(ev.start_at).toLocaleString('en-GB')}</div>
-                    <div>→ {new Date(ev.end_at).toLocaleString('en-GB')}</div>
+                    <p className="mt-1 text-xs text-primary">View results</p>
+                  </button>
+                  <div className="flex shrink-0 flex-col items-end gap-2">
+                    <div className="text-right text-xs text-muted-foreground">
+                      <div>{new Date(ev.start_at).toLocaleString('en-GB')}</div>
+                      <div>→ {new Date(ev.end_at).toLocaleString('en-GB')}</div>
+                    </div>
+                    <Button size="sm" variant="outline" onClick={() => void deleteEvent(ev, false)}>
+                      Delete
+                    </Button>
                   </div>
                 </div>
               </Card>
             ))}
           </div>
         )
+      ) : pushes.length === 0 ? (
+        <Card className="p-6 text-sm text-muted-foreground">No push quizzes yet. Start one.</Card>
+      ) : (
+        <div className="space-y-3">
+          {pushes.map((pq) => (
+            <Card
+              key={pq.id}
+              className="cursor-pointer p-4 transition-colors hover:bg-muted/30"
+              onClick={() =>
+                setResults({
+                  kind: 'push',
+                  id: pq.id,
+                  title: `Push quiz · ${new Date(pq.started_at).toLocaleString('en-GB')}`,
+                })
+              }
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="rounded bg-muted px-2 py-0.5 text-xs font-medium capitalize text-muted-foreground">
+                      {pq.scope}
+                    </span>
+                    {pq.is_live ? (
+                      <span className="rounded bg-status-success-soft px-2 py-0.5 text-xs font-medium text-status-success">
+                        Live
+                      </span>
+                    ) : (
+                      <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">Ended</span>
+                    )}
+                  </div>
+                  <p className="mt-2 text-xs text-muted-foreground">
+                    {pq.question_count} questions · {pq.submitted_count} submitted
+                    {pq.completion_points != null ? ` · ${pq.completion_points} pts` : ''}
+                  </p>
+                  <p className="mt-1 text-xs text-primary">View results</p>
+                </div>
+                <div className="text-right text-xs text-muted-foreground">
+                  <div>{new Date(pq.started_at).toLocaleString('en-GB')}</div>
+                  <div>expires {new Date(pq.expires_at).toLocaleString('en-GB')}</div>
+                </div>
+              </div>
+            </Card>
+          ))}
+        </div>
       )}
     </AdminPageShell>
   );

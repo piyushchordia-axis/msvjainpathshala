@@ -252,6 +252,19 @@ Table naming is British: `centres`, `sanchalak_centre_assignments`, `centre_holi
 ### AT31 — Debounced attendance push + windowed admin feed
 The parent "attendance marked" push is debounced per `(student, session)` behind a 5-minute settle window. The Socket.IO admin feed emits a 10-second windowed aggregate count, not one event per mark. The load-test SLO is 5,000 marks in 60s.
 
+### AT32 — Check-in is never a precondition for marking attendance (resolved 2026-08-05)
+Marking attendance MUST NOT require a prior check-in. A Guruji who forgot to tap "Start class", whose GPS never resolved, or who declined the location permission still marks a full roster — same as AT6 refuses to infer absence from silence and AT8 refuses to lose a day's work over an unmaterialised session. Blocking the roster is a larger harm than an unverified session.
+
+Four binding consequences:
+
+1. **Soft transition.** The first mark on a `'scheduled'` session sets `status='in_progress'` and `conducted_by` in the SAME transaction as the mark, leaving `check_in_at` NULL. This is what the AT8 soft-create path already does for unmaterialised sessions; a materialised session must not behave differently. Marking a `'completed'` session inside the AT26 edit window does NOT reopen it.
+
+2. **No fix is not a bad fix.** `check_in_lat`, `check_in_lng`, `check_in_distance_m` and `check_in_accuracy_m` are NULLABLE and MUST be NULL when no location was captured. Never write sentinel coordinates. `(0, 0)` is a real point in the Gulf of Guinea; passing it means every soft-created session records the Guruji ~6,000 km from the centre, flags them, and pages the Sanchalak. Callers with no fix pass `null` — never `lat: 0, lng: 0, accuracy_m: 9999`.
+
+3. **`gps_flagged` means "measured and wrong", never "not measured".** It is set only when a real fix was compared against `gps_radius_meters` and failed, or when `accuracy_m > 100` (AT15). A session with no fix at all sets `gps_unverified=true` and `gps_flagged=false`. `notifyGpsFlag` MUST NOT fire for a session that was never geolocated — a Sanchalak who is paged for every offline roster stops reading the alerts.
+
+4. **Visible, not punitive.** A session marked without check-in carries `check_in_at IS NULL` and surfaces to the Sanchalak as "not checked in", distinct from both a verified check-in and a GPS-flagged one. It is pastoral information, exactly as AT3 treats `'late'` — not a violation, not an alert, and never a reason to reject the marks.
+
 ---
 
 ## Attendance — frozen route table
@@ -294,6 +307,8 @@ One table for all scheduled work. Times are IST (Asia/Kolkata) unless noted. Ent
 | `auth.session.cleanup` | Daily 02:30 IST | schedule | |
 | `media.cleanup_unfinalized` | Daily 03:30 IST | schedule | |
 | `donation.eightyg.year_end_summary` | 1 April 00:30 IST | schedule | |
+| `exam.attempt_abandon` | Every 30 min | queue | BullMQ — abandon in_progress after `window_end + 2h` |
+| `exam.top_score` | Daily 03:15 IST | queue | BullMQ — top-score Punya catch-up (primary path is enqueue on release) |
 
 ---
 
@@ -435,6 +450,7 @@ ai.moderation.image           shivir.live.broadcast        analytics.refresh_vie
 digest.weekly.email           db.backfill.generic          auth.session.cleanup
 notifications.birthday        notifications.monthly_reports notifications.push
 notifications.sms             notifications.email          debug.echo
+exam.attempt_abandon          exam.top_score
 ```
 
 ### Scheduled jobs

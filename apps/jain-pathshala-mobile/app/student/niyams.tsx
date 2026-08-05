@@ -117,10 +117,10 @@ export default function StudentNiyams() {
             ) : (
               <View style={{ gap: 10 }}>
                 {catalogRows.map((row) => {
-                  const title = hi ? row.title_hi : row.title_en;
+                  const title = hi ? row.title_hi ?? row.title_en : row.title_en;
                   const submitted = !!row.submitted_this_period;
-                  const tag = hi ? row.period_status_tag_hi : row.period_status_tag_en;
-                  const period = hi ? row.period_label_hi : row.period_label_en;
+                  const tag = hi ? row.period_status_tag_hi ?? row.period_status_tag_en : row.period_status_tag_en;
+                  const period = hi ? row.period_label_hi ?? row.period_label_en : row.period_label_en;
                   const range = dateRangeLabel(row.start_date, row.end_date, hi);
                   const ends = endsInDaysLabel(row.end_date, hi);
                   const meta = [row.niyam_type, period, range, submitted ? tag : null]

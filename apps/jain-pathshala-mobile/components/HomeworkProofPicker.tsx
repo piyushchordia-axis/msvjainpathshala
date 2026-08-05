@@ -15,6 +15,7 @@ import {
 } from "@/lib/proof-media";
 import {
   enqueueHomeworkProofUpload,
+  type HomeworkProofSyncState,
 } from "@/lib/offline/media-upload-queue";
 import { enqueueHomeworkSubmission, drainQueues } from "@/lib/offline/sync-engine";
 import { Body, Button, Row } from "@/components/ui";
@@ -32,9 +33,41 @@ type Props = {
   submissionId: string;
   studentId: string;
   disabled?: boolean;
-  /** Fired after Submit queues the proof. `offline` when upload did not complete now. */
-  onQueued?: (info: { offline: boolean }) => void;
+  /**
+   * Fired after Submit finishes a drain attempt.
+   * `offline` when still queued locally; only call parents' "submitted" UX on synced.
+   */
+  onQueued?: (info: { offline: boolean; sync_state: HomeworkProofSyncState }) => void;
 };
+
+function statusCopy(
+  hi: boolean,
+  sync_state: HomeworkProofSyncState,
+  error_message?: string,
+): string {
+  if (sync_state === "synced") {
+    return hi ? "प्रस्तुत हो गया।" : "Submitted.";
+  }
+  if (sync_state === "queued") {
+    return hi
+      ? "ऑफ़लाइन सहेजा गया — कनेक्ट होने पर अपलोड होगा।"
+      : "Saved offline — will upload when you reconnect.";
+  }
+  if (sync_state === "conflict") {
+    return (
+      error_message ??
+      (hi
+        ? "यह कार्य सर्वर पर नए अपडेट से टकराता है — स्क्रीन रीफ़्रेश करें।"
+        : "This conflicts with a newer update on the server — refresh and try again.")
+    );
+  }
+  return (
+    error_message ??
+    (hi
+      ? "प्रस्तुत नहीं हो सका — फिर से प्रयास करें।"
+      : "Could not submit — check the file and try again.")
+  );
+}
 
 export function HomeworkProofPicker({
   assignmentId,
@@ -48,16 +81,19 @@ export function HomeworkProofPicker({
   const [busy, setBusy] = useState(false);
   const [local, setLocal] = useState<LocalProof | null>(null);
   const [statusText, setStatusText] = useState<string | null>(null);
+  const [lastSyncState, setLastSyncState] = useState<HomeworkProofSyncState | null>(null);
 
   function setPicked(uri: string, name: string, mime: string) {
     setLocal({ uri, name, mime });
     setStatusText(null);
+    setLastSyncState(null);
   }
 
   async function submitProof() {
     if (!local || disabled || busy) return;
     setBusy(true);
     setStatusText(hi ? "अपलोड हो रहा है…" : "Uploading…");
+    setLastSyncState(null);
     try {
       const sizeBytes = await resolveLocalByteSize(local.uri);
       const result = await enqueueHomeworkProofUpload(
@@ -84,19 +120,24 @@ export function HomeworkProofPicker({
         return;
       }
 
-      const offline = !result.remote_url;
-      setStatusText(
-        offline
-          ? hi
-            ? "ऑफ़लाइन सहेजा गया — कनेक्ट होने पर अपलोड होगा।"
-            : "Saved offline — will upload when you reconnect."
-          : hi
-            ? "प्रस्तुत हो गया।"
-            : "Submitted.",
-      );
-      onQueued?.({ offline });
+      const sync_state = result.sync_state;
+      setLastSyncState(sync_state);
+      setStatusText(statusCopy(hi, sync_state, result.error_message));
+
+      if (sync_state === "failed" || sync_state === "conflict") {
+        Alert.alert(
+          hi ? "प्रस्तुत नहीं हुआ" : "Not submitted",
+          statusCopy(hi, sync_state, result.error_message),
+        );
+      }
+
+      onQueued?.({
+        offline: sync_state === "queued",
+        sync_state,
+      });
     } catch (err) {
       setStatusText(null);
+      setLastSyncState("failed");
       Alert.alert(
         hi ? "सहेजा नहीं जा सका" : "Could not save",
         err instanceof Error
@@ -154,6 +195,8 @@ export function HomeworkProofPicker({
     setPicked(asset.uri, name, mime);
   }
 
+  const showRetry = lastSyncState === "failed" && !!local;
+
   return (
     <View style={{ gap: 10 }}>
       <Body style={{ fontSize: 13 }}>
@@ -191,8 +234,16 @@ export function HomeworkProofPicker({
           />
           <Row style={{ gap: 10, flexWrap: "wrap" }}>
             <Button
-              label={hi ? "भेजें" : "Submit"}
-              icon="checkmark"
+              label={
+                showRetry
+                  ? hi
+                    ? "फिर से प्रयास करें"
+                    : "Retry"
+                  : hi
+                    ? "भेजें"
+                    : "Submit"
+              }
+              icon={showRetry ? "refresh" : "checkmark"}
               loading={busy}
               disabled={disabled || busy}
               style={{ flex: 1, minWidth: 120 }}
@@ -205,13 +256,23 @@ export function HomeworkProofPicker({
               onPress={() => {
                 setLocal(null);
                 setStatusText(null);
+                setLastSyncState(null);
               }}
             />
           </Row>
         </View>
       ) : null}
       {statusText ? (
-        <Body muted style={{ fontSize: 12 }}>
+        <Body
+          muted={lastSyncState !== "failed" && lastSyncState !== "conflict"}
+          style={{
+            fontSize: 12,
+            color:
+              lastSyncState === "failed" || lastSyncState === "conflict"
+                ? c.destructive
+                : undefined,
+          }}
+        >
           {statusText}
         </Body>
       ) : null}

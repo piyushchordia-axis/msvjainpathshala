@@ -29,6 +29,11 @@ export const centres = pgTable(
     city_id: uuid("city_id")
       .notNull()
       .references(() => cities.id, { onDelete: "restrict" }),
+    /**
+     * Pathshala display code — `{CITY}-{LOCALITY}` e.g. MUM-GHK.
+     * Unique when set; required for new centres.
+     */
+    code: varchar("code", { length: 16 }),
     name: text("name").notNull(),
     locality: text("locality"),
     pincode: varchar("pincode", { length: 10 }),
@@ -46,6 +51,7 @@ export const centres = pgTable(
   (t) => ({
     city_idx: index("idx_centres_city").on(t.city_id),
     state_idx: index("idx_centres_state").on(t.state_id),
+    code_uq: uniqueIndex("centres_code_uq").on(t.code).where(sql`${t.code} is not null`),
   }),
 );
 

@@ -2,23 +2,23 @@
  * Student online-exam take-flow (mobile).
  *
  * Mirrors the /v1/exams student API and the quizzes screen's UX:
- *   available  → GET  /v1/exams/available
- *   start      → POST /v1/exams/:id/start         (optional OTP gate)
+ *   available  → GET  /v1/exams/available?student_id=
+ *   start      → POST /v1/exams/:id/start         (otp + student_id)
  *   submit     → POST /v1/exams/attempts/:id/submit
- *   result     → GET  /v1/exams/attempts/:id/result   (gated on release)
+ *   result     → GET  /v1/exams/attempts/:id/result?student_id=
  *
- * The student is resolved server-side from the auth token, so no student_id is
- * sent in the body. Query hooks are kept local to this screen to avoid touching
- * the shared lib/queries.ts.
+ * student_id comes from useSessionView().activeStudentId (ChildSwitcher) so
+ * multi-child parents hit the correct child's attempts. Query hooks stay local
+ * to this screen to avoid touching the shared lib/queries.ts.
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, Pressable, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
-import { apiGet, apiPost, ApiError } from "@/lib/api";
+import { apiGet, apiPost, apiPut, ApiError } from "@/lib/api";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
@@ -37,6 +37,7 @@ interface AvailableExam {
   max_attempts: number;
   requires_otp: boolean;
   already_attempted_count: number;
+  open_attempt_id: string | null;
 }
 
 interface ExamOption {
@@ -59,6 +60,21 @@ interface StartResponse {
   questions: ExamQuestion[];
 }
 
+interface ResumeResponse {
+  attempt_id: string;
+  exam_id: string;
+  title_en: string;
+  title_hi: string | null;
+  window_end: string;
+  total_marks?: number;
+  questions: ExamQuestion[];
+  answers: {
+    question_id: string;
+    selected_option_ids: string[];
+    text_answer: string | null;
+  }[];
+}
+
 interface SubmitResponse {
   attempt_id: string;
   status: string;
@@ -74,32 +90,70 @@ interface ResultResponse {
   total_marks?: number;
   pass_mark?: number;
   passed?: boolean;
+  per_question?: {
+    question_id: string;
+    question_en: string;
+    question_hi: string | null;
+    marks: number;
+    marks_awarded: number | null;
+    is_correct: boolean | null;
+  }[];
 }
 
 /* --------------------------------------------------------------- queries --- */
 
 const examKeys = {
-  available: ["me", "exams", "available"] as const,
-  result: (attemptId: string) => ["me", "exams", "result", attemptId] as const,
+  available: (studentId: string) => ["me", "exams", "available", studentId] as const,
+  result: (attemptId: string, studentId: string) =>
+    ["me", "exams", "result", attemptId, studentId] as const,
 };
 
-function useAvailableExams(enabled: boolean) {
+function useAvailableExams(studentId: string | undefined) {
   return useQuery({
-    queryKey: examKeys.available,
-    queryFn: () => apiGet<{ items: AvailableExam[] }>("/v1/exams/available"),
-    enabled,
+    queryKey: examKeys.available(studentId ?? ""),
+    queryFn: () =>
+      apiGet<{ items: AvailableExam[] }>(
+        `/v1/exams/available?student_id=${encodeURIComponent(studentId!)}`,
+      ),
+    enabled: !!studentId,
   });
 }
 
 function useStartExam() {
   return useMutation({
-    mutationFn: ({ id, otp }: { id: string; otp?: string }) =>
-      apiPost<StartResponse>(`/v1/exams/${id}/start`, otp ? { otp } : {}),
+    mutationFn: ({ id, otp, student_id }: { id: string; otp?: string; student_id: string }) =>
+      apiPost<StartResponse>(`/v1/exams/${id}/start`, {
+        student_id,
+        ...(otp ? { otp } : {}),
+      }),
   });
+}
+
+function useResumeExam() {
+  return useMutation({
+    mutationFn: ({ attemptId, student_id }: { attemptId: string; student_id: string }) =>
+      apiGet<ResumeResponse>(
+        `/v1/exams/attempts/${attemptId}?student_id=${encodeURIComponent(student_id)}`,
+      ),
+  });
+}
+
+function hydrateAnswers(answers: ResumeResponse["answers"]): {
+  selected: Record<string, string[]>;
+  text: Record<string, string>;
+} {
+  const selected: Record<string, string[]> = {};
+  const text: Record<string, string> = {};
+  for (const a of answers) {
+    if (a.selected_option_ids?.length) selected[a.question_id] = a.selected_option_ids;
+    if (a.text_answer != null && a.text_answer.length > 0) text[a.question_id] = a.text_answer;
+  }
+  return { selected, text };
 }
 
 interface SubmitInput {
   attemptId: string;
+  student_id: string;
   answers: {
     question_id: string;
     selected_option_ids?: string[];
@@ -110,17 +164,24 @@ interface SubmitInput {
 function useSubmitExam() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ attemptId, answers }: SubmitInput) =>
-      apiPost<SubmitResponse>(`/v1/exams/attempts/${attemptId}/submit`, { answers }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: examKeys.available }),
+    mutationFn: ({ attemptId, answers, student_id }: SubmitInput) =>
+      apiPost<SubmitResponse>(`/v1/exams/attempts/${attemptId}/submit`, {
+        answers,
+        student_id,
+      }),
+    onSuccess: (_data, vars) =>
+      qc.invalidateQueries({ queryKey: examKeys.available(vars.student_id) }),
   });
 }
 
-function useExamResult(attemptId: string | null) {
+function useExamResult(attemptId: string | null, studentId: string | null) {
   return useQuery({
-    queryKey: examKeys.result(attemptId ?? ""),
-    queryFn: () => apiGet<ResultResponse>(`/v1/exams/attempts/${attemptId}/result`),
-    enabled: !!attemptId,
+    queryKey: examKeys.result(attemptId ?? "", studentId ?? ""),
+    queryFn: () =>
+      apiGet<ResultResponse>(
+        `/v1/exams/attempts/${attemptId}/result?student_id=${encodeURIComponent(studentId!)}`,
+      ),
+    enabled: !!attemptId && !!studentId,
   });
 }
 
@@ -154,15 +215,17 @@ function fmtRange(start: string, end: string, hi: boolean): string {
 function ResultCard({
   active,
   submit,
+  studentId,
   onDone,
 }: {
   active: { titleEn: string; titleHi: string | null; attemptId: string };
   submit: SubmitResponse;
+  studentId: string;
   onDone: () => void;
 }) {
   const c = useColors();
   const { hi } = useLocale();
-  const result = useExamResult(active.attemptId);
+  const result = useExamResult(active.attemptId, studentId);
   const released = result.data && typeof result.data.score === "number";
 
   return (
@@ -210,6 +273,53 @@ function ResultCard({
                 tone={result.data.passed ? "success" : "error"}
               />
             </View>
+            {(result.data.per_question ?? []).length > 0 ? (
+              <View style={{ marginTop: 16, gap: 8 }}>
+                <Body muted style={{ fontSize: 12, fontWeight: "600" }}>
+                  {hi ? "उत्तर समीक्षा" : "Answer review"}
+                </Body>
+                {result.data.per_question!.map((pq, i) => {
+                  const prompt = (hi ? pq.question_hi : pq.question_en) ?? pq.question_en;
+                  return (
+                    <View
+                      key={pq.question_id}
+                      style={{
+                        borderWidth: 1,
+                        borderColor: c.border,
+                        borderRadius: c.radius,
+                        padding: 10,
+                      }}
+                    >
+                      <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                        <Body style={{ flex: 1, fontSize: 13, fontWeight: "600", paddingRight: 8 }}>
+                          {i + 1}. {prompt}
+                        </Body>
+                        <Body muted style={{ fontSize: 12 }}>
+                          {pq.marks_awarded ?? "—"} / {pq.marks}
+                        </Body>
+                      </Row>
+                      {pq.is_correct != null ? (
+                        <Body
+                          style={{
+                            marginTop: 4,
+                            fontSize: 12,
+                            color: pq.is_correct ? c.successText : c.errorText,
+                          }}
+                        >
+                          {pq.is_correct
+                            ? hi
+                              ? "सही"
+                              : "Correct"
+                            : hi
+                              ? "गलत"
+                              : "Incorrect"}
+                        </Body>
+                      ) : null}
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
           </>
         ) : (
           <Body muted style={{ marginTop: 16, fontSize: 13 }}>
@@ -240,10 +350,11 @@ export default function Exams() {
   const { hi } = useLocale();
   const { activeStudentId, activeChild, loading, refetch } = useSessionView();
 
-  const exams = useAvailableExams(!!activeStudentId);
+  const exams = useAvailableExams(activeStudentId ?? undefined);
   const rows = exams.data?.items ?? [];
 
   const startExam = useStartExam();
+  const resumeExam = useResumeExam();
   const submitExam = useSubmitExam();
 
   const [active, setActive] = useState<ActiveAttempt | null>(null);
@@ -253,10 +364,49 @@ export default function Exams() {
   // OTP entry state for the exam currently being started.
   const [otpFor, setOtpFor] = useState<AvailableExam | null>(null);
   const [otp, setOtp] = useState("");
+  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const saveGen = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      for (const t of Object.values(saveTimers.current)) clearTimeout(t);
+      saveTimers.current = {};
+    };
+  }, []);
+
+  function scheduleAutosave(
+    attemptId: string,
+    questionId: string,
+    payload: { selected_option_ids?: string[]; text_answer?: string },
+  ) {
+    if (!activeStudentId) return;
+    const existing = saveTimers.current[questionId];
+    if (existing) clearTimeout(existing);
+    saveTimers.current[questionId] = setTimeout(() => {
+      delete saveTimers.current[questionId];
+      const gen = ++saveGen.current;
+      setSaveStatus("saving");
+      void apiPut(`/v1/exams/attempts/${attemptId}/answers/${questionId}`, {
+        student_id: activeStudentId,
+        ...payload,
+      })
+        .then(() => {
+          if (gen === saveGen.current) setSaveStatus("saved");
+        })
+        .catch(() => {
+          if (gen === saveGen.current) setSaveStatus("idle");
+        });
+    }, 2000);
+  }
 
   function requestStart(exam: AvailableExam) {
     if (!activeStudentId) return;
     setResult(null);
+    if (exam.open_attempt_id) {
+      doResume(exam, exam.open_attempt_id);
+      return;
+    }
     if (exam.requires_otp) {
       setOtp("");
       setOtpFor(exam);
@@ -265,12 +415,53 @@ export default function Exams() {
     doStart(exam);
   }
 
+  function doResume(exam: AvailableExam, attemptId: string) {
+    if (!activeStudentId) return;
+    resumeExam.mutate(
+      { attemptId, student_id: activeStudentId },
+      {
+        onSuccess: (data) => {
+          const hydrated = hydrateAnswers(data.answers ?? []);
+          setSaveStatus("idle");
+          setActive({
+            examId: data.exam_id || exam.id,
+            titleEn: data.title_en || exam.title_en,
+            titleHi: data.title_hi ?? exam.title_hi,
+            totalMarks: data.total_marks ?? exam.total_marks,
+            attemptId: data.attempt_id,
+            questions: data.questions ?? [],
+            selected: hydrated.selected,
+            text: hydrated.text,
+          });
+        },
+        onError: (err) => {
+          const code2 = err instanceof ApiError ? err.code : "";
+          Alert.alert(
+            hi ? "परीक्षा जारी नहीं हुई" : "Could not resume",
+            code2 === "ERR_ALREADY_SUBMITTED"
+              ? hi
+                ? "यह प्रयास पहले ही जमा हो चुका है।"
+                : "This attempt was already submitted."
+              : err instanceof Error
+                ? err.message
+                : hi
+                  ? "कृपया पुनः प्रयास करें।"
+                  : "Please try again.",
+          );
+          exams.refetch();
+        },
+      },
+    );
+  }
+
   function doStart(exam: AvailableExam, code?: string) {
+    if (!activeStudentId) return;
     startExam.mutate(
-      { id: exam.id, otp: code },
+      { id: exam.id, otp: code, student_id: activeStudentId },
       {
         onSuccess: (data) => {
           setOtpFor(null);
+          setSaveStatus("idle");
           setActive({
             examId: exam.id,
             titleEn: exam.title_en,
@@ -309,33 +500,43 @@ export default function Exams() {
   }
 
   function pickSingle(qid: string, optionId: string) {
-    setActive((prev) => (prev ? { ...prev, selected: { ...prev.selected, [qid]: [optionId] } } : prev));
+    if (!active) return;
+    scheduleAutosave(active.attemptId, qid, { selected_option_ids: [optionId] });
+    setActive((prev) =>
+      prev ? { ...prev, selected: { ...prev.selected, [qid]: [optionId] } } : prev,
+    );
   }
   function toggleMulti(qid: string, optionId: string) {
-    setActive((prev) => {
-      if (!prev) return prev;
-      const cur = prev.selected[qid] ?? [];
-      const next = cur.includes(optionId) ? cur.filter((x) => x !== optionId) : [...cur, optionId];
-      return { ...prev, selected: { ...prev.selected, [qid]: next } };
-    });
+    if (!active) return;
+    const cur = active.selected[qid] ?? [];
+    const next = cur.includes(optionId) ? cur.filter((x) => x !== optionId) : [...cur, optionId];
+    scheduleAutosave(active.attemptId, qid, { selected_option_ids: next });
+    setActive((prev) =>
+      prev ? { ...prev, selected: { ...prev.selected, [qid]: next } } : prev,
+    );
   }
   function setText(qid: string, value: string) {
+    if (!active) return;
+    scheduleAutosave(active.attemptId, qid, { text_answer: value });
     setActive((prev) => (prev ? { ...prev, text: { ...prev.text, [qid]: value } } : prev));
   }
 
   function submit() {
-    if (!active) return;
+    if (!active || !activeStudentId) return;
+    for (const t of Object.values(saveTimers.current)) clearTimeout(t);
+    saveTimers.current = {};
     const answers = active.questions.map((q) =>
       q.question_type === "text"
         ? { question_id: q.id, text_answer: active.text[q.id] ?? "" }
         : { question_id: q.id, selected_option_ids: active.selected[q.id] ?? [] },
     );
     submitExam.mutate(
-      { attemptId: active.attemptId, answers },
+      { attemptId: active.attemptId, answers, student_id: activeStudentId },
       {
         onSuccess: (data) => {
           setResult({ titleEn: active.titleEn, titleHi: active.titleHi, attemptId: active.attemptId, submit: data });
           setActive(null);
+          setSaveStatus("idle");
         },
         onError: (err) => {
           const code2 = err instanceof ApiError ? err.code : "";
@@ -378,10 +579,11 @@ export default function Exams() {
         }}
       >
         {/* ---- Result ---------------------------------------------------- */}
-        {result ? (
+        {result && activeStudentId ? (
           <ResultCard
             active={result}
             submit={result.submit}
+            studentId={activeStudentId}
             onDone={() => {
               setResult(null);
               exams.refetch();
@@ -398,6 +600,11 @@ export default function Exams() {
                   tone={answeredCount === active.questions.length ? "success" : "neutral"}
                 />
                 <Pill label={`${active.totalMarks} ${hi ? "अंक" : "marks"}`} tone="info" />
+                {saveStatus === "saving" ? (
+                  <Pill label={hi ? "सहेजा जा रहा है…" : "Saving…"} tone="neutral" />
+                ) : saveStatus === "saved" ? (
+                  <Pill label={hi ? "सहेजा गया" : "Saved"} tone="success" />
+                ) : null}
               </Row>
             </Card>
 
@@ -583,9 +790,12 @@ export default function Exams() {
             const upcoming = now < new Date(exam.window_start).getTime();
             const attemptsLeft = exam.max_attempts - exam.already_attempted_count;
             const exhausted = attemptsLeft <= 0;
-            const isStarting = startExam.isPending && startExam.variables?.id === exam.id;
+            const canResume = !!exam.open_attempt_id;
+            const isStarting =
+              (startExam.isPending && startExam.variables?.id === exam.id) ||
+              (resumeExam.isPending && resumeExam.variables?.attemptId === exam.open_attempt_id);
             return (
-              <Card key={exam.id} style={!open || exhausted ? { opacity: 0.7 } : undefined}>
+              <Card key={exam.id} style={!open || (exhausted && !canResume) ? { opacity: 0.7 } : undefined}>
                 <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
                   <View style={{ flex: 1, paddingRight: 10 }}>
                     <Title style={{ fontSize: 16 }}>{hi ? exam.title_hi ?? exam.title_en : exam.title_en}</Title>
@@ -614,25 +824,29 @@ export default function Exams() {
                 <View style={{ marginTop: 14 }}>
                   <Button
                     label={
-                      exhausted
+                      canResume
                         ? hi
-                          ? "सभी प्रयास समाप्त"
-                          : "No attempts left"
-                        : !open
-                          ? upcoming
-                            ? hi
-                              ? "अभी शुरू नहीं"
-                              : "Not open yet"
+                          ? "परीक्षा जारी रखें"
+                          : "Resume exam"
+                        : exhausted
+                          ? hi
+                            ? "सभी प्रयास समाप्त"
+                            : "No attempts left"
+                          : !open
+                            ? upcoming
+                              ? hi
+                                ? "अभी शुरू नहीं"
+                                : "Not open yet"
+                              : hi
+                                ? "परीक्षा बंद"
+                                : "Window closed"
                             : hi
-                              ? "परीक्षा बंद"
-                              : "Window closed"
-                          : hi
-                            ? "परीक्षा शुरू करें"
-                            : "Start exam"
+                              ? "परीक्षा शुरू करें"
+                              : "Start exam"
                     }
                     icon="play"
                     loading={isStarting}
-                    disabled={!open || exhausted}
+                    disabled={!open || (!canResume && exhausted)}
                     onPress={() => requestStart(exam)}
                   />
                 </View>

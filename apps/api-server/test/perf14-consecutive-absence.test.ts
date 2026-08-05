@@ -7,45 +7,13 @@ import { pool } from "@workspace/db";
 import { runConsecutiveAbsenceCheck } from "../src/services/consecutive-absence";
 import * as notify from "../src/lib/notify";
 import { vi } from "vitest";
+import { withQueryCount } from "./helpers";
 
 afterAll(async () => {
   const { workerPool } = await import("@workspace/db");
   await Promise.all([pool.end(), workerPool.end()]);
 });
 
-async function withQueryCount<T>(fn: () => Promise<T>): Promise<{ result: T; queries: number }> {
-  let queries = 0;
-  const origConnect = pool.connect.bind(pool);
-  const origQuery = pool.query.bind(pool);
-  const wrapClient = (client: { query: typeof pool.query; __p?: typeof pool.query }) => {
-    if (!client.__p) client.__p = client.query.bind(client);
-    const oq = client.__p;
-    client.query = ((...args: unknown[]) => {
-      queries += 1;
-      return (oq as (...a: unknown[]) => unknown)(...args);
-    }) as typeof client.query;
-    return client;
-  };
-  pool.connect = ((arg?: unknown) => {
-    if (typeof arg === "function") {
-      return origConnect((err: Error | undefined, client: unknown, release: unknown) => {
-        if (client) wrapClient(client as { query: typeof pool.query });
-        return (arg as (e: unknown, c: unknown, r: unknown) => void)(err, client, release);
-      });
-    }
-    return (origConnect as () => Promise<{ query: typeof pool.query }>)().then(wrapClient);
-  }) as typeof pool.connect;
-  pool.query = ((...args: unknown[]) => {
-    queries += 1;
-    return (origQuery as (...a: unknown[]) => unknown)(...args);
-  }) as typeof pool.query;
-  try {
-    return { result: await fn(), queries };
-  } finally {
-    pool.connect = origConnect;
-    pool.query = origQuery;
-  }
-}
 
 describe("AT27 / PERF #14 consecutive absence", () => {
   it("excused never triggers a consecutive-absence alert", async () => {
@@ -120,13 +88,13 @@ describe("AT27 / PERF #14 consecutive absence", () => {
     vi.spyOn(notify, "sanchalakUserIdsForCentre").mockResolvedValue([]);
     vi.spyOn(notify, "cityAdminUserIdsForCentre").mockResolvedValue([]);
 
-    const { queries } = await withQueryCount(() => runConsecutiveAbsenceCheck());
+    const { count } = await withQueryCount(() => runConsecutiveAbsenceCheck());
     const active = await pool.query<{ n: string }>(
       `select count(*)::text as n from students where status = 'active' and deleted_at is null`,
     );
     const n = Number(active.rows[0]!.n);
     // Old path was ~3N queries. Set-based must be far below that.
-    expect(queries).toBeLessThan(Math.max(50, n));
+    expect(count).toBeLessThan(Math.max(50, n));
     vi.restoreAllMocks();
   });
 });

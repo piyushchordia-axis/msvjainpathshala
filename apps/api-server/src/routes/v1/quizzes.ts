@@ -14,7 +14,21 @@
  * score = correct_count. Point awards are idempotent — guarded on submitted_at so
  * re-calling submit never double-awards.
  */
-import { Router, type IRouter, type Request, type Response } from "express";
+import { ok, fail } from "../../lib/envelope";
+import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
+import { resolveAdminScope } from "../../lib/scope";
+import { awardPunya, reversePunya } from "../../lib/punya";
+import {
+  QUIZ_PARTICIPATION_FEATURE_KEY,
+  QUIZ_WIN_FEATURE_KEY,
+  PUSH_QUIZ_COMPLETION_FEATURE_KEY,
+  resolveQuizParticipationPoints,
+  resolveQuizWinPoints,
+  resolvePushQuizCompletionPoints,
+} from "../../lib/quiz-points";
+import { quizMatchesStudent, quizMatchesStudentSql } from "../../lib/quiz-scope";
+import { auditFromReq } from "../../lib/audit";
+import { clampLimit } from "../../lib/route-helpers";
 import {
   db,
   questions,
@@ -31,15 +45,10 @@ import {
   states,
   type User,
 } from "@workspace/db";
-import { and, asc, eq, gte, inArray, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { canAccessAdminPanel } from "@workspace/api-zod";
-import { ok, fail } from "../../lib/envelope";
-import { requireAuth } from "../../middlewares/auth";
-import { resolveAdminScope } from "../../lib/scope";
-import { awardPunya } from "../../lib/punya";
-import { auditFromReq } from "../../lib/audit";
-import { clampLimit } from "../../lib/route-helpers";
+import { Router, type IRouter, type Request, type Response } from "express";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -115,18 +124,6 @@ async function geoForCentre(centreId: string | null): Promise<{ city_id: string 
 }
 
 type QuizScope = (typeof QUIZ_SCOPES)[number];
-
-type QuizTargets = {
-  scope: string;
-  state_ids?: string[] | null;
-  city_ids?: string[] | null;
-  centre_ids?: string[] | null;
-  batch_ids?: string[] | null;
-  city_id?: string | null;
-  centre_id?: string | null;
-  batch_id?: string | null;
-  age_groups?: string[];
-};
 
 function uniqIds(ids: string[]): string[] {
   return Array.from(new Set(ids.filter(Boolean)));
@@ -257,6 +254,267 @@ async function authorizeQuizTargets(
   return { error: null, targets };
 }
 
+type QuizTargetRow = {
+  scope: string;
+  state_ids?: string[] | null;
+  city_ids?: string[] | null;
+  centre_ids?: string[] | null;
+  batch_ids?: string[] | null;
+  city_id?: string | null;
+  centre_id?: string | null;
+  batch_id?: string | null;
+};
+
+/** True when the admin may view results for this quiz (centre/batch write scope). */
+async function quizTargetsInAdminScope(user: User, targets: QuizTargetRow): Promise<boolean> {
+  const scope = await resolveAdminScope(user);
+  if (scope.centreIds === null) return true;
+
+  const stateIds = targets.state_ids?.length ? targets.state_ids : [];
+  const cityIds = targets.city_ids?.length ? targets.city_ids : targets.city_id ? [targets.city_id] : [];
+  const centreIds = targets.centre_ids?.length
+    ? targets.centre_ids
+    : targets.centre_id
+      ? [targets.centre_id]
+      : [];
+  const batchIds = targets.batch_ids?.length ? targets.batch_ids : targets.batch_id ? [targets.batch_id] : [];
+
+  switch (targets.scope) {
+    case "national":
+      return true;
+    case "state": {
+      if (stateIds.length === 0 || scope.centreIds.length === 0) return false;
+      const rows = await db
+        .select({ id: centres.id })
+        .from(centres)
+        .where(
+          and(
+            inArray(centres.state_id, stateIds),
+            inArray(centres.id, scope.centreIds),
+            isNull(centres.deleted_at),
+          ),
+        )
+        .limit(1);
+      return rows.length > 0;
+    }
+    case "city": {
+      if (cityIds.length === 0 || scope.centreIds.length === 0) return false;
+      const rows = await db
+        .select({ id: centres.id })
+        .from(centres)
+        .where(
+          and(
+            inArray(centres.city_id, cityIds),
+            inArray(centres.id, scope.centreIds),
+            isNull(centres.deleted_at),
+          ),
+        )
+        .limit(1);
+      return rows.length > 0;
+    }
+    case "centre":
+      return centreIds.some((id) => scope.centreIds!.includes(id));
+    case "batch": {
+      if (batchIds.length === 0) return false;
+      if (scope.batchIds !== null) {
+        return batchIds.some((id) => scope.batchIds!.includes(id));
+      }
+      const rows = await db
+        .select({ centre_id: batches.centre_id })
+        .from(batches)
+        .where(inArray(batches.id, batchIds));
+      return rows.some((b) => scope.centreIds!.includes(b.centre_id));
+    }
+    default:
+      return false;
+  }
+}
+
+/** Active students who match the quiz's geographic targets (eligible roster size). */
+async function countEligibleStudents(targets: QuizTargetRow): Promise<number> {
+  const stateIds = targets.state_ids?.length ? targets.state_ids : [];
+  const cityIds = targets.city_ids?.length ? targets.city_ids : targets.city_id ? [targets.city_id] : [];
+  const centreIds = targets.centre_ids?.length
+    ? targets.centre_ids
+    : targets.centre_id
+      ? [targets.centre_id]
+      : [];
+  const batchIds = targets.batch_ids?.length ? targets.batch_ids : targets.batch_id ? [targets.batch_id] : [];
+
+  const active = and(eq(students.status, "active"), isNull(students.deleted_at));
+
+  if (targets.scope === "national") {
+    const [row] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(students)
+      .where(active);
+    return row?.n ?? 0;
+  }
+  if (targets.scope === "batch" && batchIds.length) {
+    const [row] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(students)
+      .where(and(active, inArray(students.batch_id, batchIds)));
+    return row?.n ?? 0;
+  }
+  if (targets.scope === "centre" && centreIds.length) {
+    const [row] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(students)
+      .where(and(active, inArray(students.centre_id, centreIds)));
+    return row?.n ?? 0;
+  }
+  if (targets.scope === "city" && cityIds.length) {
+    const [row] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(students)
+      .innerJoin(centres, eq(centres.id, students.centre_id))
+      .where(and(active, inArray(centres.city_id, cityIds), isNull(centres.deleted_at)));
+    return row?.n ?? 0;
+  }
+  if (targets.scope === "state" && stateIds.length) {
+    const [row] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(students)
+      .innerJoin(centres, eq(centres.id, students.centre_id))
+      .where(and(active, inArray(centres.state_id, stateIds), isNull(centres.deleted_at)));
+    return row?.n ?? 0;
+  }
+  return 0;
+}
+
+/** Sum unreversed punya for a quiz/push attempt (source_entity_id + legacy idempotency keys). */
+async function pointsAwardedForAttempt(attemptId: string): Promise<number> {
+  const prefix = `quiz-award:${attemptId}`;
+  const result = await db.execute(sql`
+    select coalesce(sum(t.points), 0)::int as points
+    from punya_transactions t
+    where t.points > 0
+      and (
+        t.source_entity_id = ${attemptId}::uuid
+        or t.idempotency_key = ${prefix}
+        or (
+          t.idempotency_key like ${prefix + ":%"}
+          and t.idempotency_key not like ${"%:reversal"}
+        )
+      )
+      and not exists (
+        select 1 from punya_transactions r where r.reversal_of = t.id
+      )
+  `);
+  const rows = (result as unknown as { rows?: Array<{ points: number }> }).rows ?? [];
+  return rows[0]?.points ?? 0;
+}
+
+type QuizAwardRow = {
+  id: string;
+  points: number;
+  idempotency_key: string | null;
+  feature_key: string;
+};
+
+/** Unreversed quiz awards for an attempt — used by reset and force-delete. */
+async function findUnreversedQuizAwards(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  attemptId: string,
+  studentId: string,
+): Promise<QuizAwardRow[]> {
+  const prefix = `quiz-award:${attemptId}`;
+  const result = await tx.execute(sql`
+    select t.id, t.points, t.idempotency_key, t.feature_key
+    from punya_transactions t
+    where t.student_id = ${studentId}
+      and t.points > 0
+      and (
+        t.source_entity_id = ${attemptId}::uuid
+        or t.idempotency_key = ${prefix}
+        or (
+          t.idempotency_key like ${prefix + ":%"}
+          and t.idempotency_key not like ${"%:reversal"}
+        )
+      )
+      and not exists (
+        select 1 from punya_transactions r where r.reversal_of = t.id
+      )
+  `);
+  return (
+    (result as unknown as { rows?: QuizAwardRow[] }).rows ?? []
+  ).filter((r) => r.idempotency_key);
+}
+
+/**
+ * Next award revision for an attempt. Reset reverses ledger rows but keeps the
+ * original idempotency keys, so a retake must mint a new key or ON CONFLICT
+ * silently skips the credit.
+ */
+async function nextQuizAwardRevision(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  attemptId: string,
+  kind: "participation" | "win",
+): Promise<number> {
+  const legacy = `quiz-award:${attemptId}:${kind}`;
+  const prefix = `quiz-award:${attemptId}:${kind}:`;
+  const result = await tx.execute(sql`
+    select count(*)::int as n
+    from punya_transactions t
+    where t.points > 0
+      and (
+        t.idempotency_key = ${legacy}
+        or t.idempotency_key like ${prefix + "%"}
+      )
+      and t.idempotency_key not like ${"%:reversal"}
+  `);
+  const n = (result as unknown as { rows?: Array<{ n: number }> }).rows?.[0]?.n ?? 0;
+  return Number(n) + 1;
+}
+
+function quizAwardIdempotencyKey(
+  attemptId: string,
+  kind: "participation" | "win",
+  revision: number,
+): string {
+  // rev 1 keeps the historical key shape used before correction-path retakes.
+  if (revision <= 1) return `quiz-award:${attemptId}:${kind}`;
+  return `quiz-award:${attemptId}:${kind}:${revision}`;
+}
+
+async function reverseQuizAttemptAwards(
+  tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+  attemptId: string,
+  studentId: string,
+  awardedBy: string | null,
+): Promise<number> {
+  const awards = await findUnreversedQuizAwards(tx, attemptId, studentId);
+  let reversed = 0;
+  for (const award of awards) {
+    const key = award.idempotency_key!;
+    const reversalKey = key.endsWith(":reversal") ? key : `${key}:reversal`;
+    const rev = await reversePunya(
+      {
+        studentId,
+        featureKey: award.feature_key,
+        points: award.points,
+        note: "Quiz attempt reset",
+        awardedBy,
+        idempotencyKey: reversalKey,
+      },
+      tx,
+    );
+    reversed += rev.points_reversed;
+  }
+  return reversed;
+}
+
+async function questionLinkedToAttemptedEvent(questionId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: quiz_attempts.id })
+    .from(quiz_event_questions)
+    .innerJoin(quiz_attempts, eq(quiz_attempts.quiz_event_id, quiz_event_questions.quiz_event_id))
+    .where(eq(quiz_event_questions.question_id, questionId))
+    .limit(1);
+  return !!row;
+}
+
 /** Effective legacy city_id for admin listing filters. */
 async function primaryCityForTargets(
   scope: QuizScope,
@@ -269,55 +527,6 @@ async function primaryCityForTargets(
     return b ? cityForCentre(b.centre_id) : null;
   }
   return null;
-}
-
-/**
- * Does this scheduled/push quiz apply to the given student?
- * Scope drives which target array is checked; legacy single FKs are used as fallback.
- */
-function quizMatchesStudent(
-  ev: QuizTargets,
-  student: { centre_id: string | null; batch_id: string | null; age_group: string | null },
-  studentCityId: string | null,
-  studentStateId: string | null,
-): boolean {
-  if (ev.age_groups && ev.age_groups.length > 0 && !(student.age_group && ev.age_groups.includes(student.age_group))) {
-    return false;
-  }
-  const stateIds = ev.state_ids?.length ? ev.state_ids : [];
-  const cityIds = ev.city_ids?.length ? ev.city_ids : ev.city_id ? [ev.city_id] : [];
-  const centreIds = ev.centre_ids?.length ? ev.centre_ids : ev.centre_id ? [ev.centre_id] : [];
-  const batchIds = ev.batch_ids?.length ? ev.batch_ids : ev.batch_id ? [ev.batch_id] : [];
-
-  switch (ev.scope) {
-    case "batch":
-      return !!student.batch_id && batchIds.includes(student.batch_id);
-    case "centre":
-      return !!student.centre_id && centreIds.includes(student.centre_id);
-    case "city":
-      return !!studentCityId && cityIds.includes(studentCityId);
-    case "state":
-      return !!studentStateId && stateIds.includes(studentStateId);
-    case "national":
-      return true;
-    default: {
-      // Legacy rows with no scope discipline: narrow by most specific FK present.
-      if (batchIds.length) return !!student.batch_id && batchIds.includes(student.batch_id);
-      if (centreIds.length) return !!student.centre_id && centreIds.includes(student.centre_id);
-      if (cityIds.length) return !!studentCityId && cityIds.includes(studentCityId);
-      return true;
-    }
-  }
-}
-
-/** @deprecated use quizMatchesStudent */
-function eventMatchesStudent(
-  ev: QuizTargets,
-  student: { centre_id: string | null; batch_id: string | null; age_group: string | null },
-  studentCityId: string | null,
-  studentStateId: string | null = null,
-): boolean {
-  return quizMatchesStudent(ev, student, studentCityId, studentStateId);
 }
 
 /* ═══════════════════════════ ADMIN — question bank ═══════════════════════════ */
@@ -396,7 +605,7 @@ router.post("/questions", async (req: Request, res: Response) => {
 });
 
 
-/* GET /v1/quizzes/questions?limit= — scoped question bank (admin panel) */
+/* GET /v1/quizzes/questions?limit=&is_active= — scoped question bank (admin panel) */
 router.get("/questions", async (req: Request, res: Response) => {
   if (!canAccessAdminPanel(req.authUser?.role)) {
     fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
@@ -404,17 +613,23 @@ router.get("/questions", async (req: Request, res: Response) => {
   }
   const cityIds = await cityScopeForUser(req.authUser!);
   const limit = clampLimit(req.query.limit, 100, 300);
+  const activeParam = typeof req.query.is_active === "string" ? req.query.is_active : "true";
 
   // super_admin (null) sees all; otherwise show national/state (city-agnostic)
   // plus questions whose city_id is in scope. cityIds === [] => only the former.
-  let whereClause;
+  const scopeParts = [];
   if (cityIds === null) {
-    whereClause = undefined;
+    /* no city filter */
   } else if (cityIds.length === 0) {
-    whereClause = isNull(questions.city_id);
+    scopeParts.push(isNull(questions.city_id));
   } else {
-    whereClause = or(isNull(questions.city_id), inArray(questions.city_id, cityIds));
+    scopeParts.push(or(isNull(questions.city_id), inArray(questions.city_id, cityIds))!);
   }
+  if (activeParam === "true") scopeParts.push(eq(questions.is_active, true));
+  else if (activeParam === "false") scopeParts.push(eq(questions.is_active, false));
+  // "all" → no is_active filter
+
+  const whereClause = scopeParts.length === 0 ? undefined : and(...scopeParts);
 
   const rows = await db
     .select({
@@ -441,6 +656,120 @@ router.get("/questions", async (req: Request, res: Response) => {
   ok(res, { items }, { count: items.length });
 });
 
+const patchQuestionSchema = z.object({
+  question_en: z.string().min(1).max(2000).optional(),
+  question_hi: z.string().max(2000).nullable().optional(),
+  options: z
+    .array(z.object({ text_en: z.string().min(1).max(1000), text_hi: z.string().max(1000).optional() }))
+    .min(2)
+    .max(10)
+    .optional(),
+  correct_indices: z.array(z.coerce.number().int().min(0)).min(1).optional(),
+  difficulty: z.string().max(40).optional(),
+  age_groups: z.array(z.enum(["bal", "kishor", "tarun", "yuva"])).optional(),
+  topic: z.string().max(120).nullable().optional(),
+  is_active: z.boolean().optional(),
+});
+
+/* PATCH /v1/quizzes/questions/:id — edit bank question (blocked when attempts exist) */
+router.patch("/questions/:id", requireAdminPanel, async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  let body: z.infer<typeof patchQuestionSchema>;
+  try {
+    body = patchQuestionSchema.parse(req.body ?? {});
+  } catch {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid question data.");
+    return;
+  }
+  if (Object.keys(body).length === 0) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "No fields to update.");
+    return;
+  }
+
+  const [existing] = await db.select().from(questions).where(eq(questions.id, id)).limit(1);
+  if (!existing) {
+    fail(res, 404, "ERR_NOT_FOUND", "Question not found.");
+    return;
+  }
+  if (!(await quizTargetsInAdminScope(req.authUser!, existing))) {
+    fail(res, 403, "ERR_FORBIDDEN", "This question is outside your scope.");
+    return;
+  }
+  if (await questionLinkedToAttemptedEvent(id)) {
+    fail(
+      res,
+      409,
+      "ERR_QUESTION_IN_USE",
+      "This question is on a quiz that already has attempts — deactivate it and author a new question instead.",
+    );
+    return;
+  }
+
+  const nextOptions = body.options ?? existing.options;
+  const nextCorrect = body.correct_indices ?? existing.correct_indices;
+  for (const idx of nextCorrect) {
+    if (idx >= nextOptions.length) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "A correct index is out of range.");
+      return;
+    }
+  }
+
+  const [row] = await db
+    .update(questions)
+    .set({
+      ...(body.question_en !== undefined ? { question_en: body.question_en } : {}),
+      ...(body.question_hi !== undefined ? { question_hi: body.question_hi } : {}),
+      ...(body.options !== undefined
+        ? { options: body.options.map((o) => ({ text_en: o.text_en, text_hi: o.text_hi })) }
+        : {}),
+      ...(body.correct_indices !== undefined ? { correct_indices: body.correct_indices } : {}),
+      ...(body.difficulty !== undefined ? { difficulty: body.difficulty } : {}),
+      ...(body.age_groups !== undefined ? { age_groups: body.age_groups } : {}),
+      ...(body.topic !== undefined ? { topic: body.topic } : {}),
+      ...(body.is_active !== undefined ? { is_active: body.is_active } : {}),
+      updated_at: new Date(),
+    })
+    .where(eq(questions.id, id))
+    .returning({ id: questions.id, is_active: questions.is_active });
+
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "question",
+    entityId: id,
+    summary: `Updated quiz question`,
+  });
+
+  ok(res, { id: row!.id, is_active: row!.is_active });
+});
+
+/* DELETE /v1/quizzes/questions/:id — soft-delete (is_active = false) */
+router.delete("/questions/:id", requireAdminPanel, async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  const [existing] = await db.select().from(questions).where(eq(questions.id, id)).limit(1);
+  if (!existing) {
+    fail(res, 404, "ERR_NOT_FOUND", "Question not found.");
+    return;
+  }
+  if (!(await quizTargetsInAdminScope(req.authUser!, existing))) {
+    fail(res, 403, "ERR_FORBIDDEN", "This question is outside your scope.");
+    return;
+  }
+
+  await db
+    .update(questions)
+    .set({ is_active: false, updated_at: new Date() })
+    .where(eq(questions.id, id));
+
+  await auditFromReq(req, {
+    action: "delete",
+    entityKind: "question",
+    entityId: id,
+    summary: "Soft-deleted quiz question (is_active = false)",
+  });
+
+  ok(res, { id, is_active: false });
+});
+
 /* ═══════════════════════════ ADMIN — scheduled events ═══════════════════════════ */
 
 const createEventSchema = z
@@ -457,8 +786,9 @@ const createEventSchema = z
     batch_id: z.string().uuid().optional(),
     start_at: z.string().datetime(),
     end_at: z.string().datetime(),
-    participation_points: z.coerce.number().int().min(0).max(10000).default(0),
-    win_points: z.coerce.number().int().min(0).max(10000).default(0),
+    // null/omit = punya_features default; 0 disables (AT21).
+    participation_points: z.number().int().min(0).max(10000).nullish(),
+    win_points: z.number().int().min(0).max(10000).nullish(),
     age_groups: z.array(z.enum(["bal", "kishor", "tarun", "yuva"])).default([]),
     question_ids: z.array(z.string().uuid()).min(1).max(100),
   })
@@ -518,8 +848,8 @@ router.post("/events", async (req: Request, res: Response) => {
       title_hi: body.title_hi ?? null,
       start_at: new Date(body.start_at),
       end_at: new Date(body.end_at),
-      participation_points: body.participation_points,
-      win_points: body.win_points,
+      participation_points: body.participation_points ?? undefined,
+      win_points: body.win_points ?? undefined,
       age_groups: body.age_groups,
       created_by: req.authUser!.id,
     })
@@ -599,6 +929,231 @@ router.get("/events", async (req: Request, res: Response) => {
   ok(res, { items }, { count: items.length });
 });
 
+/* GET /v1/quizzes/events/:id/attempts — admin results roster */
+router.get("/events/:id/attempts", requireAdminPanel, async (req: Request, res: Response) => {
+  const eventId = String(req.params.id);
+  const [event] = await db.select().from(quiz_events).where(eq(quiz_events.id, eventId)).limit(1);
+  if (!event) {
+    fail(res, 404, "ERR_NOT_FOUND", "Quiz event not found.");
+    return;
+  }
+  if (!(await quizTargetsInAdminScope(req.authUser!, event))) {
+    fail(res, 403, "ERR_FORBIDDEN", "This quiz event is outside your scope.");
+    return;
+  }
+
+  const qRows = await db
+    .select({
+      id: questions.id,
+      correct_indices: questions.correct_indices,
+      order_index: quiz_event_questions.order_index,
+    })
+    .from(quiz_event_questions)
+    .innerJoin(questions, eq(questions.id, quiz_event_questions.question_id))
+    .where(eq(quiz_event_questions.quiz_event_id, eventId))
+    .orderBy(asc(quiz_event_questions.order_index));
+
+  const attemptRows = await db
+    .select({
+      id: quiz_attempts.id,
+      student_id: quiz_attempts.student_id,
+      full_name: students.full_name,
+      centre_name: centres.name,
+      batch_name: batches.name,
+      started_at: quiz_attempts.started_at,
+      submitted_at: quiz_attempts.submitted_at,
+      correct_count: quiz_attempts.correct_count,
+      total_count: quiz_attempts.total_count,
+      score: quiz_attempts.score,
+      answers: quiz_attempts.answers,
+    })
+    .from(quiz_attempts)
+    .innerJoin(students, eq(students.id, quiz_attempts.student_id))
+    .leftJoin(centres, eq(centres.id, students.centre_id))
+    .leftJoin(batches, eq(batches.id, students.batch_id))
+    .where(eq(quiz_attempts.quiz_event_id, eventId))
+    .orderBy(asc(students.full_name));
+
+  const items = [];
+  for (const row of attemptRows) {
+    const answers = (row.answers ?? {}) as Record<string, number[]>;
+    const question_results = qRows.map((q) => ({
+      question_id: q.id,
+      correct: sameIndexSet(answers[q.id] ?? [], q.correct_indices),
+    }));
+    items.push({
+      attempt_id: row.id,
+      student_id: row.student_id,
+      full_name: row.full_name,
+      centre_name: row.centre_name,
+      batch_name: row.batch_name,
+      started_at: row.started_at.toISOString(),
+      submitted_at: row.submitted_at ? row.submitted_at.toISOString() : null,
+      correct_count: row.correct_count,
+      total_count: row.total_count,
+      score: row.score,
+      points_awarded: await pointsAwardedForAttempt(row.id),
+      question_results,
+    });
+  }
+
+  const submitted = items.filter((i) => i.submitted_at);
+  const scoreSum = submitted.reduce((acc, i) => acc + (i.score ?? 0), 0);
+  const average_score = submitted.length ? scoreSum / submitted.length : 0;
+  const eligible_count = await countEligibleStudents(event);
+
+  ok(
+    res,
+    {
+      items,
+      attempted_count: items.length,
+      submitted_count: submitted.length,
+      eligible_count,
+      average_score,
+    },
+    { count: items.length },
+  );
+});
+
+/* POST /v1/quizzes/events/:id/attempts/:attemptId/reset — reverse Punya + clear submit */
+router.post(
+  "/events/:id/attempts/:attemptId/reset",
+  requireAdminPanel,
+  async (req: Request, res: Response) => {
+    const eventId = String(req.params.id);
+    const attemptId = String(req.params.attemptId);
+
+    const [event] = await db.select().from(quiz_events).where(eq(quiz_events.id, eventId)).limit(1);
+    if (!event) {
+      fail(res, 404, "ERR_NOT_FOUND", "Quiz event not found.");
+      return;
+    }
+    if (!(await quizTargetsInAdminScope(req.authUser!, event))) {
+      fail(res, 403, "ERR_FORBIDDEN", "This quiz event is outside your scope.");
+      return;
+    }
+
+    const [attempt] = await db
+      .select({
+        id: quiz_attempts.id,
+        student_id: quiz_attempts.student_id,
+        submitted_at: quiz_attempts.submitted_at,
+      })
+      .from(quiz_attempts)
+      .where(and(eq(quiz_attempts.id, attemptId), eq(quiz_attempts.quiz_event_id, eventId)))
+      .limit(1);
+    if (!attempt) {
+      fail(res, 404, "ERR_NOT_FOUND", "Attempt not found.");
+      return;
+    }
+
+    const outcome = await db.transaction(async (tx) => {
+      const points_reversed = await reverseQuizAttemptAwards(
+        tx,
+        attempt.id,
+        attempt.student_id,
+        req.authUser!.id,
+      );
+      await tx
+        .update(quiz_attempts)
+        .set({
+          submitted_at: null,
+          score: null,
+          correct_count: null,
+          total_count: null,
+          answers: {},
+          updated_at: new Date(),
+        })
+        .where(eq(quiz_attempts.id, attempt.id));
+      return { points_reversed };
+    });
+
+    await auditFromReq(req, {
+      action: "update",
+      entityKind: "quiz_attempt",
+      entityId: attemptId,
+      summary: `Reset quiz attempt (reversed ${outcome.points_reversed} Punya)`,
+      metadata: { event_id: eventId, points_reversed: outcome.points_reversed },
+    });
+
+    ok(res, {
+      attempt_id: attemptId,
+      points_reversed: outcome.points_reversed,
+      reset: true,
+    });
+  },
+);
+
+/* DELETE /v1/quizzes/events/:id — delete event; force reverses awards when attempts exist */
+router.delete("/events/:id", requireAdminPanel, async (req: Request, res: Response) => {
+  const eventId = String(req.params.id);
+  const force =
+    (req.body && typeof req.body === "object" && (req.body as { force?: unknown }).force === true) ||
+    req.query.force === "true";
+
+  const [event] = await db.select().from(quiz_events).where(eq(quiz_events.id, eventId)).limit(1);
+  if (!event) {
+    fail(res, 404, "ERR_NOT_FOUND", "Quiz event not found.");
+    return;
+  }
+  if (!(await quizTargetsInAdminScope(req.authUser!, event))) {
+    fail(res, 403, "ERR_FORBIDDEN", "This quiz event is outside your scope.");
+    return;
+  }
+
+  const submitted = await db
+    .select({ id: quiz_attempts.id, student_id: quiz_attempts.student_id })
+    .from(quiz_attempts)
+    .where(and(eq(quiz_attempts.quiz_event_id, eventId), isNotNull(quiz_attempts.submitted_at)));
+
+  if (submitted.length > 0 && !force) {
+    fail(
+      res,
+      409,
+      "ERR_EVENT_HAS_ATTEMPTS",
+      "This quiz event has submitted attempts — pass force: true to reverse awards and delete.",
+    );
+    return;
+  }
+
+  const outcome = await db.transaction(async (tx) => {
+    let points_reversed = 0;
+    const allAttempts = await tx
+      .select({ id: quiz_attempts.id, student_id: quiz_attempts.student_id })
+      .from(quiz_attempts)
+      .where(eq(quiz_attempts.quiz_event_id, eventId));
+
+    for (const att of allAttempts) {
+      points_reversed += await reverseQuizAttemptAwards(tx, att.id, att.student_id, req.authUser!.id);
+    }
+
+    const attemptCount = allAttempts.length;
+    await tx.delete(quiz_attempts).where(eq(quiz_attempts.quiz_event_id, eventId));
+    await tx.delete(quiz_event_questions).where(eq(quiz_event_questions.quiz_event_id, eventId));
+    await tx.delete(quiz_events).where(eq(quiz_events.id, eventId));
+    return { attemptCount, points_reversed };
+  });
+
+  await auditFromReq(req, {
+    action: "delete",
+    entityKind: "quiz_event",
+    entityId: eventId,
+    summary: `Deleted quiz event (attempts=${outcome.attemptCount}, reversed=${outcome.points_reversed}, force=${!!force})`,
+    metadata: {
+      force: !!force,
+      attempts_removed: outcome.attemptCount,
+      points_reversed: outcome.points_reversed,
+    },
+  });
+
+  ok(res, {
+    id: eventId,
+    deleted: true,
+    attempts_removed: outcome.attemptCount,
+    points_reversed: outcome.points_reversed,
+  });
+});
+
 /* ═══════════════════════════ STUDENT — event take flow ═══════════════════════════ */
 
 const startEventSchema = z.object({ student_id: z.string().uuid() });
@@ -618,32 +1173,42 @@ router.get("/events/available", async (req: Request, res: Response) => {
   const studentGeo = await geoForCentre(student.centre_id);
 
   const now = new Date();
-  const rows = await db
+  const matching = await db
     .select({
       id: quiz_events.id,
       scope: quiz_events.scope,
-      state_ids: quiz_events.state_ids,
-      city_ids: quiz_events.city_ids,
-      centre_ids: quiz_events.centre_ids,
-      batch_ids: quiz_events.batch_ids,
-      city_id: quiz_events.city_id,
-      centre_id: quiz_events.centre_id,
-      batch_id: quiz_events.batch_id,
       title_en: quiz_events.title_en,
       title_hi: quiz_events.title_hi,
       start_at: quiz_events.start_at,
       end_at: quiz_events.end_at,
       participation_points: quiz_events.participation_points,
       win_points: quiz_events.win_points,
-      age_groups: quiz_events.age_groups,
     })
     .from(quiz_events)
-    .where(and(lte(quiz_events.start_at, now), gte(quiz_events.end_at, now)))
-    .orderBy(asc(quiz_events.end_at));
-
-  const matching = rows.filter((ev) =>
-    eventMatchesStudent(ev, student, studentGeo.city_id, studentGeo.state_id),
-  );
+    .where(
+      and(
+        lte(quiz_events.start_at, now),
+        gte(quiz_events.end_at, now),
+        quizMatchesStudentSql(
+          {
+            scope: quiz_events.scope,
+            state_ids: quiz_events.state_ids,
+            city_ids: quiz_events.city_ids,
+            centre_ids: quiz_events.centre_ids,
+            batch_ids: quiz_events.batch_ids,
+            city_id: quiz_events.city_id,
+            centre_id: quiz_events.centre_id,
+            batch_id: quiz_events.batch_id,
+            age_groups: quiz_events.age_groups,
+          },
+          student,
+          studentGeo.city_id,
+          studentGeo.state_id,
+        ),
+      ),
+    )
+    .orderBy(asc(quiz_events.end_at))
+    .limit(100);
 
   // Attempt outcome per event (for completed-state UI).
   const ids = matching.map((m) => m.id);
@@ -662,15 +1227,16 @@ router.get("/events/available", async (req: Request, res: Response) => {
 
   const items = matching.map((m) => {
     const att = attemptByEvent.get(m.id);
-    const already_attempted = !!att;
+    const already_attempted = !!att?.submitted_at;
+    const in_progress = !!att && !att.submitted_at;
     const is_winner =
       !!att?.submitted_at &&
       (att.total_count ?? 0) > 0 &&
       att.correct_count === att.total_count;
     let points_earned = 0;
     if (att?.submitted_at) {
-      if (m.participation_points > 0) points_earned += m.participation_points;
-      if (is_winner && m.win_points > 0) points_earned += m.win_points;
+      if ((m.participation_points ?? 0) > 0) points_earned += m.participation_points ?? 0;
+      if (is_winner && (m.win_points ?? 0) > 0) points_earned += m.win_points ?? 0;
     }
     return {
       id: m.id,
@@ -682,6 +1248,7 @@ router.get("/events/available", async (req: Request, res: Response) => {
       participation_points: m.participation_points,
       win_points: m.win_points,
       already_attempted,
+      in_progress,
       is_winner,
       points_earned,
     };
@@ -744,7 +1311,7 @@ router.post("/events/:id/start", async (req: Request, res: Response) => {
   }
 
   const studentGeo = await geoForCentre(student.centre_id);
-  if (!eventMatchesStudent(event, student, studentGeo.city_id, studentGeo.state_id)) {
+  if (!quizMatchesStudent(event, student, studentGeo.city_id, studentGeo.state_id)) {
     fail(res, 403, "ERR_FORBIDDEN", "This quiz is not available for this student.");
     return;
   }
@@ -755,20 +1322,10 @@ router.post("/events/:id/start", async (req: Request, res: Response) => {
     return;
   }
 
-  // Already attempted? (unique on (event, student)).
-  const [existing] = await db
-    .select({ id: quiz_attempts.id, submitted_at: quiz_attempts.submitted_at })
-    .from(quiz_attempts)
-    .where(and(eq(quiz_attempts.quiz_event_id, eventId), eq(quiz_attempts.student_id, student.id)))
-    .limit(1);
-  if (existing) {
-    fail(res, 409, "ERR_ALREADY_ATTEMPTED", "This quiz has already been started.");
-    return;
-  }
-
   const eventQuestions = await loadEventQuestionsForStudent(eventId);
 
-  const [attempt] = await db
+  // Guarded insert — concurrent starts share one attempt row (no 23505 → 500).
+  const inserted = await db
     .insert(quiz_attempts)
     .values({
       quiz_event_id: eventId,
@@ -776,9 +1333,39 @@ router.post("/events/:id/start", async (req: Request, res: Response) => {
       started_at: now,
       total_count: eventQuestions.length,
     })
+    .onConflictDoNothing({
+      target: [quiz_attempts.quiz_event_id, quiz_attempts.student_id],
+    })
     .returning({ id: quiz_attempts.id });
 
-  ok(res, { attempt_id: attempt.id, questions: eventQuestions });
+  if (inserted.length === 0) {
+    const [existing] = await db
+      .select({
+        id: quiz_attempts.id,
+        submitted_at: quiz_attempts.submitted_at,
+        answers: quiz_attempts.answers,
+      })
+      .from(quiz_attempts)
+      .where(and(eq(quiz_attempts.quiz_event_id, eventId), eq(quiz_attempts.student_id, student.id)))
+      .limit(1);
+    if (!existing) {
+      fail(res, 500, "ERR_INTERNAL", "Could not open or resume this quiz attempt.");
+      return;
+    }
+    if (existing.submitted_at) {
+      fail(res, 409, "ERR_ALREADY_SUBMITTED", "You have already submitted this quiz.");
+      return;
+    }
+    ok(res, {
+      attempt_id: existing.id,
+      questions: eventQuestions,
+      resumed: true,
+      answers: existing.answers ?? {},
+    });
+    return;
+  }
+
+  ok(res, { attempt_id: inserted[0]!.id, questions: eventQuestions, resumed: false });
 });
 
 const submitEventSchema = z.object({
@@ -849,6 +1436,15 @@ router.post("/events/:id/submit", async (req: Request, res: Response) => {
   const allCorrect = totalCount > 0 && correctCount === totalCount;
   const score = correctCount;
 
+  // Resolve AT21 points outside the award transaction (avoid holding a pool
+  // connection while reading punya_configs / Redis).
+  const studentGeo = await geoForCentre(student.centre_id);
+  const participationPoints = await resolveQuizParticipationPoints(
+    studentGeo.city_id,
+    event.participation_points,
+  );
+  const winPoints = await resolveQuizWinPoints(studentGeo.city_id, event.win_points);
+
   // Atomic submit: serialize on the attempt id, then conditionally claim the
   // attempt by setting submitted_at ONLY if it is still null. Points are awarded
   // exclusively on the winning transition, so two concurrent submits (or a
@@ -874,31 +1470,37 @@ router.post("/events/:id/submit", async (req: Request, res: Response) => {
 
     // Award participation once; win bonus only when every question is correct.
     let pointsAwarded = 0;
-    if (event.participation_points > 0) {
+    if (participationPoints > 0) {
+      const rev = await nextQuizAwardRevision(tx, attempt.id, "participation");
       await awardPunya(
         {
           studentId: student.id,
-          featureKey: "quiz",
-          points: event.participation_points,
+          featureKey: QUIZ_PARTICIPATION_FEATURE_KEY,
+          points: participationPoints,
           note: `Quiz participation: ${event.title_en}`,
-          idempotencyKey: `quiz-award:${attempt.id}:participation`,
+          idempotencyKey: quizAwardIdempotencyKey(attempt.id, "participation", rev),
+          sourceEntityKind: "quiz_attempt",
+          sourceEntityId: attempt.id,
         },
         tx,
       );
-      pointsAwarded += event.participation_points;
+      pointsAwarded += participationPoints;
     }
-    if (allCorrect && event.win_points > 0) {
+    if (allCorrect && winPoints > 0) {
+      const rev = await nextQuizAwardRevision(tx, attempt.id, "win");
       await awardPunya(
         {
           studentId: student.id,
-          featureKey: "quiz",
-          points: event.win_points,
+          featureKey: QUIZ_WIN_FEATURE_KEY,
+          points: winPoints,
           note: `Quiz win: ${event.title_en}`,
-          idempotencyKey: `quiz-award:${attempt.id}:win`,
+          idempotencyKey: quizAwardIdempotencyKey(attempt.id, "win", rev),
+          sourceEntityKind: "quiz_attempt",
+          sourceEntityId: attempt.id,
         },
         tx,
       );
-      pointsAwarded += event.win_points;
+      pointsAwarded += winPoints;
     }
     return { claimed: true as const, pointsAwarded };
   });
@@ -932,7 +1534,8 @@ const createPushSchema = z
     batch_ids: z.array(z.string().uuid()).default([]),
     batch_id: z.string().uuid().optional(),
     expires_at: z.string().datetime(),
-    completion_points: z.coerce.number().int().min(0).max(10000).default(0),
+    // null/omit = punya_features default; 0 disables (AT21).
+    completion_points: z.number().int().min(0).max(10000).nullish(),
     questions: z
       .array(
         z.object({
@@ -949,6 +1552,53 @@ const createPushSchema = z
       .max(50),
   })
   .refine((b) => new Date(b.expires_at) > new Date(), { message: "expires_at must be in the future" });
+
+/* GET /v1/quizzes/push — scoped list (live first) for admin panel */
+router.get("/push", requireAdminPanel, async (req: Request, res: Response) => {
+  const limit = clampLimit(req.query.limit, 100, 300);
+  const rows = await db
+    .select({
+      id: push_quizzes.id,
+      scope: push_quizzes.scope,
+      state_ids: push_quizzes.state_ids,
+      city_ids: push_quizzes.city_ids,
+      centre_ids: push_quizzes.centre_ids,
+      batch_ids: push_quizzes.batch_ids,
+      batch_id: push_quizzes.batch_id,
+      started_at: push_quizzes.started_at,
+      expires_at: push_quizzes.expires_at,
+      completion_points: push_quizzes.completion_points,
+      question_count: sql<number>`count(distinct ${push_quiz_questions.id})::int`,
+      submitted_count: sql<number>`count(distinct ${push_quiz_attempts.id}) filter (where ${push_quiz_attempts.submitted_at} is not null)::int`,
+    })
+    .from(push_quizzes)
+    .leftJoin(push_quiz_questions, eq(push_quiz_questions.push_quiz_id, push_quizzes.id))
+    .leftJoin(push_quiz_attempts, eq(push_quiz_attempts.push_quiz_id, push_quizzes.id))
+    .groupBy(push_quizzes.id)
+    .orderBy(sql`(case when ${push_quizzes.expires_at} > now() then 0 else 1 end)`, desc(push_quizzes.started_at))
+    .limit(limit);
+
+  const items = [];
+  for (const r of rows) {
+    if (!(await quizTargetsInAdminScope(req.authUser!, r))) continue;
+    items.push({
+      id: r.id,
+      scope: r.scope,
+      state_ids: r.state_ids,
+      city_ids: r.city_ids,
+      centre_ids: r.centre_ids,
+      batch_ids: r.batch_ids,
+      batch_id: r.batch_id,
+      started_at: r.started_at.toISOString(),
+      expires_at: r.expires_at.toISOString(),
+      completion_points: r.completion_points,
+      question_count: r.question_count,
+      submitted_count: r.submitted_count,
+      is_live: r.expires_at.getTime() > Date.now(),
+    });
+  }
+  ok(res, { items }, { count: items.length });
+});
 
 /* POST /v1/quizzes/push — admin starts a live push quiz for selected targets */
 router.post("/push", async (req: Request, res: Response) => {
@@ -997,7 +1647,7 @@ router.post("/push", async (req: Request, res: Response) => {
       shikshak_user_id: req.authUser!.id,
       started_at: new Date(),
       expires_at: new Date(body.expires_at),
-      completion_points: body.completion_points,
+      completion_points: body.completion_points ?? undefined,
     })
     .returning({ id: push_quizzes.id });
 
@@ -1045,27 +1695,35 @@ router.get("/push/active", async (req: Request, res: Response) => {
 
   const studentGeo = await geoForCentre(student.centre_id);
   const now = new Date();
-  const candidates = await db
+  const [pq] = await db
     .select({
       id: push_quizzes.id,
-      scope: push_quizzes.scope,
-      state_ids: push_quizzes.state_ids,
-      city_ids: push_quizzes.city_ids,
-      centre_ids: push_quizzes.centre_ids,
-      batch_ids: push_quizzes.batch_ids,
-      batch_id: push_quizzes.batch_id,
       started_at: push_quizzes.started_at,
       expires_at: push_quizzes.expires_at,
       completion_points: push_quizzes.completion_points,
     })
     .from(push_quizzes)
-    .where(gte(push_quizzes.expires_at, now))
-    .orderBy(sql`${push_quizzes.started_at} desc`)
-    .limit(40);
+    .where(
+      and(
+        gte(push_quizzes.expires_at, now),
+        quizMatchesStudentSql(
+          {
+            scope: push_quizzes.scope,
+            state_ids: push_quizzes.state_ids,
+            city_ids: push_quizzes.city_ids,
+            centre_ids: push_quizzes.centre_ids,
+            batch_ids: push_quizzes.batch_ids,
+            batch_id: push_quizzes.batch_id,
+          },
+          student,
+          studentGeo.city_id,
+          studentGeo.state_id,
+        ),
+      ),
+    )
+    .orderBy(desc(push_quizzes.started_at))
+    .limit(1);
 
-  const pq = candidates.find((row) =>
-    quizMatchesStudent(row, student, studentGeo.city_id, studentGeo.state_id),
-  );
   if (!pq) {
     ok(res, { active: null });
     return;
@@ -1106,6 +1764,91 @@ router.get("/push/active", async (req: Request, res: Response) => {
   });
 });
 
+/* GET /v1/quizzes/push/:id/attempts — admin results roster (poll while live) */
+router.get("/push/:id/attempts", requireAdminPanel, async (req: Request, res: Response) => {
+  const pushId = String(req.params.id);
+  const [pq] = await db.select().from(push_quizzes).where(eq(push_quizzes.id, pushId)).limit(1);
+  if (!pq) {
+    fail(res, 404, "ERR_NOT_FOUND", "Push quiz not found.");
+    return;
+  }
+  if (!(await quizTargetsInAdminScope(req.authUser!, pq))) {
+    fail(res, 403, "ERR_FORBIDDEN", "This push quiz is outside your scope.");
+    return;
+  }
+
+  const qRows = await db
+    .select({
+      id: push_quiz_questions.id,
+      correct_indices: push_quiz_questions.correct_indices,
+      order_index: push_quiz_questions.order_index,
+    })
+    .from(push_quiz_questions)
+    .where(eq(push_quiz_questions.push_quiz_id, pushId))
+    .orderBy(asc(push_quiz_questions.order_index));
+
+  const attemptRows = await db
+    .select({
+      id: push_quiz_attempts.id,
+      student_id: push_quiz_attempts.student_id,
+      full_name: students.full_name,
+      centre_name: centres.name,
+      batch_name: batches.name,
+      submitted_at: push_quiz_attempts.submitted_at,
+      score: push_quiz_attempts.score,
+      answers: push_quiz_attempts.answers,
+    })
+    .from(push_quiz_attempts)
+    .innerJoin(students, eq(students.id, push_quiz_attempts.student_id))
+    .leftJoin(centres, eq(centres.id, students.centre_id))
+    .leftJoin(batches, eq(batches.id, students.batch_id))
+    .where(eq(push_quiz_attempts.push_quiz_id, pushId))
+    .orderBy(asc(students.full_name));
+
+  const items = [];
+  for (const row of attemptRows) {
+    const answers = (row.answers ?? {}) as Record<string, number[]>;
+    const question_results = qRows.map((q) => ({
+      question_id: q.id,
+      correct: sameIndexSet(answers[q.id] ?? [], q.correct_indices),
+    }));
+    const correct_count = question_results.filter((q) => q.correct).length;
+    items.push({
+      attempt_id: row.id,
+      student_id: row.student_id,
+      full_name: row.full_name,
+      centre_name: row.centre_name,
+      batch_name: row.batch_name,
+      started_at: null as string | null,
+      submitted_at: row.submitted_at ? row.submitted_at.toISOString() : null,
+      correct_count,
+      total_count: qRows.length,
+      score: row.score,
+      points_awarded: await pointsAwardedForAttempt(row.id),
+      question_results,
+    });
+  }
+
+  const submitted = items.filter((i) => i.submitted_at);
+  const scoreSum = submitted.reduce((acc, i) => acc + (i.score ?? 0), 0);
+  const average_score = submitted.length ? scoreSum / submitted.length : 0;
+  const eligible_count = await countEligibleStudents(pq);
+  const is_live = pq.expires_at.getTime() > Date.now();
+
+  ok(
+    res,
+    {
+      items,
+      is_live,
+      attempted_count: items.length,
+      submitted_count: submitted.length,
+      eligible_count,
+      average_score,
+    },
+    { count: items.length },
+  );
+});
+
 const submitPushSchema = z.object({
   student_id: z.string().uuid(),
   answers: z.record(z.string(), z.array(z.coerce.number().int().min(0))).default({}),
@@ -1130,6 +1873,11 @@ router.post("/push/:id/submit", async (req: Request, res: Response) => {
   const [pq] = await db
     .select({
       id: push_quizzes.id,
+      scope: push_quizzes.scope,
+      state_ids: push_quizzes.state_ids,
+      city_ids: push_quizzes.city_ids,
+      centre_ids: push_quizzes.centre_ids,
+      batch_ids: push_quizzes.batch_ids,
       batch_id: push_quizzes.batch_id,
       expires_at: push_quizzes.expires_at,
       completion_points: push_quizzes.completion_points,
@@ -1141,9 +1889,9 @@ router.post("/push/:id/submit", async (req: Request, res: Response) => {
     fail(res, 404, "ERR_NOT_FOUND", "Push quiz not found.");
     return;
   }
-  // The student must belong to this push quiz's batch.
-  if (student.batch_id !== pq.batch_id) {
-    fail(res, 403, "ERR_FORBIDDEN", "This quiz is not for the student's batch.");
+  const studentGeo = await geoForCentre(student.centre_id);
+  if (!quizMatchesStudent(pq, student, studentGeo.city_id, studentGeo.state_id)) {
+    fail(res, 403, "ERR_FORBIDDEN", "This quiz is not available for this student.");
     return;
   }
 
@@ -1177,6 +1925,12 @@ router.post("/push/:id/submit", async (req: Request, res: Response) => {
   }
   const score = correctCount;
 
+  // Resolve AT21 points outside the award transaction.
+  const completionPoints = await resolvePushQuizCompletionPoints(
+    studentGeo.city_id,
+    pq.completion_points,
+  );
+
   // Atomic submit: serialize on (push quiz, student), then upsert the attempt
   // but only let the update fire when the existing row has NOT been submitted
   // yet (setWhere: submitted_at IS NULL). `.returning()` yields a row ONLY on
@@ -1203,18 +1957,20 @@ router.post("/push/:id/submit", async (req: Request, res: Response) => {
 
     // Reached only on the winning claim above, so completion points award once.
     let pointsAwarded = 0;
-    if (pq.completion_points > 0) {
+    if (completionPoints > 0) {
       await awardPunya(
         {
           studentId: student.id,
-          featureKey: "push_quiz",
-          points: pq.completion_points,
+          featureKey: PUSH_QUIZ_COMPLETION_FEATURE_KEY,
+          points: completionPoints,
           note: "Push quiz completion",
-          idempotencyKey: `quiz-award:${rows[0].id}`,
+          idempotencyKey: `quiz-award:${rows[0]!.id}`,
+          sourceEntityKind: "push_quiz_attempt",
+          sourceEntityId: rows[0]!.id,
         },
         tx,
       );
-      pointsAwarded = pq.completion_points;
+      pointsAwarded = completionPoints;
     }
     return { claimed: true as const, pointsAwarded };
   });

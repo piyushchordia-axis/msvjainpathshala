@@ -30,7 +30,8 @@ export const students = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     user_id: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
     parent_id: uuid("parent_id").references(() => users.id, { onDelete: "set null" }),
-    student_code: varchar("student_code", { length: 20 }).notNull(),
+    /** City-scoped permanent ID — e.g. MUM-STU-00042 (does not change on Pathshala move). */
+    student_code: varchar("student_code", { length: 32 }).notNull(),
     full_name: text("full_name").notNull(),
     gender: genderEnum("gender"),
     dob: date("dob"),
@@ -44,6 +45,8 @@ export const students = pgTable(
     centre_id: uuid("centre_id").references(() => centres.id, { onDelete: "set null" }),
     batch_id: uuid("batch_id").references(() => batches.id, { onDelete: "set null" }),
     msv_status: msvStatusEnum("msv_status").notNull().default("none"),
+    /** Global MSV membership number (MSV00001) — set on first MSV approval; permanent. */
+    msv_code: varchar("msv_code", { length: 16 }),
     status: studentStatusEnum("status").notNull().default("active"),
     /** Set when status → inactive; AT5 excludes sessions on/after this Kolkata date. */
     deactivated_at: timestamp("deactivated_at", { withTimezone: true }),
@@ -54,6 +57,10 @@ export const students = pgTable(
     ...timestamps(),
   },
   (t) => ({
+    student_code_uq: uniqueIndex("students_student_code_uq").on(t.student_code),
+    msv_code_uq: uniqueIndex("students_msv_code_uq")
+      .on(t.msv_code)
+      .where(sql`${t.msv_code} is not null`),
     centre_idx: index("idx_students_centre").on(t.centre_id),
     user_idx: index("idx_students_user").on(t.user_id),
     parent_idx: index("idx_students_parent").on(t.parent_id),

@@ -9,9 +9,6 @@ import { Label } from '@/components/ui/label';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
 } from '@/components/ui/dialog';
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from '@/components/ui/select';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Command,
@@ -117,6 +114,90 @@ interface BatchOption { id: string; name: string | null; centre_name: string; st
 
 function batchLabel(b: BatchOption): string {
   return `${b.name ?? '—'} · ${b.centre_name}`;
+}
+
+function studentLabel(s: StudentOption): string {
+  return `${s.full_name ?? '—'} · ${s.student_code}`;
+}
+
+function StudentSearchSelect({
+  students,
+  value,
+  onChange,
+  disabled,
+  loading,
+}: {
+  students: StudentOption[];
+  value: string;
+  onChange: (id: string) => void;
+  disabled?: boolean;
+  loading?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = useMemo(() => students.find((s) => s.id === value) ?? null, [students, value]);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          disabled={disabled || loading}
+          className="h-9 w-full justify-between font-normal"
+        >
+          <span className="truncate text-left">
+            {loading
+              ? 'Loading…'
+              : selected
+                ? studentLabel(selected)
+                : 'Search student…'}
+          </span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="z-[100] w-[var(--radix-popover-trigger-width)] p-0"
+        align="start"
+      >
+        <Command>
+          <CommandInput placeholder="Search by name or student code…" />
+          <CommandList>
+            <CommandEmpty>No matching student.</CommandEmpty>
+            <CommandGroup>
+              {students.map((s) => {
+                const label = studentLabel(s);
+                return (
+                  <CommandItem
+                    key={s.id}
+                    value={`${label} ${s.student_code}`}
+                    onSelect={() => {
+                      onChange(s.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <Check
+                      className={cn(
+                        'mr-2 h-4 w-4',
+                        value === s.id ? 'opacity-100' : 'opacity-0',
+                      )}
+                    />
+                    <span className="truncate">
+                      <span className="font-medium">{s.full_name ?? '—'}</span>
+                      <span className="ml-1 font-mono text-xs text-muted-foreground">
+                        {s.student_code}
+                      </span>
+                    </span>
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 function BatchSearchSelect({
@@ -255,16 +336,16 @@ function AddEnrolmentDialog({ onAdded }: { onAdded: () => void }) {
         <form className="space-y-4 pt-2" onSubmit={submit}>
           <div className="space-y-1">
             <Label className="text-xs font-medium">Student *</Label>
-            <Select value={studentId} onValueChange={setStudentId} disabled={loadingOpts}>
-              <SelectTrigger><SelectValue placeholder={loadingOpts ? 'Loading…' : 'Select student'} /></SelectTrigger>
-              <SelectContent>
-                {students.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {(s.full_name ?? '—')} · {s.student_code}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <StudentSearchSelect
+              students={students}
+              value={studentId}
+              onChange={setStudentId}
+              loading={loadingOpts}
+              disabled={loadingOpts}
+            />
+            {!loadingOpts && students.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No students in your scope.</p>
+            ) : null}
           </div>
           <div className="space-y-1">
             <Label className="text-xs font-medium">Batch *</Label>

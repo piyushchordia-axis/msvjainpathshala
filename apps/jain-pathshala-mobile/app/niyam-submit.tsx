@@ -174,7 +174,7 @@ export default function NiyamSubmit() {
 
   const selectedDesc = selected
     ? hi
-      ? selected.description_hi
+      ? selected.description_hi ?? selected.description_en
       : selected.description_en
     : null;
   const uploadsBusy = !mediaReady(media);
@@ -221,20 +221,20 @@ export default function NiyamSubmit() {
                 <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
                   <View style={{ flex: 1, paddingRight: 10 }}>
                     <Title style={{ fontSize: 17 }}>
-                      {hi ? selected.title_hi : selected.title_en}
+                      {hi ? selected.title_hi ?? selected.title_en : selected.title_en}
                     </Title>
                   </View>
                   <Pill label={`+${selected.points}`} tone="primary" />
                 </Row>
                 <Row style={{ marginTop: 8, gap: 6, flexWrap: "wrap" }}>
                   <Pill label={selected.niyam_type} />
-                  {(hi ? selected.period_label_hi : selected.period_label_en) ? (
-                    <Pill label={(hi ? selected.period_label_hi : selected.period_label_en) ?? ""} />
+                  {(hi ? selected.period_label_hi ?? selected.period_label_en : selected.period_label_en) ? (
+                    <Pill label={(hi ? selected.period_label_hi ?? selected.period_label_en : selected.period_label_en) ?? ""} />
                   ) : null}
                   {alreadySubmitted ? (
                     <Pill
                       label={
-                        (hi ? selected.period_status_tag_hi : selected.period_status_tag_en) ??
+                        (hi ? selected.period_status_tag_hi ?? selected.period_status_tag_en : selected.period_status_tag_en) ??
                         (hi ? "प्रस्तुत" : "Submitted")
                       }
                       tone="primary"
@@ -377,10 +377,10 @@ export default function NiyamSubmit() {
                 ) : (
                   <View style={{ gap: 8 }}>
                     {catalogRows.map((row) => {
-                      const title = hi ? row.title_hi : row.title_en;
+                      const title = hi ? row.title_hi ?? row.title_en : row.title_en;
                       const submitted = !!row.submitted_this_period;
-                      const tag = hi ? row.period_status_tag_hi : row.period_status_tag_en;
-                      const period = hi ? row.period_label_hi : row.period_label_en;
+                      const tag = hi ? row.period_status_tag_hi ?? row.period_status_tag_en : row.period_status_tag_en;
+                      const period = hi ? row.period_label_hi ?? row.period_label_en : row.period_label_en;
                       const meta = [row.niyam_type, period, submitted ? tag : null]
                         .filter(Boolean)
                         .join(" · ");

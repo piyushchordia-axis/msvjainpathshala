@@ -202,3 +202,44 @@ describe("upload Content-Type round-trip", () => {
     expect(leftover).toEqual([]);
   });
 });
+
+describe("upload folder validation", () => {
+  let token: string;
+
+  beforeAll(async () => {
+    ({ token } = await loginAs("parent"));
+  });
+
+  it("accepts folder=homework and stores under homework/", async () => {
+    const buf = fs.readFileSync(path.join(fixturesDir, "sample.jpg"));
+    const res = await request(app)
+      .post("/v1/uploads")
+      .set(auth(token))
+      .field("folder", "homework")
+      .attach("file", buf, { filename: "worksheet.jpg", contentType: "image/jpeg" });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.data.key).toMatch(/^homework\//);
+  });
+
+  it("rejects unknown folder homework-proof with 422 (no silent misc fallback)", async () => {
+    const buf = fs.readFileSync(path.join(fixturesDir, "sample.jpg"));
+    const res = await request(app)
+      .post("/v1/uploads")
+      .set(auth(token))
+      .field("folder", "homework-proof")
+      .attach("file", buf, { filename: "proof.jpg", contentType: "image/jpeg" });
+    expect(res.status).toBe(422);
+    expect(res.body.error?.code).toBe("ERR_VALIDATION_FAILED");
+    expect(res.body.error?.message).toMatch(/homework-proof/);
+  });
+
+  it("defaults missing folder to misc/", async () => {
+    const buf = fs.readFileSync(path.join(fixturesDir, "sample.jpg"));
+    const res = await request(app)
+      .post("/v1/uploads")
+      .set(auth(token))
+      .attach("file", buf, { filename: "loose.jpg", contentType: "image/jpeg" });
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.data.key).toMatch(/^misc\//);
+  });
+});

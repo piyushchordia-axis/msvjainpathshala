@@ -21,13 +21,16 @@ export function QuizRunner({
   titleHi,
   questions,
   submitting,
+  initialAnswers,
   onSubmit,
   onCancel,
 }: {
   titleEn: string;
-  titleHi: string;
+  titleHi: string | null;
   questions: QuizQuestion[];
   submitting: boolean;
+  /** Restored selections when resuming an in-progress attempt. */
+  initialAnswers?: Record<string, number[]>;
   /** Called with questionId -> selected option indices. */
   onSubmit: (answers: Record<string, number[]>) => void;
   onCancel: () => void;
@@ -36,7 +39,9 @@ export function QuizRunner({
   const { hi } = useLocale();
 
   // questionId -> selected option indices (multi-select).
-  const [answers, setAnswers] = useState<Record<string, number[]>>({});
+  const [answers, setAnswers] = useState<Record<string, number[]>>(
+    () => initialAnswers ?? {},
+  );
 
   function toggleOption(questionId: string, optionIndex: number) {
     setAnswers((prev) => {
@@ -57,7 +62,7 @@ export function QuizRunner({
   return (
     <>
       <Card>
-        <Title style={{ fontSize: 18 }}>{hi ? titleHi : titleEn}</Title>
+        <Title style={{ fontSize: 18 }}>{hi ? titleHi ?? titleEn : titleEn}</Title>
         <Row style={{ marginTop: 10, gap: 8, flexWrap: "wrap" }}>
           <Pill
             label={`${answeredCount} / ${questions.length} ${hi ? "उत्तर दिए" : "answered"}`}
@@ -81,7 +86,7 @@ export function QuizRunner({
           return (
             <Card key={q.id}>
               <Body style={{ fontSize: 15, fontWeight: "600" }}>
-                {qi + 1}. {hi ? q.question_hi : q.question_en}
+                {qi + 1}. {hi ? q.question_hi ?? q.question_en : q.question_en}
               </Body>
               <View style={{ marginTop: 12, gap: 8 }}>
                 {q.options.map((opt, oi) => {
@@ -108,7 +113,7 @@ export function QuizRunner({
                         color={isOn ? c.primary : c.inkDim}
                       />
                       <Body style={{ flex: 1, color: isOn ? c.accentForeground : c.foreground }}>
-                        {hi ? opt.text_hi : opt.text_en}
+                        {hi ? opt.text_hi ?? opt.text_en : opt.text_en}
                       </Body>
                     </Pressable>
                   );

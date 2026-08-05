@@ -28,6 +28,8 @@ import {
   punya_transactions,
   punya_balances,
   punya_features,
+  punya_award_limits,
+  punya_configs,
   niyams,
   niyam_submissions,
   niyam_submission_media,
@@ -64,6 +66,7 @@ import {
   push_quizzes,
   push_quiz_questions,
   enquiries,
+  entity_code_counters,
 } from "./schema";
 import { tierForPoints } from "./schema/enums";
 import { sql, eq } from "drizzle-orm";
@@ -133,11 +136,11 @@ async function main(): Promise<void> {
       curriculum_items, curriculum_sections, curricula,
       gallery_items, library_items, shivir_events, notices,
       niyam_streaks, niyam_submission_media, niyam_submissions, niyams,
-      punya_balances, punya_transactions, punya_configs, punya_features,
+      punya_balances, punya_transactions, punya_configs, punya_features, punya_award_limits,
       attendance, sessions, absence_notifications, sync_operations,
       digital_id_cards, msv_enrolments, enrolments, students,
       shikshak_batch_assignments, shikshak_centre_assignments, sanchalak_centre_assignments,
-      centre_holidays, batches, centres,
+      centre_holidays, batches, centres, entity_code_counters,
       notice_reads, library_access_logs, settings,
       otp_codes, device_sessions, users,
       cities, states
@@ -150,6 +153,28 @@ async function main(): Promise<void> {
     { key: "niyam_completion", label: "Niyam completion", is_active: true, min_points: 0, max_points: 1000 },
     { key: "homework", label: "Homework approved", is_active: true, min_points: 0, max_points: 10 },
     { key: "homework_starred", label: "Homework starred", is_active: true, min_points: 0, max_points: 12 },
+    { key: "exam_completion", label: "Exam completion (pass)", is_active: true, min_points: 0, max_points: 500 },
+    { key: "exam_top_score", label: "Exam top score", is_active: true, min_points: 0, max_points: 500 },
+    { key: "quiz_participation", label: "Quiz participation", is_active: true, min_points: 0, max_points: 5 },
+    { key: "quiz_win", label: "Quiz win", is_active: true, min_points: 0, max_points: 25 },
+    { key: "push_quiz_completion", label: "Push quiz completion", is_active: true, min_points: 0, max_points: 5 },
+    { key: "manual_award", label: "Manual admin award", is_active: true, min_points: 0, max_points: 500 },
+  ]);
+
+  await db.insert(punya_configs).values([
+    { feature_key: "exam_completion", points: 20, city_id: null, is_active: true },
+    { feature_key: "exam_top_score", points: 50, city_id: null, is_active: true },
+    { feature_key: "quiz_participation", points: 5, city_id: null, is_active: true },
+    { feature_key: "quiz_win", points: 25, city_id: null, is_active: true },
+    { feature_key: "push_quiz_completion", points: 5, city_id: null, is_active: true },
+  ]);
+
+  await db.insert(punya_award_limits).values([
+    { role: "shikshak", max_points_per_award: 10, max_points_per_day: 50, is_active: true },
+    { role: "sanchalak", max_points_per_award: 25, max_points_per_day: 150, is_active: true },
+    { role: "city_admin", max_points_per_award: 100, max_points_per_day: 500, is_active: true },
+    { role: "state_admin", max_points_per_award: 250, max_points_per_day: 1000, is_active: true },
+    { role: "super_admin", max_points_per_award: 500, max_points_per_day: null, is_active: true },
   ]);
 
   /* ---------------- Geography ---------------- */
@@ -199,6 +224,7 @@ async function main(): Promise<void> {
       full_name: "Maharashtra State Admin",
       preferred_language: "en",
       state_id: maharashtra.id,
+      display_code: "MH-SAD-00001",
     })
     .returning();
 
@@ -211,6 +237,7 @@ async function main(): Promise<void> {
       preferred_language: "en",
       state_id: maharashtra.id,
       city_id: mumbai.id,
+      display_code: "MUM-CAD-00001",
     })
     .returning();
 
@@ -223,6 +250,7 @@ async function main(): Promise<void> {
       preferred_language: "hi",
       state_id: maharashtra.id,
       city_id: mumbai.id,
+      display_code: "MUM-GHK-SAN-00001",
     })
     .returning();
 
@@ -235,6 +263,7 @@ async function main(): Promise<void> {
       preferred_language: "hi",
       state_id: maharashtra.id,
       city_id: mumbai.id,
+      display_code: "MUM-GHK-SHK-00001",
     })
     .returning();
 
@@ -248,6 +277,7 @@ async function main(): Promise<void> {
       state_id: maharashtra.id,
       city_id: mumbai.id,
       gallery_visibility_opt_in: true,
+      display_code: "MUM-PAR-00001",
     })
     .returning();
 
@@ -272,6 +302,7 @@ async function main(): Promise<void> {
       full_name: "MP State Admin (Indore)",
       preferred_language: "hi",
       state_id: madhyaPradesh.id,
+      display_code: "MP-SAD-00001",
     })
     .returning();
 
@@ -284,6 +315,7 @@ async function main(): Promise<void> {
       preferred_language: "hi",
       state_id: madhyaPradesh.id,
       city_id: indore.id,
+      display_code: "IDR-CAD-00001",
     })
     .returning();
 
@@ -296,6 +328,7 @@ async function main(): Promise<void> {
       preferred_language: "hi",
       state_id: madhyaPradesh.id,
       city_id: indore.id,
+      display_code: "IDR-SAP-SAN-00001",
     })
     .returning();
 
@@ -308,6 +341,7 @@ async function main(): Promise<void> {
       preferred_language: "hi",
       state_id: madhyaPradesh.id,
       city_id: indore.id,
+      display_code: "IDR-SAP-SHK-00001",
     })
     .returning();
 
@@ -321,6 +355,7 @@ async function main(): Promise<void> {
       state_id: madhyaPradesh.id,
       city_id: indore.id,
       gallery_visibility_opt_in: true,
+      display_code: "IDR-PAR-00001",
     })
     .returning();
 
@@ -342,6 +377,7 @@ async function main(): Promise<void> {
     .values({
       state_id: maharashtra.id,
       city_id: mumbai.id,
+      code: "MUM-GHK",
       name: "Ghatkopar Jain Pathshala",
       locality: "Ghatkopar East",
       pincode: "400077",
@@ -359,6 +395,7 @@ async function main(): Promise<void> {
     .values({
       state_id: maharashtra.id,
       city_id: pune.id,
+      code: "PUN-KOT",
       name: "Kothrud Jain Pathshala",
       locality: "Kothrud",
       pincode: "411038",
@@ -373,6 +410,7 @@ async function main(): Promise<void> {
     .values({
       state_id: gujarat.id,
       city_id: ahmedabad.id,
+      code: "AMD-MAN",
       name: "Maninagar Jain Pathshala",
       locality: "Maninagar",
       pincode: "380008",
@@ -480,18 +518,19 @@ async function main(): Promise<void> {
   const studentSeeds = [
     {
       full_name: "Aarav Shah",
-      code: "STU000001",
+      code: "MUM-STU-00001",
       age_group: "bal" as const,
       centre_id: centreA.id,
       batch_id: batchA1.id,
       msv_status: "approved" as const,
+      msv_code: "MSV00001",
       user_id: studentUser.id,
       parent_id: parent.id,
       dob: "2016-04-12",
     },
     {
       full_name: "Diya Mehta",
-      code: "STU000002",
+      code: "MUM-STU-00002",
       age_group: "bal" as const,
       centre_id: centreA.id,
       batch_id: batchA1.id,
@@ -501,7 +540,7 @@ async function main(): Promise<void> {
     },
     {
       full_name: "Kabir Jain",
-      code: "STU000003",
+      code: "MUM-STU-00003",
       age_group: "kishor" as const,
       centre_id: centreA.id,
       batch_id: batchA2.id,
@@ -511,16 +550,17 @@ async function main(): Promise<void> {
     },
     {
       full_name: "Anaya Doshi",
-      code: "STU000004",
+      code: "PUN-STU-00001",
       age_group: "tarun" as const,
       centre_id: centreB.id,
       batch_id: batchB1.id,
       msv_status: "approved" as const,
+      msv_code: "MSV00002",
       dob: "2009-11-30",
     },
     {
       full_name: "Vivaan Sanghvi",
-      code: "STU000005",
+      code: "MUM-STU-00004",
       age_group: "kishor" as const,
       centre_id: centreA.id,
       batch_id: batchA2.id,
@@ -539,6 +579,7 @@ async function main(): Promise<void> {
         centre_id: s.centre_id,
         batch_id: s.batch_id,
         msv_status: s.msv_status,
+        msv_code: s.msv_code ?? null,
         user_id: s.user_id ?? null,
         parent_id: s.parent_id ?? null,
         dob: s.dob,
@@ -548,9 +589,9 @@ async function main(): Promise<void> {
     .returning();
 
   // Preserve prior index assumptions for Mumbai rows (0–4), then append Indore.
-  const indoreReyansh = indoreNet.students.find((s) => s.student_code === "STU000101")!;
-  const indoreMyra = indoreNet.students.find((s) => s.student_code === "STU000102")!;
-  const indoreArjun = indoreNet.students.find((s) => s.student_code === "STU000103")!;
+  const indoreReyansh = indoreNet.students.find((s) => s.student_code === "IDR-STU-00001")!;
+  const indoreMyra = indoreNet.students.find((s) => s.student_code === "IDR-STU-00002")!;
+  const indoreArjun = indoreNet.students.find((s) => s.student_code === "IDR-STU-00003")!;
   const insertedStudents = [
     ...mumbaiStudents,
     indoreReyansh,
@@ -614,8 +655,8 @@ async function main(): Promise<void> {
       .filter(
         (s) =>
           (s.msv_status === "approved" || s.msv_status === "applied") &&
-          s.student_code !== "STU000101" &&
-          s.student_code !== "STU000103",
+          s.student_code !== "IDR-STU-00001" &&
+          s.student_code !== "IDR-STU-00003",
       )
       .map((s) =>
         s.msv_status === "approved"
@@ -1402,6 +1443,30 @@ async function main(): Promise<void> {
     { kind: "enquire", name: "Neha Jain", phone: "+919811122233", city: "Indore", message: "Looking for Bal batch timings at Indore Jain Pathshala.", status: "new" },
   ]);
 
+  /* ---------------- Entity code counters (continue series after seed) ---------------- */
+  await db.insert(entity_code_counters).values([
+    { series: "STU", scope_key: "MUM", last_no: 4 },
+    { series: "STU", scope_key: "PUN", last_no: 1 },
+    { series: "STU", scope_key: "IDR", last_no: Math.max(0, indoreNet.students.length) },
+    { series: "PAR", scope_key: "MUM", last_no: 1 },
+    { series: "PAR", scope_key: "IDR", last_no: 1 },
+    { series: "CAD", scope_key: "MUM", last_no: 1 },
+    { series: "CAD", scope_key: "IDR", last_no: 1 },
+    { series: "SAD", scope_key: "MH", last_no: 1 },
+    { series: "SAD", scope_key: "MP", last_no: 1 },
+    { series: "SHK", scope_key: "MUM-GHK", last_no: 1 },
+    { series: "SHK", scope_key: "IDR-SAP", last_no: 1 },
+    { series: "SAN", scope_key: "MUM-GHK", last_no: 1 },
+    { series: "SAN", scope_key: "IDR-SAP", last_no: 1 },
+    { series: "MSV", scope_key: "GLOBAL", last_no: 2 + indoreNet.students.filter((s) => s.msv_status === "approved").length },
+  ]);
+
+  // Point staff default centre at their Pathshala (codes already minted).
+  await db.update(users).set({ centre_id_default: centreA.id }).where(eq(users.id, sanchalak.id));
+  await db.update(users).set({ centre_id_default: centreA.id }).where(eq(users.id, shikshak.id));
+  await db.update(users).set({ centre_id_default: centreIndore.id }).where(eq(users.id, indoreSanchalak.id));
+  await db.update(users).set({ centre_id_default: centreIndore.id }).where(eq(users.id, indoreShikshak.id));
+
   console.log("Seed complete.");
   console.log("\nLogin phones (OTP code: 123456 for all users via settings):");
   console.log("  --- Mumbai / national ---");
@@ -1419,7 +1484,7 @@ async function main(): Promise<void> {
   console.log("  sanchalak   : +919800000013  (+ multi-centre sanchalaks +919800002020…)");
   console.log("  shikshak    : +919800000014  (+ shikshaks +919800002030…)");
   console.log("  parent      : +919800000015  (3 children)  | more parents +919800002040…");
-  console.log("  student     : +919800000016  (Reyansh Jain / STU000101)");
+  console.log("  student     : +919800000016  (Reyansh Jain / IDR-STU-00001)");
   for (const [i, c] of indoreNet.centres.entries()) {
     const n = indoreNet.students.filter((s) => s.centre_id === c.id).length;
     console.log(`    centre[${i}] ${c.name} — ${n} students`);
