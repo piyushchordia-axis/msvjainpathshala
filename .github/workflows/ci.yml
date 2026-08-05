@@ -29,6 +29,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile=false
 
+      # PERF #2: leftover agent-debug fetch() to 127.0.0.1:7744 previously sat
+      # in the offline sync transport. Fail the build if it (or the marker
+      # region) reappears under apps/.
+      - name: Ban leftover debug telemetry
+        run: |
+          set -euo pipefail
+          if rg -n --glob '!**/node_modules/**' --glob '!**/dist/**' \
+              -e '#region agent log' -e '127\.0\.0\.1:7744' apps/; then
+            echo "::error::Forbidden debug telemetry found under apps/ (see PERF #2)"
+            exit 1
+          fi
+          echo "OK: no agent-log / 7744 telemetry under apps/"
+
       - name: Typecheck
         run: pnpm run typecheck
 
