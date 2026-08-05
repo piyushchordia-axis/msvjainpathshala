@@ -23,6 +23,12 @@ export const QUEUE_NAMES = {
   AUTH_SESSION_CLEANUP: "auth.session.cleanup",
   MEDIA_CLEANUP_UNFINALIZED: "media.cleanup_unfinalized",
   DONATION_EIGHTYG_YEAR_END: "donation.eightyg.year_end_summary",
+  /** Mark stale in_progress exam attempts abandoned (window_end + 2h). */
+  EXAM_ATTEMPT_ABANDON: "exam.attempt_abandon",
+  /** Award exam top-score Punya after results_released. */
+  EXAM_TOP_SCORE: "exam.top_score",
+  /** Chunked digital ID-card PNG generation (PERF #12). */
+  IDCARD_GENERATION: "idcard.generation",
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
@@ -43,4 +49,8 @@ export const CRON_EXPRESSIONS = {
   AUTH_SESSION_CLEANUP: "30 2 * * *",
   MEDIA_CLEANUP_UNFINALIZED: "30 3 * * *",
   DONATION_EIGHTYG_YEAR_END: "30 0 1 4 *", // 1 April 00:30 IST
+  /** Exam abandon sweep — same cadence as AT12 auto-checkout. */
+  EXAM_ATTEMPT_ABANDON: "*/30 * * * *",
+  /** Top-score catch-up for released exams (primary path is enqueue on release). */
+  EXAM_TOP_SCORE: "15 3 * * *",
 } as const;

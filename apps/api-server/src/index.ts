@@ -7,12 +7,16 @@ import { warmTestOtpNumbers } from "./lib/otp-test-numbers";
 import { assertProductionRedisConfigured } from "./lib/assert-production-redis";
 import { registerSessionLifecycleJobs } from "./jobs/session-lifecycle-jobs";
 import { registerDerivedDataJobs } from "./jobs/derived-data-jobs";
+import { registerExamJobs } from "./jobs/exam-jobs";
+import { registerIdCardJobs } from "./jobs/idcard-jobs";
 import { attachAdminDashboardFeed } from "./lib/admin-dashboard-feed";
 import { startQueueWorkers } from "./lib/queues";
 
 // Register queue handlers + cron enqueuers before the scheduler starts.
 registerSessionLifecycleJobs();
 registerDerivedDataJobs();
+registerExamJobs();
+registerIdCardJobs();
 startQueueWorkers();
 
 const rawPort = process.env["PORT"];
