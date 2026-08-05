@@ -141,23 +141,51 @@ async function handleAttendance(
   submissionOpId: string,
   payload: unknown,
 ): Promise<SyncResult> {
-  const p = z
-    .object({
-      batch_id: z.string().uuid(),
-      session_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      marked_at: z.string().min(1),
-      marks: z
-        .array(
-          z.object({
-            student_id: z.string().uuid(),
-            status: attendanceStatusSchema,
-            notes: z.string().max(500).optional().nullable(),
-            client_op_id: ulidSchema,
-          }),
-        )
-        .min(1),
-    })
-    .parse(payload);
+  const MARKS_MAX = 200;
+  const MARKS_MAX_MESSAGE =
+    "That submission has more than 200 marks. Submit one batch at a time.";
+
+  let p: {
+    batch_id: string;
+    session_date: string;
+    marked_at: string;
+    marks: Array<{
+      student_id: string;
+      status: z.infer<typeof attendanceStatusSchema>;
+      notes?: string | null;
+      client_op_id: string;
+    }>;
+  };
+  try {
+    p = z
+      .object({
+        batch_id: z.string().uuid(),
+        session_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+        marked_at: z.string().min(1),
+        marks: z
+          .array(
+            z.object({
+              student_id: z.string().uuid(),
+              status: attendanceStatusSchema,
+              notes: z.string().max(500).optional().nullable(),
+              client_op_id: ulidSchema,
+            }),
+          )
+          .min(1)
+          .max(MARKS_MAX, { message: MARKS_MAX_MESSAGE }),
+      })
+      .parse(payload);
+  } catch (err) {
+    const message =
+      err instanceof z.ZodError
+        ? (err.issues[0]?.message ?? "Invalid attendance payload.")
+        : "Invalid attendance payload.";
+    return {
+      submission_op_id: submissionOpId,
+      status: "failed",
+      error: { code: "ERR_VALIDATION_FAILED", message },
+    };
+  }
 
   let sessionId = await resolveSessionId(p.batch_id, p.session_date);
   if (!sessionId) {

@@ -26,19 +26,24 @@ import { loadSessionRoster } from "../../lib/session-roster";
 const router: IRouter = Router();
 router.use(requireAuth, requireAdminPanel);
 
+const MARKS_MAX = 200;
+const MARKS_MAX_MESSAGE =
+  "That submission has more than 200 marks. Submit one batch at a time.";
+
+const markItemSchema = z.object({
+  student_id: z.string().uuid(),
+  status: attendanceStatusSchema,
+  notes: z.string().max(500).optional().nullable(),
+  client_op_id: ulidSchema,
+});
+
 const markBodySchema = z.object({
   submission_op_id: ulidSchema,
   marked_at: z.string().datetime({ offset: true }).or(z.string().datetime()),
   marks: z
-    .array(
-      z.object({
-        student_id: z.string().uuid(),
-        status: attendanceStatusSchema,
-        notes: z.string().max(500).optional().nullable(),
-        client_op_id: ulidSchema,
-      }),
-    )
+    .array(markItemSchema)
     .min(1)
+    .max(MARKS_MAX, { message: MARKS_MAX_MESSAGE })
     .superRefine((marks, ctx) => {
       const seen = new Set<string>();
       const dupes = new Set<string>();
@@ -246,8 +251,12 @@ router.post("/:id/attendance", async (req: Request, res: Response) => {
   let body: z.infer<typeof markBodySchema>;
   try {
     body = markBodySchema.parse(req.body);
-  } catch {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid attendance payload.");
+  } catch (err) {
+    const message =
+      err instanceof z.ZodError
+        ? (err.issues[0]?.message ?? "Invalid attendance payload.")
+        : "Invalid attendance payload.";
+    fail(res, 422, "ERR_VALIDATION_FAILED", message);
     return;
   }
 
