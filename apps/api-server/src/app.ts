@@ -12,16 +12,9 @@ import { verifyUploadAccess } from "./lib/file-tokens";
 import { MIME_BY_EXT } from "./lib/upload";
 import { fail } from "./lib/envelope";
 import { handleMulterError } from "./middlewares/multer-error";
+import { corsOriginDelegate } from "./lib/cors-origins";
 
 const isProd = process.env.NODE_ENV === "production";
-// In production, restrict CORS to an explicit allow-list (comma-separated
-// origins in CORS_ORIGINS). In dev we reflect any origin so the Vite (:5173)
-// and Expo-web (:8081) previews work. Never reflect arbitrary origins with
-// credentials in production.
-const allowedOrigins = (process.env.CORS_ORIGINS ?? "")
-  .split(",")
-  .map((s) => s.trim())
-  .filter(Boolean);
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -63,9 +56,7 @@ app.use(
 app.use(
   cors({
     credentials: true,
-    origin: isProd
-      ? (origin, cb) => cb(null, !origin || allowedOrigins.includes(origin))
-      : true,
+    origin: corsOriginDelegate,
   }),
 );
 // Baseline security response headers (helmet-equivalent, dependency-free).

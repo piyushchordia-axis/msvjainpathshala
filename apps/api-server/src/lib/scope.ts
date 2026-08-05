@@ -146,4 +146,38 @@ export async function cityIdsForState(stateId: string): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
+/**
+ * Whether an admin-panel user may join the Socket.IO city feed (PERF #17).
+ * Mirrors HTTP centre-scope: super sees all; city_admin their city; state their
+ * state's cities; sanchalak/shikshak any city that owns one of their centres.
+ */
+export async function userCanAccessCity(user: User, cityId: string): Promise<boolean> {
+  if (!cityId) return false;
+  switch (user.role) {
+    case "super_admin":
+      return true;
+    case "city_admin":
+      return user.city_id === cityId;
+    case "state_admin": {
+      if (!user.state_id) return false;
+      const ids = await cityIdsForState(user.state_id);
+      return ids.includes(cityId);
+    }
+    case "sanchalak":
+    case "shikshak": {
+      const scope = await resolveAdminScope(user);
+      if (scope.centreIds === null) return true;
+      if (scope.centreIds.length === 0) return false;
+      const rows = await db
+        .select({ id: centres.id })
+        .from(centres)
+        .where(and(eq(centres.city_id, cityId), inArray(centres.id, scope.centreIds)))
+        .limit(1);
+      return rows.length > 0;
+    }
+    default:
+      return false;
+  }
+}
+
 export { inArray };
