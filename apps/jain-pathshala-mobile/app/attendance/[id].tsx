@@ -13,8 +13,8 @@
  * for the session's centre); an out-of-scope session 404s and renders as a
  * friendly "not available" state.
  */
-import { useMemo, useState } from "react";
-import { Platform, Pressable, View } from "react-native";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { FlatList, Platform, RefreshControl, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import * as Location from "expo-location";
@@ -25,20 +25,16 @@ import {
   useAttendanceSession,
   useMarkAttendance,
   type AttendanceMark,
+  type AttendanceRosterRow as RosterEntry,
 } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { bodyFamily } from "@/constants/typography";
+import {
+  RosterRow,
+  ROSTER_ROW_HEIGHT,
+} from "@/components/AttendanceRosterRow";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
-
-/** The four states a shikshak can set per student. present/late count toward
- * the present tally on the server's session list. */
-const MARKS: { value: AttendanceMark; en: string; hi: string; tone: "success" | "error" | "warning" | "info" }[] = [
-  { value: "present", en: "Present", hi: "उपस्थित", tone: "success" },
-  { value: "absent", en: "Absent", hi: "अनुपस्थित", tone: "error" },
-  { value: "late", en: "Late", hi: "विलंब", tone: "warning" },
-  { value: "excused", en: "Excused", hi: "अनुमति", tone: "info" },
-];
 
 type Feedback =
   | { tone: "success"; title: string; detail: string }
@@ -64,7 +60,8 @@ export default function AttendanceMarkScreen() {
   const roster = useMemo(() => detail.data?.roster ?? [], [detail.data]);
 
   // One-time seed: existing marks win; else AT4 suggested excused from absences.
-  if (!seeded && detail.data) {
+  useEffect(() => {
+    if (seeded || !detail.data) return;
     const initial: Record<string, AttendanceMark> = {};
     for (const r of roster) {
       if (r.status) initial[r.student_id] = r.status;
@@ -72,23 +69,26 @@ export default function AttendanceMarkScreen() {
     }
     setMarks(initial);
     setSeeded(true);
-  }
+  }, [seeded, detail.data, roster]);
 
   const markedCount = Object.keys(marks).length;
   const allMarked = roster.length > 0 && markedCount === roster.length;
   const gpsNeeded = !!session?.gps_required;
 
-  function setStudentMark(studentId: string, value: AttendanceMark) {
+  const onMark = useCallback((studentId: string, value: AttendanceMark) => {
     setFeedback(null);
     setMarks((prev) => ({ ...prev, [studentId]: value }));
-  }
+  }, []);
 
-  function setAll(value: AttendanceMark) {
-    setFeedback(null);
-    const next: Record<string, AttendanceMark> = {};
-    for (const r of roster) next[r.student_id] = value;
-    setMarks(next);
-  }
+  const setAll = useCallback(
+    (value: AttendanceMark) => {
+      setFeedback(null);
+      const next: Record<string, AttendanceMark> = {};
+      for (const r of roster) next[r.student_id] = value;
+      setMarks(next);
+    },
+    [roster],
+  );
 
   /** Capture device GPS for a geofenced session. Returns null on denial/failure
    * (with feedback already set) so the caller can abort the submit. */
@@ -192,6 +192,31 @@ export default function AttendanceMarkScreen() {
     );
   }
 
+  const renderRosterItem = useCallback(
+    ({ item }: { item: RosterEntry }) => (
+      <RosterRow
+        studentId={item.student_id}
+        name={item.full_name ?? item.student_code}
+        code={item.student_code}
+        status={marks[item.student_id]}
+        hi={hi}
+        onMark={onMark}
+      />
+    ),
+    [marks, hi, onMark],
+  );
+
+  const rosterKeyExtractor = useCallback((item: RosterEntry) => item.student_id, []);
+
+  const rosterGetItemLayout = useCallback(
+    (_data: ArrayLike<RosterEntry> | null | undefined, index: number) => ({
+      length: ROSTER_ROW_HEIGHT,
+      offset: ROSTER_ROW_HEIGHT * index,
+      index,
+    }),
+    [],
+  );
+
   // ---- Loading / error / not-available ----
   if (detail.isLoading) {
     return (
@@ -223,9 +248,8 @@ export default function AttendanceMarkScreen() {
   const fbColor =
     feedback?.tone === "success" ? c.successText : feedback?.tone === "error" ? c.errorText : c.mutedForeground;
 
-  return (
-    <Screen refreshing={detail.isRefetching} onRefresh={detail.refetch}>
-      {/* Session header */}
+  const listHeader = (
+    <>
       <Card>
         <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
           <View style={{ flex: 1, paddingRight: 10 }}>
@@ -267,121 +291,102 @@ export default function AttendanceMarkScreen() {
           emptyText={hi ? "इस बैच में कोई सक्रिय विद्यार्थी नहीं है।" : "This batch has no active students."}
         />
       ) : (
-        <>
-          {/* Bulk helpers */}
-          <Row style={{ gap: 10, flexWrap: "wrap" }}>
-            <Button
-              label={hi ? "सभी उपस्थित" : "Mark all present"}
-              icon="checkmark-done"
-              variant="outline"
-              onPress={() => setAll("present")}
-              style={{ flex: 1, minWidth: 150 }}
-            />
-            <Button
-              label={hi ? "सभी अनुपस्थित" : "Mark all absent"}
-              icon="close"
-              variant="ghost"
-              onPress={() => setAll("absent")}
-              style={{ flex: 1, minWidth: 150 }}
-            />
-          </Row>
-
-          {/* Roster */}
-          {roster.map((r) => {
-            const current = marks[r.student_id];
-            return (
-              <Card key={r.student_id}>
-                <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-                  <View style={{ flex: 1, paddingRight: 8 }}>
-                    <Title style={{ fontSize: 16 }}>{r.full_name ?? r.student_code}</Title>
-                    <Body muted style={{ fontSize: 12, marginTop: 2 }}>{r.student_code}</Body>
-                  </View>
-                </Row>
-                <Row style={{ gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-                  {MARKS.map((m) => {
-                    const on = current === m.value;
-                    const onColor =
-                      m.tone === "success" ? c.successText : m.tone === "error" ? c.errorText : m.tone === "warning" ? c.warningText : c.infoText;
-                    return (
-                      <Pressable
-                        key={m.value}
-                        onPress={() => setStudentMark(r.student_id, m.value)}
-                        style={{
-                          flexDirection: "row",
-                          alignItems: "center",
-                          gap: 6,
-                          borderWidth: 1,
-                          borderColor: on ? onColor : c.border,
-                          backgroundColor: on ? c.accent : c.card,
-                          borderRadius: 999,
-                          paddingVertical: 8,
-                          paddingHorizontal: 12,
-                        }}
-                      >
-                        <Ionicons
-                          name={on ? "radio-button-on" : "radio-button-off"}
-                          size={16}
-                          color={on ? onColor : c.inkDim}
-                        />
-                        <Body style={{ fontSize: 13, color: on ? onColor : c.foreground, fontFamily: bodyFamily(hi, "semibold") }}>
-                          {hi ? m.hi : m.en}
-                        </Body>
-                      </Pressable>
-                    );
-                  })}
-                </Row>
-              </Card>
-            );
-          })}
-
-          {/* Feedback */}
-          {feedback ? (
-            <Card style={{ borderColor: fbColor }}>
-              <Row style={{ gap: 10, alignItems: "flex-start" }}>
-                <Ionicons
-                  name={feedback.tone === "success" ? "checkmark-circle" : "close-circle"}
-                  size={22}
-                  color={fbColor}
-                />
-                <View style={{ flex: 1 }}>
-                  <Body style={{ color: fbColor, fontFamily: bodyFamily(hi, "semibold") }}>{feedback.title}</Body>
-                  <Body muted style={{ marginTop: 2 }}>{feedback.detail}</Body>
-                </View>
-              </Row>
-            </Card>
-          ) : null}
-
-          {gpsNeeded ? (
-            <Body muted style={{ fontSize: 12, textAlign: "center" }}>
-              {hi
-                ? "जमा करने पर आपका स्थान कैप्चर किया जाएगा और केंद्र की सीमा से मिलान किया जाएगा।"
-                : "Your location is captured on submit and checked against the centre geofence."}
-            </Body>
-          ) : null}
-
+        <Row style={{ gap: 10, flexWrap: "wrap" }}>
           <Button
-            label={
-              feedback?.tone === "success"
-                ? hi ? "पुनः जमा करें" : "Save again"
-                : gpsNeeded
-                  ? hi ? "स्थान लें और जमा करें" : "Capture location & save"
-                  : hi ? "उपस्थिति जमा करें" : "Save attendance"
-            }
-            icon={gpsNeeded ? "location" : "save"}
-            loading={locating || mark.isPending}
-            disabled={markedCount === 0}
-            onPress={() => void submit()}
+            label={hi ? "सभी उपस्थित" : "Mark all present"}
+            icon="checkmark-done"
+            variant="outline"
+            onPress={() => setAll("present")}
+            style={{ flex: 1, minWidth: 150 }}
           />
-          {feedback?.tone === "success" ? (
-            <Button
-              label={hi ? "आज के सत्र पर वापस जाएँ" : "Back to today's sessions"}
-              icon="arrow-back"
-              variant="ghost"
-              onPress={() => router.back()}
-            />
-          ) : null}
-        </>
+          <Button
+            label={hi ? "सभी अनुपस्थित" : "Mark all absent"}
+            icon="close"
+            variant="ghost"
+            onPress={() => setAll("absent")}
+            style={{ flex: 1, minWidth: 150 }}
+          />
+        </Row>
       )}
+    </>
+  );
+
+  const listFooter =
+    cancelled || roster.length === 0 ? null : (
+      <>
+        {feedback ? (
+          <Card style={{ borderColor: fbColor }}>
+            <Row style={{ gap: 10, alignItems: "flex-start" }}>
+              <Ionicons
+                name={feedback.tone === "success" ? "checkmark-circle" : "close-circle"}
+                size={22}
+                color={fbColor}
+              />
+              <View style={{ flex: 1 }}>
+                <Body style={{ color: fbColor, fontFamily: bodyFamily(hi, "semibold") }}>{feedback.title}</Body>
+                <Body muted style={{ marginTop: 2 }}>{feedback.detail}</Body>
+              </View>
+            </Row>
+          </Card>
+        ) : null}
+
+        {gpsNeeded ? (
+          <Body muted style={{ fontSize: 12, textAlign: "center" }}>
+            {hi
+              ? "जमा करने पर आपका स्थान कैप्चर किया जाएगा और केंद्र की सीमा से मिलान किया जाएगा।"
+              : "Your location is captured on submit and checked against the centre geofence."}
+          </Body>
+        ) : null}
+
+        <Button
+          label={
+            feedback?.tone === "success"
+              ? hi ? "पुनः जमा करें" : "Save again"
+              : gpsNeeded
+                ? hi ? "स्थान लें और जमा करें" : "Capture location & save"
+                : hi ? "उपस्थिति जमा करें" : "Save attendance"
+          }
+          icon={gpsNeeded ? "location" : "save"}
+          loading={locating || mark.isPending}
+          disabled={markedCount === 0}
+          onPress={() => void submit()}
+        />
+        {feedback?.tone === "success" ? (
+          <Button
+            label={hi ? "आज के सत्र पर वापस जाएँ" : "Back to today's sessions"}
+            icon="arrow-back"
+            variant="ghost"
+            onPress={() => router.back()}
+          />
+        ) : null}
+      </>
+    );
+
+  return (
+    <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0 }}>
+      <FlatList
+        data={cancelled || roster.length === 0 ? [] : roster}
+        keyExtractor={rosterKeyExtractor}
+        renderItem={renderRosterItem}
+        getItemLayout={rosterGetItemLayout}
+        ListHeaderComponent={listHeader}
+        ListFooterComponent={listFooter}
+        contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 8, paddingBottom: 40, gap: 14 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={!!detail.isRefetching}
+            onRefresh={detail.refetch}
+            tintColor={c.primary}
+            colors={[c.primary]}
+          />
+        }
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        initialNumToRender={12}
+        maxToRenderPerBatch={8}
+        windowSize={7}
+        removeClippedSubviews={Platform.OS !== "web"}
+      />
     </Screen>
   );
 }

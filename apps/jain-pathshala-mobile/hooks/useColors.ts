@@ -2,6 +2,27 @@ import { useColorScheme } from "react-native";
 
 import colors from "@/constants/colors";
 
+type MergedPalette = typeof colors.light & { radius: typeof colors.radius };
+
+/** Module-scoped caches — avoids a fresh merged object on every useColors call. */
+let lightCache: MergedPalette | null = null;
+let darkCache: MergedPalette | null = null;
+
+function getLightPalette(): MergedPalette {
+  if (!lightCache) lightCache = { ...colors.light, radius: colors.radius };
+  return lightCache;
+}
+
+function getDarkPalette(): MergedPalette {
+  if (!darkCache) {
+    darkCache = {
+      ...(colors as Record<string, typeof colors.light>).dark,
+      radius: colors.radius,
+    };
+  }
+  return darkCache;
+}
+
 /**
  * Returns the design tokens for the current color scheme.
  *
@@ -14,11 +35,8 @@ import colors from "@/constants/colors";
  * key, this hook will automatically switch palettes based on the
  * device's appearance setting.
  */
-export function useColors() {
+export function useColors(): MergedPalette {
   const scheme = useColorScheme();
-  const palette =
-    scheme === "dark" && "dark" in colors
-      ? (colors as Record<string, typeof colors.light>).dark
-      : colors.light;
-  return { ...palette, radius: colors.radius };
+  if (scheme === "dark" && "dark" in colors) return getDarkPalette();
+  return getLightPalette();
 }
