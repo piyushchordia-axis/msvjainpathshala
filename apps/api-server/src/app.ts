@@ -1,6 +1,7 @@
 import path from "node:path";
 import express, { type Express, type Request } from "express";
 import cors from "cors";
+import compression from "compression";
 import cookieParser from "cookie-parser";
 import pinoHttp from "pino-http";
 import router from "./routes";
@@ -53,10 +54,12 @@ app.use(
     },
   }),
 );
+app.use(compression());
 app.use(
   cors({
     credentials: true,
     origin: corsOriginDelegate,
+    maxAge: 86_400,
   }),
 );
 // Baseline security response headers (helmet-equivalent, dependency-free).
