@@ -16,7 +16,7 @@ function getLightPalette(): MergedPalette {
 function getDarkPalette(): MergedPalette {
   if (!darkCache) {
     darkCache = {
-      ...(colors as Record<string, typeof colors.light>).dark,
+      ...(colors as unknown as Record<string, typeof colors.light>).dark,
       radius: colors.radius,
     };
   }

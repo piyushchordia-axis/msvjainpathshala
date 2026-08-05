@@ -717,7 +717,7 @@ export async function markAttendance(input: MarkInput): Promise<MarkResponse> {
       if (claim.kind === "busy") {
         throw new AttendanceMarkError(
           409,
-          "ERR_SYNC_IN_PROGRESS",
+          "ERR_CONFLICT",
           "This submission is already being processed. Retry shortly.",
         );
       }
