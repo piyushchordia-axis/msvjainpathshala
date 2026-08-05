@@ -1,8 +1,8 @@
 /**
  * PERF #22 — attendance roster row re-render counts at 50 students.
  *
- * Pure React DOM simulation (not RN test renderer). Memo behaviour matches
- * AttendanceRosterRow + useCallback onMark in app/attendance/[id].tsx.
+ * Pure React simulation (createElement, no JSX) matching AttendanceRosterRow
+ * + useCallback onMark in app/attendance/[id].tsx.
  *
  * Measured row re-renders on a single mark tap (student-0 → present):
  *   BEFORE (non-memo inline .map rows): 50
@@ -10,9 +10,8 @@
  */
 /// @vitest-environment jsdom
 
-import { act } from "react";
+import { act, createElement, memo, useCallback, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { memo, useCallback, useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it } from "vitest";
 
 const ROSTER_SIZE = 50;
@@ -32,11 +31,6 @@ function mount(ui: ReactNode) {
       });
       host.remove();
     },
-    rerender(next: ReactNode) {
-      act(() => {
-        root.render(next);
-      });
-    },
   };
 }
 
@@ -46,24 +40,28 @@ function simulateBeforeMarkTap(): number {
 
   function Row({ id, status }: { id: string; status?: string }) {
     renderCount += 1;
-    return <div data-testid={id}>{status ?? "unset"}</div>;
+    return createElement("div", { "data-testid": id }, status ?? "unset");
   }
 
   function BeforeRoster() {
     const [marks, setMarks] = useState<Record<string, string>>({});
-    return (
-      <>
-        <button type="button" data-testid="mark-first" onClick={() => setMarks({ "student-0": "present" })}>
-          mark
-        </button>
-        {rosterIds.map((id) => (
-          <Row key={id} id={id} status={marks[id]} />
-        ))}
-      </>
+    return createElement(
+      "div",
+      null,
+      createElement(
+        "button",
+        {
+          type: "button",
+          "data-testid": "mark-first",
+          onClick: () => setMarks({ "student-0": "present" }),
+        },
+        "mark",
+      ),
+      ...rosterIds.map((id) => createElement(Row, { key: id, id, status: marks[id] })),
     );
   }
 
-  const view = mount(<BeforeRoster />);
+  const view = mount(createElement(BeforeRoster));
   const beforeInitial = renderCount;
   act(() => {
     (document.querySelector('[data-testid="mark-first"]') as HTMLButtonElement).click();
@@ -86,13 +84,11 @@ function simulateAfterMarkTap(): number {
     onMark: (id: string) => void;
   }) {
     renderCount += 1;
-    return (
-      <div data-testid={id}>
-        {status ?? "unset"}
-        <button type="button" onClick={() => onMark(id)}>
-          pick
-        </button>
-      </div>
+    return createElement(
+      "div",
+      { "data-testid": id },
+      status ?? "unset",
+      createElement("button", { type: "button", onClick: () => onMark(id) }, "pick"),
     );
   });
 
@@ -101,19 +97,25 @@ function simulateAfterMarkTap(): number {
     const onMark = useCallback((id: string) => {
       setMarks((prev) => ({ ...prev, [id]: "present" }));
     }, []);
-    return (
-      <>
-        <button type="button" data-testid="mark-first" onClick={() => onMark("student-0")}>
-          mark
-        </button>
-        {rosterIds.map((id) => (
-          <Row key={id} id={id} status={marks[id]} onMark={onMark} />
-        ))}
-      </>
+    return createElement(
+      "div",
+      null,
+      createElement(
+        "button",
+        {
+          type: "button",
+          "data-testid": "mark-first",
+          onClick: () => onMark("student-0"),
+        },
+        "mark",
+      ),
+      ...rosterIds.map((id) =>
+        createElement(Row, { key: id, id, status: marks[id], onMark }),
+      ),
     );
   }
 
-  const view = mount(<AfterRoster />);
+  const view = mount(createElement(AfterRoster));
   const beforeTap = renderCount;
   act(() => {
     (document.querySelector('[data-testid="mark-first"]') as HTMLButtonElement).click();
