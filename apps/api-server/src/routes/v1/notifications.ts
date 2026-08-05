@@ -148,8 +148,12 @@ function istMonthDay(when: Date): string {
 export async function runBirthdayWishes(today?: Date): Promise<{ students: number; notifications: number }> {
   const when = today ?? new Date();
   const mmdd = istMonthDay(when);
+  const [mmStr, ddStr] = mmdd.split("-");
+  const month = Number(mmStr);
+  const day = Number(ddStr);
 
   // Active students whose birthday (month+day) is today.
+  // EXTRACT is IMMUTABLE-compatible for expression indexes (PERF #6); to_char is not.
   const birthdayStudents = await db
     .select({
       id: students.id,
@@ -162,7 +166,8 @@ export async function runBirthdayWishes(today?: Date): Promise<{ students: numbe
       and(
         eq(students.status, "active"),
         isNull(students.deleted_at),
-        sql`to_char(${students.dob}, 'MM-DD') = ${mmdd}`,
+        sql`EXTRACT(MONTH FROM ${students.dob}) = ${month}`,
+        sql`EXTRACT(DAY FROM ${students.dob}) = ${day}`,
       ),
     );
 

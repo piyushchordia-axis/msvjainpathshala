@@ -40,7 +40,8 @@ export const notifications = pgTable(
     ...timestamps(),
   },
   (t) => ({
-    user_idx: index("idx_notifications_user").on(t.user_id),
+    // (user_id, created_at DESC) covers inbox list; subsumes old idx_notifications_user.
+    user_created_idx: index("idx_notifications_user_created").on(t.user_id, t.created_at),
     user_read_idx: index("idx_notifications_user_read").on(t.user_id, t.read_at),
   }),
 );

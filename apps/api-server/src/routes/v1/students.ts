@@ -19,6 +19,8 @@ import {
   getStudentAttendanceRate,
   rateToPercent0,
 } from "../../lib/attendance-rate";
+import { canAccessAdminPanel } from "@workspace/api-zod";
+import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -35,6 +37,7 @@ async function studentAccess(req: Request, studentId: string): Promise<StudentAc
       parent_id: students.parent_id,
       user_id: students.user_id,
       centre_id: students.centre_id,
+      batch_id: students.batch_id,
     })
     .from(students)
     .where(and(eq(students.id, studentId), isNull(students.deleted_at)))
@@ -47,6 +50,11 @@ async function studentAccess(req: Request, studentId: string): Promise<StudentAc
   }
   if (stu.parent_id === user.id) return "ok";
   if (stu.user_id === user.id) return "ok";
+  // Guruji / Sanchalak: batch write scope (assigned batches; centre fallback).
+  if (canAccessAdminPanel(user.role)) {
+    const scope = await resolveAdminScope(user);
+    if (inBatchWriteScope(scope, stu.batch_id, stu.centre_id)) return "ok";
+  }
   return "forbidden";
 }
 
@@ -81,7 +89,8 @@ router.get("/:id/attendance", async (req: Request, res: Response) => {
   const rows = await db
     .select({
       id: attendance.id,
-      session_date: sessions.scheduled_date,
+      // Denormalised session_date — indexed as (student_id, session_date DESC).
+      session_date: attendance.session_date,
       status: attendance.status,
       topic: sessions.topic,
       batch_name: batches.name,
@@ -90,7 +99,7 @@ router.get("/:id/attendance", async (req: Request, res: Response) => {
     .innerJoin(sessions, eq(sessions.id, attendance.session_id))
     .leftJoin(batches, eq(batches.id, sessions.batch_id))
     .where(eq(attendance.student_id, id))
-    .orderBy(desc(sessions.scheduled_date))
+    .orderBy(desc(attendance.session_date))
     .limit(limit);
 
   const rate = await getStudentAttendanceRate(id, from, to);

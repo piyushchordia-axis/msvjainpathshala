@@ -85,6 +85,9 @@ export const punya_transactions = pgTable(
   (t) => ({
     student_idx: index("idx_punya_transactions_student").on(t.student_id),
     student_created_idx: index("idx_punya_transactions_student_created").on(t.student_id, t.created_at),
+    // Global created_at range (admin analytics). INCLUDE lives in the SQL
+    // migration — drizzle-orm has no .include() in this version.
+    created_at_idx: index("idx_punya_transactions_created").on(t.created_at),
     feature_idx: index("idx_punya_transactions_feature").on(t.feature_key),
     source_revision_idx: index("idx_punya_tx_source_revision").on(
       t.student_id,

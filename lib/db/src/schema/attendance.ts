@@ -80,6 +80,14 @@ export const sessions = pgTable(
     ),
     shikshak_date_idx: index("idx_sessions_shikshak_date").on(t.shikshak_user_id, t.scheduled_date),
     date_status_idx: index("idx_sessions_date_status").on(t.scheduled_date, t.status),
+    // AT16 idempotency lookup — partial (submission_op_id IS NOT NULL).
+    submission_op_idx: index("idx_sessions_submission_op")
+      .on(t.submission_op_id, t.shikshak_user_id)
+      .where(sql`${t.submission_op_id} is not null`),
+    // Auto-checkout every 30 min — equality on status alone.
+    in_progress_idx: index("idx_sessions_in_progress")
+      .on(t.scheduled_date)
+      .where(sql`${t.status} = 'in_progress'`),
     submission_op_ulid_check: check(
       "sessions_submission_op_id_ulid_check",
       sql`${t.submission_op_id} is null or ${t.submission_op_id} ~ ${sql.raw(`'${ULID_RE}'`)}`,
@@ -123,6 +131,11 @@ export const attendance = pgTable(
       .where(sql`${t.client_op_id} is not null`),
     student_idx: index("idx_attendance_student").on(t.student_id),
     session_idx: index("idx_attendance_session").on(t.session_id),
+    // Student attendance history page — order by denormalised session_date.
+    student_session_date_idx: index("idx_attendance_student_session_date").on(
+      t.student_id,
+      t.session_date,
+    ),
     absent_by_date_idx: index("idx_attendance_student_absent_by_date")
       .on(t.student_id, t.session_date)
       .where(sql`${t.status} = 'absent'`),
