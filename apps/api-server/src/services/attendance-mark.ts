@@ -827,8 +827,12 @@ export async function markAttendance(input: MarkInput): Promise<MarkResponse> {
   });
 
   // Enqueue AFTER commit (never inside the txn); skip on idempotent replay.
+  // Never await — without Redis the handler runs inline and would hold the
+  // HTTP worker + pool connection through streak recompute (PERF #14 load path).
   if (outcome.fresh) {
-    await enqueueAttendancePostProcess(session.id);
+    void enqueueAttendancePostProcess(session.id).catch(() => {
+      /* best-effort; BullMQ retries when Redis is up */
+    });
   }
 
   return outcome.response;

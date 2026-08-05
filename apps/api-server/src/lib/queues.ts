@@ -74,10 +74,15 @@ export type DebouncedJobOpts = {
   delayMs: number;
 };
 
+/** In-process sliding debounce when Redis is unavailable (dev / load-test). */
+const inlineDebounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const inlineDebouncePending = new Map<string, { data: Record<string, unknown>; handler: JobHandler }>();
+
 /**
  * Sliding-window debounce via stable jobId: remove any existing delayed/waiting
  * job with that id, then re-add with a fresh delay. Survives process restart
- * when Redis is up. Without Redis, runs the handler promptly (no durable window).
+ * when Redis is up. Without Redis, schedules an in-process timer (same delay)
+ * so a burst does not stampede the handler once per mark.
  */
 export async function enqueueDebouncedJob(
   name: QueueName,
@@ -91,8 +96,22 @@ export async function enqueueDebouncedJob(
       logger.warn({ name }, "No queue handler registered; dropping inline debounced job");
       return;
     }
-    logger.warn({ name }, "REDIS_URL unset — running debounced queue job inline");
-    await handler(data);
+    const key = `${name}:${debounce.jobId}`;
+    inlineDebouncePending.set(key, { data, handler });
+    const existing = inlineDebounceTimers.get(key);
+    if (existing) clearTimeout(existing);
+    inlineDebounceTimers.set(
+      key,
+      setTimeout(() => {
+        inlineDebounceTimers.delete(key);
+        const pending = inlineDebouncePending.get(key);
+        inlineDebouncePending.delete(key);
+        if (!pending) return;
+        void pending.handler(pending.data).catch((err) => {
+          logger.error({ err, queue: name, jobId: debounce.jobId }, "inline debounced job failed");
+        });
+      }, debounce.delayMs),
+    );
     return;
   }
 
