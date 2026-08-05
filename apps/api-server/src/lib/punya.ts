@@ -5,7 +5,7 @@
  * this so balances/tiers never drift.
  */
 import { db, punya_transactions, punya_balances } from "@workspace/db";
-import { tierForPoints } from "@workspace/db/enums";
+import { tierForPoints, TIER_THRESHOLDS } from "@workspace/db/enums";
 import { and, eq, sql } from "drizzle-orm";
 
 export interface AwardPunyaInput {
@@ -73,7 +73,9 @@ async function readBalance(tx: Tx | Db, studentId: string, fallbackPoints: numbe
   return total;
 }
 
-/** Single balance-mutation path — always use RETURNING; skip no-ops. */
+/** Single balance-mutation path — always use RETURNING; skip no-ops.
+ * PERF #10 step 4: upsert + tier in ONE statement. Thresholds from TIER_THRESHOLDS (AT23).
+ */
 export async function creditBalance(
   tx: Tx | Db,
   studentId: string,
@@ -82,21 +84,96 @@ export async function creditBalance(
   if (delta === 0) {
     return readBalance(tx, studentId, 0);
   }
+  const tTir = TIER_THRESHOLDS.tirthankar;
+  const tShr = TIER_THRESHOLDS.shraman;
+  const tSad = TIER_THRESHOLDS.sadhak;
+  const tSra = TIER_THRESHOLDS.shravak;
   const result = await tx.execute(
-    sql`insert into punya_balances (student_id, total_points)
-        values (${studentId}, ${delta})
+    sql`insert into punya_balances (student_id, total_points, tier)
+        values (
+          ${studentId},
+          ${delta},
+          (case
+            when ${delta} >= ${tTir} then 'tirthankar'::tier_enum
+            when ${delta} >= ${tShr} then 'shraman'::tier_enum
+            when ${delta} >= ${tSad} then 'sadhak'::tier_enum
+            when ${delta} >= ${tSra} then 'shravak'::tier_enum
+            else 'jigyasu'::tier_enum
+          end)
+        )
         on conflict (student_id) do update
           set total_points = punya_balances.total_points + ${delta},
+              tier = (case
+                when punya_balances.total_points + ${delta} >= ${tTir} then 'tirthankar'::tier_enum
+                when punya_balances.total_points + ${delta} >= ${tShr} then 'shraman'::tier_enum
+                when punya_balances.total_points + ${delta} >= ${tSad} then 'sadhak'::tier_enum
+                when punya_balances.total_points + ${delta} >= ${tSra} then 'shravak'::tier_enum
+                else 'jigyasu'::tier_enum
+              end),
               updated_at = now()
         returning total_points`,
   );
   const rows = (result as unknown as { rows?: Array<{ total_points: number }> }).rows ?? [];
-  const total = Number(rows[0]?.total_points ?? delta);
-  await tx
-    .update(punya_balances)
-    .set({ tier: tierForPoints(total) })
-    .where(eq(punya_balances.student_id, studentId));
-  return total;
+  return Number(rows[0]?.total_points ?? delta);
+}
+
+/**
+ * PERF #10 step 5 — balance moves ONLY by SUM of returned (student_id, points) rows.
+ * Never by attempted points.
+ */
+export async function creditBalancesFromReturned(
+  tx: Tx | Db,
+  returned: Array<{ student_id: string; points: number }>,
+): Promise<void> {
+  if (returned.length === 0) return;
+  const byStudent = new Map<string, number>();
+  for (const r of returned) {
+    const pts = Number(r.points);
+    if (pts === 0) continue;
+    byStudent.set(r.student_id, (byStudent.get(r.student_id) ?? 0) + pts);
+  }
+  if (byStudent.size === 0) return;
+
+  const ids = [...byStudent.keys()];
+  const deltas = ids.map((id) => byStudent.get(id)!);
+  const idArray = sql`array[${sql.join(
+    ids.map((id) => sql`${id}::uuid`),
+    sql`, `,
+  )}]::uuid[]`;
+  const deltaArray = sql`array[${sql.join(
+    deltas.map((d) => sql`${d}::int`),
+    sql`, `,
+  )}]::int[]`;
+
+  const tTir = TIER_THRESHOLDS.tirthankar;
+  const tShr = TIER_THRESHOLDS.shraman;
+  const tSad = TIER_THRESHOLDS.sadhak;
+  const tSra = TIER_THRESHOLDS.shravak;
+
+  await tx.execute(sql`
+    insert into punya_balances (student_id, total_points, tier)
+    select
+      s.student_id,
+      s.delta,
+      (case
+        when s.delta >= ${tTir} then 'tirthankar'::tier_enum
+        when s.delta >= ${tShr} then 'shraman'::tier_enum
+        when s.delta >= ${tSad} then 'sadhak'::tier_enum
+        when s.delta >= ${tSra} then 'shravak'::tier_enum
+        else 'jigyasu'::tier_enum
+      end)
+    from unnest(${idArray}, ${deltaArray}) as s(student_id, delta)
+    on conflict (student_id) do update
+      set total_points = punya_balances.total_points + excluded.total_points,
+          tier = (case
+            when punya_balances.total_points + excluded.total_points >= ${tTir} then 'tirthankar'::tier_enum
+            when punya_balances.total_points + excluded.total_points >= ${tShr} then 'shraman'::tier_enum
+            when punya_balances.total_points + excluded.total_points >= ${tSad} then 'sadhak'::tier_enum
+            when punya_balances.total_points + excluded.total_points >= ${tSra} then 'shravak'::tier_enum
+            else 'jigyasu'::tier_enum
+          end),
+          updated_at = now()
+  `);
 }
 
 /**

@@ -15,12 +15,13 @@ import {
   type User,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, lte, gte, or, sql } from "drizzle-orm";
+import type { ErrorCode } from "@workspace/api-zod";
 import {
   ATTENDANCE_FEATURE_KEY,
   awardValueForStatus,
   resolveAttendanceAwardPointsForBatch,
 } from "../lib/attendance-points";
-import { creditBalance } from "../lib/punya";
+import { creditBalance, creditBalancesFromReturned } from "../lib/punya";
 import { reverseStreakBonusForSession } from "../lib/punya-streak";
 import { inBatchWriteScope, resolveAdminScope } from "../lib/scope";
 import { writeAudit } from "../lib/audit";
@@ -44,7 +45,7 @@ export type MarkItemResult =
 export class AttendanceMarkError extends Error {
   constructor(
     public readonly httpStatus: number,
-    public readonly code: string,
+    public readonly code: ErrorCode,
     message: string,
   ) {
     super(message);
@@ -262,6 +263,96 @@ async function awardAttendancePunya(
   return awardedAmount;
 }
 
+/** Pending ledger row for the batched AT20 flush (PERF #10 step 5). */
+type PendingPunyaRow = {
+  student_id: string;
+  points: number;
+  note: string;
+  awarded_by: string | null;
+  idempotency_key: string;
+  reversal_of: string | null;
+  session_id: string;
+  revision: number;
+};
+
+/**
+ * PERF #10 step 5 — one guarded INSERT … ON CONFLICT DO NOTHING RETURNING,
+ * then balance moves only by SUM of returned points per student.
+ */
+async function flushAttendancePunyaRows(tx: Tx, rows: PendingPunyaRow[]): Promise<void> {
+  if (rows.length === 0) return;
+
+  const studentArr = sql`array[${sql.join(
+    rows.map((r) => sql`${r.student_id}::uuid`),
+    sql`, `,
+  )}]::uuid[]`;
+  const pointsArr = sql`array[${sql.join(
+    rows.map((r) => sql`${r.points}::int`),
+    sql`, `,
+  )}]::int[]`;
+  const noteArr = sql`array[${sql.join(
+    rows.map((r) => sql`${r.note}`),
+    sql`, `,
+  )}]::text[]`;
+  const awardedArr = sql`array[${sql.join(
+    rows.map((r) => (r.awarded_by ? sql`${r.awarded_by}::uuid` : sql`null::uuid`)),
+    sql`, `,
+  )}]::uuid[]`;
+  const keyArr = sql`array[${sql.join(
+    rows.map((r) => sql`${r.idempotency_key}`),
+    sql`, `,
+  )}]::text[]`;
+  const revOfArr = sql`array[${sql.join(
+    rows.map((r) => (r.reversal_of ? sql`${r.reversal_of}::uuid` : sql`null::uuid`)),
+    sql`, `,
+  )}]::uuid[]`;
+  const sessionArr = sql`array[${sql.join(
+    rows.map((r) => sql`${r.session_id}::uuid`),
+    sql`, `,
+  )}]::uuid[]`;
+  const revisionArr = sql`array[${sql.join(
+    rows.map((r) => sql`${r.revision}::int`),
+    sql`, `,
+  )}]::int[]`;
+
+  const insertResult = await tx.execute(sql`
+    insert into punya_transactions (
+      student_id, feature_key, points, note, awarded_by,
+      idempotency_key, reversal_of, source_entity_kind, source_entity_id, source_revision
+    )
+    select
+      s.student_id,
+      ${ATTENDANCE_FEATURE_KEY},
+      s.points,
+      s.note,
+      s.awarded_by,
+      s.idempotency_key,
+      s.reversal_of,
+      ${"attendance"},
+      s.session_id,
+      s.revision
+    from unnest(
+      ${studentArr},
+      ${pointsArr},
+      ${noteArr},
+      ${awardedArr},
+      ${keyArr},
+      ${revOfArr},
+      ${sessionArr},
+      ${revisionArr}
+    ) as s(
+      student_id, points, note, awarded_by, idempotency_key, reversal_of, session_id, revision
+    )
+    on conflict (idempotency_key) where idempotency_key is not null
+    do nothing
+    returning student_id, points
+  `);
+  const returned =
+    (insertResult as unknown as { rows?: Array<{ student_id: string; points: number }> }).rows ??
+    [];
+  await creditBalancesFromReturned(tx, returned);
+}
+
 /* ------------------------------------------------------------------ */
 /* Enrolment — one query for the whole roster                          */
 /* ------------------------------------------------------------------ */
@@ -373,140 +464,176 @@ async function completeSyncOperation(
 /* Single-item transition (inside open txn)                            */
 /* ------------------------------------------------------------------ */
 
+type ApplyOneOutcome = {
+  result: MarkItemResult;
+  punyaRows: PendingPunyaRow[];
+  streakReverse: boolean;
+};
+
 async function applyOneMark(
   tx: Tx,
   opts: {
     sessionId: string;
     scheduledDate: string;
-    batchId: string;
     userId: string;
     markedAt: Date;
     configuredPoints: number;
     enrolledIds: Set<string>;
     mark: MarkInput["marks"][number];
   },
-): Promise<MarkItemResult> {
+): Promise<ApplyOneOutcome> {
   const { mark } = opts;
 
   if (!opts.enrolledIds.has(mark.student_id)) {
     return {
-      student_id: mark.student_id,
-      result: "rejected",
-      code: "ERR_STUDENT_NOT_ENROLLED",
-      message: "That student is not on this batch roster.",
+      result: {
+        student_id: mark.student_id,
+        result: "rejected",
+        code: "ERR_STUDENT_NOT_ENROLLED",
+        message: "That student is not on this batch roster.",
+      },
+      punyaRows: [],
+      streakReverse: false,
     };
   }
 
-  // Serialize concurrent devices on the same (session, student) slot.
-  await tx.execute(
-    sql`select pg_advisory_xact_lock(hashtext(${opts.sessionId + ":" + mark.student_id}))`,
-  );
-
-  // Capture prior state ATOMICALLY (FOR UPDATE) — no SELECT-then-UPSERT TOCTOU.
-  const priorResult = await tx.execute(sql`
-    select status, revision, marked_at
-    from attendance
-    where session_id = ${opts.sessionId}::uuid
-      and student_id = ${mark.student_id}::uuid
-    for update
+  // PERF #10 step 3 — prior FOR UPDATE + upsert in one CTE (preserves AT18 prior status).
+  const cteResult = await tx.execute(sql`
+    with prior as (
+      select status, revision, marked_at
+      from attendance
+      where session_id = ${opts.sessionId}::uuid
+        and student_id = ${mark.student_id}::uuid
+      for update
+    ),
+    up as (
+      insert into attendance (
+        session_id, student_id, status, notes, marked_at, marked_by,
+        client_op_id, session_date, revision, marked_method
+      )
+      select
+        ${opts.sessionId}::uuid, ${mark.student_id}::uuid,
+        ${mark.status}::attendance_status_enum,
+        ${mark.notes ?? null}, ${opts.markedAt.toISOString()}::timestamptz, ${opts.userId}::uuid,
+        ${mark.client_op_id}, ${opts.scheduledDate}::date, 1, 'manual'::attendance_method_enum
+      where not exists (
+        select 1 from prior p where p.marked_at > ${opts.markedAt.toISOString()}::timestamptz
+      )
+      -- AT18: identical status (same award-worthiness) → do not bump revision.
+      and not exists (
+        select 1 from prior p where p.status = ${mark.status}::attendance_status_enum
+      )
+      on conflict (session_id, student_id) do update set
+        status = excluded.status,
+        notes = excluded.notes,
+        marked_at = excluded.marked_at,
+        marked_by = excluded.marked_by,
+        client_op_id = excluded.client_op_id,
+        session_date = excluded.session_date,
+        revision = attendance.revision + 1,
+        updated_at = now()
+      where attendance.marked_at <= excluded.marked_at
+        and attendance.status is distinct from excluded.status
+      returning revision, status
+    )
+    select
+      (select status from prior) as old_status,
+      (select marked_at from prior) as old_marked_at,
+      (select revision from up) as new_revision,
+      (select status from up) as new_status
   `);
-  const priorRows =
-    (priorResult as unknown as {
-      rows?: Array<{ status: string; revision: number; marked_at: Date | string }>;
+  const cteRows =
+    (cteResult as unknown as {
+      rows?: Array<{
+        old_status: string | null;
+        old_marked_at: Date | string | null;
+        new_revision: number | null;
+        new_status: string | null;
+      }>;
     }).rows ?? [];
-  const prior = priorRows[0] ?? null;
+  const row = cteRows[0];
 
-  if (prior) {
-    const priorMarkedAt = new Date(prior.marked_at);
-    if (priorMarkedAt.getTime() > opts.markedAt.getTime()) {
-      return { student_id: mark.student_id, result: "duplicate", reason: "newer_marked_at_wins" };
-    }
+  if (!row) {
+    return {
+      result: { student_id: mark.student_id, result: "duplicate", reason: "newer_marked_at_wins" },
+      punyaRows: [],
+      streakReverse: false,
+    };
   }
 
-  const oldStatus = prior?.status ?? null;
+  if (row.old_marked_at && new Date(row.old_marked_at).getTime() > opts.markedAt.getTime()) {
+    return {
+      result: { student_id: mark.student_id, result: "duplicate", reason: "newer_marked_at_wins" },
+      punyaRows: [],
+      streakReverse: false,
+    };
+  }
+
+  const oldStatus = row.old_status ?? null;
   const oldAward = awardValueForStatus(oldStatus, opts.configuredPoints);
   const newAward = awardValueForStatus(mark.status, opts.configuredPoints);
 
-  // Resync with identical award-worthiness — do NOT bump revision (AT18).
-  if (oldStatus === mark.status && oldAward === newAward) {
-    return { student_id: mark.student_id, result: "duplicate", reason: "unchanged" };
+  if (row.new_revision == null) {
+    // Upsert skipped — newer marked_at or unchanged status.
+    if (oldStatus === mark.status && oldAward === newAward) {
+      return {
+        result: { student_id: mark.student_id, result: "duplicate", reason: "unchanged" },
+        punyaRows: [],
+        streakReverse: false,
+      };
+    }
+    return {
+      result: { student_id: mark.student_id, result: "duplicate", reason: "newer_marked_at_wins" },
+      punyaRows: [],
+      streakReverse: false,
+    };
   }
 
-  const upsertResult = await tx.execute(sql`
-    insert into attendance (
-      session_id, student_id, status, notes, marked_at, marked_by,
-      client_op_id, session_date, revision, marked_method
-    ) values (
-      ${opts.sessionId}::uuid, ${mark.student_id}::uuid, ${mark.status}::attendance_status_enum,
-      ${mark.notes ?? null}, ${opts.markedAt.toISOString()}::timestamptz, ${opts.userId}::uuid,
-      ${mark.client_op_id}, ${opts.scheduledDate}::date, 1, 'manual'::attendance_method_enum
-    )
-    on conflict (session_id, student_id) do update set
-      status = excluded.status,
-      notes = excluded.notes,
-      marked_at = excluded.marked_at,
-      marked_by = excluded.marked_by,
-      client_op_id = excluded.client_op_id,
-      session_date = excluded.session_date,
-      revision = attendance.revision + 1,
-      updated_at = now()
-    returning revision, status
-  `);
-  const upserted =
-    (upsertResult as unknown as { rows?: Array<{ revision: number; status: string }> }).rows ?? [];
-  const newRevision = Number(upserted[0]!.revision);
+  const newRevision = Number(row.new_revision);
+  const punyaRows: PendingPunyaRow[] = [];
 
-  // AT18 — always reverse-then-award on award-worthiness / value change.
+  // AT18 — collect reverse-then-award for the batched flush (AT20 on RETURNING).
   if (oldAward > 0) {
-    await reverseAttendanceAward(tx, {
-      sessionId: opts.sessionId,
-      studentId: mark.student_id,
-      newRevision,
-      awardedBy: opts.userId,
-    });
-  }
-  if (newAward > 0) {
-    await awardAttendancePunya(tx, {
-      sessionId: opts.sessionId,
-      studentId: mark.student_id,
-      newRevision,
-      amount: newAward,
-      awardedBy: opts.userId,
-    });
-  }
-
-  // AT22 — if a mark that completed a streak is corrected away from attended, reverse.
-  const wasAttended = oldStatus === "present" || oldStatus === "late";
-  const nowAttended = mark.status === "present" || mark.status === "late";
-  if (wasAttended && !nowAttended) {
-    await reverseStreakBonusForSession(tx, {
-      studentId: mark.student_id,
-      sessionId: opts.sessionId,
-      newRevision,
-    });
-    if (__attendanceMarkTestHooks.throwAfterStreakReversal) {
-      throw new Error("test-forced rollback after streak reversal");
+    const prior = await findLatestUnreversedAward(tx, opts.sessionId, mark.student_id);
+    if (prior && prior.points > 0) {
+      punyaRows.push({
+        student_id: mark.student_id,
+        points: -Math.abs(prior.points),
+        note: "attendance reversal",
+        awarded_by: opts.userId,
+        idempotency_key: reversalIdempotencyKey(opts.sessionId, mark.student_id, newRevision),
+        reversal_of: prior.id,
+        session_id: opts.sessionId,
+        revision: newRevision,
+      });
     }
   }
+  if (newAward > 0) {
+    punyaRows.push({
+      student_id: mark.student_id,
+      points: newAward,
+      note: "attendance award",
+      awarded_by: opts.userId,
+      idempotency_key: awardIdempotencyKey(opts.sessionId, mark.student_id, newRevision),
+      reversal_of: null,
+      session_id: opts.sessionId,
+      revision: newRevision,
+    });
+  }
 
-  // AT4 — marking a session covered by an advance absence consumes the notification.
-  await tx
-    .update(absence_notifications)
-    .set({ resolved_at: new Date() })
-    .where(
-      and(
-        eq(absence_notifications.student_id, mark.student_id),
-        isNull(absence_notifications.resolved_at),
-        lte(absence_notifications.start_date, opts.scheduledDate),
-        gte(absence_notifications.end_date, opts.scheduledDate),
-      ),
-    );
+  const wasAttended = oldStatus === "present" || oldStatus === "late";
+  const nowAttended = mark.status === "present" || mark.status === "late";
+  const streakReverse = wasAttended && !nowAttended;
 
   return {
-    student_id: mark.student_id,
-    result: "applied",
-    revision: newRevision,
-    status: mark.status,
+    result: {
+      student_id: mark.student_id,
+      result: "applied",
+      revision: newRevision,
+      status: mark.status,
+    },
+    punyaRows,
+    streakReverse,
   };
 }
 
@@ -593,19 +720,65 @@ export async function markAttendance(input: MarkInput): Promise<MarkResponse> {
     }
 
     const results: MarkItemResult[] = [];
+    // PERF #10 step 2 — one session lock; UNIQUE (session_id, student_id) + FOR UPDATE
+    // already serialize per-row. Per-student advisory locks only serialized the batch
+    // against itself.
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"attn:" + session.id}))`);
+
+    const pendingPunya: PendingPunyaRow[] = [];
+    const streakTargets: Array<{ studentId: string; newRevision: number }> = [];
+    const appliedStudentIds: string[] = [];
+
     for (const mark of input.marks) {
-      results.push(
-        await applyOneMark(tx, {
-          sessionId: session.id,
-          scheduledDate: session.scheduled_date,
-          batchId: session.batch_id,
-          userId: input.userId,
-          markedAt: input.markedAt,
-          configuredPoints,
-          enrolledIds,
-          mark,
-        }),
-      );
+      const outcome = await applyOneMark(tx, {
+        sessionId: session.id,
+        scheduledDate: session.scheduled_date,
+        userId: input.userId,
+        markedAt: input.markedAt,
+        configuredPoints,
+        enrolledIds,
+        mark,
+      });
+      results.push(outcome.result);
+      if (outcome.result.result === "applied") {
+        appliedStudentIds.push(mark.student_id);
+        pendingPunya.push(...outcome.punyaRows);
+        if (outcome.streakReverse) {
+          streakTargets.push({
+            studentId: mark.student_id,
+            newRevision: outcome.result.revision,
+          });
+        }
+      }
+    }
+
+    // PERF #10 step 5 — AT20: balance moves only by RETURNING from this insert.
+    await flushAttendancePunyaRows(tx, pendingPunya);
+
+    for (const s of streakTargets) {
+      await reverseStreakBonusForSession(tx, {
+        studentId: s.studentId,
+        sessionId: session.id,
+        newRevision: s.newRevision,
+      });
+      if (__attendanceMarkTestHooks.throwAfterStreakReversal) {
+        throw new Error("test-forced rollback after streak reversal");
+      }
+    }
+
+    // PERF #10 step 1 — AT4 consume once for the whole applied set.
+    if (appliedStudentIds.length > 0) {
+      await tx
+        .update(absence_notifications)
+        .set({ resolved_at: new Date() })
+        .where(
+          and(
+            inArray(absence_notifications.student_id, appliedStudentIds),
+            isNull(absence_notifications.resolved_at),
+            lte(absence_notifications.start_date, session.scheduled_date),
+            gte(absence_notifications.end_date, session.scheduled_date),
+          ),
+        );
     }
 
     // Do NOT flip status to completed here — check-out / auto-checkout own that
