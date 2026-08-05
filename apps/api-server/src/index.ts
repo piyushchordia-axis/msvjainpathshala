@@ -1,4 +1,4 @@
-import { pool } from "@workspace/db";
+import { pool, workerPool } from "@workspace/db";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { startScheduler } from "./lib/scheduler";
@@ -96,12 +96,12 @@ function shutdown(signal: NodeJS.Signals): void {
       logger.error({ err }, "Error while closing server");
       process.exit(1);
     }
-    // Drain the pg pool so in-flight DB work finishes and connections close
+    // Drain both pg pools so in-flight DB work finishes and connections close
     // cleanly. Never let a pool-drain failure block the exit — log and proceed.
     try {
-      await pool.end();
+      await Promise.all([pool.end(), workerPool.end()]);
     } catch (poolErr) {
-      logger.error({ err: poolErr }, "Error while draining pg pool");
+      logger.error({ err: poolErr }, "Error while draining pg pools");
     }
     logger.info("Server closed; exiting");
     process.exit(0);

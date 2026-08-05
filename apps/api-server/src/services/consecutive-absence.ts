@@ -4,7 +4,7 @@
  * are 'absent' (excused never counts). Already-flagged guard prevents nightly re-alert.
  */
 import {
-  db,
+  dbWorker as db,
   students,
   sessions,
   attendance,

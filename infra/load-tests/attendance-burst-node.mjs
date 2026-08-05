@@ -10,7 +10,19 @@
  *   $env:DATABASE_URL="postgres://..."
  *   node infra/load-tests/attendance-burst-node.mjs
  */
-import pg from "pg";
+import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
+
+// Resolve `pg` from the api-server workspace package (pnpm does not hoist it
+// to the repo root, and this script lives outside any package.json).
+const require = createRequire(
+  path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../apps/api-server/package.json",
+  ),
+);
+const pg = require("pg");
 
 const BASE_URL = process.env.BASE_URL || "http://127.0.0.1:8080";
 const TOKEN = process.env.TOKEN || "";

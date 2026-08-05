@@ -11,7 +11,7 @@ import {
 } from "../services/attendance-post-process";
 import { notifyParentsOfGalleryWallFeature } from "../lib/gallery-wall-notify";
 import { snapshotMonthlyLeaderboard } from "../services/monthly-leaderboard-snapshot";
-import { db } from "@workspace/db";
+import { db, dbWorker } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../lib/logger";
 
@@ -28,13 +28,14 @@ const CANONICAL_MVS = [
 ] as const;
 
 export async function refreshAnalyticsViews(): Promise<void> {
+  // dbWorker: MV refresh routinely exceeds the API statement_timeout (PERF #3).
   for (const name of CANONICAL_MVS) {
     try {
-      await db.execute(sql.raw(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${name}`));
+      await dbWorker.execute(sql.raw(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${name}`));
     } catch (err) {
       // Empty / first refresh may lack a unique index snapshot — fall back.
       try {
-        await db.execute(sql.raw(`REFRESH MATERIALIZED VIEW ${name}`));
+        await dbWorker.execute(sql.raw(`REFRESH MATERIALIZED VIEW ${name}`));
       } catch (err2) {
         logger.warn({ err: err2, name }, "MV refresh failed");
       }
@@ -90,7 +91,8 @@ export function registerDerivedDataJobs(): void {
 
   registerQueueHandler(QUEUE_NAMES.PUNYA_RECONCILE, async () => {
     // Recompute balances from ledger (idempotent safety net).
-    await db.execute(sql`
+    // dbWorker: full-ledger aggregate can exceed the API statement_timeout.
+    await dbWorker.execute(sql`
       insert into punya_balances (student_id, total_points, tier)
       select student_id, coalesce(sum(points), 0)::int, 'jigyasu'
       from punya_transactions

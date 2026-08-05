@@ -4,7 +4,7 @@
  * No historical backfill — past dates are never inserted.
  */
 import {
-  db,
+  dbWorker as db,
   sessions,
   batches,
   centre_holidays,
