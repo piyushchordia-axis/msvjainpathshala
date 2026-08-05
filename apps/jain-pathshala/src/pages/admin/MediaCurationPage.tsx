@@ -12,7 +12,7 @@ import { useLocale } from '@/lib/locale-context';
 import { apiGet, apiPatch, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
-import { AdminPageShell, AdminError } from '@/components/admin/AdminPageShell';
+import { AdminPageShell, AdminError, AdminVirtualGrid } from '@/components/admin/AdminPageShell';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -383,8 +383,12 @@ export default function MediaCurationPage() {
             </div>
           ) : null}
 
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {items.map((item) => {
+          <AdminVirtualGrid
+            count={items.length}
+            columns={3}
+            estimateRowHeight={420}
+            renderItem={(i) => {
+              const item = items[i]!;
               const flags = resolved(item);
               const src = item.thumbnail_url;
               const optedOut = item.student_id != null && !item.can_publish;
@@ -524,8 +528,8 @@ export default function MediaCurationPage() {
                   </div>
                 </Card>
               );
-            })}
-          </div>
+            }}
+          />
         </>
       )}
     </AdminPageShell>

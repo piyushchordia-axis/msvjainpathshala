@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { Locale } from '@/i18n/locales';
 
 interface LocaleContextValue {
@@ -18,16 +18,17 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
     document.documentElement.lang = locale;
   }, [locale]);
 
-  function handleSet(l: Locale) {
+  const handleSet = useCallback((l: Locale) => {
     setLocale(l);
     localStorage.setItem('jp_locale', l);
-  }
+  }, []);
 
-  return (
-    <LocaleContext.Provider value={{ locale, setLocale: handleSet }}>
-      {children}
-    </LocaleContext.Provider>
+  const value = useMemo(
+    () => ({ locale, setLocale: handleSet }),
+    [locale, handleSet],
   );
+
+  return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;
 }
 
 export function useLocale(): Locale {

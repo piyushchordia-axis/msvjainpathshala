@@ -77,6 +77,7 @@
     "zod": "catalog:"
   },
   "dependencies": {
+    "@tanstack/react-virtual": "^3.14.9",
     "@workspace/i18n": "workspace:*",
     "ulid": "^3.0.2"
   }

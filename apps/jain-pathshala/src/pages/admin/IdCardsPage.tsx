@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CreditCard } from 'lucide-react';
 import { apiPost, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
@@ -36,20 +36,26 @@ export default function IdCardsPage() {
   const { items, loading, loadingMore, error, reload, hasMore, loadMore } =
     useAdminList<AdminStudentRow>('/v1/admin/students?limit=500');
   const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [card, setCard] = useState<GeneratedCard | null>(null);
 
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQuery(query), 150);
+    return () => window.clearTimeout(t);
+  }, [query]);
+
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = debouncedQuery.trim().toLowerCase();
     if (!q) return items;
     return items.filter(
       (s) =>
         (s.full_name ?? '').toLowerCase().includes(q) ||
         s.student_code.toLowerCase().includes(q),
     );
-  }, [items, query]);
+  }, [items, debouncedQuery]);
 
   const selected = useMemo(
     () => items.find((s) => s.id === selectedId) ?? null,

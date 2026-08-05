@@ -6,7 +6,7 @@ import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow } from '@/components/admin/AdminPageShell';
 import { Button } from '@/components/ui/button';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose,
 } from '@/components/ui/dialog';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -54,16 +54,20 @@ interface SessionDetail {
   roster: RosterRow[];
 }
 
-function MarkDialog({
+/** One page-level dialog — do not mount a Dialog root per table row (PERF #24). */
+function MarkAttendanceDialog({
   centreId,
   sessionId,
+  open,
+  onOpenChange,
   onMarked,
 }: {
   centreId: string;
-  sessionId: string;
+  sessionId: string | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
   onMarked: () => void;
 }) {
-  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,9 +75,10 @@ function MarkDialog({
   const [statuses, setStatuses] = useState<Record<string, AttStatus>>({});
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !sessionId) return;
     setLoading(true);
     setError(null);
+    setDetail(null);
     apiGet<SessionDetail>(
       `/v1/admin/attendance/centres/${centreId}/log?session_id=${encodeURIComponent(sessionId)}`,
     )
@@ -90,7 +95,7 @@ function MarkDialog({
   }, [open, sessionId, centreId]);
 
   async function submit() {
-    if (!detail) return;
+    if (!detail || !sessionId) return;
     setBusy(true);
     try {
       const markedAt = new Date().toISOString();
@@ -104,7 +109,7 @@ function MarkDialog({
         })),
       });
       toast.success('Attendance saved.');
-      setOpen(false);
+      onOpenChange(false);
       onMarked();
     } catch (err) {
       toast.error('Failed to save attendance.', err instanceof ApiError ? err.message : undefined);
@@ -114,10 +119,7 @@ function MarkDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button size="sm" variant="secondary">Mark</Button>
-      </DialogTrigger>
+    <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>
@@ -192,6 +194,7 @@ export default function AttendancePage() {
   const [items, setItems] = useState<SessionRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [markingSessionId, setMarkingSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     void apiGet<{ items: CentreOption[] }>('/v1/admin/centres')
@@ -264,12 +267,29 @@ export default function AttendancePage() {
             </td>
             <td className="px-4 py-3">
               {centreId ? (
-                <MarkDialog centreId={centreId} sessionId={s.id} onMarked={reload} />
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  onClick={() => setMarkingSessionId(s.id)}
+                >
+                  Mark
+                </Button>
               ) : null}
             </td>
           </tr>
         ))}
       </AdminTable>
+      {centreId ? (
+        <MarkAttendanceDialog
+          centreId={centreId}
+          sessionId={markingSessionId}
+          open={markingSessionId != null}
+          onOpenChange={(open) => {
+            if (!open) setMarkingSessionId(null);
+          }}
+          onMarked={reload}
+        />
+      ) : null}
     </AdminPageShell>
   );
 }

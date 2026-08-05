@@ -3,7 +3,7 @@ import { ImagePlus, Trash2, Star, Eye, EyeOff } from 'lucide-react';
 import { apiPost, del, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
-import { AdminPageShell, AdminError, AdminLoadMore } from '@/components/admin/AdminPageShell';
+import { AdminPageShell, AdminError, AdminLoadMore, AdminVirtualGrid } from '@/components/admin/AdminPageShell';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -280,8 +280,12 @@ export default function GalleryAdminPage() {
           ) : items.length === 0 ? (
             <Card className="p-6 text-sm text-muted-foreground">No gallery items yet.</Card>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {items.map((g) => {
+            <AdminVirtualGrid
+              count={items.length}
+              columns={3}
+              estimateRowHeight={340}
+              renderItem={(i) => {
+                const g = items[i]!;
                 const src = g.thumbnail_url;
                 const consentPending = g.student_id && g.consent_opt_in === false;
                 return (
@@ -362,8 +366,8 @@ export default function GalleryAdminPage() {
                     </div>
                   </Card>
                 );
-              })}
-            </div>
+              }}
+            />
           )}
           <AdminLoadMore
             hasMore={hasMore}

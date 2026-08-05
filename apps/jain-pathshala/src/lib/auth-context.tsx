@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { readSessionUserFromCookie, clearSessionCookies, type SessionUser } from '@/lib/auth';
 import { post } from '@/lib/api-client';
 
@@ -25,20 +25,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(false);
   }, []);
 
-  async function logout() {
+  const logout = useCallback(async () => {
     try {
       await post('/api/auth/logout', {});
     } catch {}
     clearSessionCookies();
     setUser(null);
     window.location.href = '/admin/login';
-  }
+  }, []);
 
-  return (
-    <AuthContext.Provider value={{ user, loading, setUser, logout }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo(
+    () => ({ user, loading, setUser, logout }),
+    [user, loading, logout],
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
