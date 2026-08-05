@@ -670,9 +670,17 @@ export async function markAttendance(input: MarkInput): Promise<MarkResponse> {
 
   const session = await loadSessionOrThrow(input.sessionId);
 
-  // Scope in the SERVICE layer (not only a route guard) — sync/batch shares this path.
-  if (input.actor) {
-    const scope = await resolveAdminScope(input.actor);
+  // Scope, points, and enrolment are independent once we have the session row.
+  const [scope, pointsPack, enrolledIds] = await Promise.all([
+    input.actor ? resolveAdminScope(input.actor) : Promise.resolve(null),
+    resolveAttendanceAwardPointsForBatch(session.batch_id),
+    resolveEligibleStudentIds(
+      input.marks.map((m) => m.student_id),
+      session.batch_id,
+    ),
+  ]);
+
+  if (input.actor && scope) {
     if (!inBatchWriteScope(scope, session.batch_id, session.centre_id)) {
       throw new AttendanceMarkError(403, "ERR_FORBIDDEN", "Session is outside your scope.");
     }
@@ -690,11 +698,7 @@ export async function markAttendance(input: MarkInput): Promise<MarkResponse> {
   // AT26 — client marked_at vs session date (service layer).
   assertEditWindow(session.scheduled_date, input.markedAt);
 
-  const { points: configuredPoints } = await resolveAttendanceAwardPointsForBatch(session.batch_id);
-  const enrolledIds = await resolveEligibleStudentIds(
-    input.marks.map((m) => m.student_id),
-    session.batch_id,
-  );
+  const { points: configuredPoints } = pointsPack;
 
   const ownSync = Boolean(input.submissionOpId) && input.recordSync !== false;
 

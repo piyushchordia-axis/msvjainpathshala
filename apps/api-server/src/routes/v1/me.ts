@@ -342,22 +342,46 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
       key: periodKey(n.niyam_type as "daily" | "weekly" | "monthly", today),
     }));
     const currentKeys = [...new Set(keys.map((k) => k.key))];
-    const subs = await db
-      .select({
-        niyam_id: niyam_submissions.niyam_id,
-        status: niyam_submissions.status,
-        submission_date: niyam_submissions.submission_date,
-        period_key: niyam_submissions.period_key,
-      })
-      .from(niyam_submissions)
-      .where(
-        and(
-          eq(niyam_submissions.student_id, studentId),
-          inArray(niyam_submissions.niyam_id, items.map((i) => i.id)),
-          inArray(niyam_submissions.period_key, currentKeys),
-          ne(niyam_submissions.status, "rejected"),
+    const niyamIds = items.map((i) => i.id);
+    const [subs, streakRows, badgeRows] = await Promise.all([
+      db
+        .select({
+          niyam_id: niyam_submissions.niyam_id,
+          status: niyam_submissions.status,
+          submission_date: niyam_submissions.submission_date,
+          period_key: niyam_submissions.period_key,
+        })
+        .from(niyam_submissions)
+        .where(
+          and(
+            eq(niyam_submissions.student_id, studentId),
+            inArray(niyam_submissions.niyam_id, items.map((i) => i.id)),
+            inArray(niyam_submissions.period_key, currentKeys),
+            ne(niyam_submissions.status, "rejected"),
+          ),
         ),
-      );
+      db
+        .select({
+          niyam_id: niyam_streaks.niyam_id,
+          current_streak: niyam_streaks.current_streak,
+          longest_streak: niyam_streaks.longest_streak,
+        })
+        .from(niyam_streaks)
+        .where(
+          and(eq(niyam_streaks.student_id, studentId), inArray(niyam_streaks.niyam_id, niyamIds)),
+        ),
+      db
+        .select({
+          niyam_id: niyam_badges.niyam_id,
+          badge_key: niyam_badges.badge_key,
+          streak_length: niyam_badges.streak_length,
+          awarded_at: niyam_badges.awarded_at,
+        })
+        .from(niyam_badges)
+        .where(
+          and(eq(niyam_badges.student_id, studentId), inArray(niyam_badges.niyam_id, niyamIds)),
+        ),
+    ]);
     periodByNiyam = new Map(
       subs
         .filter((s) => s.period_key)
@@ -370,31 +394,8 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
           },
         ]),
     );
-
-    const niyamIds = items.map((i) => i.id);
-    const streakRows = await db
-      .select({
-        niyam_id: niyam_streaks.niyam_id,
-        current_streak: niyam_streaks.current_streak,
-        longest_streak: niyam_streaks.longest_streak,
-      })
-      .from(niyam_streaks)
-      .where(
-        and(eq(niyam_streaks.student_id, studentId), inArray(niyam_streaks.niyam_id, niyamIds)),
-      );
     const streakByNiyam = new Map(streakRows.map((s) => [s.niyam_id, s]));
 
-    const badgeRows = await db
-      .select({
-        niyam_id: niyam_badges.niyam_id,
-        badge_key: niyam_badges.badge_key,
-        streak_length: niyam_badges.streak_length,
-        awarded_at: niyam_badges.awarded_at,
-      })
-      .from(niyam_badges)
-      .where(
-        and(eq(niyam_badges.student_id, studentId), inArray(niyam_badges.niyam_id, niyamIds)),
-      );
     const badgesByNiyam = new Map<string, typeof badgeRows>();
     for (const b of badgeRows) {
       const list = badgesByNiyam.get(b.niyam_id) ?? [];

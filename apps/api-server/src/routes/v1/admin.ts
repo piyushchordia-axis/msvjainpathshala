@@ -217,57 +217,63 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
   const centreFilter = scopedCentreFilter(scope, students.centre_id);
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-  const [activeStudents] = await db
-    .select({ n: count() })
-    .from(students)
-    .where(and(eq(students.status, "active"), isNull(students.deleted_at), centreFilter));
-
-  // Centres in scope.
   const centreScope = scopedCentreFilter(scope, centres.id);
-  const [centreCount] = await db
-    .select({ n: count() })
-    .from(centres)
-    .where(and(eq(centres.status, "active"), isNull(centres.deleted_at), centreScope));
-
-  // Pending enrolments (open requests) in scope.
   const enrolCentreFilter = scopedCentreFilter(scope, enrolments.requested_centre_id);
-  const [openReq] = await db
-    .select({ n: count() })
-    .from(enrolments)
-    .where(and(eq(enrolments.status, "pending"), enrolCentreFilter));
-
-  // MSV approved students in scope.
-  const [msvActive] = await db
-    .select({ n: count() })
-    .from(students)
-    .where(and(eq(students.msv_status, "approved"), isNull(students.deleted_at), centreFilter));
-
-  // AT5 — canonical SQL function only (never inline FILTER arithmetic here).
   const sinceDate = since.toISOString().slice(0, 10);
   const centreIdsForRate =
     scope.centreIds === null ? null : scope.centreIds.length === 0 ? [] : scope.centreIds;
-  const attendanceRate =
-    centreIdsForRate && centreIdsForRate.length === 0
-      ? 0
-      : rateToPercent1(await getCentresAttendanceRate(centreIdsForRate, sinceDate, null));
-
-  // Punya awarded in last 30 days within scope.
   const punyaCentreFilter = scopedCentreFilter(scope, students.centre_id);
-  const [punyaRow] = await db
-    .select({ sum: sql<number>`coalesce(sum(${punya_transactions.points}),0)::int` })
-    .from(punya_transactions)
-    .innerJoin(students, eq(students.id, punya_transactions.student_id))
-    .where(and(gte(punya_transactions.created_at, since), isNull(students.deleted_at), punyaCentreFilter));
-
-  // Captured donations in the current financial year (India: Apr 1 – Mar 31).
-  // Donations are donor-based (no centre), so this is an org-wide aggregate.
   const now = new Date();
   const fyStartYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
   const fyStart = new Date(Date.UTC(fyStartYear, 3, 1)); // April 1, 00:00 UTC
-  const [donationRow] = await db
-    .select({ sum: sql<number>`coalesce(sum(${donations.amount_paise}),0)::bigint` })
-    .from(donations)
-    .where(and(eq(donations.payment_status, "captured"), gte(donations.payment_captured_at, fyStart)));
+
+  const [
+    [activeStudents],
+    [centreCount],
+    [openReq],
+    [msvActive],
+    attendanceRateRaw,
+    [punyaRow],
+    [donationRow],
+  ] = await Promise.all([
+    db
+      .select({ n: count() })
+      .from(students)
+      .where(and(eq(students.status, "active"), isNull(students.deleted_at), centreFilter)),
+    db
+      .select({ n: count() })
+      .from(centres)
+      .where(and(eq(centres.status, "active"), isNull(centres.deleted_at), centreScope)),
+    db
+      .select({ n: count() })
+      .from(enrolments)
+      .where(and(eq(enrolments.status, "pending"), enrolCentreFilter)),
+    db
+      .select({ n: count() })
+      .from(students)
+      .where(and(eq(students.msv_status, "approved"), isNull(students.deleted_at), centreFilter)),
+    centreIdsForRate && centreIdsForRate.length === 0
+      ? Promise.resolve(0)
+      : getCentresAttendanceRate(centreIdsForRate, sinceDate, null),
+    db
+      .select({ sum: sql<number>`coalesce(sum(${punya_transactions.points}),0)::int` })
+      .from(punya_transactions)
+      .innerJoin(students, eq(students.id, punya_transactions.student_id))
+      .where(
+        and(gte(punya_transactions.created_at, since), isNull(students.deleted_at), punyaCentreFilter),
+      ),
+    db
+      .select({ sum: sql<number>`coalesce(sum(${donations.amount_paise}),0)::bigint` })
+      .from(donations)
+      .where(
+        and(eq(donations.payment_status, "captured"), gte(donations.payment_captured_at, fyStart)),
+      ),
+  ]);
+
+  const attendanceRate =
+    centreIdsForRate && centreIdsForRate.length === 0
+      ? 0
+      : rateToPercent1(attendanceRateRaw as number);
 
   ok(res, {
     active_students: activeStudents?.n ?? 0,
