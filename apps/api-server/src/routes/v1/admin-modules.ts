@@ -670,6 +670,10 @@ router.post("/punya/configs", requireRole("super_admin", "state_admin", "city_ad
     points: body.points,
     is_active: body.is_active,
   }).returning({ id: punya_configs.id, feature_key: punya_configs.feature_key });
+  const { clearAttendancePointsCache } = await import("../../lib/attendance-points");
+  const { clearHomeworkPointsCache } = await import("../../lib/homework-points");
+  clearAttendancePointsCache();
+  clearHomeworkPointsCache();
   ok(res, row);
 });
 
