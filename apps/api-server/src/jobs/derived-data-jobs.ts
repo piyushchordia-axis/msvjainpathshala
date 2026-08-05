@@ -2,7 +2,12 @@
  * Frozen cron table registrations beyond session lifecycle (CLAUDE.md).
  */
 import { QUEUE_NAMES, CRON_EXPRESSIONS } from "@jp/shared/constants";
-import { registerQueueHandler, enqueueJob } from "../lib/queues";
+import {
+  registerQueueHandler,
+  enqueueJob,
+  dailyCronJobId,
+  slotCronJobId,
+} from "../lib/queues";
 import { registerCron } from "../lib/scheduler";
 import { runConsecutiveAbsenceCheck } from "../services/consecutive-absence";
 import {
@@ -11,6 +16,7 @@ import {
 } from "../services/attendance-post-process";
 import { notifyParentsOfGalleryWallFeature } from "../lib/gallery-wall-notify";
 import { snapshotMonthlyLeaderboard } from "../services/monthly-leaderboard-snapshot";
+import { todayIst } from "../services/session-materialise";
 import { db, dbWorker } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../lib/logger";
@@ -127,7 +133,11 @@ export function registerDerivedDataJobs(): void {
     QUEUE_NAMES.ATTENDANCE_CONSECUTIVE_CHECK,
     CRON_EXPRESSIONS.ATTENDANCE_CONSECUTIVE_CHECK,
     async () => {
-      await enqueueJob(QUEUE_NAMES.ATTENDANCE_CONSECUTIVE_CHECK, {});
+      await enqueueJob(
+        QUEUE_NAMES.ATTENDANCE_CONSECUTIVE_CHECK,
+        {},
+        { jobId: dailyCronJobId("consecutive", todayIst()) },
+      );
     },
   );
 
@@ -143,19 +153,31 @@ export function registerDerivedDataJobs(): void {
     QUEUE_NAMES.PUNYA_LEADERBOARD_REFRESH,
     CRON_EXPRESSIONS.PUNYA_LEADERBOARD_REFRESH,
     async () => {
-      await enqueueJob(QUEUE_NAMES.PUNYA_LEADERBOARD_REFRESH, {});
+      await enqueueJob(
+        QUEUE_NAMES.PUNYA_LEADERBOARD_REFRESH,
+        {},
+        { jobId: slotCronJobId("leaderboard", 5) },
+      );
     },
   );
 
   registerCron(QUEUE_NAMES.PUNYA_RECONCILE, CRON_EXPRESSIONS.PUNYA_RECONCILE, async () => {
-    await enqueueJob(QUEUE_NAMES.PUNYA_RECONCILE, {});
+    await enqueueJob(
+      QUEUE_NAMES.PUNYA_RECONCILE,
+      {},
+      { jobId: dailyCronJobId("punya_reconcile", todayIst()) },
+    );
   });
 
   registerCron(
     QUEUE_NAMES.ANALYTICS_REFRESH_VIEWS,
     CRON_EXPRESSIONS.ANALYTICS_REFRESH_VIEWS,
     async () => {
-      await enqueueJob(QUEUE_NAMES.ANALYTICS_REFRESH_VIEWS, {});
+      await enqueueJob(
+        QUEUE_NAMES.ANALYTICS_REFRESH_VIEWS,
+        {},
+        { jobId: dailyCronJobId("analytics_mv", todayIst()) },
+      );
     },
   );
 

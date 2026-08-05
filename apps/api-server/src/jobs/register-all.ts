@@ -7,6 +7,7 @@ import { registerSessionLifecycleJobs } from "./session-lifecycle-jobs";
 import { registerDerivedDataJobs } from "./derived-data-jobs";
 import { registerExamJobs } from "./exam-jobs";
 import { registerIdCardJobs } from "./idcard-jobs";
+import { registerBirthdayJobs } from "./birthday-jobs";
 
 let registered = false;
 
@@ -17,4 +18,5 @@ export function registerAllJobs(): void {
   registerDerivedDataJobs();
   registerExamJobs();
   registerIdCardJobs();
+  registerBirthdayJobs();
 }

@@ -1,11 +1,12 @@
 /**
- * /v1/notifications — the caller's in-app notification inbox, Expo push-token
- * registration, and the daily birthday-wishes cron.
+ * /v1/notifications — the caller's in-app notification inbox and Expo push-token
+ * registration.
  *
  * Every route requires authentication and is scoped to the caller's own user
  * (req.authUser.id): a user can only register tokens against, read, or mark
- * read their OWN notifications. The birthday cron (runBirthdayWishes) is
- * exported and idempotent per day so re-running it never double-inserts.
+ * read their OWN notifications. Birthday wishes (`runBirthdayWishes`) live here
+ * as a service export; the cron is registered in `src/jobs/birthday-jobs.ts`
+ * so importing this router does not schedule work on every API instance.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, notifications, device_push_tokens, students } from "@workspace/db";
@@ -14,8 +15,6 @@ import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
 import { sendPush } from "../../lib/push";
-import { QUEUE_NAMES, CRON_EXPRESSIONS } from "@jp/shared/constants";
-import { registerCron } from "../../lib/scheduler";
 import { clampLimit } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
@@ -272,10 +271,5 @@ export async function runBirthdayWishes(today?: Date): Promise<{ students: numbe
 
   return { students: birthdayStudents.length, notifications: toInsert.length };
 }
-
-// Frozen cron: notifications.birthday @ 06:00 IST. Never starts a timer in tests.
-registerCron(QUEUE_NAMES.NOTIFICATIONS_BIRTHDAY, CRON_EXPRESSIONS.NOTIFICATIONS_BIRTHDAY, async () => {
-  await runBirthdayWishes();
-});
 
 export default router;

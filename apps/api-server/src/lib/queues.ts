@@ -41,11 +41,53 @@ function getQueue(name: QueueName): Queue | null {
   return q;
 }
 
-/** Default opts for ordinary (non-debounced) jobs. */
-const DEFAULT_JOB_OPTS: JobsOptions = {
+/** Default opts for ordinary (non-debounced) jobs. PERF #16 — retries. */
+export const DEFAULT_JOB_OPTS: JobsOptions = {
+  attempts: 3,
+  backoff: { type: "exponential", delay: 30_000 },
   removeOnComplete: 100,
   removeOnFail: 50,
 };
+
+/** Age-bound failed-job retention on high-volume debounced queues (PERF #16). */
+export const DEBOUNCED_REMOVE_ON_FAIL = {
+  age: 7 * 24 * 3600,
+  count: 5_000,
+} as const;
+
+/** Queues whose handlers can run for minutes — extended lock (PERF #16). */
+const LONG_RUNNING_QUEUES = new Set<string>([
+  QUEUE_NAMES.ANALYTICS_REFRESH_VIEWS,
+  QUEUE_NAMES.ATTENDANCE_CONSECUTIVE_CHECK,
+  QUEUE_NAMES.SESSION_MATERIALISE,
+  QUEUE_NAMES.PUNYA_RECONCILE,
+  QUEUE_NAMES.IDCARD_GENERATION,
+]);
+
+/** @internal test + worker wiring — long jobs only. */
+export function workerOptsForQueue(name: string): {
+  lockDuration?: number;
+  stalledInterval?: number;
+  maxStalledCount?: number;
+} {
+  if (!LONG_RUNNING_QUEUES.has(name)) return {};
+  return {
+    lockDuration: 300_000,
+    stalledInterval: 60_000,
+    maxStalledCount: 2,
+  };
+}
+
+/** Deterministic daily cron jobId so BullMQ dedupes across instances (PERF #16). */
+export function dailyCronJobId(prefix: string, dateYmd: string): string {
+  return `${prefix}:${dateYmd}`;
+}
+
+/** Deterministic slot jobId for sub-daily crons (PERF #16). */
+export function slotCronJobId(prefix: string, slotMinutes: number, now = new Date()): string {
+  const slot = Math.floor(now.getTime() / (slotMinutes * 60_000));
+  return `${prefix}:${slot}`;
+}
 
 /** Enqueue a job, or run the registered handler inline when Redis is unavailable. */
 export async function enqueueJob(
@@ -132,8 +174,8 @@ export async function enqueueDebouncedJob(
     attempts: 3,
     backoff: { type: "exponential", delay: 5_000 },
     removeOnComplete: true,
-    // Keep failed jobs for inspection (do not auto-prune).
-    removeOnFail: false,
+    // Bound Redis growth — keep recent failures for inspection (PERF #16).
+    removeOnFail: DEBOUNCED_REMOVE_ON_FAIL,
   };
 
   try {
@@ -175,7 +217,11 @@ export function startQueueWorkers(): void {
       async (job) => {
         await handler((job.data ?? {}) as Record<string, unknown>);
       },
-      { connection: redis, concurrency: name === QUEUE_NAMES.SESSION_MATERIALISE ? 1 : 2 },
+      {
+        connection: redis,
+        concurrency: name === QUEUE_NAMES.SESSION_MATERIALISE ? 1 : 2,
+        ...workerOptsForQueue(name),
+      },
     );
     worker.on("failed", (job, err) => {
       logger.error({ err, queue: name, jobId: job?.id }, "Queue job failed");
