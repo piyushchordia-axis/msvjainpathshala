@@ -11,9 +11,47 @@ import {
   batches,
   centres,
 } from "@workspace/db";
-import { and, eq, isNull, lte, gte, asc } from "drizzle-orm";
+import { and, eq, inArray, isNull, lte, gte, asc } from "drizzle-orm";
 
-export async function loadSessionRoster(sessionId: string, sessionDate: string, batchId: string) {
+export type RosterEntry = {
+  student_id: string;
+  full_name: string;
+  student_code: string;
+  status: string | null;
+  marked_method: string | null;
+  suggested_status: "excused" | null;
+  absence_reason: string | null;
+};
+
+function mapRosterRow(r: {
+  student_id: string;
+  full_name: string;
+  student_code: string;
+  status: string | null;
+  marked_method: string | null;
+  absence_reason: string | null;
+  absence_id: string | null;
+}): RosterEntry {
+  const suggested =
+    !r.status && r.absence_id
+      ? ({ status: "excused" as const, reason: r.absence_reason })
+      : null;
+  return {
+    student_id: r.student_id,
+    full_name: r.full_name,
+    student_code: r.student_code,
+    status: r.status,
+    marked_method: r.marked_method,
+    suggested_status: suggested?.status ?? null,
+    absence_reason: suggested?.reason ?? null,
+  };
+}
+
+export async function loadSessionRoster(
+  sessionId: string,
+  sessionDate: string,
+  batchId: string,
+): Promise<RosterEntry[]> {
   const rosterRows = await db
     .select({
       student_id: students.id,
@@ -41,21 +79,103 @@ export async function loadSessionRoster(sessionId: string, sessionDate: string, 
     .where(and(eq(students.batch_id, batchId), eq(students.status, "active")))
     .orderBy(asc(students.full_name));
 
-  return rosterRows.map((r) => {
-    const suggested =
-      !r.status && r.absence_id
-        ? ({ status: "excused" as const, reason: r.absence_reason })
-        : null;
-    return {
-      student_id: r.student_id,
-      full_name: r.full_name,
-      student_code: r.student_code,
-      status: r.status,
-      marked_method: r.marked_method,
-      suggested_status: suggested?.status ?? null,
-      absence_reason: suggested?.reason ?? null,
-    };
-  });
+  return rosterRows.map(mapRosterRow);
+}
+
+/**
+ * Bounded roster load for many sessions: 3 queries total (students, attendance,
+ * absences), then group in JS — replaces N× loadSessionRoster.
+ */
+export async function loadRostersForSessions(
+  sessionKeys: Array<{ session_id: string; session_date: string; batch_id: string }>,
+): Promise<Map<string, RosterEntry[]>> {
+  const out = new Map<string, RosterEntry[]>();
+  if (sessionKeys.length === 0) return out;
+
+  const batchIds = [...new Set(sessionKeys.map((s) => s.batch_id))];
+  const sessionIds = sessionKeys.map((s) => s.session_id);
+
+  const studentRows = await db
+    .select({
+      id: students.id,
+      full_name: students.full_name,
+      student_code: students.student_code,
+      batch_id: students.batch_id,
+    })
+    .from(students)
+    .where(and(inArray(students.batch_id, batchIds), eq(students.status, "active")))
+    .orderBy(asc(students.full_name));
+
+  const attendanceRows = await db
+    .select({
+      session_id: attendance.session_id,
+      student_id: attendance.student_id,
+      status: attendance.status,
+      marked_method: attendance.marked_method,
+    })
+    .from(attendance)
+    .where(inArray(attendance.session_id, sessionIds));
+
+  const attBySessionStudent = new Map<string, { status: string; marked_method: string | null }>();
+  for (const a of attendanceRows) {
+    attBySessionStudent.set(`${a.session_id}:${a.student_id}`, {
+      status: a.status,
+      marked_method: a.marked_method,
+    });
+  }
+
+  const studentIds = studentRows.map((s) => s.id);
+  const absenceRows =
+    studentIds.length === 0
+      ? []
+      : await db
+          .select({
+            id: absence_notifications.id,
+            student_id: absence_notifications.student_id,
+            reason: absence_notifications.reason,
+            start_date: absence_notifications.start_date,
+            end_date: absence_notifications.end_date,
+          })
+          .from(absence_notifications)
+          .where(
+            and(
+              inArray(absence_notifications.student_id, studentIds),
+              isNull(absence_notifications.resolved_at),
+            ),
+          );
+
+  const studentsByBatch = new Map<string, typeof studentRows>();
+  for (const s of studentRows) {
+    if (!s.batch_id) continue;
+    const list = studentsByBatch.get(s.batch_id) ?? [];
+    list.push(s);
+    studentsByBatch.set(s.batch_id, list);
+  }
+
+  for (const key of sessionKeys) {
+    const batchStudents = studentsByBatch.get(key.batch_id) ?? [];
+    const roster: RosterEntry[] = batchStudents.map((s) => {
+      const att = attBySessionStudent.get(`${key.session_id}:${s.id}`);
+      const covering = absenceRows.find(
+        (a) =>
+          a.student_id === s.id &&
+          String(a.start_date) <= key.session_date &&
+          String(a.end_date) >= key.session_date,
+      );
+      return mapRosterRow({
+        student_id: s.id,
+        full_name: s.full_name,
+        student_code: s.student_code,
+        status: att?.status ?? null,
+        marked_method: att?.marked_method ?? null,
+        absence_reason: covering?.reason ?? null,
+        absence_id: covering?.id ?? null,
+      });
+    });
+    out.set(key.session_id, roster);
+  }
+
+  return out;
 }
 
 export async function loadSessionDetail(sessionId: string) {

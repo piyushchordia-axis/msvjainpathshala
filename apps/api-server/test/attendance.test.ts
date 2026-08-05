@@ -44,19 +44,30 @@ describe("attendance (frozen routes)", () => {
 
     const today = await request(app).get("/v1/sessions/today").set(auth(token));
     expect(today.status).toBe(200);
-    const items = today.body.data.items as Array<{
+    const listItems = today.body.data.items as Array<{
+      id: string;
+      scheduled_date: string;
+      status: string;
+      centre_id?: string;
+    }>;
+    const candidate = listItems.find(
+      (s) => s.status === "scheduled" || s.status === "in_progress",
+    );
+    if (!candidate) return;
+
+    // Broad /today omits roster — fetch one session with roster via session_id.
+    const detail = await request(app)
+      .get("/v1/sessions/today")
+      .query({ session_id: candidate.id })
+      .set(auth(token));
+    expect(detail.status).toBe(200);
+    const session = (detail.body.data.items as Array<{
       id: string;
       scheduled_date: string;
       status: string;
       roster: Array<{ student_id: string; status: string | null }>;
-    }>;
-    // Prefer a live session — prior runs may leave cancelled rows first in the list.
-    const session = items.find(
-      (s) =>
-        (s.status === "scheduled" || s.status === "in_progress") &&
-        (s.roster?.length ?? 0) > 0,
-    );
-    if (!session) return;
+    }>)[0];
+    if (!session || !(session.roster?.length ?? 0)) return;
 
     const roster = session.roster ?? [];
     const markedAt = `${session.scheduled_date}T10:00:00.000+05:30`;
@@ -84,13 +95,23 @@ describe("attendance (frozen routes)", () => {
     const { token } = await loginAs("super_admin");
     await request(app).post("/v1/admin/sessions/materialise").set(auth(token)).send({});
     const today = await request(app).get("/v1/sessions/today").set(auth(token));
-    const items = today.body.data.items as Array<{
+    const listItems = today.body.data.items as Array<{
+      id: string;
+      status: string;
+    }>;
+    const candidate = listItems.find((s) => s.status === "scheduled" || s.status === "in_progress");
+    if (!candidate) return;
+
+    const detail = await request(app)
+      .get("/v1/sessions/today")
+      .query({ session_id: candidate.id })
+      .set(auth(token));
+    const session = (detail.body.data.items as Array<{
       id: string;
       scheduled_date: string;
       roster: Array<{ student_id: string }>;
       status: string;
-    }>;
-    const session = items.find((s) => s.status === "scheduled" || s.status === "in_progress");
+    }>)[0];
     if (!session || !session.roster?.length) return;
 
     await request(app)

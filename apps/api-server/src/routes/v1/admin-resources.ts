@@ -638,28 +638,46 @@ router.get("/attendance/centres/:id/log", async (req: Request, res: Response) =>
     return;
   }
 
-  const rows = await db
-    .select({
-      id: sessions.id,
-      session_date: sessions.scheduled_date,
-      status: sessions.status,
-      topic: sessions.topic,
-      gps_required: sessions.gps_required,
-      batch_id: sessions.batch_id,
-      batch_name: batches.name,
-      centre_name: centres.name,
-      present_count: sql<number>`count(${attendance.id}) filter (where ${attendance.status} in ('present','late'))::int`,
-      total_count: sql<number>`count(${attendance.id})::int`,
-    })
-    .from(sessions)
-    .innerJoin(batches, eq(batches.id, sessions.batch_id))
-    .innerJoin(centres, eq(centres.id, batches.centre_id))
-    .leftJoin(attendance, eq(attendance.session_id, sessions.id))
-    .where(and(eq(batches.centre_id, centreId), isNull(batches.deleted_at)))
-    .groupBy(sessions.id, batches.name, centres.name)
-    .orderBy(desc(sessions.scheduled_date))
-    .limit(limit);
-  ok(res, { items: rows }, { count: rows.length });
+  const {
+    pageSessionsWithAttendanceCounts,
+    decodeSessionCursor,
+  } = await import("../../lib/session-page");
+  const cursor = decodeSessionCursor(req.query.cursor);
+  const fromExplicit =
+    typeof req.query.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from)
+      ? req.query.from
+      : null;
+  const toExplicit =
+    typeof req.query.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to)
+      ? req.query.to
+      : null;
+
+  const filters = [
+    eq(batches.centre_id, centreId),
+    isNull(batches.deleted_at),
+  ];
+  if (fromExplicit) filters.push(gte(sessions.scheduled_date, fromExplicit));
+  if (toExplicit) filters.push(lte(sessions.scheduled_date, toExplicit));
+
+  const result = await pageSessionsWithAttendanceCounts({
+    filters,
+    limit,
+    cursor,
+    // Explicit range replaces the default 180-day window.
+    windowDays: fromExplicit || toExplicit ? null : 180,
+  });
+
+  ok(
+    res,
+    { items: result.items },
+    {
+      count: result.items.length,
+      has_more: result.hasMore,
+      next_cursor: result.nextCursor,
+      window_days: result.windowDays,
+      window_from: result.windowFrom,
+    },
+  );
 });
 
 /* GET /v1/admin/sessions — recent sessions in scope */
@@ -667,26 +685,46 @@ router.get("/sessions", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
   const limit = clampLimit(req.query.limit, 50, 200);
   const centreFilter = scopedCentreFilter(scope, batches.centre_id);
-  const rows = await db
-    .select({
-      id: sessions.id,
-      session_date: sessions.scheduled_date,
-      status: sessions.status,
-      topic: sessions.topic,
-      batch_name: batches.name,
-      centre_name: centres.name,
-      present_count: sql<number>`count(${attendance.id}) filter (where ${attendance.status} in ('present','late'))::int`,
-      total_count: sql<number>`count(${attendance.id})::int`,
-    })
-    .from(sessions)
-    .innerJoin(batches, eq(batches.id, sessions.batch_id))
-    .innerJoin(centres, eq(centres.id, batches.centre_id))
-    .leftJoin(attendance, eq(attendance.session_id, sessions.id))
-    .where(and(isNull(batches.deleted_at), isNull(centres.deleted_at), centreFilter))
-    .groupBy(sessions.id, batches.name, centres.name)
-    .orderBy(desc(sessions.scheduled_date))
-    .limit(limit);
-  ok(res, { items: rows }, { count: rows.length });
+  const {
+    pageSessionsWithAttendanceCounts,
+    decodeSessionCursor,
+  } = await import("../../lib/session-page");
+  const cursor = decodeSessionCursor(req.query.cursor);
+  const fromExplicit =
+    typeof req.query.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from)
+      ? req.query.from
+      : null;
+  const toExplicit =
+    typeof req.query.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to)
+      ? req.query.to
+      : null;
+
+  const filters = [
+    isNull(batches.deleted_at),
+    isNull(centres.deleted_at),
+    ...(centreFilter ? [centreFilter] : []),
+  ];
+  if (fromExplicit) filters.push(gte(sessions.scheduled_date, fromExplicit));
+  if (toExplicit) filters.push(lte(sessions.scheduled_date, toExplicit));
+
+  const result = await pageSessionsWithAttendanceCounts({
+    filters,
+    limit,
+    cursor,
+    windowDays: fromExplicit || toExplicit ? null : 180,
+  });
+
+  ok(
+    res,
+    { items: result.items },
+    {
+      count: result.items.length,
+      has_more: result.hasMore,
+      next_cursor: result.nextCursor,
+      window_days: result.windowDays,
+      window_from: result.windowFrom,
+    },
+  );
 });
 
 /* GET /v1/admin/geography */

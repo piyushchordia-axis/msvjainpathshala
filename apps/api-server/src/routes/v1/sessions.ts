@@ -7,8 +7,8 @@ import { ulidSchema, attendanceStatusSchema } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope } from "../../lib/scope";
-import { db, sessions, batches, attendance, centres } from "@workspace/db";
-import { and, eq, sql, desc, inArray } from "drizzle-orm";
+import { sessions, batches } from "@workspace/db";
+import { eq, sql, inArray, isNull } from "drizzle-orm";
 import {
   AttendanceMarkError,
   markAttendance,
@@ -21,7 +21,9 @@ import {
   cancelSession,
 } from "../../services/session-lifecycle";
 import { todayIst } from "../../services/session-materialise";
-import { loadSessionRoster } from "../../lib/session-roster";
+import { loadRostersForSessions } from "../../lib/session-roster";
+import { pageSessionsWithAttendanceCounts } from "../../lib/session-page";
+import { clampLimit } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 router.use(requireAuth, requireAdminPanel);
@@ -103,67 +105,105 @@ function handleLifecycleError(res: Response, err: unknown): boolean {
   return false;
 }
 
-/* GET /v1/sessions/today — shikshak's sessions for today (IST), with AT4 roster */
+/* GET /v1/sessions/today — today's sessions (IST).
+ *
+ * Roster policy: include AT4 roster only when the result set is already
+ * batch-bounded (shikshak scope) or the caller passes centre_id / batch_id /
+ * session_id. City/national callers without a filter get counts only — a
+ * full city roster on this list was unbounded N+1 and multi-MB responses.
+ * Clients fetch one session via ?session_id= when they need the roster.
+ */
 router.get("/today", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
   const date = todayIst();
+  const limit = clampLimit(req.query.limit, 50, 100);
   const onlyId =
     typeof req.query.session_id === "string" && req.query.session_id.length > 0
       ? String(req.query.session_id)
       : null;
+  const centreId =
+    typeof req.query.centre_id === "string" && req.query.centre_id.length > 0
+      ? String(req.query.centre_id)
+      : null;
+  const batchId =
+    typeof req.query.batch_id === "string" && req.query.batch_id.length > 0
+      ? String(req.query.batch_id)
+      : null;
 
-  let scopeFilter;
+  if (centreId && scope.centreIds !== null && !scope.centreIds.includes(centreId)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope.");
+    return;
+  }
+  if (batchId && scope.batchIds !== null && !scope.batchIds.includes(batchId)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Batch not in your scope.");
+    return;
+  }
+
+  const filters = [eq(sessions.scheduled_date, date), isNull(batches.deleted_at)];
+  if (onlyId) filters.push(eq(sessions.id, onlyId));
+  if (batchId) filters.push(eq(sessions.batch_id, batchId));
+  if (centreId) filters.push(eq(batches.centre_id, centreId));
+
   if (scope.batchIds !== null) {
-    scopeFilter = scope.batchIds.length === 0 ? sql`false` : inArray(sessions.batch_id, scope.batchIds);
-  } else if (scope.centreIds !== null) {
-    scopeFilter =
-      scope.centreIds.length === 0 ? sql`false` : inArray(batches.centre_id, scope.centreIds);
+    filters.push(
+      scope.batchIds.length === 0 ? sql`false` : inArray(sessions.batch_id, scope.batchIds),
+    );
+  } else if (scope.centreIds !== null && !centreId) {
+    filters.push(
+      scope.centreIds.length === 0 ? sql`false` : inArray(batches.centre_id, scope.centreIds),
+    );
+  }
+
+  const result = await pageSessionsWithAttendanceCounts({
+    filters,
+    limit,
+    windowDays: null,
+    forToday: true,
+  });
+
+  const includeRoster =
+    onlyId !== null ||
+    batchId !== null ||
+    centreId !== null ||
+    scope.batchIds !== null;
+
+  type TodayItem = (typeof result.items)[number] & {
+    scheduled_date: string;
+    roster?: Awaited<ReturnType<typeof loadRostersForSessions>> extends Map<string, infer V>
+      ? V
+      : never;
+  };
+  let items: TodayItem[];
+  if (includeRoster && result.items.length > 0) {
+    const rosters = await loadRostersForSessions(
+      result.items.map((r) => ({
+        session_id: r.id,
+        session_date: r.session_date,
+        batch_id: r.batch_id,
+      })),
+    );
+    items = result.items.map((r) => ({
+      ...r,
+      scheduled_date: r.session_date,
+      roster: rosters.get(r.id) ?? [],
+    }));
   } else {
-    scopeFilter = undefined;
+    items = result.items.map((r) => ({
+      ...r,
+      scheduled_date: r.session_date,
+    }));
   }
 
-  const rows = await db
-    .select({
-      id: sessions.id,
-      batch_id: sessions.batch_id,
-      batch_name: batches.name,
-      centre_name: centres.name,
-      centre_id: batches.centre_id,
-      scheduled_date: sessions.scheduled_date,
-      scheduled_start_time: sessions.scheduled_start_time,
-      scheduled_end_time: sessions.scheduled_end_time,
-      status: sessions.status,
-      topic: sessions.topic,
-      gps_required: sessions.gps_required,
-      unscheduled: sessions.unscheduled,
-      gps_flagged: sessions.gps_flagged,
-      check_in_at: sessions.check_in_at,
-      check_out_at: sessions.check_out_at,
-      has_gps: sql<boolean>`(${centres.lat} is not null and ${centres.lng} is not null)`,
-      present_count: sql<number>`count(${attendance.id}) filter (where ${attendance.status} in ('present','late'))::int`,
-      total_count: sql<number>`count(${attendance.id})::int`,
-    })
-    .from(sessions)
-    .innerJoin(batches, eq(batches.id, sessions.batch_id))
-    .innerJoin(centres, eq(centres.id, batches.centre_id))
-    .leftJoin(attendance, eq(attendance.session_id, sessions.id))
-    .where(
-      and(
-        eq(sessions.scheduled_date, date),
-        scopeFilter,
-        onlyId ? eq(sessions.id, onlyId) : undefined,
-      ),
-    )
-    .groupBy(sessions.id, batches.name, centres.name, batches.centre_id, centres.lat, centres.lng)
-    .orderBy(desc(sessions.scheduled_start_time));
-
-  const items = [];
-  for (const row of rows) {
-    const roster = await loadSessionRoster(row.id, row.scheduled_date, row.batch_id);
-    items.push({ ...row, roster });
-  }
-
-  ok(res, { items, date }, { count: items.length });
+  ok(
+    res,
+    { items, date },
+    {
+      count: items.length,
+      has_more: result.hasMore,
+      next_cursor: result.nextCursor,
+      roster_included: includeRoster,
+    },
+  );
 });
 
 /* POST /v1/sessions/:id/check-in */
