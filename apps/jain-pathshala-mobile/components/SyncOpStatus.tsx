@@ -11,6 +11,9 @@ export function SyncOpStatus(props: {
   state: SyncUiState;
   error?: { code: string; message: string };
   onRetry?: () => void;
+  /** Optional overrides for contextual copy (e.g. check-in vs attendance). */
+  title?: string;
+  detail?: string;
 }) {
   const c = useColors();
   const { hi } = useLocale();
@@ -24,22 +27,25 @@ export function SyncOpStatus(props: {
     queued: {
       bg: c.infoSoft,
       fg: c.infoText,
-      title: hi ? "ऑफ़लाइन सहेजा गया" : "Saved offline — will sync",
-      detail: hi
-        ? "नेटवर्क मिलते ही स्वतः भेजा जाएगा।"
-        : "We'll send this when you're back online.",
+      title: props.title ?? (hi ? "ऑफ़लाइन सहेजा गया" : "Saved offline — will sync"),
+      detail:
+        props.detail ??
+        (hi
+          ? "नेटवर्क मिलते ही स्वतः भेजा जाएगा।"
+          : "We'll send this when you're back online."),
     },
     syncing: {
       bg: c.warningSoft,
       fg: c.warningText,
-      title: hi ? "सिंक हो रहा है…" : "Syncing…",
-      detail: hi ? "कृपया प्रतीक्षा करें।" : "Please wait.",
+      title: props.title ?? (hi ? "सिंक हो रहा है…" : "Syncing…"),
+      detail: props.detail ?? (hi ? "कृपया प्रतीक्षा करें।" : "Please wait."),
     },
     conflict: {
       bg: c.errorSoft,
       fg: c.errorText,
-      title: hi ? "टकराव — अपडेट नहीं हुआ" : "Conflict — not applied",
+      title: props.title ?? (hi ? "टकराव — अपडेट नहीं हुआ" : "Conflict — not applied"),
       detail:
+        props.detail ??
         props.error?.message ??
         (hi
           ? "सर्वर पर नया बदलाव पहले से है। स्क्रीन रीफ़्रेश करें और आवश्यक हो तो फिर से चिह्नित करें।"
@@ -48,8 +54,9 @@ export function SyncOpStatus(props: {
     failed: {
       bg: c.errorSoft,
       fg: c.errorText,
-      title: hi ? "सिंक विफल" : "Sync failed",
+      title: props.title ?? (hi ? "सिंक विफल" : "Sync failed"),
       detail:
+        props.detail ??
         props.error?.message ??
         (hi
           ? "स्वतः प्रयास समाप्त। नीचे से मैन्युअल पुनः प्रयास करें — डेटा हटाया नहीं गया।"

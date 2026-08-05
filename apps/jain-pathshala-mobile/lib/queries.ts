@@ -280,6 +280,11 @@ export interface AttendanceSessionDetail {
     centre_name: string | null;
     /** centre has configured lat/lng — geofence can actually be enforced. */
     has_gps: boolean;
+    check_in_at: string | null;
+    check_out_at: string | null;
+    gps_flagged: boolean;
+    gps_unverified: boolean;
+    unscheduled: boolean;
   };
   roster: AttendanceRosterRow[];
 }
@@ -295,6 +300,15 @@ type TodaySessionRow = {
   batch_name: string | null;
   centre_name: string | null;
   has_gps: boolean;
+  check_in_at?: string | null;
+  check_out_at?: string | null;
+  check_in_distance_m?: number | null;
+  check_out_distance_m?: number | null;
+  gps_flagged?: boolean;
+  gps_unverified?: boolean;
+  duration_minutes?: number | null;
+  auto_checked_out?: boolean;
+  unscheduled?: boolean;
   roster: AttendanceRosterRow[];
 };
 
@@ -324,6 +338,11 @@ export function useAttendanceSession(sessionId?: string) {
           batch_name: row.batch_name,
           centre_name: row.centre_name,
           has_gps: !!row.has_gps,
+          check_in_at: row.check_in_at ?? null,
+          check_out_at: row.check_out_at ?? null,
+          gps_flagged: !!row.gps_flagged,
+          gps_unverified: !!row.gps_unverified,
+          unscheduled: !!row.unscheduled,
         },
         roster: row.roster ?? [],
       } satisfies AttendanceSessionDetail;
@@ -336,8 +355,7 @@ export type AttendanceMark = "present" | "absent" | "late" | "excused";
 export interface MarkAttendanceResult {
   session_id: string;
   marked: number;
-  /** "gps" when a geofence was enforced, else "manual". */
-  method: "gps" | "manual";
+  method: "manual";
 }
 /**
  * Queue attendance for offline sync. Payload keys on (batch_id, session_date)
@@ -356,8 +374,6 @@ export function useMarkAttendance() {
       batchId: string;
       sessionDate: string;
       records: { student_id: string; status: AttendanceMark; notes?: string }[];
-      lat?: number;
-      lng?: number;
     }) => {
       const { enqueueAttendance, drainQueues } = await import("@/lib/offline/sync-engine");
       const { ulid } = await import("@/lib/offline/ulid");

@@ -56,8 +56,13 @@ export type PagedSessionRow = {
   gps_required?: boolean;
   unscheduled?: boolean;
   gps_flagged?: boolean;
+  gps_unverified?: boolean;
   check_in_at?: Date | null;
   check_out_at?: Date | null;
+  check_in_distance_m?: number | null;
+  check_out_distance_m?: number | null;
+  duration_minutes?: number | null;
+  auto_checked_out?: boolean;
   has_gps?: boolean;
   present_count: number;
   total_count: number;
@@ -121,8 +126,13 @@ export async function pageSessionsWithAttendanceCounts(opts: {
         gps_required: sessions.gps_required,
         unscheduled: sessions.unscheduled,
         gps_flagged: sessions.gps_flagged,
+        gps_unverified: sessions.gps_unverified,
         check_in_at: sessions.check_in_at,
         check_out_at: sessions.check_out_at,
+        check_in_distance_m: sessions.check_in_distance_m,
+        check_out_distance_m: sessions.check_out_distance_m,
+        duration_minutes: sessions.duration_minutes,
+        auto_checked_out: sessions.auto_checked_out,
         has_gps: sql<boolean>`(${centres.lat} is not null and ${centres.lng} is not null)`,
       }
     : {

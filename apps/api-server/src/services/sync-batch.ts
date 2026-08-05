@@ -103,9 +103,10 @@ async function handleCheckin(actor: User, submissionOpId: string, payload: unkno
     .object({
       batch_id: z.string().uuid(),
       session_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      lat: z.number(),
-      lng: z.number(),
-      accuracy_m: z.number(),
+      // AT32.2 — null when no fix; never invent (0,0) / 9999 sentinels.
+      lat: z.number().nullable(),
+      lng: z.number().nullable(),
+      accuracy_m: z.number().nullable(),
     })
     .parse(payload);
 
@@ -190,13 +191,14 @@ async function handleAttendance(
   let sessionId = await resolveSessionId(p.batch_id, p.session_date);
   if (!sessionId) {
     // AT8 — no materialised row: soft-create via check-in so marks are not lost.
+    // AT32.2 — no GPS was captured on the attendance path; pass nulls, never (0,0).
     const created = await checkInSession({
       sessionId: "00000000-0000-4000-8000-000000000000",
       actor,
       submissionOpId: ulid(), // distinct from this attendance submission_op_id
-      lat: 0,
-      lng: 0,
-      accuracy_m: 9999,
+      lat: null,
+      lng: null,
+      accuracy_m: null,
       batchId: p.batch_id,
       scheduledDate: p.session_date,
     });
@@ -247,9 +249,9 @@ async function handleCheckout(
     .object({
       batch_id: z.string().uuid(),
       session_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-      lat: z.number(),
-      lng: z.number(),
-      accuracy_m: z.number().optional(),
+      lat: z.number().nullable(),
+      lng: z.number().nullable(),
+      accuracy_m: z.number().nullable().optional(),
     })
     .parse(payload);
 
@@ -271,7 +273,7 @@ async function handleCheckout(
       actor,
       lat: p.lat,
       lng: p.lng,
-      accuracy_m: p.accuracy_m,
+      accuracy_m: p.accuracy_m ?? null,
     });
     return {
       submission_op_id: submissionOpId,

@@ -92,20 +92,33 @@ describe("drain order + escape hatch", () => {
       ],
     } as Record<QueueKey, QueuedOp[]>;
 
-    // Attendance blocked while checkin pending.
+    // Attendance blocked while checkin pending; checkout waits for attendance.
     const blocked = planDrain(queues);
-    expect(blocked.map((x) => x.queue)).toEqual([
-      QUEUE_KEYS.checkin,
-      QUEUE_KEYS.checkout,
-    ]);
+    expect(blocked.map((x) => x.queue)).toEqual([QUEUE_KEYS.checkin]);
 
-    // After checkin leaves the pending set, attendance releases.
+    // After checkin leaves the pending set, attendance releases; checkout still waits.
     queues[QUEUE_KEYS.checkin] = [];
+    const mid = planDrain(queues);
+    expect(mid.map((x) => x.queue)).toEqual([QUEUE_KEYS.attendance]);
+
+    // After attendance clears, checkout drains.
+    queues[QUEUE_KEYS.attendance] = [];
     const released = planDrain(queues);
-    expect(released.map((x) => x.queue)).toEqual([
-      QUEUE_KEYS.attendance,
-      QUEUE_KEYS.checkout,
+    expect(released.map((x) => x.queue)).toEqual([QUEUE_KEYS.checkout]);
+  });
+
+  it("a queued check-in blocks attendance for the same (batch_id, session_date)", () => {
+    const batch = "11111111-1111-4111-8111-111111111111";
+    const date = "2026-08-02";
+    const gate = isAttendanceBlockedByCheckin(batch, date, [
+      op("01CHECKIN00000000000000001", "queued", {
+        batch_id: batch,
+        session_date: date,
+      }),
     ]);
+    expect(gate.blocked).toBe(true);
+    expect(gate.reason).toBe("pending");
+    expect(sessionKey(batch, date)).toBe(`${batch}|${date}`);
   });
 
   it("releases attendance when checkin is FAILED (escape hatch)", () => {
@@ -137,6 +150,38 @@ describe("drain order + escape hatch", () => {
     expect(planned.map((x) => x.queue)).toContain(QUEUE_KEYS.attendance);
   });
 
+  it("check-out never drains before the attendance ops for its session", () => {
+    const batch = "11111111-1111-4111-8111-111111111111";
+    const date = "2026-08-02";
+    const otherBatch = "22222222-2222-4222-8222-222222222222";
+    const queues = {
+      ...emptyQueues(),
+      [QUEUE_KEYS.attendance]: [
+        op("01ATTEND000000000000000001", "queued", {
+          batch_id: batch,
+          session_date: date,
+          marks: [],
+        }),
+      ],
+      [QUEUE_KEYS.checkout]: [
+        op("01CHECKOUT0000000000000001", "queued", {
+          batch_id: batch,
+          session_date: date,
+        }),
+        op("01CHECKOUT0000000000000002", "queued", {
+          batch_id: otherBatch,
+          session_date: date,
+        }),
+      ],
+    } as Record<QueueKey, QueuedOp[]>;
+
+    const planned = planDrain(queues);
+    expect(planned.map((x) => x.op.submission_op_id)).toEqual([
+      "01ATTEND000000000000000001",
+      "01CHECKOUT0000000000000002",
+    ]);
+  });
+
   it("blocks attendance while checkin is PENDING for same session key", () => {
     const batch = "11111111-1111-4111-8111-111111111111";
     const date = "2026-08-02";
@@ -148,7 +193,6 @@ describe("drain order + escape hatch", () => {
     ]);
     expect(gate.blocked).toBe(true);
     expect(gate.reason).toBe("pending");
-    expect(sessionKey(batch, date)).toBe(`${batch}|${date}`);
   });
 });
 

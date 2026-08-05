@@ -72,16 +72,17 @@ const patchBodySchema = z.object({
 
 const checkInBodySchema = z.object({
   submission_op_id: ulidSchema,
-  lat: z.number().min(-90).max(90),
-  lng: z.number().min(-180).max(180),
-  accuracy_m: z.number().min(0).max(10_000),
+  // AT32.2 — null when no fix; never invent (0,0).
+  lat: z.number().min(-90).max(90).nullable(),
+  lng: z.number().min(-180).max(180).nullable(),
+  accuracy_m: z.number().min(0).max(10_000).nullable(),
   batch_id: z.string().uuid().optional(),
 });
 
 const checkOutBodySchema = z.object({
-  lat: z.number().min(-90).max(90),
-  lng: z.number().min(-180).max(180),
-  accuracy_m: z.number().min(0).max(10_000).optional(),
+  lat: z.number().min(-90).max(90).nullable(),
+  lng: z.number().min(-180).max(180).nullable(),
+  accuracy_m: z.number().min(0).max(10_000).nullable().optional(),
 });
 
 const cancelBodySchema = z.object({

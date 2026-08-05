@@ -12,9 +12,10 @@ export type PendingCheckInOp = {
   submission_op_id: string;
   batch_id: string;
   session_date: string;
-  lat: number;
-  lng: number;
-  accuracy_m: number;
+  /** Null when Guruji starts without a location fix (AT32.2). */
+  lat: number | null;
+  lng: number | null;
+  accuracy_m: number | null;
   client_timestamp: string;
 };
 
@@ -36,9 +37,10 @@ export type PendingCheckOutOp = {
   submission_op_id: string;
   batch_id: string;
   session_date: string;
-  lat: number;
-  lng: number;
-  accuracy_m: number;
+  /** Null when Guruji ends without a location fix (AT32.2). */
+  lat: number | null;
+  lng: number | null;
+  accuracy_m: number | null;
   client_timestamp: string;
 };
 

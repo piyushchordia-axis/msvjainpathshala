@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Plus, ClipboardList, Pencil, Trash2, Paperclip } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Check, ChevronsUpDown, Plus, ClipboardList, Pencil, Trash2, Paperclip } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
@@ -10,12 +10,22 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { safeHref } from '@/lib/safe-url';
 import { useLocale } from '@/lib/locale-context';
+import { cn } from '@/lib/utils';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
 } from '@/components/ui/dialog';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
 
@@ -82,6 +92,109 @@ interface CurriculumTopicOption {
   label_en: string;
   label_hi: string;
   curriculum_name: string;
+}
+
+function topicLabel(t: CurriculumTopicOption): string {
+  return t.curriculum_name ? `${t.label_en} · ${t.curriculum_name}` : t.label_en;
+}
+
+/** Searchable curriculum topic combobox — same Popover+Command pattern as Enrolments. */
+function CurriculumTopicSearchSelect({
+  topics,
+  value,
+  onChange,
+  disabled,
+  loading,
+  placeholder,
+  emptyHint,
+}: {
+  topics: CurriculumTopicOption[];
+  value: string;
+  onChange: (id: string) => void;
+  disabled?: boolean;
+  loading?: boolean;
+  placeholder?: string;
+  emptyHint?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const selected = useMemo(() => topics.find((t) => t.id === value) ?? null, [topics, value]);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          disabled={disabled || loading}
+          className="h-9 w-full justify-between font-normal"
+        >
+          <span className="truncate text-left">
+            {loading
+              ? 'Loading…'
+              : selected
+                ? topicLabel(selected)
+                : (placeholder ?? 'Search curriculum topic…')}
+          </span>
+          <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        className="z-[100] w-[var(--radix-popover-trigger-width)] p-0"
+        align="start"
+      >
+        <Command>
+          <CommandInput placeholder="Search by topic or curriculum…" />
+          <CommandList>
+            <CommandEmpty>{emptyHint ?? 'No matching topic.'}</CommandEmpty>
+            <CommandGroup>
+              <CommandItem
+                value="__none__ none clear"
+                onSelect={() => {
+                  onChange('');
+                  setOpen(false);
+                }}
+              >
+                <Check
+                  className={cn('mr-2 h-4 w-4', !value ? 'opacity-100' : 'opacity-0')}
+                />
+                None
+              </CommandItem>
+              {topics.map((t) => {
+                const label = topicLabel(t);
+                return (
+                  <CommandItem
+                    key={t.id}
+                    value={`${label} ${t.label_hi} ${t.curriculum_name}`}
+                    onSelect={() => {
+                      onChange(t.id);
+                      setOpen(false);
+                    }}
+                  >
+                    <Check
+                      className={cn(
+                        'mr-2 h-4 w-4',
+                        value === t.id ? 'opacity-100' : 'opacity-0',
+                      )}
+                    />
+                    <span className="truncate">
+                      <span className="font-medium">{t.label_en}</span>
+                      {t.curriculum_name ? (
+                        <span className="ml-1 text-xs text-muted-foreground">
+                          {t.curriculum_name}
+                        </span>
+                      ) : null}
+                    </span>
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
 }
 
 interface BatchOption { id: string; name: string | null; centre_name: string; }
@@ -281,23 +394,20 @@ function NewAssignmentDialog({ onAdded }: { onAdded: () => void }) {
             <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Learn the Navkar Mantra" required />
           </FormRow>
           <FormRow label="Curriculum topic (optional)">
-            <Select
-              value={curriculumItemId || '__none__'}
-              onValueChange={(v) => setCurriculumItemId(v === '__none__' ? '' : v)}
+            <CurriculumTopicSearchSelect
+              topics={topics}
+              value={curriculumItemId}
+              onChange={setCurriculumItemId}
               disabled={!batchId || topics.length === 0}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder={batchId ? (topics.length ? 'None' : 'No topics for this batch') : 'Pick a batch first'} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">None</SelectItem>
-                {topics.map((t) => (
-                  <SelectItem key={t.id} value={t.id}>
-                    {t.label_en}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              placeholder={
+                batchId
+                  ? topics.length
+                    ? 'Search curriculum topic…'
+                    : 'No topics for this batch'
+                  : 'Pick a batch first'
+              }
+              emptyHint="No matching topic."
+            />
           </FormRow>
           <FormRow label="Due date *">
             <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} required />
@@ -420,22 +530,14 @@ function EditAssignmentDialog({
             <Input value={title} onChange={(e) => setTitle(e.target.value)} required />
           </FormRow>
           <FormRow label="Curriculum topic (optional)">
-            <Select
-              value={curriculumItemId || '__none__'}
-              onValueChange={(v) => setCurriculumItemId(v === '__none__' ? '' : v)}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder={topics.length ? 'None' : 'No topics for this track'} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">None</SelectItem>
-                {topics.map((t) => (
-                  <SelectItem key={t.id} value={t.id}>
-                    {t.label_en}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <CurriculumTopicSearchSelect
+              topics={topics}
+              value={curriculumItemId}
+              onChange={setCurriculumItemId}
+              disabled={topics.length === 0}
+              placeholder={topics.length ? 'Search curriculum topic…' : 'No topics for this track'}
+              emptyHint="No matching topic."
+            />
           </FormRow>
           <FormRow label="Due date *">
             <Input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} required />

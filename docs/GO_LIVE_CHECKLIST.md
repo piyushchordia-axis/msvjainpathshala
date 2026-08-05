@@ -71,9 +71,11 @@ Legend: ☐ = to do · each item names the **service to provision**, the **secre
   for `expo-notifications` push.
 - ☐ **Build:** `eas build -p ios` and `eas build -p android` (profiles in `eas.json`). Confirm both produce
   signed binaries.
-- ☐ **Verify (on-device QA):** login via real SMS OTP; the persona tabs load; **GPS attendance**
-  (`expo-location`) and the **Shivir QR scanner** (`expo-camera`) work on a physical device (simulators
-  can't fully exercise camera/GPS); a **push notification** (birthday / notice) is received.
+- ☐ **Verify (on-device QA):** login via real SMS OTP; the persona tabs load; **GPS check-in /
+  check-out** (`expo-location` at class start/end only — never in the background, never for
+  students; `NSLocationWhenInUseUsageDescription` / Play Data safety must match this) and the
+  **Shivir QR scanner** (`expo-camera`) work on a physical device (simulators can't fully exercise
+  camera/GPS); a **push notification** (birthday / notice) is received.
 - ☐ **Submit:** `eas submit` to TestFlight / Play internal track, then promote.
 
 ---

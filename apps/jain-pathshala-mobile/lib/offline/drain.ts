@@ -1,8 +1,19 @@
 /**
  * Causal drain planner + ordering guard with FAILED escape hatch.
+ *
+ * Drain order: checkin → attendance → checkout → …
+ * Attendance blocked while checkin is PENDING for same (batch_id, session_date).
+ * Attendance RELEASED if checkin is FAILED (AT8 escape hatch).
+ * Checkout blocked while attendance is PENDING for the same session key
+ * (marks must land before the session closes).
  */
 import { DRAIN_ORDER, QUEUE_KEYS, type QueueKey } from "./queue-keys";
-import type { PendingAttendanceOp, PendingCheckInOp, QueuedOp } from "./types";
+import type {
+  PendingAttendanceOp,
+  PendingCheckInOp,
+  PendingCheckOutOp,
+  QueuedOp,
+} from "./types";
 
 export type SessionKey = string; // `${batch_id}|${session_date}`
 
@@ -22,11 +33,18 @@ function keyFromAttendance(op: QueuedOp): SessionKey | null {
   return sessionKey(p.batch_id, p.session_date);
 }
 
+function keyFromCheckout(op: QueuedOp): SessionKey | null {
+  const p = op.payload as PendingCheckOutOp;
+  if (!p?.batch_id || !p?.session_date) return null;
+  return sessionKey(p.batch_id, p.session_date);
+}
+
 /**
  * Returns ops to send now, in causal order, respecting:
  * - Within a queue: submission_op_id ascending
  * - Attendance blocked while checkin is PENDING for same (batch_id, session_date)
  * - Attendance RELEASED if checkin is FAILED (escape hatch / AT8)
+ * - Checkout blocked while attendance is PENDING for same session key
  */
 export function planDrain(
   queues: Record<QueueKey, QueuedOp[]>,
@@ -37,8 +55,6 @@ export function planDrain(
       .filter((op) => op.state === "queued" && op.next_attempt_at <= now)
       .sort((a, b) => a.submission_op_id.localeCompare(b.submission_op_id));
 
-  // Normalize: only auto-drain queued (and syncing interrupted). Manual retry
-  // sets state back to queued.
   const checkins = queues[QUEUE_KEYS.checkin] ?? [];
   const pendingCheckinKeys = new Set(
     checkins
@@ -53,17 +69,34 @@ export function planDrain(
       .filter((k): k is string => !!k),
   );
 
+  const attendanceOps = queues[QUEUE_KEYS.attendance] ?? [];
+  const pendingAttendanceKeys = new Set(
+    attendanceOps
+      .filter((op) => op.state === "queued" || op.state === "syncing")
+      .map(keyFromAttendance)
+      .filter((k): k is string => !!k),
+  );
+
   const planned: Array<{ queue: QueueKey; op: QueuedOp }> = [];
 
   for (const queue of DRAIN_ORDER) {
     const ops = ready(queues[queue] ?? []).filter((op) => {
-      if (queue !== QUEUE_KEYS.attendance) return true;
-      const k = keyFromAttendance(op);
-      if (!k) return true;
-      // Ordering guard: block while checkin PENDING for same key.
-      if (pendingCheckinKeys.has(k)) return false;
-      // Escape hatch: FAILED checkin does NOT block (AT8 soft-create on server).
-      if (failedCheckinKeys.has(k)) return true;
+      if (queue === QUEUE_KEYS.attendance) {
+        const k = keyFromAttendance(op);
+        if (!k) return true;
+        // Ordering guard: block while checkin PENDING for same key.
+        if (pendingCheckinKeys.has(k)) return false;
+        // Escape hatch: FAILED checkin does NOT block (AT8 soft-create on server).
+        if (failedCheckinKeys.has(k)) return true;
+        return true;
+      }
+      if (queue === QUEUE_KEYS.checkout) {
+        const k = keyFromCheckout(op);
+        if (!k) return true;
+        // Check-out must not close a session before its marks arrive.
+        if (pendingAttendanceKeys.has(k)) return false;
+        return true;
+      }
       return true;
     });
 

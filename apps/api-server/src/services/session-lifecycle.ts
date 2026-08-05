@@ -84,6 +84,49 @@ function centreDistanceM(
   return Math.round(haversineMeters(lat, lng, Number(centreLat), Number(centreLng)));
 }
 
+/**
+ * AT32.2 / AT32.3 — absent GPS is NULL, never (0,0).
+ * gps_flagged means "measured and wrong", never "not measured".
+ */
+function evaluateGpsFix(
+  lat: number | null,
+  lng: number | null,
+  accuracy_m: number | null,
+  centreLat: string | null,
+  centreLng: string | null,
+  radius: number,
+): {
+  distance_m: number | null;
+  lat_str: string | null;
+  lng_str: string | null;
+  accuracy_rounded: number | null;
+  gps_unverified: boolean;
+  gps_flagged: boolean;
+} {
+  if (lat == null || lng == null) {
+    return {
+      distance_m: null,
+      lat_str: null,
+      lng_str: null,
+      accuracy_rounded: accuracy_m != null ? Math.round(accuracy_m) : null,
+      gps_unverified: true,
+      gps_flagged: false,
+    };
+  }
+  const distance_m = centreDistanceM(lat, lng, centreLat, centreLng);
+  const outOfRadius = distance_m != null && distance_m > radius;
+  const accuracyBad = accuracy_m != null && accuracy_m > ACCURACY_UNVERIFIED_M;
+  return {
+    distance_m,
+    lat_str: String(lat),
+    lng_str: String(lng),
+    accuracy_rounded: accuracy_m != null ? Math.round(accuracy_m) : null,
+    // Null accuracy with a real fix is still unverified (AT15 never rejects).
+    gps_unverified: accuracy_m == null || accuracyBad,
+    gps_flagged: outOfRadius || accuracyBad,
+  };
+}
+
 async function notifyGpsFlag(
   centreId: string,
   title_en: string,
@@ -99,9 +142,10 @@ export type CheckInInput = {
   sessionId: string;
   actor: User;
   submissionOpId: string;
-  lat: number;
-  lng: number;
-  accuracy_m: number;
+  /** Null when no fix was captured (AT32.2) — never sentinel 0/0. */
+  lat: number | null;
+  lng: number | null;
+  accuracy_m: number | null;
   /** Required when soft-creating (AT8) because no session row matched. */
   batchId?: string;
   /** Offline sync may soft-create for a specific calendar date (defaults to today IST). */
@@ -154,7 +198,11 @@ export async function checkInSession(input: CheckInInput): Promise<SessionRow> {
   }
 
   // AT8 — no matching scheduled session → soft-create (or resolve today's row).
-  if (!session || session.status !== "scheduled") {
+  // AT32.1 companion — also allow check-in when marks soft-transitioned the
+  // session to in_progress with check_in_at still NULL (GPS can still be recorded).
+  const softTransitionOpen =
+    !!session && session.status === "in_progress" && session.check_in_at == null;
+  if (!session || (session.status !== "scheduled" && !softTransitionOpen)) {
     if (session) {
       throw new SessionLifecycleError(
         409,
@@ -194,14 +242,11 @@ export async function checkInSession(input: CheckInInput): Promise<SessionRow> {
       return todayRow;
     }
 
-    if (todayRow?.status === "scheduled") {
+    if (todayRow?.status === "scheduled" || (todayRow?.status === "in_progress" && !todayRow.check_in_at)) {
       session = todayRow;
     } else if (!todayRow) {
-      const distance = centreDistanceM(lat, lng, bcSoft.lat, bcSoft.lng);
       const radius = bcSoft.gps_radius_meters ?? 250;
-      const outOfRadius = distance != null && distance > radius;
-      const gpsUnverified = accuracy_m > ACCURACY_UNVERIFIED_M;
-      const gpsFlagged = outOfRadius || gpsUnverified;
+      const gps = evaluateGpsFix(lat, lng, accuracy_m, bcSoft.lat, bcSoft.lng, radius);
 
       const [created] = await db
         .insert(sessions)
@@ -216,12 +261,12 @@ export async function checkInSession(input: CheckInInput): Promise<SessionRow> {
           conducted_by: actor.id,
           submission_op_id: submissionOpId,
           check_in_at: new Date(),
-          check_in_lat: String(lat),
-          check_in_lng: String(lng),
-          check_in_distance_m: distance,
-          check_in_accuracy_m: Math.round(accuracy_m),
-          gps_flagged: gpsFlagged,
-          gps_unverified: gpsUnverified,
+          check_in_lat: gps.lat_str,
+          check_in_lng: gps.lng_str,
+          check_in_distance_m: gps.distance_m,
+          check_in_accuracy_m: gps.accuracy_rounded,
+          gps_flagged: gps.gps_flagged,
+          gps_unverified: gps.gps_unverified,
         })
         .onConflictDoNothing()
         .returning();
@@ -238,8 +283,8 @@ export async function checkInSession(input: CheckInInput): Promise<SessionRow> {
             unscheduled: true,
             batch_id: batchId,
             scheduled_date: date,
-            gps_flagged: gpsFlagged,
-            check_in_distance_m: distance,
+            gps_flagged: gps.gps_flagged,
+            check_in_distance_m: gps.distance_m,
           },
         });
         const sanchalakIds = await sanchalakUserIdsForCentre(bcSoft.centre_id);
@@ -250,7 +295,8 @@ export async function checkInSession(input: CheckInInput): Promise<SessionRow> {
           body_en: `A Guruji started an unscheduled session at ${bcSoft.centre_name}.`,
           body_hi: `${bcSoft.centre_name} पर गुरुजी ने एक अनिर्धारित सत्र शुरू किया।`,
         });
-        if (gpsFlagged) {
+        // AT32.3 — never page for an absent fix; gps_flagged is measured-and-wrong only.
+        if (gps.gps_flagged) {
           await notifyGpsFlag(
             bcSoft.centre_id,
             "GPS-flagged check-in",
@@ -288,11 +334,8 @@ export async function checkInSession(input: CheckInInput): Promise<SessionRow> {
     throw new SessionLifecycleError(409, "ERR_SESSION_CANCELLED", "Session is cancelled.");
   }
 
-  const distance = centreDistanceM(lat, lng, bc.lat, bc.lng);
   const radius = bc.gps_radius_meters ?? 250;
-  const outOfRadius = distance != null && distance > radius;
-  const gpsUnverified = accuracy_m > ACCURACY_UNVERIFIED_M;
-  const gpsFlagged = outOfRadius || gpsUnverified;
+  const gps = evaluateGpsFix(lat, lng, accuracy_m, bc.lat, bc.lng, radius);
 
   const [updated] = await db
     .update(sessions)
@@ -302,17 +345,17 @@ export async function checkInSession(input: CheckInInput): Promise<SessionRow> {
       conducted_by: actor.id,
       submission_op_id: submissionOpId,
       check_in_at: new Date(),
-      check_in_lat: String(lat),
-      check_in_lng: String(lng),
-      check_in_distance_m: distance,
-      check_in_accuracy_m: Math.round(accuracy_m),
-      gps_flagged: gpsFlagged || session.gps_flagged,
-      gps_unverified: gpsUnverified || session.gps_unverified,
+      check_in_lat: gps.lat_str,
+      check_in_lng: gps.lng_str,
+      check_in_distance_m: gps.distance_m,
+      check_in_accuracy_m: gps.accuracy_rounded,
+      gps_flagged: gps.gps_flagged || session.gps_flagged,
+      gps_unverified: gps.gps_unverified || session.gps_unverified,
     })
     .where(eq(sessions.id, session.id))
     .returning();
 
-  if (gpsFlagged) {
+  if (gps.gps_flagged) {
     await notifyGpsFlag(
       bc.centre_id,
       "GPS-flagged check-in",
@@ -328,9 +371,10 @@ export async function checkInSession(input: CheckInInput): Promise<SessionRow> {
 export type CheckOutInput = {
   sessionId: string;
   actor: User;
-  lat: number;
-  lng: number;
-  accuracy_m?: number;
+  /** Null when no fix was captured (AT32.2). */
+  lat: number | null;
+  lng: number | null;
+  accuracy_m?: number | null;
 };
 
 export async function checkOutSession(input: CheckOutInput): Promise<SessionRow> {
@@ -353,14 +397,23 @@ export async function checkOutSession(input: CheckOutInput): Promise<SessionRow>
     );
   }
 
-  const distance = centreDistanceM(input.lat, input.lng, bc.lat, bc.lng);
   const radius = bc.gps_radius_meters ?? 250;
-  const outOfRadius = distance != null && distance > radius;
-  const accuracy = input.accuracy_m ?? null;
-  const gpsUnverified = accuracy != null && accuracy > ACCURACY_UNVERIFIED_M;
+  const gps = evaluateGpsFix(
+    input.lat,
+    input.lng,
+    input.accuracy_m ?? null,
+    bc.lat,
+    bc.lng,
+    radius,
+  );
 
   let gpsHaversine: number | null = null;
-  if (session.check_in_lat != null && session.check_in_lng != null) {
+  if (
+    session.check_in_lat != null &&
+    session.check_in_lng != null &&
+    input.lat != null &&
+    input.lng != null
+  ) {
     gpsHaversine = Math.round(
       haversineMeters(
         Number(session.check_in_lat),
@@ -383,19 +436,19 @@ export async function checkOutSession(input: CheckOutInput): Promise<SessionRow>
     .set({
       status: "completed",
       check_out_at: checkOutAt,
-      check_out_lat: String(input.lat),
-      check_out_lng: String(input.lng),
-      check_out_distance_m: distance,
-      check_out_accuracy_m: accuracy != null ? Math.round(accuracy) : null,
+      check_out_lat: gps.lat_str,
+      check_out_lng: gps.lng_str,
+      check_out_distance_m: gps.distance_m,
+      check_out_accuracy_m: gps.accuracy_rounded,
       gps_haversine_m: gpsHaversine,
       duration_minutes: durationMinutes,
-      gps_flagged: outOfRadius || gpsUnverified || session.gps_flagged,
-      gps_unverified: gpsUnverified || session.gps_unverified,
+      gps_flagged: gps.gps_flagged || session.gps_flagged,
+      gps_unverified: gps.gps_unverified || session.gps_unverified,
     })
     .where(eq(sessions.id, session.id))
     .returning();
 
-  if (outOfRadius || gpsUnverified) {
+  if (gps.gps_flagged) {
     await notifyGpsFlag(
       bc.centre_id,
       "GPS-flagged check-out",

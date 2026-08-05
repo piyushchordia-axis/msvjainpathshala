@@ -668,12 +668,24 @@ export function niyamBadgeLabel(key: string, lang: "en" | "hi" = "en"): string {
 }
 export const shikshakSessionRowSchema = z.object({
   id: z.string(),
+  batch_id: z.string().optional(),
   session_date: z.string(),
+  scheduled_date: z.string().optional(),
   status: z.string(),
   topic: z.string().nullable(),
   batch_name: z.string().nullable(),
   centre_name: z.string().nullable(),
   present_count: z.number(),
   total_count: z.number(),
+  gps_required: z.boolean().optional(),
+  check_in_at: z.string().nullable().optional(),
+  check_out_at: z.string().nullable().optional(),
+  check_in_distance_m: z.number().nullable().optional(),
+  check_out_distance_m: z.number().nullable().optional(),
+  gps_flagged: z.boolean().optional(),
+  gps_unverified: z.boolean().optional(),
+  duration_minutes: z.number().nullable().optional(),
+  auto_checked_out: z.boolean().optional(),
+  unscheduled: z.boolean().optional(),
 });
 export type ShikshakSessionRow = z.infer<typeof shikshakSessionRowSchema>;

@@ -729,6 +729,18 @@ export async function markAttendance(input: MarkInput): Promise<MarkResponse> {
     // against itself.
     await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${"attn:" + session.id}))`);
 
+    // AT32.1 — first mark on a scheduled session soft-transitions to in_progress
+    // without requiring check-in. Leave check_in_at NULL. Do not reopen completed.
+    if (session.status === "scheduled") {
+      await tx
+        .update(sessions)
+        .set({
+          status: "in_progress",
+          conducted_by: input.userId,
+        })
+        .where(and(eq(sessions.id, session.id), eq(sessions.status, "scheduled")));
+    }
+
     const pendingPunya: PendingPunyaRow[] = [];
     const streakTargets: Array<{ studentId: string; newRevision: number }> = [];
     const appliedStudentIds: string[] = [];

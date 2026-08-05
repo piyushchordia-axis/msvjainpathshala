@@ -92,6 +92,10 @@ Apple asks for this on the app's App Store page. Fill it **once**; later updates
 - Age rating (short quiz)
 - App Privacy — what data the app collects
 - Export compliance — already handled by `ITSAppUsesNonExemptEncryption: false` in `app.json`
+- **Location (`NSLocationWhenInUseUsageDescription`):** precise location is used only when a
+  Guruji starts or ends a class at the centre (foreground check-in / check-out). Never in the
+  background, never for students. Review notes and App Privacy must match this — do not claim
+  continuous tracking or student location.
 
 **⚠️ If the app has login (ours does):**
 In **App Review Information**, give Apple a **demo account** (username + password) + a contact name/email. Without it, the review gets **rejected** because the reviewer can't get past the login screen.

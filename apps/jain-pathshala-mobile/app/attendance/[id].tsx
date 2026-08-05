@@ -2,22 +2,14 @@
  * Shikshak attendance-marking screen.
  *
  * Flow: load today's session roster (GET /v1/sessions/today?session_id=),
- * toggle each student present / absent / late / excused, then enqueue
- * POST /v1/sync/batch. For a gps_required session the
- * device's GPS is captured via expo-location (permission flow + graceful
- * denial) and sent so the server can haversine-check it against the centre
- * geofence; the screen surfaces the success + the enforced method (gps vs
- * manual) and, on a geofence rejection, an "outside centre" message.
- *
- * Authorization + geofencing are enforced server-side (in-scope admin/shikshak
- * for the session's centre); an out-of-scope session 404s and renders as a
- * friendly "not available" state.
+ * toggle each student present / absent / late / excused, then enqueue via
+ * POST /v1/sync/batch. Geofencing belongs on check-in / check-out only (AT32) —
+ * this screen never captures GPS.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { FlatList, Platform, RefreshControl, View } from "react-native";
+import { FlatList, Platform, Pressable, RefreshControl, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
-import * as Location from "expo-location";
 import * as Haptics from "expo-haptics";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
@@ -34,6 +26,7 @@ import {
   RosterRow,
   ROSTER_ROW_HEIGHT,
 } from "@/components/AttendanceRosterRow";
+import { SessionCheckIn } from "@/components/SessionCheckIn";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 type Feedback =
@@ -49,17 +42,14 @@ export default function AttendanceMarkScreen() {
   const detail = useAttendanceSession(id);
   const mark = useMarkAttendance();
 
-  // studentId -> chosen status. Seeded lazily from the roster once it loads so
-  // a previously-marked session opens with its existing marks visible.
   const [marks, setMarks] = useState<Record<string, AttendanceMark>>({});
   const [seeded, setSeeded] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
-  const [locating, setLocating] = useState(false);
+  const [checkInOpen, setCheckInOpen] = useState(false);
 
   const session = detail.data?.session ?? null;
   const roster = useMemo(() => detail.data?.roster ?? [], [detail.data]);
 
-  // One-time seed: existing marks win; else AT4 suggested excused from absences.
   useEffect(() => {
     if (seeded || !detail.data) return;
     const initial: Record<string, AttendanceMark> = {};
@@ -73,7 +63,7 @@ export default function AttendanceMarkScreen() {
 
   const markedCount = Object.keys(marks).length;
   const allMarked = roster.length > 0 && markedCount === roster.length;
-  const gpsNeeded = !!session?.gps_required;
+  const needsCheckIn = !!session?.gps_required && !session?.check_in_at;
 
   const onMark = useCallback((studentId: string, value: AttendanceMark) => {
     setFeedback(null);
@@ -90,59 +80,9 @@ export default function AttendanceMarkScreen() {
     [roster],
   );
 
-  /** Capture device GPS for a geofenced session. Returns null on denial/failure
-   * (with feedback already set) so the caller can abort the submit. */
-  async function captureLocation(): Promise<{ lat: number; lng: number } | null> {
-    if (Platform.OS === "web") {
-      // expo-location web uses the browser geolocation API; still attempt it,
-      // but surface a clear message if it's unavailable.
-    }
-    setLocating(true);
-    try {
-      const perm = await Location.requestForegroundPermissionsAsync();
-      if (perm.status !== "granted") {
-        const blocked = !perm.canAskAgain;
-        setFeedback({
-          tone: "error",
-          title: hi ? "स्थान अनुमति चाहिए" : "Location needed",
-          detail: blocked
-            ? hi
-              ? "स्थान अनुमति अवरुद्ध है। इस सत्र की उपस्थिति दर्ज करने के लिए सेटिंग्स में अनुमति दें।"
-              : "Location access is blocked. Enable it in Settings to mark attendance for this session."
-            : hi
-              ? "इस सत्र के लिए स्थान अनुमति आवश्यक है।"
-              : "This session requires your location to mark attendance.",
-        });
-        return null;
-      }
-      const pos = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Balanced,
-      });
-      return { lat: pos.coords.latitude, lng: pos.coords.longitude };
-    } catch {
-      setFeedback({
-        tone: "error",
-        title: hi ? "स्थान नहीं मिला" : "Couldn't get location",
-        detail: hi
-          ? "आपका स्थान प्राप्त नहीं हो सका। GPS चालू करें और पुनः प्रयास करें।"
-          : "We couldn't read your location. Turn on GPS and try again.",
-      });
-      return null;
-    } finally {
-      setLocating(false);
-    }
-  }
-
   async function submit() {
     if (!session || roster.length === 0 || markedCount === 0) return;
     setFeedback(null);
-
-    let coords: { lat: number; lng: number } | undefined;
-    if (gpsNeeded) {
-      const got = await captureLocation();
-      if (!got) return; // feedback already shown
-      coords = got;
-    }
 
     const records = Object.entries(marks).map(([student_id, status]) => ({
       student_id,
@@ -155,8 +95,6 @@ export default function AttendanceMarkScreen() {
         batchId: session.batch_id,
         sessionDate: session.session_date,
         records,
-        lat: coords?.lat,
-        lng: coords?.lng,
       },
       {
         onSuccess: (res) => {
@@ -171,22 +109,11 @@ export default function AttendanceMarkScreen() {
         },
         onError: (err) => {
           if (Platform.OS !== "web") void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-          const code = err instanceof ApiError ? err.code : "";
-          if (code === "ERR_FORBIDDEN" && gpsNeeded) {
-            setFeedback({
-              tone: "error",
-              title: hi ? "केंद्र की सीमा के बाहर" : "Outside the centre",
-              detail: hi
-                ? "आप केंद्र की निर्धारित सीमा के बाहर हैं। उपस्थिति दर्ज करने के लिए केंद्र पर पहुँचें।"
-                : "You're outside the centre's allowed radius. Move to the centre to mark attendance.",
-            });
-          } else {
-            setFeedback({
-              tone: "error",
-              title: hi ? "दर्ज नहीं हो सका" : "Couldn't save",
-              detail: err instanceof ApiError ? err.message : hi ? "पुनः प्रयास करें।" : "Please try again.",
-            });
-          }
+          setFeedback({
+            tone: "error",
+            title: hi ? "दर्ज नहीं हो सका" : "Couldn't save",
+            detail: err instanceof ApiError ? err.message : hi ? "पुनः प्रयास करें।" : "Please try again.",
+          });
         },
       },
     );
@@ -217,7 +144,6 @@ export default function AttendanceMarkScreen() {
     [],
   );
 
-  // ---- Loading / error / not-available ----
   if (detail.isLoading) {
     return (
       <Screen scroll={false}>
@@ -267,15 +193,17 @@ export default function AttendanceMarkScreen() {
             label={`${markedCount} / ${roster.length} ${hi ? "चिह्नित" : "marked"}`}
             tone={allMarked ? "success" : "neutral"}
           />
-          {gpsNeeded ? (
-            <Pill
-              label={
-                session.has_gps
-                  ? hi ? "GPS आवश्यक" : "GPS required"
-                  : hi ? "GPS आवश्यक (केंद्र अकॉन्फ़िगर्ड)" : "GPS required (centre unconfigured)"
-              }
-              tone="info"
-            />
+          {session.gps_required ? (
+            <Pressable onPress={() => setCheckInOpen(true)} disabled={cancelled}>
+              <Pill
+                label={
+                  hi
+                    ? "केंद्र पर चेक-इन आवश्यक"
+                    : "Check-in at the centre required"
+                }
+                tone="info"
+              />
+            </Pressable>
           ) : null}
         </Row>
       </Card>
@@ -330,11 +258,11 @@ export default function AttendanceMarkScreen() {
           </Card>
         ) : null}
 
-        {gpsNeeded ? (
+        {needsCheckIn ? (
           <Body muted style={{ fontSize: 12, textAlign: "center" }}>
             {hi
-              ? "जमा करने पर आपका स्थान कैप्चर किया जाएगा और केंद्र की सीमा से मिलान किया जाएगा।"
-              : "Your location is captured on submit and checked against the centre geofence."}
+              ? "इस सत्र के लिए केंद्र पर चेक-इन अनुशंसित है — उपस्थिति बिना चेक-इन के भी दर्ज हो सकती है।"
+              : "This session asks for centre check-in — you can still mark attendance without it."}
           </Body>
         ) : null}
 
@@ -342,12 +270,10 @@ export default function AttendanceMarkScreen() {
           label={
             feedback?.tone === "success"
               ? hi ? "पुनः जमा करें" : "Save again"
-              : gpsNeeded
-                ? hi ? "स्थान लें और जमा करें" : "Capture location & save"
-                : hi ? "उपस्थिति जमा करें" : "Save attendance"
+              : hi ? "उपस्थिति जमा करें" : "Save attendance"
           }
-          icon={gpsNeeded ? "location" : "save"}
-          loading={locating || mark.isPending}
+          icon="save"
+          loading={mark.isPending}
           disabled={markedCount === 0}
           onPress={() => void submit()}
         />
@@ -386,6 +312,15 @@ export default function AttendanceMarkScreen() {
         maxToRenderPerBatch={8}
         windowSize={7}
         removeClippedSubviews={Platform.OS !== "web"}
+      />
+      <SessionCheckIn
+        visible={checkInOpen}
+        mode="checkin"
+        batchId={session.batch_id}
+        sessionDate={session.session_date}
+        batchName={session.batch_name}
+        onClose={() => setCheckInOpen(false)}
+        onSettled={() => void detail.refetch()}
       />
     </Screen>
   );

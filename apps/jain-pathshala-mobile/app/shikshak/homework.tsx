@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Alert,
   Modal,
@@ -18,6 +18,7 @@ import {
   useCreateHomeworkAssignment,
   useHomeworkAssignments,
   useHomeworkCurriculumTopics,
+  type CurriculumTopicOption,
 } from "@/lib/queries";
 import { ApiError, apiUpload } from "@/lib/api";
 import { formatDate } from "@/lib/format";
@@ -30,6 +31,246 @@ import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
+type CurriculumTopic = CurriculumTopicOption;
+
+/** Collapsible searchable curriculum dropdown (avoids nested Modal inside create sheet). */
+function CurriculumTopicDropdown({
+  topics,
+  value,
+  onChange,
+  hi,
+  disabled,
+  loading,
+  emptyMessage,
+}: {
+  topics: CurriculumTopic[];
+  value: string;
+  onChange: (id: string) => void;
+  hi: boolean;
+  disabled?: boolean;
+  loading?: boolean;
+  emptyMessage?: string;
+}) {
+  const c = useColors();
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+
+  const selected = useMemo(
+    () => topics.find((t) => t.id === value) ?? null,
+    [topics, value],
+  );
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return topics;
+    return topics.filter((t) => {
+      const hay = `${t.label_en} ${t.label_hi} ${t.curriculum_name ?? ""}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [topics, query]);
+
+  const selectedLabel = selected
+    ? hi
+      ? selected.label_hi || selected.label_en
+      : selected.label_en
+    : hi
+      ? "विषय चुनें…"
+      : "Select topic…";
+
+  if (loading) {
+    return <Body muted>{hi ? "लोड हो रहा है…" : "Loading…"}</Body>;
+  }
+  if (disabled) {
+    return (
+      <Body muted style={{ fontSize: 13 }}>
+        {emptyMessage ?? (hi ? "पहले बैच चुनें।" : "Pick a batch first.")}
+      </Body>
+    );
+  }
+  if (topics.length === 0) {
+    return (
+      <Body muted style={{ fontSize: 13 }}>
+        {emptyMessage ?? (hi ? "इस बैच के लिए कोई विषय नहीं।" : "No topics for this batch.")}
+      </Body>
+    );
+  }
+
+  return (
+    <View style={{ gap: 8 }}>
+      <Pressable
+        onPress={() => setOpen((v) => !v)}
+        style={{
+          paddingVertical: 12,
+          paddingHorizontal: 14,
+          borderRadius: c.radius,
+          borderWidth: 1,
+          borderColor: open || value ? c.primary : c.border,
+          backgroundColor: c.card,
+          flexDirection: "row",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+        }}
+      >
+        <View style={{ flex: 1 }}>
+          <Text
+            numberOfLines={1}
+            style={{
+              fontFamily: bodyFamily(hi, "semibold"),
+              fontSize: 15,
+              color: value ? c.foreground : c.mutedForeground,
+            }}
+          >
+            {value ? selectedLabel : hi ? "कोई नहीं / विषय चुनें…" : "None / select topic…"}
+          </Text>
+          {selected?.curriculum_name ? (
+            <Text
+              numberOfLines={1}
+              style={{
+                fontFamily: bodyFamily(hi),
+                fontSize: 12,
+                color: c.mutedForeground,
+                marginTop: 2,
+              }}
+            >
+              {selected.curriculum_name}
+            </Text>
+          ) : null}
+        </View>
+        <Ionicons
+          name={open ? "chevron-up" : "chevron-down"}
+          size={18}
+          color={c.mutedForeground}
+        />
+      </Pressable>
+
+      {open ? (
+        <View
+          style={{
+            borderWidth: 1,
+            borderColor: c.border,
+            borderRadius: c.radius,
+            backgroundColor: c.card,
+            overflow: "hidden",
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+              paddingHorizontal: 12,
+              paddingVertical: 8,
+              borderBottomWidth: 1,
+              borderBottomColor: c.border,
+            }}
+          >
+            <Ionicons name="search" size={16} color={c.mutedForeground} />
+            <TextInput
+              value={query}
+              onChangeText={setQuery}
+              placeholder={hi ? "विषय खोजें…" : "Search topics…"}
+              placeholderTextColor={c.mutedForeground}
+              autoCorrect={false}
+              style={{
+                flex: 1,
+                fontFamily: bodyFamily(hi),
+                fontSize: 15,
+                color: c.foreground,
+                paddingVertical: 6,
+              }}
+            />
+            {query ? (
+              <Pressable onPress={() => setQuery("")} hitSlop={8}>
+                <Ionicons name="close-circle" size={16} color={c.mutedForeground} />
+              </Pressable>
+            ) : null}
+          </View>
+
+          <ScrollView
+            nestedScrollEnabled
+            keyboardShouldPersistTaps="handled"
+            style={{ maxHeight: 220 }}
+          >
+            <Pressable
+              onPress={() => {
+                onChange("");
+                setOpen(false);
+                setQuery("");
+              }}
+              style={{
+                paddingVertical: 12,
+                paddingHorizontal: 14,
+                borderBottomWidth: 1,
+                borderBottomColor: c.border,
+                backgroundColor: !value ? c.primary + "14" : "transparent",
+              }}
+            >
+              <Text
+                style={{
+                  fontFamily: bodyFamily(hi, "semibold"),
+                  fontSize: 15,
+                  color: c.foreground,
+                }}
+              >
+                {hi ? "कोई नहीं" : "None"}
+              </Text>
+            </Pressable>
+            {filtered.length === 0 ? (
+              <Body muted style={{ padding: 14, fontSize: 13 }}>
+                {hi ? "कोई मिलान नहीं।" : "No matching topic."}
+              </Body>
+            ) : (
+              filtered.map((t) => {
+                const active = t.id === value;
+                const label = hi ? t.label_hi || t.label_en : t.label_en;
+                return (
+                  <Pressable
+                    key={t.id}
+                    onPress={() => {
+                      onChange(t.id);
+                      setOpen(false);
+                      setQuery("");
+                    }}
+                    style={{
+                      paddingVertical: 12,
+                      paddingHorizontal: 14,
+                      borderBottomWidth: 1,
+                      borderBottomColor: c.border,
+                      backgroundColor: active ? c.primary + "14" : "transparent",
+                    }}
+                  >
+                    <Text
+                      style={{
+                        fontFamily: bodyFamily(hi, "semibold"),
+                        fontSize: 15,
+                        color: c.foreground,
+                      }}
+                    >
+                      {label}
+                    </Text>
+                    {t.curriculum_name ? (
+                      <Text
+                        style={{
+                          fontFamily: bodyFamily(hi),
+                          fontSize: 12,
+                          color: c.mutedForeground,
+                          marginTop: 2,
+                        }}
+                      >
+                        {t.curriculum_name}
+                      </Text>
+                    ) : null}
+                  </Pressable>
+                );
+              })
+            )}
+          </ScrollView>
+        </View>
+      ) : null}
+    </View>
+  );
+}
 function tomorrowKolkata(): string {
   // YYYY-MM-DD in Asia/Kolkata — same shape as the API due_date.
   const fmt = new Intl.DateTimeFormat("en-CA", {
@@ -278,83 +519,24 @@ function CreateAssignmentModal({
             <Body muted style={{ fontSize: 12 }}>
               {hi ? "पाठ्यक्रम विषय (वैकल्पिक)" : "Curriculum topic (optional)"}
             </Body>
-            {!batchId ? (
-              <Body muted style={{ fontSize: 13 }}>
-                {hi ? "पहले बैच चुनें।" : "Pick a batch first."}
-              </Body>
-            ) : topics.isLoading ? (
-              <Body muted>{hi ? "लोड हो रहा है…" : "Loading…"}</Body>
-            ) : topicItems.length === 0 ? (
-              <Body muted style={{ fontSize: 13 }}>
-                {hi ? "इस बैच के लिए कोई विषय नहीं।" : "No topics for this batch."}
-              </Body>
-            ) : (
-              <>
-                <Pressable
-                  onPress={() => setCurriculumItemId("")}
-                  style={{
-                    paddingVertical: 12,
-                    paddingHorizontal: 14,
-                    borderRadius: c.radius,
-                    borderWidth: 1,
-                    borderColor: !curriculumItemId ? c.primary : c.border,
-                    backgroundColor: !curriculumItemId ? c.primary + "14" : c.card,
-                    marginBottom: 6,
-                  }}
-                >
-                  <Text
-                    style={{
-                      fontFamily: bodyFamily(hi, "semibold"),
-                      fontSize: 15,
-                      color: c.foreground,
-                    }}
-                  >
-                    {hi ? "कोई नहीं" : "None"}
-                  </Text>
-                </Pressable>
-                {topicItems.map((t) => {
-                  const active = t.id === curriculumItemId;
-                  const label = hi ? t.label_hi || t.label_en : t.label_en;
-                  return (
-                    <Pressable
-                      key={t.id}
-                      onPress={() => setCurriculumItemId(t.id)}
-                      style={{
-                        paddingVertical: 12,
-                        paddingHorizontal: 14,
-                        borderRadius: c.radius,
-                        borderWidth: 1,
-                        borderColor: active ? c.primary : c.border,
-                        backgroundColor: active ? c.primary + "14" : c.card,
-                        marginBottom: 6,
-                      }}
-                    >
-                      <Text
-                        style={{
-                          fontFamily: bodyFamily(hi, "semibold"),
-                          fontSize: 15,
-                          color: c.foreground,
-                        }}
-                      >
-                        {label}
-                      </Text>
-                      {t.curriculum_name ? (
-                        <Text
-                          style={{
-                            fontFamily: bodyFamily(hi),
-                            fontSize: 12,
-                            color: c.mutedForeground,
-                            marginTop: 2,
-                          }}
-                        >
-                          {t.curriculum_name}
-                        </Text>
-                      ) : null}
-                    </Pressable>
-                  );
-                })}
-              </>
-            )}
+            <CurriculumTopicDropdown
+              key={batchId || "no-batch"}
+              topics={topicItems}
+              value={curriculumItemId}
+              onChange={setCurriculumItemId}
+              hi={hi}
+              disabled={!batchId}
+              loading={!!batchId && topics.isLoading}
+              emptyMessage={
+                !batchId
+                  ? hi
+                    ? "पहले बैच चुनें।"
+                    : "Pick a batch first."
+                  : hi
+                    ? "इस बैच के लिए कोई विषय नहीं।"
+                    : "No topics for this batch."
+              }
+            />
           </View>
 
           <View style={{ gap: 6 }}>
