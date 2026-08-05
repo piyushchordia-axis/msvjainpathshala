@@ -73,7 +73,6 @@ export const sessions = pgTable(
     ...timestamps(),
   },
   (t) => ({
-    batch_idx: index("idx_sessions_batch").on(t.batch_id),
     batch_scheduled_unique: uniqueIndex("sessions_batch_id_scheduled_date_unique").on(
       t.batch_id,
       t.scheduled_date,
@@ -130,7 +129,6 @@ export const attendance = pgTable(
       .on(t.client_op_id)
       .where(sql`${t.client_op_id} is not null`),
     student_idx: index("idx_attendance_student").on(t.student_id),
-    session_idx: index("idx_attendance_session").on(t.session_id),
     // Student attendance history page — order by denormalised session_date.
     student_session_date_idx: index("idx_attendance_student_session_date").on(
       t.student_id,
@@ -166,7 +164,6 @@ export const absence_notifications = pgTable(
       t.start_date,
       t.end_date,
     ),
-    student_idx: index("idx_absence_notifications_student").on(t.student_id),
     range_check: check(
       "absence_notifications_end_gte_start",
       sql`${t.end_date} >= ${t.start_date}`,

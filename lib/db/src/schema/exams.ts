@@ -120,7 +120,6 @@ export const exam_answers = pgTable(
   },
   (t) => ({
     attempt_question_unique: uniqueIndex("exam_answers_attempt_question_unique").on(t.attempt_id, t.question_id),
-    attempt_idx: index("idx_exam_answers_attempt").on(t.attempt_id),
   }),
 );
 

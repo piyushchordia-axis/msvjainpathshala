@@ -218,6 +218,13 @@
       "when": 1788950400000,
       "tag": "0037_sync_operations_applied_at",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1789036800000,
+      "tag": "0038_drop_redundant_indexes",
+      "breakpoints": true
     }
   ]
 }
