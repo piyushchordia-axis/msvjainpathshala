@@ -5,19 +5,25 @@ import { startScheduler } from "./lib/scheduler";
 import { getSmsProvider } from "./lib/sms";
 import { warmTestOtpNumbers } from "./lib/otp-test-numbers";
 import { assertProductionRedisConfigured } from "./lib/assert-production-redis";
-import { registerSessionLifecycleJobs } from "./jobs/session-lifecycle-jobs";
-import { registerDerivedDataJobs } from "./jobs/derived-data-jobs";
-import { registerExamJobs } from "./jobs/exam-jobs";
-import { registerIdCardJobs } from "./jobs/idcard-jobs";
+import { registerAllJobs } from "./jobs/register-all";
 import { attachAdminDashboardFeed } from "./lib/admin-dashboard-feed";
-import { startQueueWorkers } from "./lib/queues";
+import { startQueueWorkers, shutdownQueues } from "./lib/queues";
+import { isWorkerProcess, shouldRunWorkersAndCrons } from "./lib/process-role";
 
-// Register queue handlers + cron enqueuers before the scheduler starts.
-registerSessionLifecycleJobs();
-registerDerivedDataJobs();
-registerExamJobs();
-registerIdCardJobs();
-startQueueWorkers();
+if (isWorkerProcess()) {
+  throw new Error(
+    "PROCESS_ROLE=worker must use the worker entry (dist/worker.mjs / pnpm run start:worker), not the API entry.",
+  );
+}
+
+// PERF #15 — default API-only. RUN_WORKERS_INLINE=1 keeps single-container
+// behaviour (handlers + BullMQ consumers + crons in this process).
+const runInlineWorkers = shouldRunWorkersAndCrons();
+if (runInlineWorkers) {
+  registerAllJobs();
+  startQueueWorkers();
+  logger.info("RUN_WORKERS_INLINE=1 — workers and crons run inside the API process");
+}
 
 const rawPort = process.env["PORT"];
 
@@ -57,8 +63,11 @@ const host = process.env["HOST"] || "0.0.0.0";
 const server = app.listen(port, host, () => {
   logger.info({ port, host }, "Server listening");
   attachAdminDashboardFeed(server);
-  // Start cron jobs (birthday wishes, etc.) only in the running server process.
-  startScheduler();
+  // Crons live on the worker process (PERF #15). Only start here under the
+  // single-container escape hatch — avoids overlapping crons on every API replica.
+  if (runInlineWorkers) {
+    startScheduler();
+  }
 
   // Eagerly construct the SMS provider in production so a missing/invalid SMS
   // config fails LOUDLY at boot. Without this, getSmsProvider()'s prod
@@ -108,6 +117,11 @@ function shutdown(signal: NodeJS.Signals): void {
     if (err) {
       logger.error({ err }, "Error while closing server");
       process.exit(1);
+    }
+    try {
+      await shutdownQueues();
+    } catch (qErr) {
+      logger.error({ err: qErr }, "Error while shutting down queues");
     }
     // Drain both pg pools so in-flight DB work finishes and connections close
     // cleanly. Never let a pool-drain failure block the exit — log and proceed.

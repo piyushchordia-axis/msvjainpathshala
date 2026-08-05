@@ -32,6 +32,7 @@ services:
       # API_PORT lets you avoid a clash with another service on the host
       # (e.g. set API_PORT=8090 in a root .env). nginx must proxy to the same port.
       PORT: "${API_PORT:-8080}"
+      PROCESS_ROLE: api
       UPLOADS_DIR: /data/uploads
     volumes:
       - jp_uploads:/data/uploads
@@ -41,6 +42,29 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  # PERF #15 — BullMQ consumers + frozen cron table. Same image as api; no HTTP.
+  worker:
+    image: jain-pathshala-api:latest
+    container_name: jain-pathshala-worker
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      api:
+        condition: service_started
+    env_file:
+      - apps/api-server/.env
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      PROCESS_ROLE: worker
+      UPLOADS_DIR: /data/uploads
+      UV_THREADPOOL_SIZE: "8"
+      # Smaller pool than the API; long jobs use workerPool (statement_timeout off).
+      PG_POOL_MAX: "${PG_WORKER_HTTP_POOL_MAX:-5}"
+      PG_WORKER_POOL_MAX: "${PG_WORKER_POOL_MAX:-5}"
+    volumes:
+      - jp_uploads:/data/uploads
+    command: ["node", "--enable-source-maps", "dist/worker.mjs"]
 
 volumes:
   jp_uploads:

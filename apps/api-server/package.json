@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "node ./scripts/dev.mjs",
+    "dev:worker": "node ./scripts/dev-worker.mjs",
     "build": "node ./build.mjs",
     "start": "node --enable-source-maps ./dist/index.mjs",
+    "start:worker": "node --enable-source-maps ./dist/worker.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "DATABASE_URL=postgres://sumit@localhost:5432/jainpathshala vitest run",
     "test:watch": "DATABASE_URL=postgres://sumit@localhost:5432/jainpathshala vitest",

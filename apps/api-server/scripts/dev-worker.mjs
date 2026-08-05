@@ -1,7 +1,5 @@
 process.env.NODE_ENV ??= "development";
-// PERF #15 — local `pnpm run dev` stays single-process; production uses
-// compose api + worker (or set RUN_WORKERS_INLINE=0 and run start:worker).
-process.env.RUN_WORKERS_INLINE ??= "1";
+process.env.PROCESS_ROLE ??= "worker";
 
 import { spawnSync } from "node:child_process";
 
@@ -18,4 +16,4 @@ function run(script) {
 }
 
 run("build");
-run("start");
+run("start:worker");
