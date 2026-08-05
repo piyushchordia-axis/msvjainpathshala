@@ -4,6 +4,7 @@ import { logger } from "./lib/logger";
 import { startScheduler } from "./lib/scheduler";
 import { getSmsProvider } from "./lib/sms";
 import { warmTestOtpNumbers } from "./lib/otp-test-numbers";
+import { assertProductionRedisConfigured } from "./lib/assert-production-redis";
 import { registerSessionLifecycleJobs } from "./jobs/session-lifecycle-jobs";
 import { registerDerivedDataJobs } from "./jobs/derived-data-jobs";
 import { attachAdminDashboardFeed } from "./lib/admin-dashboard-feed";
@@ -65,6 +66,14 @@ const server = app.listen(port, host, () => {
       getSmsProvider();
     } catch (err) {
       logger.fatal({ err }, "SMS provider unavailable in production; refusing to start");
+      process.exit(1);
+    }
+    // PERF #5 — without Redis, BullMQ debounce collapses to inline execution
+    // inside the HTTP request (quadratic in marks per session on AT31 bursts).
+    try {
+      assertProductionRedisConfigured();
+    } catch (err) {
+      logger.fatal({ err }, "Redis unavailable in production; refusing to start");
       process.exit(1);
     }
   }

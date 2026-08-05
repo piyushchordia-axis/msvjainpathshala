@@ -63,6 +63,7 @@ export async function enqueueJob(
     logger.warn({ name }, "No queue handler registered; dropping inline job");
     return;
   }
+  logger.warn({ name }, "REDIS_URL unset — running queue job inline");
   await handler(data);
 }
 
@@ -90,6 +91,7 @@ export async function enqueueDebouncedJob(
       logger.warn({ name }, "No queue handler registered; dropping inline debounced job");
       return;
     }
+    logger.warn({ name }, "REDIS_URL unset — running debounced queue job inline");
     await handler(data);
     return;
   }
@@ -140,7 +142,10 @@ export async function enqueueDebouncedJob(
 export function startQueueWorkers(): void {
   const redis = getRedis();
   if (!redis) {
-    logger.info("REDIS_URL unset — queue jobs will run inline");
+    logger.warn(
+      { queues: [...handlers.keys()] },
+      "REDIS_URL unset — queue jobs will run inline",
+    );
     return;
   }
   for (const [name, handler] of handlers) {
