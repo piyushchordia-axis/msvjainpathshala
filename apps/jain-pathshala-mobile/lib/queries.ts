@@ -4,7 +4,12 @@
  * unwrapped DTO (lib/api.ts strips the { data } envelope).
  */
 import { Alert } from "react-native";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { apiGet, apiPost, apiPut, apiGetEnvelope, ApiError } from "@/lib/api";
 import type {
   AdminBatchRow,
@@ -53,6 +58,17 @@ export const qk = {
   attendanceSession: (id: string) => ["shikshak", "attendance-session", id] as const,
   overview: ["admin", "overview"] as const,
   adminStudents: (s?: string) => ["admin", "students", s ?? "all"] as const,
+  adminStudent: (id: string) => ["admin", "student", id] as const,
+  adminStudentPunya: (id: string) => ["admin", "student", id, "punya"] as const,
+  adminStudentHomework: (id: string) => ["admin", "student", id, "homework"] as const,
+  adminStudentNiyams: (id: string) => ["admin", "student", id, "niyams"] as const,
+  adminStudentIdCard: (id: string) => ["admin", "student", id, "id-card"] as const,
+  adminStudentProgress: (id: string) => ["admin", "student", id, "progress"] as const,
+  punyaAwardLimit: () => ["admin", "punya-award-limit"] as const,
+  pendingNiyam: (batchId: string | null, niyamType: string | null) =>
+    ["shikshak", "niyam-pending", batchId ?? "all", niyamType ?? "all"] as const,
+  batchPunyaStandings: (batchId: string, month: string) =>
+    ["shikshak", "punya-standings", batchId, month] as const,
   adminEnrolments: (s?: string) => ["admin", "enrolments", s ?? "all"] as const,
   adminBatches: ["admin", "batches"] as const,
   staffingMe: ["admin", "staffing", "me"] as const,
@@ -63,6 +79,8 @@ export const qk = {
     ["shikshak", "homework-assignments", overdue ? "overdue" : "all"] as const,
   homeworkSubmissions: (assignmentId: string) =>
     ["shikshak", "homework-submissions", assignmentId] as const,
+  homeworkCurriculumTopics: (batchId: string) =>
+    ["shikshak", "homework-curriculum-topics", batchId] as const,
   quizzesAvailable: (id: string) => ["me", "quizzes", "available", id] as const,
   pushQuizActive: (id: string) => ["me", "quizzes", "push-active", id] as const,
   openCompetitions: ["me", "competitions", "open"] as const,
@@ -393,6 +411,315 @@ export function useAdminStudents(status?: string, enabled = true) {
   });
 }
 
+/** Shikshak dossier — profile + parent/student contact. */
+export interface AdminStudentDetail {
+  id: string;
+  full_name: string;
+  student_code: string;
+  age_group: string;
+  dob: string | null;
+  msv_status: string;
+  status: string;
+  blood_group: string | null;
+  photo_url?: string | null;
+  centre_id?: string | null;
+  batch_id?: string | null;
+  batch_name?: string | null;
+  centre_name?: string | null;
+  student_phone: string | null;
+  parent: {
+    full_name: string | null;
+    phone: string | null;
+    email?: string | null;
+    relation: string | null;
+  } | null;
+}
+
+export function useAdminStudentDetail(studentId?: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.adminStudent(studentId ?? ""),
+    queryFn: () => apiGet<AdminStudentDetail>(`/v1/admin/students/${studentId}`),
+    enabled: !!studentId && enabled,
+  });
+}
+
+export function useAdminStudentPunya(studentId?: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.adminStudentPunya(studentId ?? ""),
+    queryFn: () => apiGet<PunyaSummary>(`/v1/admin/students/${studentId}/punya`),
+    enabled: !!studentId && enabled,
+  });
+}
+
+export interface StudentHomeworkHistoryRow {
+  id: string;
+  assignment_id: string;
+  title: string;
+  due_date: string;
+  status: string;
+  late: boolean;
+  overdue: boolean;
+  marked_at?: string | null;
+  submission_url?: string | null;
+  feedback_note: string | null;
+  batch_name: string | null;
+}
+
+export function useStudentHomeworkHistory(studentId?: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.adminStudentHomework(studentId ?? ""),
+    queryFn: () =>
+      apiGet<List<StudentHomeworkHistoryRow>>(
+        `/v1/homework/students/${studentId}/submissions`,
+      ),
+    enabled: !!studentId && enabled,
+  });
+}
+
+export interface AdminNiyamByStudentRow {
+  id: string;
+  niyam_title_en: string;
+  niyam_title_hi: string;
+  submission_date: string;
+  status: string;
+  points_awarded: number | null;
+  proof_url?: string | null;
+}
+
+export function useAdminNiyamByStudent(studentId?: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.adminStudentNiyams(studentId ?? ""),
+    queryFn: () =>
+      apiGet<List<AdminNiyamByStudentRow>>(
+        `/v1/admin/niyam-submissions?student_id=${encodeURIComponent(studentId!)}&limit=60`,
+      ),
+    enabled: !!studentId && enabled,
+  });
+}
+
+export function useAdminIdCard(studentId?: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.adminStudentIdCard(studentId ?? ""),
+    queryFn: async () => {
+      try {
+        return await apiGet<IdCardRow>(`/v1/id-cards/${studentId}`);
+      } catch (err) {
+        if (err instanceof ApiError && err.statusCode === 404) return null;
+        throw err;
+      }
+    },
+    enabled: !!studentId && enabled,
+  });
+}
+
+export interface StudentProgressItem {
+  item_id: string;
+  title_en: string;
+  title_hi: string | null;
+  section_title: string | null;
+  level: string;
+  note: string | null;
+}
+
+export function useStudentProgress(studentId?: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.adminStudentProgress(studentId ?? ""),
+    queryFn: () =>
+      apiGet<List<StudentProgressItem>>(`/v1/progress/students/${studentId}`),
+    enabled: !!studentId && enabled,
+  });
+}
+
+export interface PunyaAwardLimit {
+  role: string;
+  max_points_per_award: number;
+  max_points_per_day: number | null;
+  points_awarded_today: number;
+  remaining_today: number | null;
+}
+
+export function usePunyaAwardLimit(enabled = true) {
+  return useQuery({
+    queryKey: qk.punyaAwardLimit(),
+    queryFn: () => apiGet<PunyaAwardLimit>("/v1/admin/punya/award-limit"),
+    enabled,
+  });
+}
+
+export type AwardPunyaResult = {
+  student_id: string;
+  points_awarded: number;
+  total_points: number;
+  tier: string;
+};
+
+export function useAwardPunya() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      student_id: string;
+      points: number;
+      note?: string;
+      idempotency_key?: string;
+    }) => apiPost<AwardPunyaResult>("/v1/admin/punya/award", body),
+    onSuccess: (_res, vars) => {
+      void qc.invalidateQueries({ queryKey: qk.adminStudentPunya(vars.student_id) });
+      void qc.invalidateQueries({ queryKey: qk.punya(vars.student_id) });
+      void qc.invalidateQueries({ queryKey: qk.punyaAwardLimit() });
+      void qc.invalidateQueries({ queryKey: qk.adminStudent(vars.student_id) });
+    },
+  });
+}
+
+export interface BatchPunyaStandingRow {
+  student_id: string;
+  full_name: string;
+  student_code: string;
+  age_group?: string;
+  total_points: number;
+  tier: string;
+  rank: number;
+  month_points: number;
+  by_source?: Record<string, number>;
+}
+
+export interface BatchPunyaStandingsMeta {
+  batch_id?: string;
+  batch_name?: string;
+  month?: string;
+  student_count?: number;
+  batch_total?: number;
+  batch_average?: number;
+  tier_counts?: Record<string, number>;
+  by_source?: Record<string, number>;
+}
+
+export function useBatchPunyaStandings(
+  batchId: string | null,
+  month: string,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: qk.batchPunyaStandings(batchId ?? "", month),
+    queryFn: async () => {
+      const qs = month ? `?month=${encodeURIComponent(month)}` : "";
+      const env = await apiGetEnvelope<{
+        items: BatchPunyaStandingRow[];
+        meta?: BatchPunyaStandingsMeta;
+      }>(`/v1/admin/batches/${batchId}/punya-standings${qs}`);
+      const nested = env.data?.meta;
+      return {
+        items: env.data?.items ?? [],
+        meta: (nested ??
+          (env.meta as BatchPunyaStandingsMeta | undefined) ??
+          {}) as BatchPunyaStandingsMeta,
+      };
+    },
+    enabled: enabled && !!batchId,
+  });
+}
+
+export interface PendingNiyamMedia {
+  id: string;
+  url: string;
+  kind: string;
+  mime?: string | null;
+  size_bytes?: number | null;
+  ordinal?: number;
+}
+
+export interface PendingNiyamRow {
+  id: string;
+  student_id: string;
+  student_name: string;
+  student_code?: string | null;
+  batch_id?: string | null;
+  batch_name?: string | null;
+  niyam_id: string;
+  niyam_title_en: string;
+  niyam_title_hi: string;
+  niyam_type?: string;
+  proof_url?: string | null;
+  notes?: string | null;
+  submission_date: string;
+  period_key?: string | null;
+  status: string;
+  created_at?: string;
+  can_reject?: boolean;
+  media?: PendingNiyamMedia[];
+}
+
+export type PendingNiyamPage = {
+  items: PendingNiyamRow[];
+  next_cursor: string | null;
+};
+
+export function usePendingNiyamInfinite(opts: {
+  batchId?: string | null;
+  niyamType?: string | null;
+  enabled?: boolean;
+}) {
+  const batchId = opts.batchId ?? null;
+  const niyamType = opts.niyamType ?? null;
+  const enabled = opts.enabled !== false;
+  return useInfiniteQuery({
+    queryKey: qk.pendingNiyam(batchId, niyamType),
+    initialPageParam: null as string | null,
+    queryFn: async ({ pageParam }) => {
+      const qs = new URLSearchParams({ limit: "30" });
+      if (batchId) qs.set("batch_id", batchId);
+      if (niyamType) qs.set("niyam_type", niyamType);
+      if (pageParam) qs.set("cursor", pageParam);
+      return apiGet<PendingNiyamPage>(`/v1/niyam-submissions/pending?${qs.toString()}`);
+    },
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    enabled,
+  });
+}
+
+export function useApproveNiyam() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      apiPost(`/v1/niyam-submissions/${id}/approve`, {}),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["shikshak", "niyam-pending"] });
+    },
+  });
+}
+
+export function useRejectNiyam() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      apiPost(`/v1/niyam-submissions/${id}/reject`, { reason }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["shikshak", "niyam-pending"] });
+    },
+  });
+}
+
+export type BulkApproveNiyamResult = {
+  results: Array<{
+    id: string;
+    status: "approved" | "skipped" | "failed";
+    error?: { code: string; message: string };
+  }>;
+};
+
+export function useBulkApproveNiyams() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (submission_ids: string[]) =>
+      apiPost<BulkApproveNiyamResult>("/v1/niyam-submissions/bulk-approve", {
+        submission_ids,
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["shikshak", "niyam-pending"] });
+    },
+  });
+}
+
 export function useAdminEnrolments(status?: string, enabled = true) {
   return useQuery({
     queryKey: qk.adminEnrolments(status),
@@ -701,6 +1028,25 @@ export function useHomeworkSubmissions(assignmentId: string | undefined) {
   });
 }
 
+export type CurriculumTopicOption = {
+  id: string;
+  label_en: string;
+  label_hi: string;
+  curriculum_name: string;
+};
+
+/** Topics available for a batch (non-MSV create path — matches web NewAssignmentDialog). */
+export function useHomeworkCurriculumTopics(batchId: string | undefined, enabled = true) {
+  return useQuery({
+    queryKey: qk.homeworkCurriculumTopics(batchId ?? ""),
+    queryFn: () =>
+      apiGet<List<CurriculumTopicOption>>(
+        `/v1/homework/batches/${batchId}/curriculum-topics?is_msv=false`,
+      ),
+    enabled: enabled && !!batchId,
+  });
+}
+
 export function useCreateHomeworkAssignment() {
   const qc = useQueryClient();
   return useMutation({
@@ -786,6 +1132,8 @@ export interface QuizEventRow {
   participation_points: number;
   win_points: number;
   already_attempted: boolean;
+  /** Open attempt exists but has not been submitted yet. */
+  in_progress: boolean;
   /** True when the student submitted with every answer correct. */
   is_winner?: boolean;
   /** Punya awarded for this attempt (participation + win if applicable). */
@@ -793,7 +1141,14 @@ export interface QuizEventRow {
 }
 export interface QuizOption { text_en: string; text_hi: string | null }
 export interface QuizQuestion { id: string; question_en: string; question_hi: string | null; options: QuizOption[] }
-export interface QuizStartResponse { attempt_id: string; questions: QuizQuestion[] }
+export interface QuizStartResponse {
+  attempt_id: string;
+  questions: QuizQuestion[];
+  /** True when start resumed an existing in-progress attempt. */
+  resumed?: boolean;
+  /** Prior answers when resumed — keyed by question id. */
+  answers?: Record<string, number[]>;
+}
 export interface QuizSubmitResponse {
   attempt_id: string;
   score: number;

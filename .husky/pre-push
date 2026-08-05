@@ -1,1 +1,26 @@
+#!/usr/bin/env sh
+# Git for Windows runs husky via Bash with a PATH that often omits Node.js.
+# Put common Windows Node install dirs first so `node` + `pnpm` resolve.
+for _dir in \
+  "$HOME/AppData/Local/nodejs" \
+  "/c/Users/$USER/AppData/Local/nodejs" \
+  "/c/Program Files/nodejs"
+do
+  if [ -d "$_dir" ]; then
+    PATH="$_dir:$PATH"
+  fi
+done
+export PATH
+unset _dir
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "husky pre-push: node not found — add Node.js to PATH for Git Bash." >&2
+  exit 127
+fi
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "husky pre-push: pnpm not found — run: corepack enable && corepack prepare pnpm@latest --activate" >&2
+  exit 127
+fi
+
 pnpm run typecheck
