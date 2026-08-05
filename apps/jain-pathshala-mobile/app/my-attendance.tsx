@@ -1,8 +1,10 @@
-import { View } from "react-native";
+import { useCallback } from "react";
+import { FlatList, Platform, RefreshControl, View, type ListRenderItem } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useAttendance } from "@/lib/queries";
+import type { AttendanceRow } from "@/lib/types";
 import { formatDate } from "@/lib/format";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { Body, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
@@ -29,14 +31,44 @@ export default function MyAttendanceScreen() {
       ? Math.round(attendance.data.attendance_rate * 100)
       : null);
 
-  return (
-    <Screen
-      refreshing={attendance.isRefetching}
-      onRefresh={() => {
-        refetch();
-        attendance.refetch();
-      }}
-    >
+  const onRefresh = useCallback(() => {
+    refetch();
+    attendance.refetch();
+  }, [refetch, attendance]);
+
+  const renderRow: ListRenderItem<AttendanceRow> = useCallback(
+    ({ item, index }) => (
+      <View
+        style={{
+          paddingHorizontal: 14,
+          paddingVertical: 12,
+          borderBottomWidth: index < rows.length - 1 ? 1 : 0,
+          borderBottomColor: c.border,
+        }}
+      >
+        <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
+          <Body style={{ fontWeight: "600" }}>{formatDate(item.session_date)}</Body>
+          <Pill label={item.status} tone={attendanceTone(item.status)} />
+        </Row>
+        {item.topic ? (
+          <Body muted style={{ marginTop: 2, fontSize: 13 }}>
+            {item.topic}
+          </Body>
+        ) : null}
+        {item.batch_name ? (
+          <Body muted style={{ marginTop: 2, fontSize: 12 }}>
+            {item.batch_name}
+          </Body>
+        ) : null}
+      </View>
+    ),
+    [c.border, rows.length],
+  );
+
+  const keyExtractor = useCallback((item: AttendanceRow) => item.id, []);
+
+  const listHeader = (
+    <>
       <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
         <View style={{ flex: 1, paddingRight: 10 }}>
           <Title style={{ fontSize: 22 }}>{hi ? "उपस्थिति" : "Attendance"}</Title>
@@ -83,36 +115,38 @@ export default function MyAttendanceScreen() {
             />
           ) : (
             <Card style={{ padding: 0, overflow: "hidden" }}>
-              {rows.map((row, i) => (
-                <View
-                  key={row.id}
-                  style={{
-                    paddingHorizontal: 14,
-                    paddingVertical: 12,
-                    borderBottomWidth: i < rows.length - 1 ? 1 : 0,
-                    borderBottomColor: c.border,
-                  }}
-                >
-                  <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
-                    <Body style={{ fontWeight: "600" }}>{formatDate(row.session_date)}</Body>
-                    <Pill label={row.status} tone={attendanceTone(row.status)} />
-                  </Row>
-                  {row.topic ? (
-                    <Body muted style={{ marginTop: 2, fontSize: 13 }}>
-                      {row.topic}
-                    </Body>
-                  ) : null}
-                  {row.batch_name ? (
-                    <Body muted style={{ marginTop: 2, fontSize: 12 }}>
-                      {row.batch_name}
-                    </Body>
-                  ) : null}
-                </View>
-              ))}
+              <FlatList
+                data={rows}
+                keyExtractor={keyExtractor}
+                renderItem={renderRow}
+                scrollEnabled={false}
+              />
             </Card>
           )}
         </>
       )}
+    </>
+  );
+
+  return (
+    <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0 }}>
+      <FlatList
+        data={[]}
+        renderItem={() => null}
+        ListHeaderComponent={listHeader}
+        contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 8, paddingBottom: 40, gap: 14 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={!!attendance.isRefetching}
+            onRefresh={onRefresh}
+            tintColor={c.primary}
+            colors={[c.primary]}
+          />
+        }
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+        removeClippedSubviews={Platform.OS !== "web"}
+      />
     </Screen>
   );
 }

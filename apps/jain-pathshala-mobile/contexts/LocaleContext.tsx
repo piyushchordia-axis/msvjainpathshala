@@ -1,8 +1,10 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
   type ReactNode,
 } from "react";
@@ -36,22 +38,25 @@ export function LocaleProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  function setLocale(l: Locale) {
+  const setLocale = useCallback((l: Locale) => {
     setLocaleState(l);
     AsyncStorage.setItem(STORAGE_KEY, l).catch(() => {});
-  }
+  }, []);
 
-  function toggleLocale() {
-    setLocale(locale === "hi" ? "en" : "hi");
-  }
+  const toggleLocale = useCallback(() => {
+    setLocaleState((prev) => {
+      const next = prev === "hi" ? "en" : "hi";
+      AsyncStorage.setItem(STORAGE_KEY, next).catch(() => {});
+      return next;
+    });
+  }, []);
 
-  return (
-    <LocaleContext.Provider
-      value={{ locale, hi: locale === "hi", setLocale, toggleLocale }}
-    >
-      {children}
-    </LocaleContext.Provider>
+  const value = useMemo(
+    () => ({ locale, hi: locale === "hi", setLocale, toggleLocale }),
+    [locale, setLocale, toggleLocale],
   );
+
+  return <LocaleContext.Provider value={value}>{children}</LocaleContext.Provider>;
 }
 
 export function useLocale(): LocaleContextValue {

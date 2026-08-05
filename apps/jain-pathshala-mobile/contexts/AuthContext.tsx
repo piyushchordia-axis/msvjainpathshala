@@ -2,8 +2,10 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
   type ReactNode,
 } from "react";
@@ -67,23 +69,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, []);
 
-  async function signIn(nextUser: SessionUser, tokens: AuthTokens) {
-    // Drop any cached data belonging to a previously signed-in account on this
-    // device before the new user's queries run.
-    queryClient.clear();
-    setAuthToken(tokens.access_token);
-    setRefreshToken(tokens.refresh_token);
-    setUser(nextUser);
-    await Promise.all([
-      secureStorage.setItem(TOKEN_KEY, tokens.access_token),
-      secureStorage.setItem(REFRESH_KEY, tokens.refresh_token),
-      AsyncStorage.setItem(USER_KEY, JSON.stringify(nextUser)),
-    ]);
-    // Register this device for push, best-effort — must never block sign-in.
-    void registerPushTokenWithApi();
-  }
+  const signIn = useCallback(
+    async (nextUser: SessionUser, tokens: AuthTokens) => {
+      // Drop any cached data belonging to a previously signed-in account on this
+      // device before the new user's queries run.
+      queryClient.clear();
+      setAuthToken(tokens.access_token);
+      setRefreshToken(tokens.refresh_token);
+      setUser(nextUser);
+      await Promise.all([
+        secureStorage.setItem(TOKEN_KEY, tokens.access_token),
+        secureStorage.setItem(REFRESH_KEY, tokens.refresh_token),
+        AsyncStorage.setItem(USER_KEY, JSON.stringify(nextUser)),
+      ]);
+      // Register this device for push, best-effort — must never block sign-in.
+      void registerPushTokenWithApi();
+    },
+    [queryClient],
+  );
 
-  async function logout() {
+  const logout = useCallback(async () => {
     // Send the refresh token so the server revokes the session (mobile has no
     // cookie); short access TTL means the access token also lapses quickly.
     const refresh = await secureStorage.getItem(REFRESH_KEY).catch(() => null);
@@ -99,13 +104,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       secureStorage.removeItem(REFRESH_KEY),
       AsyncStorage.removeItem(USER_KEY),
     ]);
-  }
+  }, [queryClient]);
 
-  return (
-    <AuthContext.Provider value={{ user, loading, signIn, logout }}>
-      {children}
-    </AuthContext.Provider>
+  const value = useMemo(
+    () => ({ user, loading, signIn, logout }),
+    [user, loading, signIn, logout],
   );
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {
