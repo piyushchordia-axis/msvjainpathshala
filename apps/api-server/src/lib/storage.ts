@@ -9,7 +9,7 @@
  * presignedUrl() returns a direct, time-limited S3 link when needed.
  */
 import { createReadStream, type ReadStream } from "node:fs";
-import { Readable } from "node:stream";
+import { Readable, PassThrough } from "node:stream";
 import { mkdir, writeFile, copyFile, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -33,6 +33,11 @@ export interface StorageProvider {
   getStream(key: string): ReadStream;
   /** Best-effort delete; never throws on a missing key. */
   remove(key: string): Promise<void>;
+  /**
+   * Direct, time-limited object URL (S3). When present, the /uploads gate
+   * verifies HMAC then 302s here so Node never proxies media bytes (PERF #18).
+   */
+  presignedUrl?(key: string, expiresInSeconds?: number): Promise<string>;
 }
 
 /** Build a safe, collision-free storage key: <folder>/<yyyy>/<mm>/<uuid><ext>. */
@@ -180,20 +185,26 @@ class S3StorageProvider implements StorageProvider {
     return `${PUBLIC_API_URL}/uploads/${key.split("/").map(encodeURIComponent).join("/")}`;
   }
 
-  /** Presigned GET URL valid for urlTtl seconds (direct S3 access). */
-  async presignedUrl(key: string): Promise<string> {
+  /** Presigned GET URL valid for expiresInSeconds (direct S3 access). */
+  async presignedUrl(key: string, expiresInSeconds?: number): Promise<string> {
     const client = await this.getClient();
     const { GetObjectCommand } = await this.getSdk();
     const { getSignedUrl } = (await import("@aws-sdk/s3-request-presigner")) as unknown as PresignerModule;
+    const ttl = Math.min(
+      Math.max(expiresInSeconds ?? this.urlTtl, 60),
+      this.urlTtl,
+    );
     return getSignedUrl(client, new GetObjectCommand({ Bucket: this.bucket, Key: key }), {
-      expiresIn: this.urlTtl,
+      expiresIn: ttl,
     });
   }
 
   getStream(key: string): ReadStream {
     // S3 GetObject is async, but the interface is synchronous: return a Readable
-    // immediately and pump the S3 body into it once the request resolves.
-    const passthrough = new Readable({ read() {} });
+    // immediately and pipe the S3 body once the request resolves. PassThrough
+    // honours backpressure so a slow client does not buffer the whole object
+    // in heap (PERF #18).
+    const passthrough = new PassThrough({ highWaterMark: 64 * 1024 });
     void (async () => {
       try {
         const client = await this.getClient();
@@ -204,9 +215,7 @@ class S3StorageProvider implements StorageProvider {
           passthrough.destroy(new Error("Empty S3 body"));
           return;
         }
-        body.on("error", (err: Error) => passthrough.destroy(err));
-        body.on("data", (chunk: Buffer) => passthrough.push(chunk));
-        body.on("end", () => passthrough.push(null));
+        body.pipe(passthrough);
       } catch (err) {
         passthrough.destroy(err instanceof Error ? err : new Error(String(err)));
       }

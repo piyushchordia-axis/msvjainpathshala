@@ -93,8 +93,9 @@ app.use(express.urlencoded({ extended: true }));
 // Serve uploaded files ONLY with a valid short-lived signature (see
 // lib/file-tokens.ts). Sensitive artifacts (progress PDFs, ID cards, proofs)
 // are no longer world-readable by URL. API responses mint signed URLs.
-// Content-Type comes from MIME_BY_EXT (same table as the upload allowlist).
-app.get(/^\/uploads\/.+/, (req: Request, res) => {
+// S3: after HMAC verify, 302 to a short-lived presigned URL (PERF #18) so Node
+// never proxies media bytes. LocalDisk: stream from disk as before.
+app.get(/^\/uploads\/.+/, async (req: Request, res) => {
   let key: string;
   try {
     key = req.path.replace(/^\/uploads\//, "").split("/").map(decodeURIComponent).join("/");
@@ -108,6 +109,18 @@ app.get(/^\/uploads\/.+/, (req: Request, res) => {
     fail(res, 403, "ERR_FORBIDDEN", "Invalid or expired file link.");
     return;
   }
+
+  if (typeof storage.presignedUrl === "function") {
+    const remaining = Math.max(60, Number(se) - Math.floor(Date.now() / 1000));
+    try {
+      const direct = await storage.presignedUrl(key, Math.min(remaining, 900));
+      res.redirect(302, direct);
+      return;
+    } catch (err) {
+      logger.warn({ err, key }, "presigned redirect failed; falling back to proxy");
+    }
+  }
+
   const dot = key.lastIndexOf(".");
   const ext = dot >= 0 ? key.slice(dot + 1).toLowerCase() : "";
   res.setHeader("Content-Type", MIME_BY_EXT[ext] ?? "application/octet-stream");
