@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
+import { visualizer } from "rollup-plugin-visualizer";
 
 const rawPort = process.env.PORT;
 
@@ -32,6 +33,12 @@ export default defineConfig({
     react(),
     tailwindcss(),
     runtimeErrorOverlay(),
+    visualizer({
+      filename: path.resolve(import.meta.dirname, "dist/stats.html"),
+      gzipSize: true,
+      brotliSize: true,
+      template: "treemap",
+    }),
     ...(process.env.NODE_ENV !== "production" &&
     process.env.REPL_ID !== undefined
       ? [
@@ -57,6 +64,22 @@ export default defineConfig({
   build: {
     outDir: path.resolve(import.meta.dirname, "dist/public"),
     emptyOutDir: true,
+    chunkSizeWarningLimit: 300,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes("node_modules")) return;
+          if (id.includes("react-dom") || id.includes("/react/") || id.endsWith("/react")) {
+            return "react-vendor";
+          }
+          if (id.includes("@radix-ui")) return "radix-ui";
+          if (id.includes("recharts") || id.includes("d3-")) return "recharts";
+          if (id.includes("@tanstack")) return "tanstack";
+          if (id.includes("framer-motion")) return "framer";
+          if (id.includes("lucide-react") || id.includes("react-icons")) return "icons";
+        },
+      },
+    },
   },
   server: {
     port,
