@@ -102,17 +102,21 @@ function RootLayoutNav() {
 }
 
 export default function RootLayout() {
+  // PERF #24 — block splash on three faces only; load the rest after first paint.
   const [fontsLoaded, fontError] = useFonts({
     Outfit_400Regular,
+    Outfit_700Bold,
+    Mukta_400Regular,
+  });
+
+  const [extraFontsLoaded] = useFonts({
     Outfit_500Medium,
     Outfit_600SemiBold,
-    Outfit_700Bold,
     Outfit_800ExtraBold,
     Outfit_900Black,
     DMMono_400Regular,
     DMMono_500Medium,
     TiroDevanagariSanskrit_400Regular,
-    Mukta_400Regular,
     Mukta_500Medium,
     Mukta_600SemiBold,
     Mukta_700Bold,
@@ -123,6 +127,9 @@ export default function RootLayout() {
       SplashScreen.hideAsync();
     }
   }, [fontsLoaded, fontError]);
+
+  // Extra faces load in the background; no splash gate.
+  void extraFontsLoaded;
 
   useEffect(() => {
     if (__DEV__) {

@@ -15,6 +15,13 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <!-- PERF #24: discoverable in the initial HTML scan (not buried in @import).
+         Outfit cut to 400/600/700; DM Mono dropped (system ui-monospace).
+         Mukta + Tiro cover Devanagari; Google serves unicode-range subsets. -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Mukta:wght@400;500;600;700&family=Outfit:wght@400;600;700&family=Tiro+Devanagari+Sanskrit&display=swap"
+    >
   </head>
   <body>
     <div id="root"></div>
