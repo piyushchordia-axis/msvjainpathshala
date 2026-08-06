@@ -19,7 +19,10 @@ import {
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 import { NiyamBadgeRow } from "@/components/NiyamBadgeRow";
 import { badgeLabel, moreToNextBadge } from "@/lib/niyam-badges";
+import { useCelebration } from "@/hooks/useCelebration";
 import type { NiyamCatalogRow } from "@/lib/types";
+
+const ALERT_AFTER_CELEBRATE_MS = 400;
 
 function niyamsTabHref(role: string | undefined): "/student/niyams" | "/parent/niyams" {
   return role === "parent" ? "/parent/niyams" : "/student/niyams";
@@ -50,6 +53,7 @@ export default function NiyamSubmit() {
 
   const catalog = useNiyamCatalog(!!activeStudentId, activeStudentId);
   const submit = useSubmitNiyam();
+  const { fire: celebrate, Celebration } = useCelebration();
 
   const catalogRows = catalog.data?.items ?? [];
 
@@ -111,32 +115,44 @@ export default function NiyamSubmit() {
         onSuccess: (res) => {
           const approved = res.status === "auto_approved" || res.status === "approved";
           const badges = res.new_badges ?? [];
-          if (badges.length > 0) {
-            const names = badges.map((b) => badgeLabel(b.badge_key, hi)).join(", ");
-            Alert.alert(
-              hi ? "बैज मिला!" : "Badge earned!",
-              hi
-                ? `बधाई हो — आपने अर्जित किया: ${names}`
-                : `Congratulations — you earned: ${names}`,
-            );
-          } else {
-            Alert.alert(
-              approved
-                ? hi
-                  ? "स्वीकृत"
-                  : "Approved"
-                : hi
-                  ? "प्रस्तुत किया गया"
-                  : "Submitted",
-              approved
-                ? hi
-                  ? "आपका नियम स्वतः स्वीकृत हो गया है।"
-                  : "Your niyam was auto-approved."
-                : hi
-                  ? "आपका नियम समीक्षा के लिए भेज दिया गया है।"
-                  : "Your niyam was submitted for review.",
-            );
-          }
+          celebrate({
+            message: badges.length > 0
+              ? hi
+                ? "बैज मिला!"
+                : "Badge earned!"
+              : hi
+                ? "बहुत अच्छा"
+                : "Well done",
+          });
+          const showAlert = () => {
+            if (badges.length > 0) {
+              const names = badges.map((b) => badgeLabel(b.badge_key, hi)).join(", ");
+              Alert.alert(
+                hi ? "बैज मिला!" : "Badge earned!",
+                hi
+                  ? `बधाई हो — आपने अर्जित किया: ${names}`
+                  : `Congratulations — you earned: ${names}`,
+              );
+            } else {
+              Alert.alert(
+                approved
+                  ? hi
+                    ? "स्वीकृत"
+                    : "Approved"
+                  : hi
+                    ? "प्रस्तुत किया गया"
+                    : "Submitted",
+                approved
+                  ? hi
+                    ? "आपका नियम स्वतः स्वीकृत हो गया है।"
+                    : "Your niyam was auto-approved."
+                  : hi
+                    ? "आपका नियम समीक्षा के लिए भेज दिया गया है।"
+                    : "Your niyam was submitted for review.",
+              );
+            }
+          };
+          setTimeout(showAlert, ALERT_AFTER_CELEBRATE_MS);
           resetForm();
           catalog.refetch();
         },
@@ -182,6 +198,7 @@ export default function NiyamSubmit() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
+      {Celebration}
       <Screen
         refreshing={catalog.isRefetching}
         onRefresh={() => {

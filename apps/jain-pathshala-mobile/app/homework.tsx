@@ -15,7 +15,10 @@ import { formatDate } from "@/lib/format";
 import { bodyFamily } from "@/constants/typography";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { HomeworkProofPicker } from "@/components/HomeworkProofPicker";
+import { useCelebration } from "@/hooks/useCelebration";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+
+const ALERT_AFTER_CELEBRATE_MS = 400;
 
 function isImageUploadUrl(url: string): boolean {
   const path = url.split("?")[0]?.toLowerCase() ?? "";
@@ -267,12 +270,14 @@ function MarkDoneButton({
           {
             onSuccess: () => {
               onDone?.();
-              Alert.alert(
-                hi ? "पूर्ण बताया" : "Marked done",
-                hi
-                  ? "गुरुजी को बता दिया गया है कि कार्य पूरा हो गया।"
-                  : "Guruji will see that the work is done.",
-              );
+              setTimeout(() => {
+                Alert.alert(
+                  hi ? "पूर्ण बताया" : "Marked done",
+                  hi
+                    ? "गुरुजी को बता दिया गया है कि कार्य पूरा हो गया।"
+                    : "Guruji will see that the work is done.",
+                );
+              }, ALERT_AFTER_CELEBRATE_MS);
             },
             onError: (err) => {
               Alert.alert(
@@ -460,6 +465,7 @@ export default function HomeworkScreen() {
     useSessionView();
   const [allChildren, setAllChildren] = useState(false);
   const [tab, setTab] = useState<FeedTab>("todo");
+  const { fire: celebrate, Celebration } = useCelebration();
 
   const homework = useHomework(allChildren ? null : activeStudentId, {
     allChildren,
@@ -486,6 +492,7 @@ export default function HomeworkScreen() {
         homework.refetch();
       }}
     >
+      {Celebration}
       <Title style={{ fontSize: 22 }}>{hi ? "गृहकार्य" : "Homework"}</Title>
       <Body muted style={{ marginTop: -4 }}>
         {hi
@@ -590,6 +597,7 @@ export default function HomeworkScreen() {
                 allChildren={allChildren}
                 activeStudentId={activeStudentId}
                 onSubmitted={() => {
+                  celebrate({ message: hi ? "बहुत अच्छा" : "Well done" });
                   void homework.refetch();
                   setTab("submitted");
                 }}

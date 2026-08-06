@@ -33,6 +33,7 @@ import { formatDate } from "@/lib/format";
 import { bodyFamily } from "@/constants/typography";
 import { AttendanceMonthCalendar } from "@/components/AttendanceMonthCalendar";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
+import { useCelebration } from "@/hooks/useCelebration";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 import { ApiError } from "@/lib/api";
 
@@ -42,10 +43,13 @@ function NotifyLeaveModal({
   open,
   onClose,
   studentId,
+  onLeaveSent,
 }: {
   open: boolean;
   onClose: () => void;
   studentId: string;
+  /** Fired after a successful leave notice (parent celebrates on the screen behind). */
+  onLeaveSent?: () => void;
 }) {
   const c = useColors();
   const { hi } = useLocale();
@@ -97,6 +101,7 @@ function NotifyLeaveModal({
           setEndDate("");
           setReason("");
           onClose();
+          onLeaveSent?.();
         },
         onError: (err) => {
           const msg =
@@ -198,6 +203,7 @@ export default function MyAttendanceScreen() {
   const maxMonth = shiftMonth(currentMonthIst(), 12);
   const [month, setMonth] = useState(currentMonthIst());
   const [leaveOpen, setLeaveOpen] = useState(false);
+  const { fire: celebrate, Celebration } = useCelebration();
 
   const attendance = useAttendance(activeStudentId ?? undefined, true, {
     month,
@@ -366,6 +372,11 @@ export default function MyAttendanceScreen() {
             open={leaveOpen}
             onClose={() => setLeaveOpen(false)}
             studentId={activeStudentId}
+            onLeaveSent={() => {
+              celebrate({
+                message: hi ? "अवकाश सूचित" : "Leave noted",
+              });
+            }}
           />
         </>
       )}
@@ -374,6 +385,7 @@ export default function MyAttendanceScreen() {
 
   return (
     <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0 }}>
+      {Celebration}
       <FlatList
         data={[]}
         renderItem={() => null}
