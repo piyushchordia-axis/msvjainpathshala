@@ -252,7 +252,9 @@ describe("notifications — inbox + read flow", () => {
         user_id: parent.user.id,
         kind: "general",
         title_en: "Parent only",
+        title_hi: "केवल अभिभावक",
         body_en: "Private to the parent.",
+        body_hi: "अभिभावक के लिए निजी।",
       })
       .returning({ id: notifications.id });
 
@@ -490,6 +492,20 @@ describe("notifications — dead token reaping (FIX #3)", () => {
     } finally {
       sendSpy.mockRestore();
     }
+  });
+});
+
+describe("notifications — Hindi columns required (FIX #8)", () => {
+  it("an insert without Hindi copy is rejected", async () => {
+    const parent = await loginAs("parent");
+    await expect(
+      db.insert(notifications).values({
+        user_id: parent.user.id,
+        kind: "general",
+        title_en: "English only",
+        body_en: "No Hindi fields",
+      }),
+    ).rejects.toThrow();
   });
 });
 

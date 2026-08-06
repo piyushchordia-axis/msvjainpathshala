@@ -309,6 +309,13 @@
       "when": 1789468800000,
       "tag": "0043_push_receipts",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1789555200000,
+      "tag": "0044_notifications_hi_not_null",
+      "breakpoints": true
     }
   ]
 }
