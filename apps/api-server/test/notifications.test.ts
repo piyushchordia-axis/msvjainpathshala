@@ -1,10 +1,19 @@
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import app from "../src/app";
-import { db, pool, notifications } from "@workspace/db";
-import { and, desc, eq } from "drizzle-orm";
+import {
+  db,
+  pool,
+  notifications,
+  users,
+  students,
+  sessions,
+  attendance,
+} from "@workspace/db";
+import { and, desc, eq, inArray } from "drizzle-orm";
 import { loginAs, auth } from "./helpers";
 import { runBirthdayWishes } from "../src/routes/v1/notifications";
+import { sendParentAttendancePush } from "../src/services/attendance-post-process";
 
 afterAll(async () => {
   await pool.end(); // close the shared pg pool so vitest exits cleanly
@@ -205,5 +214,163 @@ describe("notifications — birthday cron", () => {
     const result = await runBirthdayWishes(new Date("2020-12-25T06:00:00+05:30"));
     expect(result.students).toBe(0);
     expect(result.notifications).toBe(0);
+  });
+});
+
+describe("notifications — parent attendance push scope (FIX #1)", () => {
+  it("the parent attendance push names the student it was queued for", async () => {
+    const batchPick = await pool.query<{ batch_id: string; centre_id: string }>(
+      `select b.id as batch_id, b.centre_id
+         from batches b
+        where b.deleted_at is null and b.status = 'active'
+        limit 1`,
+    );
+    expect(batchPick.rows.length).toBe(1);
+    const { batch_id: batchId, centre_id: centreId } = batchPick.rows[0]!;
+    const suffix = `${Date.now()}`;
+
+    const plantedParents: string[] = [];
+    const plantedStudents: Array<{
+      id: string;
+      parent_id: string;
+      full_name: string;
+      status: "present" | "absent" | "late";
+    }> = [];
+
+    const statuses = ["present", "absent", "late"] as const;
+    const names = [
+      `Fix1 Alpha ${suffix}`,
+      `Fix1 Beta ${suffix}`,
+      `Fix1 Gamma ${suffix}`,
+    ];
+
+    try {
+      for (let i = 0; i < 3; i++) {
+        const [parent] = await db
+          .insert(users)
+          .values({
+            phone: `+91981${suffix.slice(-7)}${i}`.slice(0, 15),
+            role: "parent",
+            full_name: `Fix1 Parent ${i} ${suffix}`,
+          })
+          .returning({ id: users.id });
+        plantedParents.push(parent!.id);
+
+        const [stu] = await db
+          .insert(students)
+          .values({
+            centre_id: centreId,
+            batch_id: batchId,
+            parent_id: parent!.id,
+            full_name: names[i]!,
+            student_code: `F1${suffix}${i}`,
+            status: "active",
+            dob: "2015-01-01",
+            gender: "male",
+            age_group: "bal",
+          })
+          .returning({ id: students.id, full_name: students.full_name });
+        plantedStudents.push({
+          id: stu!.id,
+          parent_id: parent!.id,
+          full_name: stu!.full_name,
+          status: statuses[i]!,
+        });
+      }
+
+      const scheduledDate = "2024-07-18";
+      const [session] = await db
+        .insert(sessions)
+        .values({
+          batch_id: batchId,
+          scheduled_date: scheduledDate,
+          scheduled_start_time: "10:00:00",
+          scheduled_end_time: "11:00:00",
+          status: "completed",
+          topic: `fix1-attn-scope-${suffix}`,
+        })
+        .onConflictDoUpdate({
+          target: [sessions.batch_id, sessions.scheduled_date],
+          set: { topic: `fix1-attn-scope-${suffix}`, status: "completed" },
+        })
+        .returning({ id: sessions.id });
+
+      await db.delete(attendance).where(eq(attendance.session_id, session!.id));
+      for (const s of plantedStudents) {
+        await db.insert(attendance).values({
+          session_id: session!.id,
+          student_id: s.id,
+          status: s.status,
+          session_date: scheduledDate,
+          marked_method: "manual",
+          revision: 1,
+        });
+      }
+
+      // Clear any leftover inbox rows for these parents from prior runs.
+      await db
+        .delete(notifications)
+        .where(inArray(notifications.user_id, plantedParents));
+
+      const middle = plantedStudents[1]!;
+      await sendParentAttendancePush(middle.id, session!.id);
+
+      const afterMiddle = await db
+        .select({
+          id: notifications.id,
+          user_id: notifications.user_id,
+          body_en: notifications.body_en,
+        })
+        .from(notifications)
+        .where(inArray(notifications.user_id, plantedParents));
+
+      expect(afterMiddle.length).toBe(1);
+      expect(afterMiddle[0]!.user_id).toBe(middle.parent_id);
+      expect(afterMiddle[0]!.body_en).toContain(middle.full_name);
+      for (const other of plantedStudents.filter((s) => s.id !== middle.id)) {
+        expect(afterMiddle[0]!.body_en).not.toContain(other.full_name);
+      }
+
+      // Each parent must receive only their own child's name.
+      await db
+        .delete(notifications)
+        .where(inArray(notifications.user_id, plantedParents));
+
+      for (const s of plantedStudents) {
+        await sendParentAttendancePush(s.id, session!.id);
+      }
+
+      for (const s of plantedStudents) {
+        const notes = await db
+          .select({
+            user_id: notifications.user_id,
+            body_en: notifications.body_en,
+          })
+          .from(notifications)
+          .where(eq(notifications.user_id, s.parent_id));
+        expect(notes.length).toBe(1);
+        expect(notes[0]!.body_en).toContain(s.full_name);
+        for (const other of plantedStudents.filter((o) => o.id !== s.id)) {
+          expect(notes[0]!.body_en).not.toContain(other.full_name);
+        }
+      }
+
+      await db.delete(attendance).where(eq(attendance.session_id, session!.id));
+    } finally {
+      if (plantedStudents.length) {
+        await db
+          .delete(notifications)
+          .where(inArray(notifications.user_id, plantedParents));
+        await db
+          .delete(attendance)
+          .where(inArray(attendance.student_id, plantedStudents.map((s) => s.id)));
+        await db
+          .delete(students)
+          .where(inArray(students.id, plantedStudents.map((s) => s.id)));
+      }
+      if (plantedParents.length) {
+        await db.delete(users).where(inArray(users.id, plantedParents));
+      }
+    }
   });
 });

@@ -65,10 +65,15 @@ export async function sendParentAttendancePush(
     .from(students)
     .innerJoin(
       attendance,
-      and(eq(attendance.student_id, students.id), eq(attendance.session_id, sessionId)),
+      and(
+        eq(attendance.student_id, students.id),
+        eq(attendance.session_id, sessionId),
+        eq(attendance.student_id, studentId),
+      ),
     )
     .innerJoin(sessions, eq(sessions.id, sessionId))
     .leftJoin(users, eq(users.id, students.parent_id))
+    .where(eq(students.id, studentId))
     .limit(1);
 
   if (!row?.parent_id) return;
