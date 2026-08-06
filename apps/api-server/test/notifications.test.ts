@@ -495,6 +495,203 @@ describe("notifications — dead token reaping (FIX #3)", () => {
   });
 });
 
+describe("notifications — attendance kind (FIX #9)", () => {
+  it("attendance notifications are stored with kind 'attendance'", async () => {
+    const batchPick = await pool.query<{ batch_id: string; centre_id: string }>(
+      `select b.id as batch_id, b.centre_id
+         from batches b
+        where b.deleted_at is null and b.status = 'active'
+        limit 1`,
+    );
+    expect(batchPick.rows.length).toBe(1);
+    const { batch_id: batchId, centre_id: centreId } = batchPick.rows[0]!;
+    const suffix = `${Date.now()}`;
+
+    const [parent] = await db
+      .insert(users)
+      .values({
+        phone: `+91982${suffix.slice(-7)}`.slice(0, 15),
+        role: "parent",
+        full_name: `Fix9 Parent ${suffix}`,
+      })
+      .returning({ id: users.id });
+    const [stu] = await db
+      .insert(students)
+      .values({
+        centre_id: centreId,
+        batch_id: batchId,
+        parent_id: parent!.id,
+        full_name: `Fix9 Child ${suffix}`,
+        student_code: `F9${suffix}`,
+        status: "active",
+        dob: "2015-01-01",
+        gender: "male",
+        age_group: "bal",
+      })
+      .returning({ id: students.id });
+
+    try {
+      const [session] = await db
+        .insert(sessions)
+        .values({
+          batch_id: batchId,
+          scheduled_date: "2024-08-01",
+          scheduled_start_time: "10:00:00",
+          scheduled_end_time: "11:00:00",
+          status: "completed",
+          topic: `fix9-kind-${suffix}`,
+        })
+        .onConflictDoUpdate({
+          target: [sessions.batch_id, sessions.scheduled_date],
+          set: { topic: `fix9-kind-${suffix}`, status: "completed" },
+        })
+        .returning({ id: sessions.id });
+
+      await db.delete(attendance).where(eq(attendance.session_id, session!.id));
+      await db.insert(attendance).values({
+        session_id: session!.id,
+        student_id: stu!.id,
+        status: "present",
+        session_date: "2024-08-01",
+        marked_method: "manual",
+        revision: 1,
+      });
+
+      await db.delete(notifications).where(eq(notifications.user_id, parent!.id));
+      await sendParentAttendancePush(stu!.id, session!.id);
+
+      const rows = await db
+        .select({ kind: notifications.kind, title_en: notifications.title_en })
+        .from(notifications)
+        .where(eq(notifications.user_id, parent!.id));
+      expect(rows.length).toBe(1);
+      expect(rows[0]!.kind).toBe("attendance");
+      expect(rows[0]!.title_en).toBe("Attendance marked");
+    } finally {
+      await db.delete(notifications).where(eq(notifications.user_id, parent!.id));
+      await db.delete(attendance).where(eq(attendance.student_id, stu!.id));
+      await db.delete(students).where(eq(students.id, stu!.id));
+      await db.delete(users).where(eq(users.id, parent!.id));
+    }
+  });
+
+  it("disabling 'attendance' does not suppress 'general' notifications, and vice versa", async () => {
+    const parent = await loginAs("parent");
+    const [prefsBefore] = await db
+      .select({ prefs: users.notification_preferences })
+      .from(users)
+      .where(eq(users.id, parent.user.id))
+      .limit(1);
+
+    const spy = vi.spyOn(pushModule, "sendPush").mockResolvedValue([]);
+    try {
+      await db
+        .update(users)
+        .set({ notification_preferences: { attendance: false } })
+        .where(eq(users.id, parent.user.id));
+
+      await db
+        .delete(notifications)
+        .where(
+          and(
+            eq(notifications.user_id, parent.user.id),
+            inArray(notifications.kind, ["attendance", "general"]),
+          ),
+        );
+
+      await notifyUsers({
+        userIds: [parent.user.id],
+        kind: "attendance",
+        title_en: "Attendance gated",
+        title_hi: "उपस्थिति बंद",
+        body_en: "Should be skipped",
+        body_hi: "छोड़ा जाना चाहिए",
+        push: false,
+      });
+      await notifyUsers({
+        userIds: [parent.user.id],
+        kind: "general",
+        title_en: "General allowed",
+        title_hi: "सामान्य अनुमति",
+        body_en: "Should land",
+        body_hi: "आना चाहिए",
+        push: false,
+      });
+
+      const afterAttendanceOff = await db
+        .select({ kind: notifications.kind, title_en: notifications.title_en })
+        .from(notifications)
+        .where(
+          and(
+            eq(notifications.user_id, parent.user.id),
+            inArray(notifications.kind, ["attendance", "general"]),
+          ),
+        );
+      expect(afterAttendanceOff.some((r) => r.kind === "attendance")).toBe(false);
+      expect(afterAttendanceOff.some((r) => r.title_en === "General allowed")).toBe(true);
+
+      await db
+        .update(users)
+        .set({ notification_preferences: { general: false } })
+        .where(eq(users.id, parent.user.id));
+
+      await db
+        .delete(notifications)
+        .where(
+          and(
+            eq(notifications.user_id, parent.user.id),
+            inArray(notifications.kind, ["attendance", "general"]),
+          ),
+        );
+
+      await notifyUsers({
+        userIds: [parent.user.id],
+        kind: "general",
+        title_en: "General gated",
+        title_hi: "सामान्य बंद",
+        body_en: "Should be skipped",
+        body_hi: "छोड़ा जाना चाहिए",
+        push: false,
+      });
+      await notifyUsers({
+        userIds: [parent.user.id],
+        kind: "attendance",
+        title_en: "Attendance allowed",
+        title_hi: "उपस्थिति अनुमति",
+        body_en: "Should land",
+        body_hi: "आना चाहिए",
+        push: false,
+      });
+
+      const afterGeneralOff = await db
+        .select({ kind: notifications.kind, title_en: notifications.title_en })
+        .from(notifications)
+        .where(
+          and(
+            eq(notifications.user_id, parent.user.id),
+            inArray(notifications.kind, ["attendance", "general"]),
+          ),
+        );
+      expect(afterGeneralOff.some((r) => r.kind === "general")).toBe(false);
+      expect(afterGeneralOff.some((r) => r.title_en === "Attendance allowed")).toBe(true);
+    } finally {
+      spy.mockRestore();
+      await db
+        .update(users)
+        .set({ notification_preferences: prefsBefore?.prefs ?? {} })
+        .where(eq(users.id, parent.user.id));
+      await db
+        .delete(notifications)
+        .where(
+          and(
+            eq(notifications.user_id, parent.user.id),
+            inArray(notifications.kind, ["attendance", "general"]),
+          ),
+        );
+    }
+  });
+});
+
 describe("notifications — Hindi columns required (FIX #8)", () => {
   it("an insert without Hindi copy is rejected", async () => {
     const parent = await loginAs("parent");

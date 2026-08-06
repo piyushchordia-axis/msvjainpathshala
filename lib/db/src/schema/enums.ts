@@ -122,7 +122,22 @@ export const EXAM_ATTEMPT_STATUSES = [
   "graded",
   "abandoned",
 ] as const;
-export const NOTIFICATION_KINDS = ["general", "birthday", "homework", "quiz", "competition", "service_request", "exam", "shivir", "niyam_rejected", "niyam_badge"] as const;
+export const NOTIFICATION_KINDS = [
+  "general",
+  "birthday",
+  "homework",
+  "quiz",
+  "competition",
+  "service_request",
+  "exam",
+  "shivir",
+  "niyam_rejected",
+  "niyam_badge",
+  "attendance",
+  "attendance_streak",
+  "donation",
+  "gallery",
+] as const;
 export const DONATION_PAYMENT_STATUSES = ["created", "pending", "captured", "failed", "refunded"] as const;
 export const AUDIT_ACTIONS = [
   "create",

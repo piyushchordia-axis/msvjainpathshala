@@ -55,7 +55,7 @@ export async function notifyParentsOfGalleryWallFeature(
       const shortName = fullName.trim().split(/\s+/)[0] || "your child";
       await notifyUsers({
         userIds: [parentId],
-        kind: "general",
+        kind: "gallery",
         title_en: "On the Punya Wall",
         title_hi: "पुण्य दीवार पर",
         body_en: `${shortName}'s niyam photo is now on the Punya Wall.`,

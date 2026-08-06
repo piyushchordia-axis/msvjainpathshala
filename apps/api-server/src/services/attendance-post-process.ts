@@ -14,7 +14,6 @@ import {
   centres,
   students,
   centre_holidays,
-  users,
 } from "@workspace/db";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { awardPunya } from "../lib/punya";
@@ -37,14 +36,6 @@ export { STREAK_EVERY };
 /** AT31 — parent "attendance marked" settles for 5 minutes per (student, session). */
 export const PARENT_PUSH_DEBOUNCE_MS = 5 * 60 * 1000;
 
-function prefsAllowAttendance(prefs: unknown): boolean {
-  if (!prefs || typeof prefs !== "object") return true;
-  const p = prefs as Record<string, unknown>;
-  if (p.attendance === false) return false;
-  if (p.push === false) return false;
-  return true;
-}
-
 function kolkataDate(d: Date): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(d);
 }
@@ -58,7 +49,6 @@ export async function sendParentAttendancePush(
     .select({
       parent_id: students.parent_id,
       full_name: students.full_name,
-      prefs: users.notification_preferences,
       session_date: sessions.scheduled_date,
       status: attendance.status,
     })
@@ -72,16 +62,15 @@ export async function sendParentAttendancePush(
       ),
     )
     .innerJoin(sessions, eq(sessions.id, sessionId))
-    .leftJoin(users, eq(users.id, students.parent_id))
     .where(eq(students.id, studentId))
     .limit(1);
 
   if (!row?.parent_id) return;
-  if (!prefsAllowAttendance(row.prefs)) return;
 
+  // Prefs (including push / attendance opt-out) gated inside notifyUsers.
   await notifyUsers({
     userIds: [row.parent_id],
-    kind: "general",
+    kind: "attendance",
     title_en: "Attendance marked",
     title_hi: "उपस्थिति दर्ज",
     body_en: `${row.full_name}: ${row.status} on ${row.session_date}`,

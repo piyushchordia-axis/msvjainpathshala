@@ -11,10 +11,13 @@ import {
   sanchalak_centre_assignments,
   centres,
   students,
+  NOTIFICATION_KINDS,
 } from "@workspace/db";
 import { and, eq, inArray } from "drizzle-orm";
 import { sendPush } from "./push";
 import { logger } from "./logger";
+
+export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
 /** Honour users.notification_preferences before enqueueing a given kind. */
 export function prefsAllowKind(prefs: unknown, kind: string): boolean {
@@ -27,17 +30,7 @@ export function prefsAllowKind(prefs: unknown, kind: string): boolean {
 
 export async function notifyUsers(opts: {
   userIds: string[];
-  kind?:
-    | "general"
-    | "birthday"
-    | "homework"
-    | "quiz"
-    | "competition"
-    | "service_request"
-    | "exam"
-    | "shivir"
-    | "niyam_rejected"
-    | "niyam_badge";
+  kind?: NotificationKind;
   title_en: string;
   title_hi: string;
   body_en: string;
