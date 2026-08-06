@@ -11,7 +11,8 @@
 **Product:** Jain Pathshala — a multi-tenant Jain religious education platform
 **Organisation:** Megh Sanskar Vatika (MSV) network
 **Developer:** Enaa Creations
-**Surfaces:** Mobile app (Expo) + Web admin panel (Next.js) + Public website (Next.js) + Backend API (NestJS) + AI service (FastAPI)
+**Surfaces:** Mobile app (Expo) + Web admin panel (Vite/React) + Backend API (Express 5).  
+**NOT YET IMPLEMENTED:** Next.js public site / App Router admin; NestJS API; FastAPI AI service.
 
 ---
 
@@ -32,44 +33,49 @@ If a prompt says "Read Section 7", open `SPEC.md`, find `### 7.` and read everyt
 
 ## Stack — non-negotiable
 
-| Layer | Technology | Must NOT use |
+| Layer | Technology (running) | Must NOT use |
 |---|---|---|
-| ORM | Drizzle | Prisma, TypeORM |
-| Backend framework | NestJS v10+ | Express, Fastify |
-| Queue system | BullMQ | Kafka, RabbitMQ, SQS |
-| Architecture | Modular monolith | Microservices (except AI service) |
-| Package manager | pnpm workspaces + Turborepo | npm, yarn |
-| Mobile | Expo SDK 54+ with Expo Router v6 | bare React Native CLI |
-| Web | Next.js 15 App Router | Pages Router, Remix, Vite |
-| Language | TypeScript everywhere | JavaScript (except configs) |
-| AI service | Python 3.12 + FastAPI | Node-based AI service |
+| ORM | Drizzle (`@workspace/db`) | Prisma, TypeORM |
+| Backend framework | **Express 5** in `apps/api-server` | Fastify. NestJS v10+ is the SPEC target — **NOT YET IMPLEMENTED** |
+| Queue system | BullMQ (when Redis is up) + `node-cron` for schedules | Kafka, RabbitMQ, SQS |
+| Architecture | Modular monolith | Microservices (except AI service — **NOT YET IMPLEMENTED**) |
+| Package manager | pnpm workspaces | npm, yarn. Turborepo — **NOT YET IMPLEMENTED** |
+| Mobile | Expo SDK 54+ with Expo Router v6 (`apps/jain-pathshala-mobile`) | bare React Native CLI |
+| Web | Vite + React + wouter (`apps/jain-pathshala`) | Remix. Next.js 15 App Router — **NOT YET IMPLEMENTED** (SPEC target) |
+| Language | TypeScript everywhere | JavaScript (except configs / build scripts) |
+| AI service | — | **NOT YET IMPLEMENTED** (SPEC: Python 3.12 + FastAPI) |
 | Database | PostgreSQL 16 | MySQL, SQLite, MongoDB |
-| Cache / Queues | Redis 7 | Memcached, in-process cache |
+| Cache / Queues | Redis 7 (BullMQ + rate limits; optional in local/dev) | Memcached |
 
 ---
 
 ## Monorepo structure
 
 ```
-jain-pathshala/
+msvjainpathshala/          (repo root; also referred to as jain-pathshala)
 ├── apps/
-│   ├── api/          ← NestJS backend (port 3000) + worker entry (port 3100)
-│   ├── mobile/       ← Expo React Native app
-│   ├── web/          ← Next.js 15 public site + admin panel (port 3001)
-│   └── ai/           ← Python FastAPI AI service (port 8000)
-├── packages/
-│   ├── shared/       ← @jp/shared — enums, Zod schemas, error codes, constants
-│   ├── design-tokens/← @jp/design-tokens — token JSON + typed exports
-│   └── i18n/         ← @jp/i18n — EN/HI translation files + t() helper
+│   ├── api-server/        ← Express 5 API (`@workspace/api-server`, PORT env, often 8080)
+│   │                        + `dev:worker` / `start:worker` BullMQ worker entry
+│   ├── jain-pathshala/    ← Vite + React + wouter web/admin (`@workspace/jain-pathshala`)
+│   ├── jain-pathshala-mobile/ ← Expo Router v6 mobile (`@workspace/jain-pathshala-mobile`)
+│   ├── jp-shared/         ← `@jp/shared` — QUEUE_NAMES, CRON_EXPRESSIONS, errors
+│   ├── jp-api/            ← thin `@jp/api` shim (integration-test script only)
+│   └── mockup-sandbox/    ← design/mockup sandbox (non-production)
+├── lib/
+│   ├── db/                ← `@workspace/db` — Drizzle schema, client, migrations, seed
+│   ├── api-zod/           ← `@workspace/api-zod` — shared Zod contracts
+│   ├── api-spec/          ← OpenAPI / API spec artefacts
+│   ├── api-client-react/  ← generated/shared React API client
+│   └── i18n/              ← `@workspace/i18n` — EN/HI locale JSON + helpers
 ├── infra/
-│   ├── docker/       ← docker-compose.yml (Postgres, Redis, MinIO, MailHog)
-│   ├── terraform/    ← AWS infrastructure as code
-│   └── load-tests/   ← k6 load test scripts
-├── docs/
-│   └── runbooks/     ← operational runbooks
-├── SPEC.md           ← full engineering specification (read this)
-└── CLAUDE.md         ← this file
+│   └── load-tests/        ← k6 / node attendance burst scripts
+├── docs/                  ← reviews, fix prompts, deployment notes
+├── docker-compose.yml     ← root compose (API image; host Postgres/Redis)
+├── SPEC.md
+└── CLAUDE.md
 ```
+
+**NOT YET IMPLEMENTED (SPEC layout):** `apps/api` (NestJS), `apps/web` / `apps/mobile` / `apps/ai`, `packages/*` (shared / design-tokens / i18n), `infra/docker`, `infra/terraform`, `docs/runbooks`.
 
 ---
 
@@ -116,7 +122,7 @@ These are the rules most likely to be implemented incorrectly. Read carefully.
 MSV approval is **purely admin discretion**. Do not implement any eligibility validation, age checks, or score thresholds for MSV enrolment. The admin approves or rejects based on their own judgement.
 
 ### Q2 — MSV curriculum: super_admin only
-Creating or editing MSV-type curricula is restricted to `super_admin` at the **service layer**, not just the UI. If a city_admin calls the MSV curriculum endpoint directly, it must return 403. This check lives in the NestJS service, not the guard.
+Creating or editing MSV-type curricula is restricted to `super_admin` at the **service layer**, not just the UI. If a city_admin calls the MSV curriculum endpoint directly, it must return 403. This check lives in the API service layer (Express route/service today; NestJS service in SPEC — **NOT YET IMPLEMENTED**), not only a UI guard.
 
 ### Q3 — 80G certificates: toggleable
 `platform_settings.eighty_g_enabled` controls whether 80G certificates are generated. Default is `false`. When toggled on, both `eighty_g_registration_number` AND `organization_pan` must be set or the toggle is rejected. Existing certificates are never deleted when toggled off.
@@ -135,6 +141,13 @@ Library items of `type='video_embed'` store a YouTube or Vimeo URL in `embed_url
 
 ### Q11 — Students: never hard delete
 Students are deactivated (`status='inactive'`), never deleted from the database. This includes their enrolment records. Re-activation must be possible at any time. Deactivated students do not appear in active enrolment counts, attendance rosters, or Punya leaderboards.
+
+### Q12 — Niyam review scope: shikshak is batch-bound, sanchalak covers the centre (resolved 2026-08-05)
+`POST /v1/niyam-submissions/:id/approve` and `/reject` gate on `inBatchWriteScope(scope, student.batch_id, student.centre_id)`, NOT the deprecated centre-level `inScope`. A shikshak decides only on submissions from batches they are assigned to — a Guruji judging whether a child kept a Niyam needs to know the child. `inBatchWriteScope` already resolves `batchIds === null` to centre membership, so sanchalak and above keep whole-centre reach with no special case.
+
+The sanchalak is the safety net, and that only works if they can actually reach the queue: niyam review MUST be available to the sanchalak persona on mobile, not web-only. Do not tighten the shikshak gate without shipping the sanchalak's mobile access in the same release — otherwise an unstaffed batch's submissions strand with nobody able to clear them.
+
+`GET /pending` stays centre-scoped for both roles so a shikshak can see the centre's backlog; only the approve/reject writes are batch-bound.
 
 ## Attendance module — binding decisions (resolved 2026-08)
 
@@ -290,25 +303,33 @@ Resource-nested and hyphenated. These are the only attendance/session routes —
 
 ## Cron table (frozen — single list)
 
-One table for all scheduled work. Times are IST (Asia/Kolkata) unless noted. Entries marked **schedule** are `@nestjs/schedule` crons (not BullMQ queues) — their absence from `@jp/shared/constants` queue names is intentional, not a bug. Entries marked **queue** are BullMQ repeatable/cron-driven jobs whose names DO appear in queue constants.
+Source of truth: `CRON_EXPRESSIONS` in `apps/jp-shared/src/constants.ts` (`@jp/shared/constants`). Times are IST (`Asia/Kolkata` via `node-cron`, not `@nestjs/schedule` — Nest schedule is **NOT YET IMPLEMENTED**).
 
-| Job | Schedule | Kind | Notes |
+**Kind:**
+- **queue** — cron tick enqueues a BullMQ job (handler registered via `registerQueueHandler`).
+- **schedule** — cron tick runs work inline (or is a stub tick); not driven through a BullMQ worker for that tick. `niyam-streak-lapse` is explicitly documented in constants as not a BullMQ queue.
+
+| Job | Schedule (`CRON_EXPRESSIONS`) | Kind | Notes |
 |---|---|---|---|
-| `session.materialise` | Nightly 01:00 IST | schedule | AT7 — rolling 60-day window |
-| `attendance.no_show_check` | Every 15 min | schedule | Unchecked-in sessions past start |
-| `attendance.auto_checkout` | Every 30 min | schedule | AT12 — `scheduled_end_time + 2h` |
-| `attendance.consecutive_check` | Daily 02:00 IST | schedule | AT27 — was 22:00; moved to next-day 02:00 |
-| `notifications.birthday` | Daily 06:00 IST | schedule | |
-| `notifications.monthly_reports` | 1st of month 02:00 IST | schedule | |
-| `punya.leaderboard.refresh` | Every 5 min | queue | BullMQ |
-| `punya.reconcile` | Daily 03:00 IST | queue | BullMQ |
-| `analytics.refresh_views` | Daily 04:00 IST | schedule | Materialised view refresh |
-| `digest.weekly.email` | Monday 07:00 IST | schedule | |
-| `auth.session.cleanup` | Daily 02:30 IST | schedule | |
-| `media.cleanup_unfinalized` | Daily 03:30 IST | schedule | |
-| `donation.eightyg.year_end_summary` | 1 April 00:30 IST | schedule | |
-| `exam.attempt_abandon` | Every 30 min | queue | BullMQ — abandon in_progress after `window_end + 2h` |
-| `exam.top_score` | Daily 03:15 IST | queue | BullMQ — top-score Punya catch-up (primary path is enqueue on release) |
+| `session.materialise` | `0 1 * * *` (nightly 01:00 IST) | queue | AT7 — rolling 60-day window |
+| `attendance.no_show_check` | `*/15 * * * *` | queue | Unchecked-in sessions past start |
+| `attendance.auto_checkout` | `*/30 * * * *` | queue | AT12 — `scheduled_end_time + 2h` |
+| `attendance.consecutive_check` | `0 2 * * *` (02:00 IST) | queue | AT27 — following day |
+| `notifications.birthday` | `0 6 * * *` | queue | |
+| `notifications.push_receipts` | `*/30 * * * *` | queue | Expo receipt sweep / dead-token reap |
+| `niyam-streak-lapse` | `0 5 * * *` | schedule | Zero lapsed `current_streak` (not BullMQ) |
+| `notifications.monthly_reports` | `0 2 1 * *` (1st 02:00 IST) | schedule | Tick registered; report worker hooks later |
+| `punya.leaderboard.refresh` | `*/5 * * * *` | queue | Monthly leaderboard snapshot |
+| `punya.reconcile` | `0 3 * * *` | queue | Balance rebuild from ledger |
+| `analytics.refresh_views` | `0 4 * * *` | queue | Materialised view refresh |
+| `digest.weekly.email` | `0 7 * * 1` (Monday 07:00 IST) | schedule | Tick stub today |
+| `auth.session.cleanup` | `30 2 * * *` | schedule | Inline session + retention prune |
+| `media.cleanup_unfinalized` | `30 3 * * *` | schedule | Tick stub today |
+| `donation.eightyg.year_end_summary` | `30 0 1 4 *` (1 April 00:30 IST) | schedule | Tick stub today |
+| `exam.attempt_abandon` | `*/30 * * * *` | queue | Abandon `in_progress` after `window_end + 2h` |
+| `exam.top_score` | `15 3 * * *` | queue | Top-score Punya catch-up (primary path is enqueue on release) |
+
+Event-driven queue names that are **not** in `CRON_EXPRESSIONS` (still in `QUEUE_NAMES`): `attendance.post_process`, `notifications.parent`, `idcard.generation`, `report.generation`.
 
 ---
 
@@ -330,17 +351,16 @@ One name per view. Do not invent aliases.
 
 ## Design system
 
-### Token files (already set up)
+### Token files
 ```
-packages/design-tokens/tokens.json    ← master token file (W3C format)
-apps/web/tailwind.config.ts           ← Tailwind preset consuming tokens
-apps/web/src/styles/tokens.css        ← CSS custom properties (--jp-* prefix)
-apps/mobile/src/constants/colors.ts  ← JPColors, JPSpacing, JPRadius, JPFonts
+apps/jain-pathshala-mobile/constants/colors.ts  ← mobile colour tokens (running)
+apps/jain-pathshala/src/index.css              ← web HSL / CSS variables (running)
 ```
+**NOT YET IMPLEMENTED:** `packages/design-tokens/tokens.json` (W3C master), `apps/web/tailwind.config.ts` / `tokens.css`, `apps/mobile/src/constants/colors.ts` under the SPEC path names.
 
 ### Never hardcode values
 **Wrong:** `color: '#D4621A'`
-**Right:** `color: JPColors.saffron` (mobile) or `text-saffron` (web Tailwind)
+**Right:** token colours from `apps/jain-pathshala-mobile/constants/colors.ts` (mobile) or CSS variables / theme classes in `apps/jain-pathshala` (web). Do not invent hex literals.
 
 ### Palette summary
 | Token | Hex | Usage |
@@ -392,69 +412,76 @@ Thresholds live in CONFIGURATION alongside `punya_features`, not as code constan
 
 ### Local development
 ```bash
-# Start all local infrastructure
-docker compose -f infra/docker/docker-compose.yml up -d
+# API container (root compose; expects host Postgres/Redis — see docker-compose.yml)
+docker compose up -d
 
-# API (HTTP server, port 3000)
-pnpm --filter @jp/api dev
+# API HTTP server — PORT is required (often 8080 in .env)
+pnpm --filter @workspace/api-server run dev
 
-# API (BullMQ worker, port 3100)
-pnpm --filter @jp/api dev:worker
+# BullMQ worker process (PERF #15 split; optional RUN_WORKERS_INLINE=1 on API)
+pnpm --filter @workspace/api-server run dev:worker
 
-# Mobile (Expo dev server)
-pnpm --filter @jp/mobile dev
+# Mobile (Expo)
+pnpm --filter @workspace/jain-pathshala-mobile run dev
 
-# Web (Next.js, port 3001)
-pnpm --filter @jp/web dev
-
-# AI service (FastAPI, port 8000)
-cd apps/ai && uvicorn main:app --reload
+# Web admin (Vite)
+pnpm --filter @workspace/jain-pathshala run dev
 ```
+
+**NOT YET IMPLEMENTED:** `infra/docker/docker-compose.yml` full local stack; `@jp/api` / `@jp/mobile` / `@jp/web` package names as primary apps; FastAPI AI on port 8000; NestJS on 3000 / worker 3100 as default ports.
 
 ### Database
 ```bash
-pnpm db:generate    # generate Drizzle migration from schema changes
-pnpm db:migrate     # apply migrations (uses advisory lock)
-pnpm db:studio      # open Drizzle Studio
-pnpm db:seed:dev    # seed local dev data
+pnpm db:generate    # drizzle-kit generate (@workspace/db)
+pnpm db:migrate     # drizzle-kit migrate
+# seed: pnpm --filter @workspace/db run seed
 ```
+
+**NOT YET IMPLEMENTED as root scripts:** `pnpm db:studio`, `pnpm db:seed:dev` (use the `@workspace/db` package scripts).
 
 ### Code quality
 ```bash
-pnpm typecheck      # typecheck all packages
-pnpm lint           # lint all packages
-pnpm test           # unit tests (Vitest)
-pnpm test:integration  # integration tests (Testcontainers)
+pnpm typecheck                              # libs + apps
+pnpm --filter @workspace/api-server run test
+pnpm --filter @workspace/api-server run test:integration
+# or: pnpm --filter @jp/api run test:integration
 ```
 
-### Turborepo
+**NOT YET IMPLEMENTED:** root `pnpm lint` / `pnpm test` umbrella scripts as documented in older SPEC tooling.
+
+### Build
 ```bash
-pnpm build          # build all packages in dependency order
-pnpm --filter @jp/shared build   # build one package
+pnpm build                                  # typecheck + recursive build
+pnpm --filter @workspace/api-server run build
+pnpm --filter @workspace/jain-pathshala run build
 ```
+
+**NOT YET IMPLEMENTED:** Turborepo (`turbo.json` / `pnpm --filter @jp/shared build` as the primary graph).
 
 ---
 
-## All 30 BullMQ queues
+## Queue names (`QUEUE_NAMES`)
 
-These queue names are used throughout the codebase. Always import from `@jp/shared/constants` — never hardcode queue name strings.
+Source of truth: `QUEUE_NAMES` in `apps/jp-shared/src/constants.ts`. Always import from `@jp/shared/constants` — never hardcode queue name strings.
+
+There are **21** named entries (not 30). Several SPEC queues (`auth.sms.otp`, `notifications.fanout`, `punya.award`, `ai.*`, etc.) are **NOT YET IMPLEMENTED** — do not invent them as string literals.
 
 ```
-auth.sms.otp                notifications.fanout          attendance.post_process
-attendance.consecutive_check  punya.award                  punya.leaderboard.refresh
-punya.reconcile               niyam.streak.recompute       media.processing
-idcard.generation             report.generation            report.shivir.export
-export.student.pdf            export.bulk.zip              donation.eightyg.cert
-donation.receipt.generate     audit.write                  ai.quiz.generate
-ai.moderation.image           shivir.live.broadcast        analytics.refresh_views
-digest.weekly.email           db.backfill.generic          auth.session.cleanup
-notifications.birthday        notifications.monthly_reports notifications.push
-notifications.sms             notifications.email          debug.echo
-exam.attempt_abandon          exam.top_score
+session.materialise              attendance.auto_checkout         attendance.no_show_check
+attendance.post_process          attendance.consecutive_check     notifications.parent
+notifications.birthday           notifications.push_receipts      niyam-streak-lapse
+notifications.monthly_reports    punya.leaderboard.refresh        punya.reconcile
+analytics.refresh_views          digest.weekly.email              auth.session.cleanup
+media.cleanup_unfinalized        donation.eightyg.year_end_summary exam.attempt_abandon
+exam.top_score                   idcard.generation                report.generation
 ```
+
+Notes:
+- `niyam-streak-lapse` is listed in `QUEUE_NAMES` for cron registration identity but is **not** a BullMQ queue (constants comment).
+- `attendance.post_process`, `notifications.parent`, `idcard.generation`, `report.generation` are event/enqueue-driven and have **no** `CRON_EXPRESSIONS` entry.
 
 ### Scheduled jobs
-**Deleted as a separate list.** The single frozen cron table (including `session.materialise`, attendance jobs, and the jobs formerly listed here) lives under **"Cron table (frozen — single list)"** above. Do not maintain a second copy.
+**Deleted as a separate list.** The single frozen cron table (matching `CRON_EXPRESSIONS`) lives under **"Cron table (frozen — single list)"** above. Do not maintain a second copy.
 
 ---
 
@@ -517,7 +544,7 @@ Error codes are defined in `@jp/shared/errors`. Always use the enum — never re
 - **OTP storage:** argon2id hash only — never plaintext, never reversible hash
 - **JWT algorithm:** RS256 only — reject tokens with `alg: none` or symmetric algorithms
 - **Signed URLs:** all media assets served via signed URLs with TTL — never public S3 URLs for private content
-- **HMAC for AI service:** all NestJS → FastAPI calls carry `X-Signature: hex(HMAC-SHA256(secret, body))`
+- **HMAC for AI service:** all API → FastAPI calls carry `X-Signature: hex(HMAC-SHA256(secret, body))` — **NOT YET IMPLEMENTED** (no FastAPI AI service in this monorepo yet)
 - **Webhook signatures:** Razorpay webhooks verified via `x-razorpay-signature` before any processing
 - **Rate limiting:** OTP send: 3/min/phone, 10/hr/phone, 30/hr/IP. Implemented in Redis with sliding window.
 
@@ -748,26 +775,32 @@ Every queued op carries a local state. Only `queued` is insufficient — a mark 
 
 ## Design system file locations (at build time)
 
-These files exist in the repo after Step 2. Reference them — never rebuild from scratch.
+**Running paths (prefer these):**
+```
+apps/jain-pathshala-mobile/constants/colors.ts   ← mobile colours
+apps/jain-pathshala-mobile/constants/typography.ts
+apps/jain-pathshala/src/index.css               ← web CSS variables / brand tokens
+lib/i18n/src/locales/en.json                    ← English strings (`@workspace/i18n`)
+lib/i18n/src/locales/hi.json                    ← Hindi strings (Devanagari)
+```
 
+**NOT YET IMPLEMENTED (SPEC Step-2 paths — do not delete the requirement):**
 ```
 packages/design-tokens/tokens.json           ← master tokens (W3C format)
 packages/design-tokens/src/index.ts          ← typed TypeScript exports
-packages/i18n/src/locales/en.json            ← English strings
-packages/i18n/src/locales/hi.json            ← Hindi strings (Devanagari)
-apps/web/tailwind.config.ts                  ← Tailwind consuming tokens
-apps/web/src/styles/globals.css              ← CSS custom properties
-apps/mobile/src/constants/colors.ts         ← JPColors, JPSpacing, JPRadius
-apps/mobile/src/components/ui/              ← pre-built RN components
-apps/web/src/components/ui/                 ← pre-built React components
-apps/api/src/templates/id-card.hbs          ← student ID card Handlebars template
+packages/i18n/src/locales/{en,hi}.json       ← (locales live under lib/i18n today)
+apps/web/tailwind.config.ts / globals.css
+apps/mobile/src/constants/colors.ts + components/ui/
+apps/web/src/components/ui/
+apps/api/src/templates/id-card.hbs           ← ID cards are generated in api-server today (PNG path)
 ```
 
 ---
 
 ## Environment variables
 
-All env vars are validated via Zod in `apps/api/src/core/config/`. The app **fails fast** on startup if required vars are missing. Full list in `apps/api/.env.example`.
+Env for the running API: `apps/api-server/.env.example` (and root/compose overrides).  
+**NOT YET IMPLEMENTED:** Zod fail-fast config module at `apps/api/src/core/config/` (Nest layout).
 
 Key vars by category:
 ```
@@ -816,12 +849,12 @@ SMS_MONTHLY_CAP_INR             # daily SMS spend cap
 
 | Pitfall | Correct approach |
 |---|---|
-| Using `Prisma` for any ORM operation | Use `Drizzle` with `DrizzleService.db` or `.dbRead` |
-| Hardcoding queue names as strings | Import from `@jp/shared/constants` — `QUEUES.PUNYA_AWARD` etc |
-| Awarding Punya without idempotency_key | Always pass `idempotency_key` to `PunyaService.award()` |
+| Using `Prisma` for any ORM operation | Use `Drizzle` from `@workspace/db` (`db` / read pools as implemented) |
+| Hardcoding queue names as strings | Import from `@jp/shared/constants` — `QUEUE_NAMES.*` only (no invented `QUEUES.PUNYA_AWARD`) |
+| Awarding Punya without idempotency_key | Always pass `idempotencyKey` into the Punya award helper |
 | Hard-deleting students or enrolments | Use `status='inactive'` + `deactivated_at` — never DELETE |
 | Returning raw phone/OTP in logs | PII redactor handles this — but never manually log these fields |
-| Using RGB/hex directly in mobile components | Use `JPColors.*` from `apps/mobile/src/constants/colors.ts` |
+| Using RGB/hex directly in mobile components | Use tokens from `apps/jain-pathshala-mobile/constants/colors.ts` |
 | Using className or CSS in React Native | Use `StyleSheet.create()` with token values |
 | Creating MSV curriculum as city_admin | Service-layer 403 — read Q2 |
 | Rejecting niyam after 30 days | Return `ERR_NIYAM_REVERSAL_WINDOW_EXPIRED` — read Q5 |
@@ -831,4 +864,4 @@ SMS_MONTHLY_CAP_INR             # daily SMS spend cap
 
 ---
 
-*Last updated: August 2026 — Offline sync canonical model; AT1–AT31; CLAUDE.md > SPEC.md*
+*Last updated: August 2026 — Stack reconciled to Express/`apps/api-server` + `QUEUE_NAMES`/`CRON_EXPRESSIONS`; offline sync; AT1–AT32; CLAUDE.md > SPEC.md*
