@@ -77,6 +77,118 @@ describe("notifications — push token", () => {
       .send({ expo_token: "" });
     expect(res.status).toBe(422);
   });
+
+  it("user B cannot claim user A's active push token", async () => {
+    const userA = await loginAs("parent");
+    const userB = await loginAs("shikshak");
+    const expoToken = `ExponentPushToken[fix4-claim-${Date.now()}]`;
+
+    const regA = await request(app)
+      .post("/v1/notifications/push-token")
+      .set(auth(userA.token))
+      .send({ expo_token: expoToken, platform: "ios" });
+    expect(regA.status).toBe(200);
+
+    try {
+      const claimB = await request(app)
+        .post("/v1/notifications/push-token")
+        .set(auth(userB.token))
+        .send({ expo_token: expoToken, platform: "android" });
+      expect(claimB.status).toBe(409);
+      expect(claimB.body.error.code).toBe("ERR_PUSH_TOKEN_CLAIMED");
+
+      const [row] = await db
+        .select({ user_id: device_push_tokens.user_id, is_active: device_push_tokens.is_active })
+        .from(device_push_tokens)
+        .where(eq(device_push_tokens.expo_token, expoToken))
+        .limit(1);
+      expect(row?.user_id).toBe(userA.user.id);
+      expect(row?.is_active).toBe(true);
+    } finally {
+      await db.delete(device_push_tokens).where(eq(device_push_tokens.expo_token, expoToken));
+    }
+  });
+
+  it("re-registering your own token is idempotent and reactivates it", async () => {
+    const userA = await loginAs("parent");
+    const expoToken = `ExponentPushToken[fix4-reactivate-${Date.now()}]`;
+
+    const reg1 = await request(app)
+      .post("/v1/notifications/push-token")
+      .set(auth(userA.token))
+      .send({ expo_token: expoToken, platform: "ios" });
+    expect(reg1.status).toBe(200);
+
+    const [before] = await db
+      .select({ id: device_push_tokens.id })
+      .from(device_push_tokens)
+      .where(eq(device_push_tokens.expo_token, expoToken))
+      .limit(1);
+
+    await db
+      .update(device_push_tokens)
+      .set({ is_active: false })
+      .where(eq(device_push_tokens.expo_token, expoToken));
+
+    try {
+      const reg2 = await request(app)
+        .post("/v1/notifications/push-token")
+        .set(auth(userA.token))
+        .send({ expo_token: expoToken, platform: "android" });
+      expect(reg2.status).toBe(200);
+
+      const [after] = await db
+        .select({
+          id: device_push_tokens.id,
+          is_active: device_push_tokens.is_active,
+          platform: device_push_tokens.platform,
+          user_id: device_push_tokens.user_id,
+        })
+        .from(device_push_tokens)
+        .where(eq(device_push_tokens.expo_token, expoToken))
+        .limit(1);
+      expect(after?.id).toBe(before?.id);
+      expect(after?.is_active).toBe(true);
+      expect(after?.platform).toBe("android");
+      expect(after?.user_id).toBe(userA.user.id);
+    } finally {
+      await db.delete(device_push_tokens).where(eq(device_push_tokens.expo_token, expoToken));
+    }
+  });
+
+  it("a token deactivated by DeviceNotRegistered can be claimed by a new user", async () => {
+    const userA = await loginAs("parent");
+    const userB = await loginAs("shikshak");
+    const expoToken = `ExponentPushToken[fix4-handover-${Date.now()}]`;
+
+    await request(app)
+      .post("/v1/notifications/push-token")
+      .set(auth(userA.token))
+      .send({ expo_token: expoToken, platform: "ios" });
+
+    await db
+      .update(device_push_tokens)
+      .set({ is_active: false })
+      .where(eq(device_push_tokens.expo_token, expoToken));
+
+    try {
+      const claimB = await request(app)
+        .post("/v1/notifications/push-token")
+        .set(auth(userB.token))
+        .send({ expo_token: expoToken, platform: "android" });
+      expect(claimB.status).toBe(200);
+
+      const [row] = await db
+        .select({ user_id: device_push_tokens.user_id, is_active: device_push_tokens.is_active })
+        .from(device_push_tokens)
+        .where(eq(device_push_tokens.expo_token, expoToken))
+        .limit(1);
+      expect(row?.user_id).toBe(userB.user.id);
+      expect(row?.is_active).toBe(true);
+    } finally {
+      await db.delete(device_push_tokens).where(eq(device_push_tokens.expo_token, expoToken));
+    }
+  });
 });
 
 describe("notifications — inbox + read flow", () => {

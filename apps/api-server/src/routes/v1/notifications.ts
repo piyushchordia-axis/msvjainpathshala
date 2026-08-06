@@ -39,24 +39,70 @@ router.post("/push-token", async (req: Request, res: Response) => {
     return;
   }
 
-  // Upsert on the unique expo_token: a device re-registering under a new user
-  // (or after reinstall) re-points the token to the current caller + reactivates.
-  await db
-    .insert(device_push_tokens)
-    .values({
-      user_id: req.authUser!.id,
-      expo_token: body.expo_token,
-      platform: body.platform ?? null,
-      is_active: true,
-    })
-    .onConflictDoUpdate({
-      target: device_push_tokens.expo_token,
-      set: {
-        user_id: req.authUser!.id,
-        platform: body.platform ?? null,
+  const callerId = req.authUser!.id;
+  const platform = body.platform ?? null;
+  const lockKey = `push-token:${body.expo_token}`;
+
+  // Read-then-write under an advisory lock so two devices cannot race a claim.
+  // Active tokens stay bound to their owner; inactive tokens may be reassigned
+  // (genuine DeviceNotRegistered / reinstall / device handover).
+  let claimedByOther = false;
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+
+    const [existing] = await tx
+      .select({
+        id: device_push_tokens.id,
+        user_id: device_push_tokens.user_id,
+        is_active: device_push_tokens.is_active,
+      })
+      .from(device_push_tokens)
+      .where(eq(device_push_tokens.expo_token, body.expo_token))
+      .limit(1);
+
+    if (!existing) {
+      await tx.insert(device_push_tokens).values({
+        user_id: callerId,
+        expo_token: body.expo_token,
+        platform,
         is_active: true,
-      },
-    });
+      });
+      return;
+    }
+
+    if (existing.user_id === callerId) {
+      await tx
+        .update(device_push_tokens)
+        .set({ platform, is_active: true, updated_at: new Date() })
+        .where(eq(device_push_tokens.id, existing.id));
+      return;
+    }
+
+    if (!existing.is_active) {
+      await tx
+        .update(device_push_tokens)
+        .set({
+          user_id: callerId,
+          platform,
+          is_active: true,
+          updated_at: new Date(),
+        })
+        .where(eq(device_push_tokens.id, existing.id));
+      return;
+    }
+
+    claimedByOther = true;
+  });
+
+  if (claimedByOther) {
+    fail(
+      res,
+      409,
+      "ERR_PUSH_TOKEN_CLAIMED",
+      "That device is registered to another account — sign out on that device first.",
+    );
+    return;
+  }
 
   ok(res, { ok: true });
 });

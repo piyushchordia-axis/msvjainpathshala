@@ -76,6 +76,8 @@ export const ERROR_CODES = [
   // Manual Punya award limits
   "ERR_AWARD_LIMIT_EXCEEDED",
   "ERR_AWARD_DAILY_LIMIT_EXCEEDED",
+  // Push tokens
+  "ERR_PUSH_TOKEN_CLAIMED",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -141,6 +143,7 @@ export const ErrorCode = {
   SMS_UNAVAILABLE: "ERR_SMS_UNAVAILABLE",
   AWARD_LIMIT_EXCEEDED: "ERR_AWARD_LIMIT_EXCEEDED",
   AWARD_DAILY_LIMIT_EXCEEDED: "ERR_AWARD_DAILY_LIMIT_EXCEEDED",
+  PUSH_TOKEN_CLAIMED: "ERR_PUSH_TOKEN_CLAIMED",
 } as const satisfies Record<string, ErrorCode>;
 
 /** Server + client upload size cap (multer + pre-upload guard). */
@@ -194,5 +197,9 @@ export const ERROR_MESSAGES = {
   ERR_AWARD_DAILY_LIMIT_EXCEEDED: {
     en: "You have reached today's award limit — try again tomorrow or ask a higher role to award.",
     hi: "आज की पुरस्कार सीमा पूरी हो चुकी है — कल फिर कोशिश करें या उच्च भूमिका से पुरस्कार दिलवाएँ।",
+  },
+  ERR_PUSH_TOKEN_CLAIMED: {
+    en: "That device is registered to another account — sign out on that device first.",
+    hi: "यह डिवाइस किसी अन्य खाते से जुड़ा है — पहले उस डिवाइस पर साइन आउट करें।",
   },
 } as const satisfies Partial<Record<ErrorCode, { en: string; hi: string }>>;
