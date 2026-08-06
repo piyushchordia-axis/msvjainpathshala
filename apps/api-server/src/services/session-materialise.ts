@@ -200,13 +200,14 @@ export async function rematerialiseBatch(batchId: string): Promise<{
   const { attempted, inserted } = await materialiseBatch(batchId);
 
   const parentIds = await parentUserIdsForBatch(batchId);
+  // Admin request path — rematerialise must not fail on notify (FIX #6).
   await notifyUsers({
     userIds: parentIds,
     title_en: "Class timetable updated",
     title_hi: "कक्षा समय सारणी अपडेट",
     body_en: "Your child's batch schedule has changed. Upcoming class dates may differ.",
     body_hi: "आपके बच्चे की बैच समय सारणी बदल गई है। आगामी कक्षा की तिथियाँ भिन्न हो सकती हैं।",
-  });
+  }).catch(() => undefined);
 
   // Optional parent-notify queue hop when Redis is available.
   await enqueueJob(QUEUE_NAMES.PARENT_NOTIFY, {

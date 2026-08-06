@@ -1,7 +1,7 @@
 /**
- * Best-effort in-app notifications (+ optional Expo push).
- * Push delivery never throws. Inbox insert failures currently still swallow
- * (FIX #6 will surface them); preference gating always applies before push.
+ * In-app notifications (+ optional Expo push).
+ * Preference reads and inbox inserts propagate failures so queue jobs can retry.
+ * Push delivery is best-effort and never throws.
  */
 import {
   db,
@@ -53,43 +53,44 @@ export async function notifyUsers(opts: {
 }): Promise<void> {
   const ids = [...new Set(opts.userIds)].filter(Boolean);
   if (ids.length === 0) return;
-  try {
-    // AT31 — honour users.notification_preferences before enqueueing.
-    const prefRows = await db
-      .select({
-        id: users.id,
-        prefs: users.notification_preferences,
-        preferred_language: users.preferred_language,
-      })
-      .from(users)
-      .where(inArray(users.id, ids));
-    const kind = opts.kind ?? "general";
-    const allowedIds = prefRows
-      .filter((r) => prefsAllowKind(r.prefs, kind))
-      .map((r) => r.id);
-    // Users missing from the prefs query (shouldn't happen) stay allowed.
-    const known = new Set(prefRows.map((r) => r.id));
-    for (const id of ids) if (!known.has(id)) allowedIds.push(id);
-    if (allowedIds.length === 0) return;
 
-    const langByUser = new Map(
-      prefRows.map((r) => [r.id, r.preferred_language] as const),
+  // AT31 — honour users.notification_preferences before enqueueing.
+  const prefRows = await db
+    .select({
+      id: users.id,
+      prefs: users.notification_preferences,
+      preferred_language: users.preferred_language,
+    })
+    .from(users)
+    .where(inArray(users.id, ids));
+  const kind = opts.kind ?? "general";
+  const allowedIds = prefRows
+    .filter((r) => prefsAllowKind(r.prefs, kind))
+    .map((r) => r.id);
+  // Users missing from the prefs query (shouldn't happen) stay allowed.
+  const known = new Set(prefRows.map((r) => r.id));
+  for (const id of ids) if (!known.has(id)) allowedIds.push(id);
+  if (allowedIds.length === 0) return;
+
+  const langByUser = new Map(
+    prefRows.map((r) => [r.id, r.preferred_language] as const),
+  );
+
+  if (opts.inbox !== false) {
+    await db.insert(notifications).values(
+      allowedIds.map((user_id) => ({
+        user_id,
+        kind,
+        title_en: opts.title_en,
+        title_hi: opts.title_hi,
+        body_en: opts.body_en,
+        body_hi: opts.body_hi,
+      })),
     );
+  }
 
-    if (opts.inbox !== false) {
-      await db.insert(notifications).values(
-        allowedIds.map((user_id) => ({
-          user_id,
-          kind,
-          title_en: opts.title_en,
-          title_hi: opts.title_hi,
-          body_en: opts.body_en,
-          body_hi: opts.body_hi,
-        })),
-      );
-    }
-
-    if (opts.push !== false) {
+  if (opts.push !== false) {
+    try {
       const tokens = await db
         .select({
           user_id: device_push_tokens.user_id,
@@ -116,9 +117,9 @@ export async function notifyUsers(opts: {
           }),
         );
       }
+    } catch (err) {
+      logger.warn({ err }, "notifyUsers push failed");
     }
-  } catch (err) {
-    logger.warn({ err }, "notifyUsers failed");
   }
 }
 

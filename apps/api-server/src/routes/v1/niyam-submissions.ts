@@ -330,6 +330,7 @@ async function notifyParentOfRejection(opts: {
 }): Promise<void> {
   if (!opts.parentId) return;
 
+  // Request-handler path — never fail reject on notify (FIX #6).
   await notifyUsers({
     userIds: [opts.parentId],
     kind: "niyam_rejected",
@@ -339,6 +340,8 @@ async function notifyParentOfRejection(opts: {
     body_hi: `${opts.studentName} का "${opts.niyamTitleHi ?? opts.niyamTitleEn}" जमा अस्वीकृत: ${opts.reason}`,
     push: true,
     data: { kind: "niyam_rejected", submission_id: opts.submissionId },
+  }).catch((err) => {
+    logger.warn({ err, submissionId: opts.submissionId }, "notifyParentOfRejection failed");
   });
 }
 

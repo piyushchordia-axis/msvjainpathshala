@@ -493,6 +493,108 @@ describe("notifications — dead token reaping (FIX #3)", () => {
   });
 });
 
+describe("notifications — inbox insert failures (FIX #6)", () => {
+  it("notifyUsers throws when the inbox insert fails", async () => {
+    const parent = await loginAs("parent");
+    const origInsert = db.insert.bind(db);
+    const insertSpy = vi.spyOn(db, "insert").mockImplementation(((table: unknown) => {
+      if (table === notifications) {
+        return {
+          values: () => Promise.reject(new Error("inbox insert failed")),
+        } as ReturnType<typeof db.insert>;
+      }
+      return origInsert(table as Parameters<typeof db.insert>[0]);
+    }) as typeof db.insert);
+
+    try {
+      await expect(
+        notifyUsers({
+          userIds: [parent.user.id],
+          kind: "general",
+          title_en: "Insert fail",
+          title_hi: "असफल",
+          body_en: "Body",
+          body_hi: "शरीर",
+          push: false,
+        }),
+      ).rejects.toThrow("inbox insert failed");
+    } finally {
+      insertSpy.mockRestore();
+    }
+  });
+
+  it("notifyUsers resolves when only the push transport fails", async () => {
+    const parent = await loginAs("parent");
+    const expoToken = `ExponentPushToken[fix6-push-fail-${Date.now()}]`;
+    await db.insert(device_push_tokens).values({
+      user_id: parent.user.id,
+      expo_token: expoToken,
+      platform: "ios",
+      is_active: true,
+    });
+
+    const spy = vi
+      .spyOn(pushModule, "sendPush")
+      .mockRejectedValue(new Error("Expo transport down"));
+    const title = `Fix6 push-fail ${Date.now()}`;
+    try {
+      await expect(
+        notifyUsers({
+          userIds: [parent.user.id],
+          kind: "general",
+          title_en: title,
+          title_hi: "पुश असफल",
+          body_en: "Body stays in inbox",
+          body_hi: "इनबॉक्स में रहता है",
+          push: true,
+        }),
+      ).resolves.toBeUndefined();
+
+      const inbox = await db
+        .select({ title_en: notifications.title_en })
+        .from(notifications)
+        .where(
+          and(eq(notifications.user_id, parent.user.id), eq(notifications.title_en, title)),
+        );
+      expect(inbox.length).toBe(1);
+    } finally {
+      spy.mockRestore();
+      await db.delete(device_push_tokens).where(eq(device_push_tokens.expo_token, expoToken));
+      await db
+        .delete(notifications)
+        .where(
+          and(eq(notifications.user_id, parent.user.id), eq(notifications.title_en, title)),
+        );
+    }
+  });
+
+  it("a caller in a fire-and-forget path is unaffected", async () => {
+    // homework-notify (and gallery-wall-notify) wrap notifyUsers in try/catch so
+    // a durable-insert throw does not crash the request handler.
+    const parent = await loginAs("parent");
+    const children = await request(app).get("/v1/me/children").set(auth(parent.token));
+    const childId = (children.body.data.items as Array<{ id: string }>)[0]?.id;
+    expect(childId).toBeTruthy();
+
+    const notifyMod = await import("../src/lib/notify");
+    const { notifyParentsHomeworkAssigned } = await import("../src/lib/homework-notify");
+    const notifySpy = vi
+      .spyOn(notifyMod, "notifyUsers")
+      .mockRejectedValue(new Error("inbox insert failed"));
+    try {
+      await expect(
+        notifyParentsHomeworkAssigned({
+          studentIds: [childId!],
+          assignmentTitle: "Fix6 fire-and-forget",
+        }),
+      ).resolves.toBeUndefined();
+      expect(notifySpy).toHaveBeenCalled();
+    } finally {
+      notifySpy.mockRestore();
+    }
+  });
+});
+
 describe("notifications — preferred language on push (FIX #5)", () => {
   it("a Hindi-preference user receives the Devanagari push body", async () => {
     const hiUser = await loginAs("parent");

@@ -135,7 +135,10 @@ async function notifyGpsFlag(
   body_hi: string,
 ): Promise<void> {
   const ids = await sanchalakUserIdsForCentre(centreId);
-  await notifyUsers({ userIds: ids, title_en, title_hi, body_en, body_hi });
+  // Request-handler / sync path — do not fail check-in on notify (FIX #6).
+  await notifyUsers({ userIds: ids, title_en, title_hi, body_en, body_hi }).catch((err) => {
+    logger.warn({ err, centreId }, "notifyGpsFlag failed");
+  });
 }
 
 export type CheckInInput = {
@@ -294,6 +297,8 @@ export async function checkInSession(input: CheckInInput): Promise<SessionRow> {
           title_hi: "अनिर्धारित सत्र शुरू",
           body_en: `A Guruji started an unscheduled session at ${bcSoft.centre_name}.`,
           body_hi: `${bcSoft.centre_name} पर गुरुजी ने एक अनिर्धारित सत्र शुरू किया।`,
+        }).catch((err) => {
+          logger.warn({ err, centreId: bcSoft.centre_id }, "unscheduled session notify failed");
         });
         // AT32.3 — never page for an absent fix; gps_flagged is measured-and-wrong only.
         if (gps.gps_flagged) {
@@ -597,6 +602,8 @@ export async function cancelSession(input: CancelInput): Promise<SessionRow> {
     title_hi: "कक्षा रद्द",
     body_en: `Today's class at ${bc.centre_name} has been cancelled. Reason: ${reason}`,
     body_hi: `${bc.centre_name} की आज की कक्षा रद्द कर दी गई है। कारण: ${reason}`,
+  }).catch((err) => {
+    logger.warn({ err, sessionId: session.id }, "session cancel notify failed");
   });
 
   const [updated] = await db

@@ -9,6 +9,7 @@ import { and, eq } from "drizzle-orm";
 import { niyamBadgeLabel, niyamBadgeLadder } from "@workspace/api-zod";
 import { awardPunya } from "./punya";
 import { notifyUsers } from "./notify";
+import { logger } from "./logger";
 import type { NiyamPeriodType } from "./niyam-period";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -105,6 +106,7 @@ export async function notifyBadgesPush(opts: {
   const labelsEn = opts.badges.map((b) => niyamBadgeLabel(b.badge_key, "en")).join(", ");
   const labelsHi = opts.badges.map((b) => niyamBadgeLabel(b.badge_key, "hi")).join(", ");
 
+  // Request-handler path — never fail approve/badge award on notify.
   await notifyUsers({
     userIds: [opts.parentUserId],
     kind: "niyam_badge",
@@ -117,5 +119,7 @@ export async function notifyBadgesPush(opts: {
       kind: "niyam_badge",
       badges: opts.badges.map((b) => b.badge_key),
     },
+  }).catch((err) => {
+    logger.warn({ err, parentUserId: opts.parentUserId }, "notifyBadgesPush failed");
   });
 }
