@@ -2,9 +2,10 @@
  * attendance.post_process — AT22 streaks, AT31 parent push debounce + admin feed.
  * Delivery is via BullMQ (QUEUE_NAMES.ATTENDANCE_POST_PROCESS / PARENT_NOTIFY).
  *
- * PERF #14 — bound history to STREAK_HISTORY_BOUND eligible sessions; recompute
- * all marked students from one grouped read; batch streak UPDATEs. Parent
- * enqueue stays per student (AT31 debounce jobId). Punya awards stay guarded (AT20).
+ * FIX #12 / PERF #14 — bound history to STREAK_HISTORY_BOUND eligible sessions;
+ * recompute all marked students from one grouped read; batch streak UPDATEs.
+ * Parent enqueue stays per student (AT31 debounce jobId — BullMQ addBulk cannot
+ * preserve the per-id remove/re-add slide). Punya awards stay guarded (AT20).
  */
 import {
   db,
