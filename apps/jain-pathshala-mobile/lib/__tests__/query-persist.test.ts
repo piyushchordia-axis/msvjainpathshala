@@ -19,6 +19,13 @@ describe("query persist allow-list", () => {
     expect(shouldPersistQueryKey(["me", "punya", "student-1"])).toBe(false);
     expect(shouldPersistQueryKey(["me", "notifications"])).toBe(false);
   });
+
+  it("never persists the admin gallery key (opted-out family photos)", () => {
+    expect(shouldPersistQueryKey(["admin", "gallery"])).toBe(false);
+    expect(
+      shouldPersistQueryKey(["admin", "gallery", { filter: "needs_attention" }]),
+    ).toBe(false);
+  });
 });
 
 /**

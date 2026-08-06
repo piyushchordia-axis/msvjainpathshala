@@ -182,6 +182,23 @@ export function canAdministerExams(role: Role | null | undefined): boolean {
   return !!role && EXAM_ADMIN_ROLES.includes(role);
 }
 
+/**
+ * Who may see organisation-wide donation figures.
+ *
+ * Deliberately NARROWER than canAccessAdminPanel — sanchalak and shikshak can
+ * open the admin panel but must NOT see donation totals, matching the
+ * /admin/donations page gate. Do not "fix" this by reusing ADMIN_PANEL_ROLES.
+ *
+ * `donations` carries no centre_id and no direct city_id (only a nullable
+ * campaign_id → donation_campaigns.city_id), so a centre-scoped sum is not
+ * expressible. The figure is therefore withheld, never silently national.
+ */
+export const DONATION_VIEW_ROLES: Role[] = ["super_admin", "state_admin", "city_admin"];
+
+export function canViewDonations(role: Role | null | undefined): boolean {
+  return !!role && DONATION_VIEW_ROLES.includes(role);
+}
+
 /* ------------------------------------------------------------------ */
 /* Auth                                                               */
 /* ------------------------------------------------------------------ */
@@ -247,7 +264,8 @@ export const overviewSchema = z.object({
   attendance_rate_30d: z.number(),
   punya_awarded_30d: z.number(),
   msv_active: z.number(),
-  donations_total_paise_ytd: z.number(),
+  /** Omitted entirely for roles outside DONATION_VIEW_ROLES — never a national figure on a scoped endpoint. */
+  donations_total_paise_ytd: z.number().optional(),
 });
 export type OverviewPayload = z.infer<typeof overviewSchema>;
 
@@ -258,6 +276,10 @@ export const enrolmentRowSchema = z.object({
   requested_centre_id: z.string(),
   requested_batch_id: z.string(),
   status: enrolmentStatusSchema,
+  student_name: z.string().nullable().optional(),
+  student_code: z.string().nullable().optional(),
+  centre_name: z.string().nullable().optional(),
+  batch_name: z.string().nullable().optional(),
 });
 export type EnrolmentRow = z.infer<typeof enrolmentRowSchema>;
 
@@ -269,6 +291,10 @@ export const adminStudentRowSchema = z.object({
   dob: z.string().nullable(),
   msv_status: z.string(),
   status: studentStatusSchema,
+  batch_id: z.string().nullable().optional(),
+  centre_id: z.string().nullable().optional(),
+  batch_name: z.string().nullable().optional(),
+  centre_name: z.string().nullable().optional(),
 });
 export type AdminStudentRow = z.infer<typeof adminStudentRowSchema>;
 
@@ -687,5 +713,9 @@ export const shikshakSessionRowSchema = z.object({
   duration_minutes: z.number().nullable().optional(),
   auto_checked_out: z.boolean().optional(),
   unscheduled: z.boolean().optional(),
+  conducted_by: z.string().nullable().optional(),
+  conducted_by_name: z.string().nullable().optional(),
+  scheduled_start_time: z.string().nullable().optional(),
+  scheduled_end_time: z.string().nullable().optional(),
 });
 export type ShikshakSessionRow = z.infer<typeof shikshakSessionRowSchema>;

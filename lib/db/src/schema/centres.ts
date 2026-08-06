@@ -85,6 +85,11 @@ export const centre_holidays = pgTable(
     centre_id: uuid("centre_id")
       .notNull()
       .references(() => centres.id, { onDelete: "cascade" }),
+    /**
+     * Single calendar day. CLAUDE.md AT10 speaks of a holiday "range", but this
+     * column is one date — a Diwali week is currently seven rows. Future: either
+     * add start/end columns or amend AT10. Do not invent a range join here.
+     */
     holiday_date: date("holiday_date").notNull(),
     reason: text("reason"),
     /** AT30 — public GET /v1/centres/:id/holidays returns published rows only. */

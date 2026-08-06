@@ -753,6 +753,7 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
       curriculum_topic_hi: sql<string | null>`case when ${curriculum_items.id} is null then null else ${curriculum_sections.title_hi} || ': ' || ${curriculum_items.title_hi} end`,
       batch_id: homework_assignments.batch_id,
       batch_name: batches.name,
+      centre_id: batches.centre_id,
       centre_name: centres.name,
       created_at: homework_assignments.created_at,
     })

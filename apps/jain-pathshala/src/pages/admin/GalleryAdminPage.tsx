@@ -175,10 +175,18 @@ export default function GalleryAdminPage() {
   }
 
   async function takedown(item: AdminGalleryItem) {
+    const reason = window.prompt(
+      'Why are you taking this down? (saved to the audit log, at least 5 characters)',
+    );
+    if (reason == null) return;
+    if (reason.trim().length < 5) {
+      toast.error('Write a short reason — at least 5 characters.');
+      return;
+    }
     if (!window.confirm('Remove this item from the gallery? This cannot be undone.')) return;
     setRowBusy(item.id);
     try {
-      await del(`/v1/gallery/admin/${item.id}`);
+      await del(`/v1/gallery/admin/${item.id}`, { reason: reason.trim() });
       toast.success('Item removed.');
       void reload();
     } catch (err) {

@@ -27,7 +27,7 @@ import {
   centres,
   type User,
 } from "@workspace/db";
-import { and, asc, desc, eq, gt, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { canFeatureMedia } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
@@ -48,6 +48,50 @@ import {
 const router: IRouter = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ISO_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Keyset cursor: `isoTimestamp|uuid` base64url. */
+function encodeKeysetCursor(value: string, id: string): string {
+  return Buffer.from(`${value}|${id}`, "utf8").toString("base64url");
+}
+
+function decodeKeysetCursor(raw: unknown): { value: string; id: string } | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const decoded = Buffer.from(raw, "base64url").toString("utf8");
+    const i = decoded.indexOf("|");
+    if (i < 0) return null;
+    const value = decoded.slice(0, i);
+    const id = decoded.slice(i + 1);
+    if (!ISO_TS_RE.test(value) || !UUID_RE.test(id)) return null;
+    return { value, id };
+  } catch {
+    return null;
+  }
+}
+
+function parseSince(raw: unknown): Date | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const s = raw.trim();
+  if (DATE_RE.test(s)) {
+    const d = new Date(`${s}T00:00:00.000Z`);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  if (ISO_TS_RE.test(s)) {
+    const d = new Date(s);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+
+function parseBoolQuery(raw: unknown): boolean | undefined {
+  if (raw === undefined || raw === null || raw === "") return undefined;
+  const s = String(raw).toLowerCase();
+  if (s === "true" || s === "1" || s === "yes") return true;
+  if (s === "false" || s === "0" || s === "no") return false;
+  return undefined;
+}
 
 function requireFeatureMedia(req: Request, res: Response): boolean {
   if (!canFeatureMedia(req.authUser?.role)) {
@@ -247,21 +291,74 @@ router.post("/admin", requireAuth, requireAdminPanel, async (req: Request, res: 
   );
 });
 
-/* GET /v1/gallery/admin?limit= — admin listing */
+/* GET /v1/gallery/admin?limit=&cursor=&is_public=&opt_in=&since= — admin listing */
 router.get("/admin", requireAuth, requireAdminPanel, async (req: Request, res: Response) => {
-  const limit = clampLimit(req.query.limit, 100, 500);
+  const limit = clampLimit(req.query.limit, 40, 200);
   const scope = await resolveAdminScope(req.authUser!);
+  const cursor = decodeKeysetCursor(req.query.cursor);
+
+  const isPublic = parseBoolQuery(req.query.is_public);
+  if (req.query.is_public !== undefined && req.query.is_public !== "" && isPublic === undefined) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "is_public must be true or false.");
+    return;
+  }
+  const optIn = parseBoolQuery(req.query.opt_in);
+  if (req.query.opt_in !== undefined && req.query.opt_in !== "" && optIn === undefined) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "opt_in must be true or false.");
+    return;
+  }
+  const since =
+    req.query.since !== undefined && req.query.since !== ""
+      ? parseSince(req.query.since)
+      : null;
+  if (req.query.since !== undefined && req.query.since !== "" && !since) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "since must be YYYY-MM-DD or an ISO timestamp.");
+    return;
+  }
 
   const owner = users;
-  let scopeWhere;
+  const filters = [isNull(gallery_items.deleted_at)];
+
   if (scope.centreIds === null) {
-    scopeWhere = undefined;
+    // super_admin — no centre gate
   } else if (scope.centreIds.length === 0) {
-    scopeWhere = isNull(gallery_items.student_id);
+    filters.push(isNull(gallery_items.student_id));
   } else {
-    scopeWhere = or(
-      isNull(gallery_items.student_id),
-      inArray(students.centre_id, scope.centreIds),
+    filters.push(
+      or(isNull(gallery_items.student_id), inArray(students.centre_id, scope.centreIds))!,
+    );
+  }
+
+  if (isPublic !== undefined) {
+    filters.push(eq(gallery_items.is_public, isPublic));
+  }
+  if (optIn === true) {
+    filters.push(
+      and(
+        sql`${gallery_items.student_id} is not null`,
+        eq(owner.gallery_visibility_opt_in, true),
+      )!,
+    );
+  } else if (optIn === false) {
+    // Student-tied rows whose family has not opted in (Q6) — still listed so
+    // Sanchalak can take them down; public surfaces never show these.
+    filters.push(
+      and(
+        sql`${gallery_items.student_id} is not null`,
+        or(eq(owner.gallery_visibility_opt_in, false), isNull(owner.gallery_visibility_opt_in))!,
+      )!,
+    );
+  }
+  if (since) {
+    filters.push(gte(gallery_items.created_at, since));
+  }
+  if (cursor) {
+    const cursorAt = new Date(cursor.value);
+    filters.push(
+      or(
+        lt(gallery_items.created_at, cursorAt),
+        and(eq(gallery_items.created_at, cursorAt), lt(gallery_items.id, cursor.id)),
+      )!,
     );
   }
 
@@ -288,11 +385,17 @@ router.get("/admin", requireAuth, requireAdminPanel, async (req: Request, res: R
     .leftJoin(centres, eq(centres.id, students.centre_id))
     .leftJoin(niyams, eq(niyams.id, gallery_items.niyam_id))
     .leftJoin(owner, eq(owner.id, sql`coalesce(${students.parent_id}, ${students.user_id})`))
-    .where(and(isNull(gallery_items.deleted_at), scopeWhere))
-    .orderBy(desc(gallery_items.created_at))
-    .limit(limit);
+    .where(and(...filters))
+    .orderBy(desc(gallery_items.created_at), desc(gallery_items.id))
+    .limit(limit + 1);
 
-  const items = rows.map((r) => ({
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  const nextCursor =
+    hasMore && last ? encodeKeysetCursor(last.created_at.toISOString(), last.id) : null;
+
+  const items = page.map((r) => ({
     id: r.id,
     student_id: r.student_id,
     first_name: r.student_id ? firstName(r.full_name) : "",
@@ -310,7 +413,7 @@ router.get("/admin", requireAuth, requireAdminPanel, async (req: Request, res: R
     consent_opt_in: r.student_id ? Boolean(r.opt_in) : null,
     created_at: r.created_at.toISOString(),
   }));
-  ok(res, { items }, { count: items.length });
+  ok(res, { items }, { count: items.length, has_more: hasMore, next_cursor: nextCursor });
 });
 
 /** Load a non-deleted item + its student's centre, enforcing caller scope. */
@@ -652,11 +755,27 @@ router.get("/admin/queue", requireAuth, async (req: Request, res: Response) => {
   ok(res, { items }, { count: items.length, next_cursor: nextCursor });
 });
 
-/* DELETE /v1/gallery/admin/:id — soft-delete takedown (scoped) */
+/* DELETE /v1/gallery/admin/:id — soft-delete takedown (scoped); reason required for audit */
+const takedownSchema = z.object({
+  reason: z.string().trim().min(5).max(500),
+});
+
 router.delete("/admin/:id", requireAuth, requireAdminPanel, async (req: Request, res: Response) => {
   const id = String(req.params.id);
   if (!UUID_RE.test(id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Gallery item not found.");
+    return;
+  }
+  let body: z.infer<typeof takedownSchema>;
+  try {
+    body = takedownSchema.parse(req.body ?? {});
+  } catch {
+    fail(
+      res,
+      422,
+      "ERR_VALIDATION_FAILED",
+      "Provide a short reason (at least 5 characters) for the audit log.",
+    );
     return;
   }
   const item = await loadScopedItem(req, id);
@@ -694,6 +813,7 @@ router.delete("/admin/:id", requireAuth, requireAdminPanel, async (req: Request,
     entityKind: "gallery_item",
     entityId: id,
     summary: "Took down a gallery item.",
+    metadata: { reason: body.reason },
   });
 
   ok(res, { id: row.id, deleted: true });

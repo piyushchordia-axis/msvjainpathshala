@@ -32,7 +32,6 @@ import { awardPunya, reversePunya } from "../../lib/punya";
 import { auditFromReq, writeAudit } from "../../lib/audit";
 import {
   clampLimit,
-  inScope,
   ownedStudentId,
   scopedCentreFilter,
 } from "../../lib/route-helpers";
@@ -766,6 +765,7 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
       student_id: niyam_submissions.student_id,
       student_name: students.full_name,
       student_code: students.student_code,
+      centre_id: students.centre_id,
       batch_id: students.batch_id,
       batch_name: batches.name,
       niyam_id: niyam_submissions.niyam_id,
@@ -833,6 +833,8 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
     period_key: r.period_key,
     status: r.status,
     created_at: r.created_at.toISOString(),
+    // Q12 — list stays centre-scoped; clients disable actions when false.
+    can_decide: inBatchWriteScope(scope, r.batch_id, r.centre_id),
     media: (bySub.get(r.id) ?? []).map((m) => ({
       id: m.id,
       url: signUploadUrl(m.url),
@@ -986,6 +988,7 @@ router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response
       created_at: niyam_submissions.created_at,
       punya_transaction_id: niyam_submissions.punya_transaction_id,
       centre_id: students.centre_id,
+      batch_id: students.batch_id,
       parent_id: students.parent_id,
       student_name: students.full_name,
       niyam_type: niyams.niyam_type,
@@ -997,7 +1000,8 @@ router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response
     .innerJoin(niyams, eq(niyams.id, niyam_submissions.niyam_id))
     .where(eq(niyam_submissions.id, String(req.params.id)))
     .limit(1);
-  if (!sub || !inScope(scope, sub.centre_id)) {
+  // Q12 — same batch write gate as approve (no sanchalak special-case).
+  if (!sub || !inBatchWriteScope(scope, sub.batch_id, sub.centre_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Submission not found."); return;
   }
 

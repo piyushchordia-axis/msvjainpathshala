@@ -24,6 +24,7 @@ import {
   niyam_submissions,
   niyam_submission_media,
   centre_holidays,
+  centre_monthly_reports,
   settings,
   shikshak_batch_assignments,
   shikshak_centre_assignments,
@@ -53,6 +54,14 @@ import { isClientSettingKey } from "../../lib/client-settings";
 import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
 import { rejectionWindowFields } from "../../lib/niyam-constants";
 import { signUploadUrl } from "../../lib/file-tokens";
+import { enqueueJob } from "../../lib/queues";
+import { QUEUE_NAMES } from "@jp/shared/constants";
+import { isValidReportMonth } from "../../lib/centre-monthly-report";
+import { registerReportJobs } from "../../jobs/report-jobs";
+import { logger } from "../../lib/logger";
+
+/** Ensure inline (no-Redis) test/dev can run report.generation. */
+registerReportJobs();
 import { ErrorCode } from "@workspace/api-zod";
 
 const phoneSchema = z.string().regex(/^\+[1-9]\d{6,14}$/, "Phone must be E.164 (+91…)");
@@ -87,16 +96,25 @@ router.get("/centres", async (req: Request, res: Response) => {
       code: centres.code,
       name: centres.name,
       locality: centres.locality,
+      pincode: centres.pincode,
       city_name: cities.name,
       state_name: states.name,
       contact_phone: centres.contact_phone,
+      contact_email: centres.contact_email,
+      gps_radius_meters: centres.gps_radius_meters,
       status: centres.status,
-      batch_count: sql<number>`count(${batches.id})::int`,
+      batch_count: sql<number>`count(distinct ${batches.id})::int`,
+      active_student_count: sql<number>`(
+        select count(*)::int from ${students}
+        where ${students.centre_id} = ${centres.id}
+          and ${students.status} = 'active'
+          and ${students.deleted_at} is null
+      )`,
     })
     .from(centres)
     .innerJoin(cities, eq(cities.id, centres.city_id))
     .innerJoin(states, eq(states.id, centres.state_id))
-    .leftJoin(batches, and(eq(batches.centre_id, centres.id), eq(batches.status, "active")))
+    .leftJoin(batches, and(eq(batches.centre_id, centres.id), eq(batches.status, "active"), isNull(batches.deleted_at)))
     .where(and(isNull(centres.deleted_at), centreFilter))
     .groupBy(centres.id, cities.name, states.name)
     .orderBy(asc(states.name), asc(cities.name), asc(centres.name));
@@ -682,9 +700,333 @@ router.get(
       .from(centre_holidays)
       .where(eq(centre_holidays.centre_id, centreId))
       .orderBy(desc(centre_holidays.holiday_date));
-    ok(res, { items: rows }, { count: rows.length });
+
+    // Per-row estimate for the delete confirm ("restore N cancelled sessions").
+    const { countRestorableSessions } = await import("../../services/session-materialise");
+    const items = await Promise.all(
+      rows.map(async (r) => ({
+        ...r,
+        restorable_session_count: await countRestorableSessions(centreId, r.holiday_date),
+      })),
+    );
+    ok(res, { items }, { count: items.length });
   },
 );
+
+const monthlyReportBody = z.object({ month: z.string().regex(/^\d{4}-\d{2}$/) });
+
+/* POST /v1/admin/centres/:id/reports/monthly — enqueue centre monthly PDF */
+router.post(
+  "/centres/:id/reports/monthly",
+  async (req: Request, res: Response) => {
+    const centreId = String(req.params.id);
+    if (!UUID_RE.test(centreId)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Centre not found.");
+      return;
+    }
+    const parsed = monthlyReportBody.safeParse(req.body ?? {});
+    if (!parsed.success || !isValidReportMonth(parsed.data.month)) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "month must be YYYY-MM.");
+      return;
+    }
+    const month = parsed.data.month;
+    const nowYm = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }).slice(0, 7);
+    if (month > nowYm) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Cannot generate a report for a future month.");
+      return;
+    }
+
+    const scope = await resolveAdminScope(req.authUser!);
+    if (scope.centreIds !== null && !scope.centreIds.includes(centreId)) {
+      fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope.");
+      return;
+    }
+    const [centre] = await db
+      .select({ id: centres.id })
+      .from(centres)
+      .where(and(eq(centres.id, centreId), isNull(centres.deleted_at)))
+      .limit(1);
+    if (!centre) {
+      fail(res, 404, "ERR_NOT_FOUND", "Centre not found.");
+      return;
+    }
+
+    const [row] = await db
+      .insert(centre_monthly_reports)
+      .values({
+        centre_id: centreId,
+        month,
+        status: "queued",
+        generated_by: req.authUser!.id,
+      })
+      .returning({ id: centre_monthly_reports.id });
+
+    await auditFromReq(req, {
+      action: "create",
+      entityKind: "centre_monthly_report",
+      entityId: row.id,
+      summary: `Queued monthly report for centre ${centreId} (${month}).`,
+      metadata: { centre_id: centreId, month },
+    });
+
+    // Return queued immediately; job may run inline when REDIS_URL is unset.
+    void enqueueJob(QUEUE_NAMES.REPORT_GENERATION, { report_id: row.id }).catch((err) => {
+      logger.warn({ err, reportId: row.id }, "report.generation enqueue failed");
+    });
+
+    ok(res, { job_id: row.id, status: "queued" as const });
+  },
+);
+
+/* GET /v1/admin/centres/:id/reports?month=YYYY-MM — list with signed PDF URLs */
+router.get("/centres/:id/reports", async (req: Request, res: Response) => {
+  const centreId = String(req.params.id);
+  if (!UUID_RE.test(centreId)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Centre not found.");
+    return;
+  }
+  const scope = await resolveAdminScope(req.authUser!);
+  if (scope.centreIds !== null && !scope.centreIds.includes(centreId)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope.");
+    return;
+  }
+
+  const monthQ = typeof req.query.month === "string" ? req.query.month : null;
+  if (monthQ && !isValidReportMonth(monthQ)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "month must be YYYY-MM.");
+    return;
+  }
+
+  const conditions = [eq(centre_monthly_reports.centre_id, centreId)];
+  if (monthQ) conditions.push(eq(centre_monthly_reports.month, monthQ));
+
+  const rows = await db
+    .select({
+      id: centre_monthly_reports.id,
+      centre_id: centre_monthly_reports.centre_id,
+      month: centre_monthly_reports.month,
+      status: centre_monthly_reports.status,
+      pdf_url: centre_monthly_reports.pdf_url,
+      error_message: centre_monthly_reports.error_message,
+      created_at: centre_monthly_reports.created_at,
+      updated_at: centre_monthly_reports.updated_at,
+    })
+    .from(centre_monthly_reports)
+    .where(and(...conditions))
+    .orderBy(desc(centre_monthly_reports.created_at))
+    .limit(50);
+
+  const items = rows.map((r) => ({
+    id: r.id,
+    centre_id: r.centre_id,
+    month: r.month,
+    status: r.status,
+    // Long-lived download like progress reports — still signed, never a public bucket URL.
+    pdf_url: r.pdf_url ? signUploadUrl(r.pdf_url, 7 * 24 * 3600) : null,
+    error_message: r.error_message,
+    created_at: r.created_at,
+    updated_at: r.updated_at,
+  }));
+  ok(res, { items }, { count: items.length });
+});
+
+/* GET /v1/admin/attendance/alerts — centre monitor (read-only; AT27 / AT6 / AT32) */
+router.get("/attendance/alerts", async (req: Request, res: Response) => {
+  const scope = await resolveAdminScope(req.authUser!);
+  const centreId =
+    typeof req.query.centre_id === "string" && req.query.centre_id.length > 0
+      ? String(req.query.centre_id)
+      : null;
+  if (!centreId) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "centre_id is required.");
+    return;
+  }
+  if (scope.centreIds !== null && !scope.centreIds.includes(centreId)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope.");
+    return;
+  }
+
+  const { todayIst } = await import("../../services/session-materialise");
+  const { findConsecutiveAbsenceCandidates } = await import(
+    "../../services/consecutive-absence"
+  );
+  const date =
+    typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+      ? req.query.date
+      : todayIst();
+
+  const candidates = await findConsecutiveAbsenceCandidates({ centreId });
+  const studentIds = candidates.map((c) => c.student_id);
+
+  const studentMeta =
+    studentIds.length === 0
+      ? []
+      : await db
+          .select({
+            id: students.id,
+            batch_id: students.batch_id,
+            batch_name: batches.name,
+            parent_phone: users.phone,
+          })
+          .from(students)
+          .leftJoin(batches, eq(batches.id, students.batch_id))
+          .leftJoin(users, eq(users.id, students.parent_id))
+          .where(inArray(students.id, studentIds));
+
+  const lastAttendedRows =
+    studentIds.length === 0
+      ? []
+      : (
+          await db.execute(sql`
+          select distinct on (a.student_id)
+            a.student_id::text as student_id,
+            s.scheduled_date::text as last_attended_date
+          from attendance a
+          inner join sessions s on s.id = a.session_id
+          where a.student_id in (${sql.join(
+            studentIds.map((id) => sql`${id}::uuid`),
+            sql`, `,
+          )})
+            and a.status in ('present', 'late')
+            and s.status <> 'cancelled'
+          order by a.student_id, s.scheduled_date desc, s.id desc
+        `)
+        );
+  const lastAttended = new Map<string, string>();
+  const lastRows =
+    (lastAttendedRows as unknown as { rows?: Array<{ student_id: string; last_attended_date: string }> })
+      .rows ??
+    (Array.isArray(lastAttendedRows)
+      ? (lastAttendedRows as Array<{ student_id: string; last_attended_date: string }>)
+      : []);
+  for (const r of lastRows) {
+    lastAttended.set(r.student_id, r.last_attended_date);
+  }
+
+  const metaByStudent = new Map(studentMeta.map((s) => [s.id, s]));
+  const consecutive_absences = candidates.map((c) => {
+    const meta = metaByStudent.get(c.student_id);
+    return {
+      student_id: c.student_id,
+      student_name: c.full_name,
+      batch_id: meta?.batch_id ?? null,
+      batch_name: meta?.batch_name ?? null,
+      consecutive_absent_count: Array.isArray(c.session_ids) ? c.session_ids.length : 3,
+      last_attended_date: lastAttended.get(c.student_id) ?? null,
+      parent_phone: meta?.parent_phone ?? null,
+    };
+  });
+
+  // Today's (or ?date) sessions past scheduled_end (IST) with zero attendance rows (AT6).
+  const sessionRows = await db
+    .select({
+      id: sessions.id,
+      batch_id: sessions.batch_id,
+      batch_name: batches.name,
+      centre_name: centres.name,
+      status: sessions.status,
+      scheduled_date: sessions.scheduled_date,
+      scheduled_start_time: sessions.scheduled_start_time,
+      scheduled_end_time: sessions.scheduled_end_time,
+      check_in_at: sessions.check_in_at,
+      gps_flagged: sessions.gps_flagged,
+      gps_unverified: sessions.gps_unverified,
+      attendance_count: sql<number>`(
+        select count(*)::int from attendance a where a.session_id = ${sessions.id}
+      )`,
+    })
+    .from(sessions)
+    .innerJoin(batches, eq(batches.id, sessions.batch_id))
+    .innerJoin(centres, eq(centres.id, batches.centre_id))
+    .where(
+      and(
+        eq(batches.centre_id, centreId),
+        eq(sessions.scheduled_date, date),
+        isNull(batches.deleted_at),
+        sql`${sessions.status} <> 'cancelled'`,
+      ),
+    )
+    .orderBy(asc(sessions.scheduled_start_time));
+
+  const nowMs = Date.now();
+  function endInstantMs(scheduledDate: string, endTime: string | null): number | null {
+    if (!endTime) return null;
+    // scheduled_date + end_time interpreted in Asia/Kolkata → UTC instant
+    const iso = `${scheduledDate}T${String(endTime).slice(0, 8)}+05:30`;
+    const t = Date.parse(iso);
+    return Number.isFinite(t) ? t : null;
+  }
+
+  const unmarked_sessions = sessionRows
+    .filter((s) => {
+      if (Number(s.attendance_count) > 0) return false;
+      const endMs = endInstantMs(String(s.scheduled_date), s.scheduled_end_time);
+      return endMs != null && nowMs > endMs;
+    })
+    .map((s) => ({
+      id: s.id,
+      batch_id: s.batch_id,
+      batch_name: s.batch_name,
+      centre_name: s.centre_name,
+      status: s.status,
+      scheduled_date: String(s.scheduled_date),
+      scheduled_start_time: s.scheduled_start_time,
+      scheduled_end_time: s.scheduled_end_time,
+      label: "not_marked" as const,
+    }));
+
+  // AT32.3 — gps_flagged means measured-and-wrong; no-fix is pastoral "not checked in".
+  const gps_flagged_sessions = sessionRows
+    .filter((s) => s.gps_flagged === true)
+    .map((s) => ({
+      id: s.id,
+      batch_id: s.batch_id,
+      batch_name: s.batch_name,
+      centre_name: s.centre_name,
+      status: s.status,
+      scheduled_date: String(s.scheduled_date),
+      scheduled_start_time: s.scheduled_start_time,
+      check_in_at: s.check_in_at ? s.check_in_at.toISOString() : null,
+      gps_flagged: true as const,
+    }));
+
+  const not_checked_in_sessions = sessionRows
+    .filter((s) => s.check_in_at == null && s.gps_flagged !== true)
+    .map((s) => ({
+      id: s.id,
+      batch_id: s.batch_id,
+      batch_name: s.batch_name,
+      centre_name: s.centre_name,
+      status: s.status,
+      scheduled_date: String(s.scheduled_date),
+      scheduled_start_time: s.scheduled_start_time,
+      check_in_at: null as null,
+      gps_unverified: s.gps_unverified === true,
+      label: "not_checked_in" as const,
+    }));
+
+  // Alert badge excludes pastoral "not checked in" (AT32.4).
+  const alert_count =
+    consecutive_absences.length + unmarked_sessions.length + gps_flagged_sessions.length;
+
+  ok(
+    res,
+    {
+      consecutive_absences,
+      unmarked_sessions,
+      gps_flagged_sessions,
+      not_checked_in_sessions,
+      date,
+    },
+    {
+      consecutive_absence_count: consecutive_absences.length,
+      unmarked_count: unmarked_sessions.length,
+      gps_flagged_count: gps_flagged_sessions.length,
+      not_checked_in_count: not_checked_in_sessions.length,
+      alert_count,
+    },
+  );
+});
 
 /* GET /v1/admin/attendance/centres/:id/log — centre attendance log (frozen) */
 router.get("/attendance/centres/:id/log", async (req: Request, res: Response) => {

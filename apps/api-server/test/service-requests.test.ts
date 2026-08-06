@@ -408,4 +408,95 @@ describe("service-requests", () => {
     expect(detail.status).toBe(404);
     expect(detail.body.error.code).toBe("ERR_NOT_FOUND");
   });
+
+  it("sanchalak sees only centre-scoped requests; claim, resolve, parent reply reopens", async () => {
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const marker = `SR-sanchalak-${Date.now()}`;
+
+    const create = await request(app)
+      .post("/v1/service-requests")
+      .set(auth(parent.token))
+      .send({
+        category: "general",
+        subject: marker,
+        description: "Centre-scoped inbox check for the Sanchalak.",
+        student_id: studentId,
+      });
+    expect(create.status).toBe(200);
+    const requestId: string = create.body.data.id;
+
+    // Plant an out-of-scope request on another centre (Kothrud) — same parent row is fine;
+    // centre_id alone drives the admin list filter.
+    const otherCentre = await pool.query<{ id: string }>(
+      `select id from centres where name = 'Kothrud Jain Pathshala' limit 1`,
+    );
+    expect(otherCentre.rows[0]?.id).toBeTruthy();
+    const foreign = await pool.query<{ id: string }>(
+      `insert into service_requests
+         (parent_user_id, category, subject, description, status, centre_id)
+       values ($1, 'general', $2, 'Out of scope for Mumbai Sanchalak.', 'submitted', $3)
+       returning id`,
+      [parent.user.id, `SR-foreign-${Date.now()}`, otherCentre.rows[0]!.id],
+    );
+    const foreignId = foreign.rows[0]!.id;
+
+    const sanchalak = await loginAs("sanchalak");
+    const list = await request(app)
+      .get("/v1/service-requests?limit=300")
+      .set(auth(sanchalak.token));
+    expect(list.status).toBe(200);
+    const ids = (list.body.data.items as Array<{ id: string }>).map((r) => r.id);
+    expect(ids).toContain(requestId);
+    expect(ids).not.toContain(foreignId);
+
+    // Claim → in_review + assigned_to self.
+    const claim = await request(app)
+      .post(`/v1/service-requests/${requestId}/assign`)
+      .set(auth(sanchalak.token))
+      .send({});
+    expect(claim.status).toBe(200);
+    expect(claim.body.data.status).toBe("in_review");
+
+    const afterClaim = await request(app)
+      .get(`/v1/service-requests/${requestId}`)
+      .set(auth(sanchalak.token));
+    expect(afterClaim.status).toBe(200);
+    expect(afterClaim.body.data.status).toBe("in_review");
+    expect(afterClaim.body.data.assigned_to).toBe(sanchalak.user.id);
+
+    // Resolve, then parent reply reopens onto the open list.
+    const resolve = await request(app)
+      .post(`/v1/service-requests/${requestId}/resolve`)
+      .set(auth(sanchalak.token))
+      .send({});
+    expect(resolve.status).toBe(200);
+    expect(resolve.body.data.status).toBe("resolved");
+
+    const resolvedList = await request(app)
+      .get("/v1/service-requests?status=resolved&limit=300")
+      .set(auth(sanchalak.token));
+    expect(resolvedList.body.data.items.find((r: { id: string }) => r.id === requestId)).toBeTruthy();
+
+    const parentReply = await request(app)
+      .post(`/v1/service-requests/${requestId}/messages`)
+      .set(auth(parent.token))
+      .send({ message: "Thanks — I still need help with this." });
+    expect(parentReply.status).toBe(200);
+    expect(parentReply.body.data.reopened).toBe(true);
+    expect(parentReply.body.data.status).toBe("in_review"); // still assigned
+
+    const openList = await request(app)
+      .get("/v1/service-requests?limit=300")
+      .set(auth(sanchalak.token));
+    expect(openList.status).toBe(200);
+    const reopened = openList.body.data.items.find((r: { id: string; status: string }) => r.id === requestId);
+    expect(reopened).toBeTruthy();
+    expect(reopened.status).toBe("in_review");
+    expect(
+      openList.body.data.items
+        .filter((r: { status: string }) => r.status === "resolved")
+        .find((r: { id: string }) => r.id === requestId),
+    ).toBeUndefined();
+  });
 });

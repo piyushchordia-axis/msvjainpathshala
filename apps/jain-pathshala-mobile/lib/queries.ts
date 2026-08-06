@@ -10,7 +10,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { apiGet, apiPost, apiPut, apiGetEnvelope, ApiError } from "@/lib/api";
+import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiGetEnvelope, ApiError } from "@/lib/api";
 import type {
   AdminBatchRow,
   AdminStudentRow,
@@ -57,7 +57,9 @@ export const qk = {
   today: ["me", "today"] as const,
   attendanceSession: (id: string) => ["shikshak", "attendance-session", id] as const,
   overview: ["admin", "overview"] as const,
-  adminStudents: (s?: string) => ["admin", "students", s ?? "all"] as const,
+  adminGallery: (filter: string) => ["admin", "gallery", filter] as const,
+  adminStudents: (opts?: { status?: string; q?: string; batchId?: string }) =>
+    ["admin", "students", opts?.status ?? "all", opts?.q ?? "", opts?.batchId ?? ""] as const,
   adminStudent: (id: string) => ["admin", "student", id] as const,
   adminStudentPunya: (id: string) => ["admin", "student", id, "punya"] as const,
   adminStudentHomework: (id: string) => ["admin", "student", id, "homework"] as const,
@@ -71,6 +73,20 @@ export const qk = {
     ["shikshak", "punya-standings", batchId, month] as const,
   adminEnrolments: (s?: string) => ["admin", "enrolments", s ?? "all"] as const,
   adminBatches: ["admin", "batches"] as const,
+  adminCentres: ["admin", "centres"] as const,
+  adminCentreSanchalaks: (id: string) => ["admin", "centres", id, "sanchalaks"] as const,
+  adminCentreShikshaks: (id: string) => ["admin", "centres", id, "shikshaks"] as const,
+  adminBatchShikshaks: (id: string) => ["admin", "batches", id, "shikshaks"] as const,
+  adminUsersPick: (role: string, centreId: string) =>
+    ["admin", "users", "pick", role, centreId] as const,
+  adminCentreHolidays: (id: string) => ["admin", "centres", id, "holidays"] as const,
+  adminCentreReports: (id: string, month: string) =>
+    ["admin", "centres", id, "reports", month] as const,
+  adminNotices: ["admin", "notices"] as const,
+  adminAttendanceAlerts: (centreId: string, date: string) =>
+    ["admin", "attendance", "alerts", centreId, date] as const,
+  adminCentreToday: (centreId: string, date: string) =>
+    ["admin", "sessions", "today", centreId, date] as const,
   staffingMe: ["admin", "staffing", "me"] as const,
   // Wave 4 (new student/parent flows)
   notifications: ["me", "notifications"] as const,
@@ -164,6 +180,99 @@ export function useWallGallery(limit = 60, enabled = true) {
   });
 }
 
+export type AdminGalleryFilter = "needs_attention" | "all" | "hidden" | "opted_out";
+
+export type AdminGalleryItem = {
+  id: string;
+  student_id: string | null;
+  first_name: string;
+  age_group: string;
+  centre_name: string | null;
+  niyam_title_en: string | null;
+  image_url: string | null;
+  thumbnail_url: string | null;
+  caption: string | null;
+  caption_hi: string | null;
+  featured_gallery: boolean;
+  featured_home: boolean;
+  is_featured: boolean;
+  is_public: boolean;
+  consent_opt_in: boolean | null;
+  created_at: string;
+};
+
+export type AdminGalleryPage = {
+  items: AdminGalleryItem[];
+  next_cursor: string | null;
+  has_more: boolean;
+};
+
+function daysAgoYmd(days: number): string {
+  const d = new Date(Date.now() - days * 86_400_000);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Admin gallery list — never dehydrate to AsyncStorage (see query-persist-keys).
+ * Default filter is needs_attention (public + last 14 days).
+ */
+export function useAdminGalleryInfinite(filter: AdminGalleryFilter, enabled = true) {
+  return useInfiniteQuery({
+    queryKey: qk.adminGallery(filter),
+    initialPageParam: null as string | null,
+    gcTime: 0,
+    staleTime: 0,
+    queryFn: async ({ pageParam }): Promise<AdminGalleryPage> => {
+      const qs = new URLSearchParams({ limit: "40" });
+      if (filter === "needs_attention") {
+        qs.set("is_public", "true");
+        qs.set("since", daysAgoYmd(14));
+      } else if (filter === "hidden") {
+        qs.set("is_public", "false");
+      } else if (filter === "opted_out") {
+        qs.set("opt_in", "false");
+      }
+      if (pageParam) qs.set("cursor", pageParam);
+      const env = await apiGetEnvelope<{ items: AdminGalleryItem[] }>(
+        `/v1/gallery/admin?${qs.toString()}`,
+      );
+      const next =
+        typeof env.meta?.next_cursor === "string" && env.meta.next_cursor.length > 0
+          ? env.meta.next_cursor
+          : null;
+      return {
+        items: env.data?.items ?? [],
+        next_cursor: next,
+        has_more: env.meta?.has_more === true,
+      };
+    },
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    enabled,
+  });
+}
+
+export function useGalleryVisibility() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, is_public }: { id: string; is_public: boolean }) =>
+      apiPatch(`/v1/gallery/admin/${id}/visibility`, { is_public }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["admin", "gallery"] });
+    },
+  });
+}
+
+export function useGalleryTakedown() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) =>
+      apiDelete(`/v1/gallery/admin/${id}`, { reason }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["admin", "gallery"] });
+    },
+  });
+}
+
 export type ClientSettingRow = { key: string; value: string };
 
 export function useClientSettings(enabled = true) {
@@ -252,6 +361,106 @@ export function useToday(enabled = true) {
     queryKey: qk.today,
     queryFn: () => apiGet<List<ShikshakSessionRow>>("/v1/sessions/today"),
     enabled,
+  });
+}
+
+export type CentreTodaySession = ShikshakSessionRow & {
+  centre_id?: string;
+  check_in_at?: string | null;
+  gps_flagged?: boolean;
+  gps_unverified?: boolean;
+  conducted_by_name?: string | null;
+  scheduled_start_time?: string | null;
+  scheduled_end_time?: string | null;
+  roster?: AttendanceRosterRow[];
+};
+
+export function useCentreTodaySessions(
+  centreId: string | null,
+  date: string,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: qk.adminCentreToday(centreId ?? "", date),
+    queryFn: () =>
+      apiGet<{ items: CentreTodaySession[]; date: string }>(
+        `/v1/sessions/today?centre_id=${centreId}&date=${date}&limit=100`,
+      ),
+    enabled: enabled && !!centreId,
+  });
+}
+
+export function useCentreSessionDetail(
+  centreId: string | null,
+  sessionId: string | null,
+  date: string,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: ["admin", "sessions", "today", centreId, date, sessionId],
+    queryFn: () =>
+      apiGet<{ items: CentreTodaySession[]; date: string }>(
+        `/v1/sessions/today?centre_id=${centreId}&date=${date}&session_id=${sessionId}`,
+      ),
+    enabled: enabled && !!centreId && !!sessionId,
+  });
+}
+
+export type AttendanceAlertsPayload = {
+  consecutive_absences: Array<{
+    student_id: string;
+    student_name: string;
+    batch_id: string | null;
+    batch_name: string | null;
+    consecutive_absent_count: number;
+    last_attended_date: string | null;
+    parent_phone: string | null;
+  }>;
+  unmarked_sessions: Array<{
+    id: string;
+    batch_id: string;
+    batch_name: string;
+    status: string;
+    scheduled_date: string;
+    scheduled_start_time: string | null;
+    scheduled_end_time: string | null;
+    label: "not_marked";
+  }>;
+  gps_flagged_sessions: Array<{
+    id: string;
+    batch_id: string;
+    batch_name: string;
+    status: string;
+    scheduled_date: string;
+    check_in_at: string | null;
+  }>;
+  not_checked_in_sessions: Array<{
+    id: string;
+    batch_id: string;
+    batch_name: string;
+    status: string;
+    scheduled_date: string;
+    label: "not_checked_in";
+  }>;
+  date: string;
+};
+
+export type AttendanceAlertsMeta = {
+  consecutive_absence_count: number;
+  unmarked_count: number;
+  gps_flagged_count: number;
+  not_checked_in_count: number;
+  alert_count: number;
+};
+
+export function useAttendanceAlerts(centreId: string | null, date: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.adminAttendanceAlerts(centreId ?? "", date),
+    queryFn: () =>
+      apiGetEnvelope<AttendanceAlertsPayload>(
+        `/v1/admin/attendance/alerts?centre_id=${centreId}&date=${date}`,
+      ),
+    enabled: enabled && !!centreId,
   });
 }
 
@@ -416,13 +625,33 @@ export function useOverview(enabled = true) {
   });
 }
 
-export function useAdminStudents(status?: string, enabled = true) {
-  return useQuery({
-    queryKey: qk.adminStudents(status),
-    queryFn: () =>
-      apiGet<List<AdminStudentRow>>(
-        `/v1/admin/students${status ? `?status=${status}` : ""}`,
-      ),
+export type AdminStudentsPage = {
+  items: AdminStudentRow[];
+  next_cursor: string | null;
+};
+
+export function useAdminStudents(opts?: {
+  status?: string;
+  q?: string;
+  batchId?: string;
+  enabled?: boolean;
+}) {
+  const status = opts?.status?.trim() || undefined;
+  const q = opts?.q?.trim() || undefined;
+  const batchId = opts?.batchId?.trim() || undefined;
+  const enabled = opts?.enabled !== false;
+  return useInfiniteQuery({
+    queryKey: qk.adminStudents({ status, q, batchId }),
+    initialPageParam: null as string | null,
+    queryFn: async ({ pageParam }) => {
+      const qs = new URLSearchParams({ limit: "50" });
+      if (status) qs.set("status", status);
+      if (q) qs.set("q", q);
+      if (batchId) qs.set("batch_id", batchId);
+      if (pageParam) qs.set("cursor", pageParam);
+      return apiGet<AdminStudentsPage>(`/v1/admin/students?${qs.toString()}`);
+    },
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
     enabled,
   });
 }
@@ -662,6 +891,8 @@ export interface PendingNiyamRow {
   status: string;
   created_at?: string;
   can_reject?: boolean;
+  /** Q12 — false when the caller may see the row but not approve/reject. */
+  can_decide?: boolean;
   media?: PendingNiyamMedia[];
 }
 
@@ -755,6 +986,162 @@ export function useAdminBatches(enabled = true) {
   });
 }
 
+export type AdminCentreRow = {
+  id: string;
+  code: string | null;
+  name: string;
+  locality: string | null;
+  pincode: string | null;
+  city_name: string;
+  state_name: string;
+  contact_phone: string | null;
+  contact_email: string | null;
+  gps_radius_meters: number;
+  status: string;
+  batch_count: number;
+  active_student_count: number;
+};
+
+export function useAdminCentres(enabled = true) {
+  return useQuery({
+    queryKey: qk.adminCentres,
+    queryFn: () => apiGet<List<AdminCentreRow>>("/v1/admin/centres"),
+    enabled,
+  });
+}
+
+export type CentreSanchalakRow = {
+  id: string;
+  user_id: string;
+  full_name: string;
+  phone: string;
+  is_active: boolean;
+  assigned_at: string | Date;
+};
+
+export function useCentreSanchalaks(centreId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: qk.adminCentreSanchalaks(centreId ?? ""),
+    queryFn: () =>
+      apiGet<List<CentreSanchalakRow>>(`/v1/admin/centres/${centreId}/sanchalaks`),
+    enabled: enabled && !!centreId,
+  });
+}
+
+export type CentreShikshakBatch = {
+  batch_id: string;
+  batch_name: string;
+  is_primary: boolean;
+};
+
+export type CentreShikshakRow = {
+  id: string;
+  user_id: string;
+  full_name: string;
+  phone: string;
+  gender: "male" | "female" | "other" | null;
+  is_active: boolean;
+  batch_count: number;
+  batches: CentreShikshakBatch[];
+};
+
+export function useCentreShikshaks(centreId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: qk.adminCentreShikshaks(centreId ?? ""),
+    queryFn: () =>
+      apiGet<List<CentreShikshakRow>>(`/v1/admin/centres/${centreId}/shikshaks`),
+    enabled: enabled && !!centreId,
+  });
+}
+
+export type BatchShikshakRow = {
+  id: string;
+  user_id: string;
+  full_name: string;
+  phone: string;
+  gender: "male" | "female" | "other" | null;
+  is_primary: boolean;
+};
+
+export function useBatchShikshaks(batchId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: qk.adminBatchShikshaks(batchId ?? ""),
+    queryFn: () =>
+      apiGet<{ items: BatchShikshakRow[]; centre_id?: string }>(
+        `/v1/admin/batches/${batchId}/shikshaks`,
+      ),
+    enabled: enabled && !!batchId,
+  });
+}
+
+export type UserPickRow = {
+  id: string;
+  full_name: string;
+  phone: string;
+  gender: "male" | "female" | "other" | null;
+  role: string;
+};
+
+export function useUsersPick(
+  role: "shikshak" | "sanchalak",
+  centreId: string | null,
+  enabled = true,
+) {
+  return useQuery({
+    queryKey: qk.adminUsersPick(role, centreId ?? ""),
+    queryFn: () =>
+      apiGet<List<UserPickRow>>(
+        `/v1/admin/users/pick?role=${role}&centre_id=${centreId}`,
+      ),
+    enabled: enabled && !!centreId,
+  });
+}
+
+export type CentreHolidayRow = {
+  id: string;
+  holiday_date: string;
+  reason: string | null;
+  is_published: boolean;
+  restorable_session_count?: number;
+};
+
+export function useCentreHolidays(centreId: string | null, enabled = true) {
+  return useQuery({
+    queryKey: qk.adminCentreHolidays(centreId ?? ""),
+    queryFn: () =>
+      apiGet<List<CentreHolidayRow>>(`/v1/admin/centres/${centreId}/holidays`),
+    enabled: enabled && !!centreId,
+  });
+}
+
+export type AdminNoticeRow = {
+  id: string;
+  title_en: string;
+  title_hi: string | null;
+  content_en: string | null;
+  content_hi: string | null;
+  audience: string;
+  state_id: string | null;
+  city_id: string | null;
+  centre_id: string | null;
+  batch_id: string | null;
+  centre_name: string | null;
+  batch_name: string | null;
+  is_public: boolean;
+  pinned: boolean;
+  is_critical: boolean;
+  published_at: string | null;
+  created_at: string;
+};
+
+export function useAdminNotices(enabled = true) {
+  return useQuery({
+    queryKey: qk.adminNotices,
+    queryFn: () => apiGet<List<AdminNoticeRow>>("/v1/notices/admin?limit=100"),
+    enabled,
+  });
+}
+
 export type StaffingMePayload = {
   user_id: string;
   centres: { centre_id: string; centre_name: string }[];
@@ -814,6 +1201,221 @@ export function useBatchAction() {
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.adminBatches }),
   });
 }
+
+function wrongRoleMessage(e: unknown, hi: boolean): string {
+  if (e instanceof ApiError && e.code === "ERR_WRONG_ROLE") {
+    return hi
+      ? "यह व्यक्ति गुरुजी के रूप में पंजीकृत नहीं है"
+      : "That person is not registered as a Guruji";
+  }
+  return e instanceof Error ? e.message : "Action failed";
+}
+
+export function useAssignCentreShikshak() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ centreId, userId }: { centreId: string; userId: string }) =>
+      apiPost(`/v1/admin/centres/${centreId}/shikshaks`, { user_id: userId }),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: qk.adminCentreShikshaks(v.centreId) });
+      qc.invalidateQueries({ queryKey: ["admin", "users", "pick"] });
+    },
+  });
+}
+
+export function useRemoveCentreShikshak() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ centreId, userId }: { centreId: string; userId: string }) =>
+      apiPost(`/v1/admin/centres/${centreId}/shikshaks/${userId}/remove`, {}),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: qk.adminCentreShikshaks(v.centreId) });
+      qc.invalidateQueries({ queryKey: ["admin", "batches"] });
+      qc.invalidateQueries({ queryKey: ["admin", "users", "pick"] });
+    },
+  });
+}
+
+export function useAssignBatchShikshak() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      batchId,
+      userId,
+      isPrimary,
+    }: {
+      batchId: string;
+      userId: string;
+      isPrimary?: boolean;
+    }) =>
+      apiPost(`/v1/admin/batches/${batchId}/shikshaks`, {
+        user_id: userId,
+        ...(isPrimary ? { is_primary: true } : {}),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "batches"] });
+      qc.invalidateQueries({ queryKey: ["admin", "centres"] });
+    },
+  });
+}
+
+export function useRemoveBatchShikshak() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ batchId, userId }: { batchId: string; userId: string }) =>
+      apiPost(`/v1/admin/batches/${batchId}/shikshaks/${userId}/remove`, {}),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "batches"] });
+      qc.invalidateQueries({ queryKey: ["admin", "centres"] });
+    },
+  });
+}
+
+export function useSetBatchPrimary() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ batchId, userId }: { batchId: string; userId: string }) =>
+      apiPost(`/v1/admin/batches/${batchId}/primary`, { user_id: userId }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["admin", "batches"] });
+      qc.invalidateQueries({ queryKey: ["admin", "centres"] });
+    },
+  });
+}
+
+export function useCreateCentreHoliday() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      centreId,
+      holiday_date,
+      reason,
+    }: {
+      centreId: string;
+      holiday_date: string;
+      reason?: string;
+    }) =>
+      apiPost(`/v1/admin/centres/${centreId}/holidays`, {
+        holiday_date,
+        reason: reason || undefined,
+        is_published: true,
+      }),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: qk.adminCentreHolidays(v.centreId) });
+    },
+  });
+}
+
+export function usePatchCentreHoliday() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      centreId,
+      holidayId,
+      is_published,
+    }: {
+      centreId: string;
+      holidayId: string;
+      is_published: boolean;
+    }) =>
+      apiPatch(`/v1/admin/centres/${centreId}/holidays/${holidayId}`, { is_published }),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: qk.adminCentreHolidays(v.centreId) });
+    },
+  });
+}
+
+export function useDeleteCentreHoliday() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ centreId, holidayId }: { centreId: string; holidayId: string }) =>
+      apiDelete(`/v1/admin/centres/${centreId}/holidays/${holidayId}`),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: qk.adminCentreHolidays(v.centreId) });
+    },
+  });
+}
+
+export type CentreMonthlyReportRow = {
+  id: string;
+  centre_id: string;
+  month: string;
+  status: "queued" | "generating" | "ready" | "failed" | string;
+  pdf_url: string | null;
+  error_message: string | null;
+  created_at: string | Date;
+  updated_at: string | Date;
+};
+
+export function useCentreMonthlyReports(centreId: string | null, month: string) {
+  return useQuery({
+    queryKey: qk.adminCentreReports(centreId ?? "", month),
+    queryFn: () =>
+      apiGet<List<CentreMonthlyReportRow>>(
+        `/v1/admin/centres/${centreId}/reports?month=${encodeURIComponent(month)}`,
+      ),
+    enabled: !!centreId && /^\d{4}-\d{2}$/.test(month),
+    refetchInterval: (q) => {
+      const items = q.state.data?.items ?? [];
+      const pending = items.some((r) => r.status === "queued" || r.status === "generating");
+      return pending ? 2000 : false;
+    },
+  });
+}
+
+export function useGenerateCentreMonthlyReport() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ centreId, month }: { centreId: string; month: string }) =>
+      apiPost<{ job_id: string; status: string }>(
+        `/v1/admin/centres/${centreId}/reports/monthly`,
+        { month },
+      ),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: qk.adminCentreReports(v.centreId, v.month) });
+    },
+  });
+}
+
+export type NoticeWriteBody = {
+  title_en: string;
+  title_hi: string;
+  content_en: string;
+  content_hi: string;
+  audience: "centre" | "batch";
+  centre_id?: string;
+  batch_id?: string;
+  pinned?: boolean;
+  is_critical?: boolean;
+};
+
+export function useCreateNotice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: NoticeWriteBody) => apiPost("/v1/notices/admin", body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.adminNotices }),
+  });
+}
+
+export function useUpdateNotice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, body }: { id: string; body: NoticeWriteBody }) =>
+      apiPatch(`/v1/notices/admin/${id}`, body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.adminNotices }),
+  });
+}
+
+export function useDeleteNotice() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiDelete(`/v1/notices/admin/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.adminNotices }),
+  });
+}
+
+/** Shared ERR_WRONG_ROLE copy for staffing assign failures. */
+export { wrongRoleMessage };
 
 /* ---------------------------------------------------- wave 4 (new flows) --- */
 
@@ -1000,6 +1602,7 @@ export type HomeworkAssignmentRow = {
   curriculum_topic_hi: string | null;
   batch_id: string;
   batch_name: string | null;
+  centre_id: string;
   centre_name: string;
   created_at: string;
   total: number;

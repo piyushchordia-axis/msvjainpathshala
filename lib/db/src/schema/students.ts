@@ -65,6 +65,10 @@ export const students = pgTable(
     user_idx: index("idx_students_user").on(t.user_id),
     parent_idx: index("idx_students_parent").on(t.parent_id),
     batch_idx: index("idx_students_batch").on(t.batch_id),
+    // Keyset list order for GET /v1/admin/students (full_name, id).
+    name_id_alive_idx: index("idx_students_name_id_alive")
+      .on(t.full_name, t.id)
+      .where(sql`${t.deleted_at} IS NULL`),
     // Expression index — EXTRACT(MONTH/DAY FROM dob). Declared in SQL migration
     // with the exact expressions; kept here so schema documents the intent.
     birthday_idx: index("idx_students_birthday")

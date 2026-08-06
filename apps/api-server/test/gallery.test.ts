@@ -115,7 +115,7 @@ describe("gallery", () => {
     expect(patch.body.data.featured_gallery).toBe(false);
 
     // Delete (soft takedown).
-    const del = await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(token));
+    const del = await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(token)).send({ reason: "Test cleanup take down." });
     expect(del.status).toBe(200);
     expect(del.body.data.deleted).toBe(true);
 
@@ -125,7 +125,7 @@ describe("gallery", () => {
     expect(gone).toBeUndefined();
 
     // Deleting again is a 404 (already taken down).
-    const delAgain = await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(token));
+    const delAgain = await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(token)).send({ reason: "Test cleanup take down." });
     expect(delAgain.status).toBe(404);
   });
 
@@ -199,7 +199,7 @@ describe("gallery", () => {
         .set({ gallery_visibility_opt_in: seededOptIn })
         .where(eq(users.id, ownerId));
       if (itemId) {
-        await request(app).delete(`${MOUNT}/admin/${itemId}`).set(auth(admin.token));
+        await request(app).delete(`${MOUNT}/admin/${itemId}`).set(auth(admin.token)).send({ reason: "Test cleanup take down." });
       }
     }
   });
@@ -261,7 +261,7 @@ describe("gallery", () => {
         .set({ gallery_visibility_opt_in: seededOptIn })
         .where(eq(users.id, ownerId));
       if (itemId) {
-        await request(app).delete(`${MOUNT}/admin/${itemId}`).set(auth(admin.token));
+        await request(app).delete(`${MOUNT}/admin/${itemId}`).set(auth(admin.token)).send({ reason: "Test cleanup take down." });
       }
     }
   });
@@ -311,7 +311,7 @@ describe("gallery", () => {
       expect(row).toHaveProperty("consent_opt_in");
       expect(row).toHaveProperty("can_publish");
     } finally {
-      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(admin.token));
+      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(admin.token)).send({ reason: "Test cleanup take down." });
     }
   });
 
@@ -331,7 +331,7 @@ describe("gallery", () => {
       const found = feed.body.data.items.find((r: { id: string }) => r.id === id);
       expect(found).toBeUndefined();
     } finally {
-      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(token));
+      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(token)).send({ reason: "Test cleanup take down." });
     }
   });
 
@@ -350,7 +350,7 @@ describe("gallery", () => {
     expect(create.status).toBe(201);
 
     // cleanup
-    await request(app).delete(`${MOUNT}/admin/${create.body.data.id}`).set(auth(cityAdmin.token));
+    await request(app).delete(`${MOUNT}/admin/${create.body.data.id}`).set(auth(cityAdmin.token)).send({ reason: "Test cleanup take down." });
   });
 
   it("forbids a city_admin from creating an item for a student OUTSIDE their scope (Pune)", async () => {
@@ -385,7 +385,7 @@ describe("gallery", () => {
     if (create.status === 201) {
       // clean up if it was allowed.
       const admin = await loginAs("super_admin");
-      await request(app).delete(`${MOUNT}/admin/${create.body.data.id}`).set(auth(admin.token));
+      await request(app).delete(`${MOUNT}/admin/${create.body.data.id}`).set(auth(admin.token)).send({ reason: "Test cleanup take down." });
     }
   });
 
@@ -417,10 +417,10 @@ describe("gallery", () => {
       expect(cityList.body.data.items.some((r: { id: string }) => r.id === id)).toBe(false);
 
       // …and cannot delete it (out of scope → 404 takedown).
-      const del = await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(cityAdmin.token));
+      const del = await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(cityAdmin.token)).send({ reason: "Test cleanup take down." });
       expect(del.status).toBe(404);
     } finally {
-      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(superAdmin.token));
+      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(superAdmin.token)).send({ reason: "Test cleanup take down." });
     }
   });
 
@@ -495,8 +495,115 @@ describe("gallery", () => {
       .send({ is_public: true });
     expect(patch.status).toBe(404);
 
-    const del = await request(app).delete(`${MOUNT}/admin/${ghost}`).set(auth(token));
+    const del = await request(app).delete(`${MOUNT}/admin/${ghost}`).set(auth(token)).send({ reason: "Test cleanup take down." });
     expect(del.status).toBe(404);
+  });
+
+  it("rejects a takedown without a reason (422)", async () => {
+    const { token } = await loginAs("super_admin");
+    const tag = uniqueTag("noreason");
+    const create = await request(app)
+      .post(`${MOUNT}/admin`)
+      .set(auth(token))
+      .send({ image_url: uploadUrl(tag), caption: tag });
+    expect(create.status).toBe(201);
+    const id: string = create.body.data.id;
+
+    const missing = await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(token)).send({});
+    expect(missing.status).toBe(422);
+    expect(missing.body.error.code).toBe("ERR_VALIDATION_FAILED");
+
+    const short = await request(app)
+      .delete(`${MOUNT}/admin/${id}`)
+      .set(auth(token))
+      .send({ reason: "no" });
+    expect(short.status).toBe(422);
+
+    await request(app)
+      .delete(`${MOUNT}/admin/${id}`)
+      .set(auth(token))
+      .send({ reason: "Test cleanup take down." });
+  });
+
+  it("filters the admin list by is_public, opt_in, and since, with keyset pagination", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await aaravId(parent.token);
+    const stamp = Date.now();
+    const pubTag = `gallery-filter-pub-${stamp}`;
+    const hidTag = `gallery-filter-hid-${stamp}`;
+
+    const pub = await request(app)
+      .post(`${MOUNT}/admin`)
+      .set(auth(admin.token))
+      .send({
+        image_url: uploadUrl(uniqueTag("filterpub")),
+        caption: pubTag,
+        student_id: studentId,
+        is_public: true,
+      });
+    expect(pub.status).toBe(201);
+    const pubId: string = pub.body.data.id;
+
+    const hid = await request(app)
+      .post(`${MOUNT}/admin`)
+      .set(auth(admin.token))
+      .send({
+        image_url: uploadUrl(uniqueTag("filterhid")),
+        caption: hidTag,
+        student_id: studentId,
+        is_public: false,
+      });
+    expect(hid.status).toBe(201);
+    const hidId: string = hid.body.data.id;
+
+    try {
+      const publicOnly = await request(app)
+        .get(`${MOUNT}/admin?is_public=true&limit=200`)
+        .set(auth(admin.token));
+      expect(publicOnly.status).toBe(200);
+      expect(publicOnly.body.data.items.find((r: { id: string }) => r.id === pubId)).toBeTruthy();
+      expect(publicOnly.body.data.items.find((r: { id: string }) => r.id === hidId)).toBeUndefined();
+
+      const hiddenOnly = await request(app)
+        .get(`${MOUNT}/admin?is_public=false&limit=200`)
+        .set(auth(admin.token));
+      expect(hiddenOnly.status).toBe(200);
+      expect(hiddenOnly.body.data.items.find((r: { id: string }) => r.id === hidId)).toBeTruthy();
+      expect(hiddenOnly.body.data.items.find((r: { id: string }) => r.id === pubId)).toBeUndefined();
+
+      const sinceFuture = await request(app)
+        .get(`${MOUNT}/admin?since=2099-01-01&limit=50`)
+        .set(auth(admin.token));
+      expect(sinceFuture.status).toBe(200);
+      expect(sinceFuture.body.data.items.find((r: { id: string }) => r.id === pubId)).toBeUndefined();
+
+      const page1 = await request(app)
+        .get(`${MOUNT}/admin?is_public=true&limit=1`)
+        .set(auth(admin.token));
+      expect(page1.status).toBe(200);
+      expect(page1.body.data.items).toHaveLength(1);
+      expect(page1.body.meta.has_more).toBe(true);
+      expect(typeof page1.body.meta.next_cursor).toBe("string");
+
+      const page2 = await request(app)
+        .get(
+          `${MOUNT}/admin?is_public=true&limit=1&cursor=${encodeURIComponent(page1.body.meta.next_cursor)}`,
+        )
+        .set(auth(admin.token));
+      expect(page2.status).toBe(200);
+      expect(page2.body.data.items).toHaveLength(1);
+      expect(page2.body.data.items[0].id).not.toBe(page1.body.data.items[0].id);
+    } finally {
+      await request(app)
+        .delete(`${MOUNT}/admin/${pubId}`)
+        .set(auth(admin.token))
+        .send({ reason: "Test cleanup take down." });
+      await request(app)
+        .delete(`${MOUNT}/admin/${hidId}`)
+        .set(auth(admin.token))
+        .send({ reason: "Test cleanup take down." });
+    }
   });
 
   /* ────────────────── 5. Surface curation (home / wall) ────────────────── */
@@ -522,7 +629,7 @@ describe("gallery", () => {
       expect(wall.body.data.items.some((r: { id: string }) => r.id === id)).toBe(false);
       expect(home.body.data.items.some((r: { id: string }) => r.id === id)).toBe(false);
     } finally {
-      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(admin.token));
+      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(admin.token)).send({ reason: "Test cleanup take down." });
     }
   });
 
@@ -554,7 +661,7 @@ describe("gallery", () => {
       expect(home.body.data.items.some((r: { id: string }) => r.id === id)).toBe(true);
       expect(wall.body.data.items.some((r: { id: string }) => r.id === id)).toBe(false);
     } finally {
-      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(admin.token));
+      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(admin.token)).send({ reason: "Test cleanup take down." });
     }
   });
 
@@ -594,7 +701,7 @@ describe("gallery", () => {
         expect(bulk.status).toBe(403);
       }
     } finally {
-      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(admin.token));
+      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(admin.token)).send({ reason: "Test cleanup take down." });
     }
   });
 
@@ -619,7 +726,7 @@ describe("gallery", () => {
       expect(feature.status).toBe(403);
       expect(feature.body.error.code).toBe("ERR_FORBIDDEN");
     } finally {
-      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(superAdmin.token));
+      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(superAdmin.token)).send({ reason: "Test cleanup take down." });
     }
   });
 
@@ -676,7 +783,7 @@ describe("gallery", () => {
       expect(forbidden).toEqual({ id: outScopeId, result: "forbidden" });
     } finally {
       for (const id of [...inScopeIds, outScopeId].filter(Boolean)) {
-        await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(superAdmin.token));
+        await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(superAdmin.token)).send({ reason: "Test cleanup take down." });
       }
     }
   });
@@ -711,7 +818,7 @@ describe("gallery", () => {
       const wall = await request(app).get(`${MOUNT}?surface=wall&limit=200`);
       expect(wall.body.data.items.some((r: { id: string }) => r.id === id)).toBe(true);
     } finally {
-      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(superAdmin.token));
+      await request(app).delete(`${MOUNT}/admin/${id}`).set(auth(superAdmin.token)).send({ reason: "Test cleanup take down." });
     }
   });
 });

@@ -14,7 +14,7 @@ import {
 } from "@workspace/db";
 import { and, asc, eq } from "drizzle-orm";
 import type { AdminScope } from "../lib/scope";
-import { inScope } from "../lib/route-helpers";
+import { inBatchWriteScope } from "../lib/scope";
 import { awardPunya } from "../lib/punya";
 import { writeAudit } from "../lib/audit";
 import { resolveNiyamAwardPoints } from "../lib/niyam-points";
@@ -114,6 +114,7 @@ export async function approveNiyamSubmission(opts: {
       notes: niyam_submissions.notes,
       created_at: niyam_submissions.created_at,
       centre_id: students.centre_id,
+      batch_id: students.batch_id,
       parent_id: students.parent_id,
       student_name: students.full_name,
       city_id: centres.city_id,
@@ -127,7 +128,8 @@ export async function approveNiyamSubmission(opts: {
     .where(eq(niyam_submissions.id, opts.submissionId))
     .limit(1);
 
-  if (!sub || !inScope(opts.scope, sub.centre_id)) {
+  // Q12 — shikshak is batch-bound; sanchalak+ keep centre reach via batchIds === null.
+  if (!sub || !inBatchWriteScope(opts.scope, sub.batch_id, sub.centre_id)) {
     return { status: "not_found" };
   }
 

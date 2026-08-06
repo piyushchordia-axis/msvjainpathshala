@@ -5,10 +5,10 @@ import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useOverview } from "@/lib/queries";
-import { formatPaise } from "@/lib/format";
 import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
+import { SanchalakQuickActions } from "@/components/QuickActions";
 import { Body, Button, Card, Numeric, Row, Screen, StateView, Title } from "@/components/ui";
 
 export default function DashboardScreen() {
@@ -24,7 +24,6 @@ export default function DashboardScreen() {
     { label: hi ? "30-दिन उपस्थिति" : "30-day attendance", value: data ? `${data.attendance_rate_30d}%` : "—", icon: "checkmark-done-outline" as const },
     { label: hi ? "पुण्य (30 दिन)" : "Punya awarded", value: data?.punya_awarded_30d ?? 0, icon: "ribbon-outline" as const },
     { label: hi ? "एमएसवी सक्रिय" : "MSV active", value: data?.msv_active ?? 0, icon: "leaf-outline" as const },
-    { label: hi ? "दान (वर्ष)" : "Donations YTD", value: formatPaise(data?.donations_total_paise_ytd), icon: "heart-outline" as const },
   ];
 
   const firstName = user?.full_name?.split(" ")[0] ?? "";
@@ -45,6 +44,10 @@ export default function DashboardScreen() {
       <Screen refreshing={isRefetching} onRefresh={refetch}>
         <AnimatedMount delay={0}>
           <GalleryCarousel />
+        </AnimatedMount>
+
+        <AnimatedMount delay={40}>
+          <SanchalakQuickActions />
         </AnimatedMount>
 
         {isLoading ? (

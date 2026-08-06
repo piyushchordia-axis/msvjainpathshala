@@ -29,6 +29,8 @@ export const QUEUE_NAMES = {
   EXAM_TOP_SCORE: "exam.top_score",
   /** Chunked digital ID-card PNG generation (PERF #12). */
   IDCARD_GENERATION: "idcard.generation",
+  /** Centre monthly aggregate PDF (Sanchalak / admin). */
+  REPORT_GENERATION: "report.generation",
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];

@@ -143,6 +143,7 @@ router.get("/", requireAdminPanel, async (req: Request, res: Response) => {
       parent_name: users.full_name,
       student_name: students.full_name,
       centre_name: centres.name,
+      assigned_to: service_requests.assigned_to,
       assigned_name: assignee.full_name,
       last_response_at: service_requests.last_response_at,
       resolved_at: service_requests.resolved_at,
@@ -216,6 +217,7 @@ router.get("/:id", async (req: Request, res: Response) => {
     fail(res, 404, "ERR_NOT_FOUND", "Service request not found."); return;
   }
 
+  const assignee = alias(users, "assignee");
   const [detail] = await db
     .select({
       id: service_requests.id,
@@ -227,6 +229,7 @@ router.get("/:id", async (req: Request, res: Response) => {
       student_name: students.full_name,
       centre_name: centres.name,
       assigned_to: service_requests.assigned_to,
+      assigned_name: assignee.full_name,
       last_response_at: service_requests.last_response_at,
       resolved_at: service_requests.resolved_at,
       created_at: service_requests.created_at,
@@ -235,6 +238,7 @@ router.get("/:id", async (req: Request, res: Response) => {
     .leftJoin(users, eq(users.id, service_requests.parent_user_id))
     .leftJoin(students, eq(students.id, service_requests.student_id))
     .leftJoin(centres, eq(centres.id, service_requests.centre_id))
+    .leftJoin(assignee, eq(assignee.id, service_requests.assigned_to))
     .where(eq(service_requests.id, access.row.id))
     .limit(1);
 

@@ -244,3 +244,70 @@ export async function applyHolidayToSessions(
   logger.info({ centreId, start, end, deleted: deletedCount }, "applyHolidayToSessions");
   return { deleted: deletedCount };
 }
+
+/**
+ * How many scheduled sessions rematerialise would recreate for a holiday date
+ * that is being removed — active batches whose day_of_week matches, inside the
+ * AT7 forward window, with no existing session row (AT10 left attendance-bearing
+ * sessions alone; those must not count as restorable).
+ */
+export async function countRestorableSessions(
+  centreId: string,
+  holidayDate: string,
+): Promise<number> {
+  const from = todayIst();
+  const to = addDays(from, WINDOW_DAYS - 1);
+  if (holidayDate < from || holidayDate > to) return 0;
+  const weekday = isoWeekday(holidayDate);
+  const result = await db.execute(sql`
+    select count(*)::int as n
+    from batches b
+    where b.centre_id = ${centreId}::uuid
+      and b.status = 'active'
+      and b.deleted_at is null
+      and ${weekday} = any(b.day_of_week)
+      and not exists (
+        select 1 from sessions s
+        where s.batch_id = b.id
+          and s.scheduled_date = ${holidayDate}::date
+      )
+  `);
+  const rows = (result as unknown as { rows?: Array<{ n: number }> }).rows ?? [];
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * Re-expand every active batch at a centre into the AT7 window.
+ * Uses ON CONFLICT DO NOTHING on UNIQUE (batch_id, scheduled_date) so sessions
+ * that already exist (including those AT10 left because they had attendance)
+ * are never duplicated.
+ */
+export async function rematerialiseCentreBatches(centreId: string): Promise<{
+  batches: number;
+  attempted: number;
+  inserted: number;
+}> {
+  const active = await db
+    .select({ id: batches.id })
+    .from(batches)
+    .where(
+      and(
+        eq(batches.centre_id, centreId),
+        eq(batches.status, "active"),
+        isNull(batches.deleted_at),
+      ),
+    );
+
+  let attempted = 0;
+  let inserted = 0;
+  for (const b of active) {
+    const r = await materialiseBatch(b.id);
+    attempted += r.attempted;
+    inserted += r.inserted;
+  }
+  logger.info(
+    { centreId, batches: active.length, attempted, inserted },
+    "rematerialiseCentreBatches",
+  );
+  return { batches: active.length, attempted, inserted };
+}

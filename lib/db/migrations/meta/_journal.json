@@ -288,6 +288,20 @@
       "when": 1789209600000,
       "tag": "0040_null_sentinel_checkin_gps",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1789296000000,
+      "tag": "0041_students_search_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1789382400000,
+      "tag": "0042_centre_monthly_reports",
+      "breakpoints": true
     }
   ]
 }

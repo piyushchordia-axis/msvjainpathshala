@@ -7,6 +7,7 @@ export default function Layout() {
   return (
     <PersonaTabs
       allowed={ADMIN_ROLES}
+      hide={["centres", "shikshaks", "holidays", "notices", "niyam-review", "attendance", "service-requests", "homework", "gallery", "reports"]}
       tabs={[
         { name: "dashboard", title: hi ? "डैशबोर्ड" : "Dashboard", icon: "stats-chart" },
         { name: "students", title: hi ? "विद्यार्थी" : "Students", icon: "people" },

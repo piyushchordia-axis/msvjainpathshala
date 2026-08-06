@@ -2,6 +2,9 @@
  * AT27 — consecutive absence check at 02:00 IST the following day.
  * Set-based: one CTE finds students whose last 3 eligible sessions are all
  * 'absent' (excused never counts). Fan-out notifications in chunks.
+ *
+ * `findConsecutiveAbsenceCandidates` is the shared query — the cron notifies;
+ * GET /v1/admin/attendance/alerts reads the same set for the Sanchalak monitor.
  */
 import {
   dbWorker as db,
@@ -16,7 +19,7 @@ import {
 } from "../lib/notify";
 import { logger } from "../lib/logger";
 
-type FlaggedRow = {
+export type ConsecutiveAbsenceCandidate = {
   student_id: string;
   full_name: string;
   parent_id: string | null;
@@ -25,9 +28,14 @@ type FlaggedRow = {
   session_ids: string[];
 };
 
-export async function runConsecutiveAbsenceCheck(): Promise<{ flagged: number }> {
-  // Holidays loaded once into the CTE (national set is small). Eligible =
-  // non-cancelled, not on a centre holiday. Last 3 per batch via ROW_NUMBER.
+/**
+ * Students whose last 3 eligible sessions (non-cancelled, not on holiday) are
+ * all status='absent'. Optional centre filter for the admin alerts feed.
+ */
+export async function findConsecutiveAbsenceCandidates(opts?: {
+  centreId?: string | null;
+}): Promise<ConsecutiveAbsenceCandidate[]> {
+  const centreId = opts?.centreId ?? null;
   const result = await db.execute(sql`
     with active_students as (
       select id, full_name, parent_id, batch_id, centre_id
@@ -36,6 +44,7 @@ export async function runConsecutiveAbsenceCheck(): Promise<{ flagged: number }>
         and deleted_at is null
         and batch_id is not null
         and centre_id is not null
+        and (${centreId}::uuid is null or centre_id = ${centreId}::uuid)
     ),
     eligible_sessions as (
       select
@@ -100,8 +109,13 @@ export async function runConsecutiveAbsenceCheck(): Promise<{ flagged: number }>
   `);
 
   const rows =
-    (result as unknown as { rows?: FlaggedRow[] }).rows ??
-    (Array.isArray(result) ? (result as FlaggedRow[]) : []);
+    (result as unknown as { rows?: ConsecutiveAbsenceCandidate[] }).rows ??
+    (Array.isArray(result) ? (result as ConsecutiveAbsenceCandidate[]) : []);
+  return rows;
+}
+
+export async function runConsecutiveAbsenceCheck(): Promise<{ flagged: number }> {
+  const rows = await findConsecutiveAbsenceCandidates();
 
   let flagged = 0;
   const NOTIFY_CHUNK = 40;

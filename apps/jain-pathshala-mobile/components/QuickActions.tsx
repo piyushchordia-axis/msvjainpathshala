@@ -1,4 +1,4 @@
-import { View, Platform, Pressable } from "react-native";
+import { View, Platform, Pressable, Text } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import * as Haptics from "expo-haptics";
@@ -7,8 +7,12 @@ import Animated, {
   useSharedValue,
   withTiming,
 } from "react-native-reanimated";
+import { useEffect, useMemo, useState } from "react";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { bodyFamily } from "@/constants/typography";
+import { useAdminCentres, useAttendanceAlerts, useOverview } from "@/lib/queries";
 import { Card, Body, Title } from "@/components/ui";
 
 export type QuickAction = {
@@ -16,6 +20,8 @@ export type QuickAction = {
   icon: keyof typeof Ionicons.glyphMap;
   en: string;
   hi: string;
+  /** Optional count badge (e.g. attendance alerts). */
+  badge?: number;
 };
 
 const PARENT_ACTIONS: QuickAction[] = [
@@ -46,12 +52,36 @@ export const SHIKSHAK_ACTIONS: QuickAction[] = [
   { href: "/shikshak/profile", icon: "person-circle-outline", en: "Profile", hi: "प्रोफ़ाइल" },
 ];
 
+/** Sanchalak shortcuts — management surfaces that sit outside the five-tab bar. */
+export const SANCHALAK_ACTIONS: QuickAction[] = [
+  { href: "/admin/centres", icon: "business-outline", en: "Centres", hi: "केंद्र" },
+  { href: "/admin/shikshaks", icon: "people-circle-outline", en: "Shikshaks", hi: "शिक्षक" },
+  { href: "/admin/holidays", icon: "calendar-outline", en: "Holidays", hi: "अवकाश" },
+  { href: "/admin/notices", icon: "megaphone-outline", en: "Notices", hi: "सूचनाएँ" },
+  { href: "/admin/niyam-review", icon: "clipboard-outline", en: "Niyam review", hi: "नियम समीक्षा" },
+  { href: "/admin/attendance", icon: "checkmark-done-outline", en: "Attendance", hi: "उपस्थिति" },
+  {
+    href: "/admin/service-requests",
+    icon: "chatbubbles-outline",
+    en: "Service requests",
+    hi: "सेवा अनुरोध",
+  },
+  { href: "/admin/homework", icon: "book-outline", en: "Homework", hi: "गृहकार्य" },
+  { href: "/admin/gallery", icon: "images-outline", en: "Gallery", hi: "गैलरी" },
+  { href: "/admin/reports", icon: "document-text-outline", en: "Reports", hi: "रिपोर्ट" },
+  { href: "/admin/enrolments", icon: "clipboard-outline", en: "Enrolments", hi: "नामांकन" },
+  { href: "/admin/students", icon: "people-outline", en: "Students", hi: "विद्यार्थी" },
+  { href: "/gallery", icon: "ribbon-outline", en: "Punya Wall", hi: "पुण्य दीवार" },
+  { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "अधिसूचनाएँ" },
+];
+
 function ActionTile({ action }: { action: QuickAction }) {
   const c = useColors();
   const { hi } = useLocale();
   const router = useRouter();
   const scale = useSharedValue(1);
   const animStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  const badge = action.badge && action.badge > 0 ? action.badge : 0;
 
   return (
     <Pressable
@@ -80,7 +110,36 @@ function ActionTile({ action }: { action: QuickAction }) {
           animStyle,
         ]}
       >
-        <Ionicons name={action.icon} size={26} color={c.primary} />
+        <View style={{ position: "relative" }}>
+          <Ionicons name={action.icon} size={26} color={c.primary} />
+          {badge > 0 ? (
+            <View
+              style={{
+                position: "absolute",
+                top: -6,
+                right: -10,
+                minWidth: 18,
+                height: 18,
+                borderRadius: 9,
+                paddingHorizontal: 4,
+                backgroundColor: c.primary,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 10,
+                  lineHeight: 12,
+                  color: c.primaryForeground,
+                  fontFamily: bodyFamily(false, "semibold"),
+                }}
+              >
+                {badge > 99 ? "99+" : String(badge)}
+              </Text>
+            </View>
+          ) : null}
+        </View>
         <Body style={{ fontSize: 11, marginTop: 6, textAlign: "center" }}>
           {hi ? action.hi : action.en}
         </Body>
@@ -118,6 +177,63 @@ export function ShikshakQuickActions() {
       actions={SHIKSHAK_ACTIONS}
       titleEn="Guruji menu"
       titleHi="गुरुजी मेनू"
+    />
+  );
+}
+
+export function SanchalakQuickActions() {
+  const centresQ = useAdminCentres();
+  const [centreId, setCentreId] = useState<string | null>(null);
+
+  useEffect(() => {
+    void AsyncStorage.getItem("jp.sanchalak.selectedCentreId").then((stored) => {
+      if (stored) setCentreId(stored);
+    });
+  }, []);
+
+  useEffect(() => {
+    const items = centresQ.data?.items ?? [];
+    if (items.length === 0) return;
+    const valid = centreId && items.some((c) => c.id === centreId);
+    if (!valid) setCentreId(items[0]!.id);
+  }, [centresQ.data?.items, centreId]);
+
+  const today = useMemo(
+    () =>
+      new Intl.DateTimeFormat("en-CA", {
+        timeZone: "Asia/Kolkata",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date()),
+    [],
+  );
+  const alerts = useAttendanceAlerts(centreId, today, !!centreId);
+  const alertCount =
+    typeof alerts.data?.meta?.alert_count === "number"
+      ? (alerts.data.meta.alert_count as number)
+      : 0;
+  const overview = useOverview();
+  const openSr =
+    typeof overview.data?.open_service_requests === "number"
+      ? overview.data.open_service_requests
+      : 0;
+
+  const actions = useMemo(
+    () =>
+      SANCHALAK_ACTIONS.map((a) => {
+        if (a.href === "/admin/attendance") return { ...a, badge: alertCount };
+        if (a.href === "/admin/service-requests") return { ...a, badge: openSr };
+        return a;
+      }),
+    [alertCount, openSr],
+  );
+
+  return (
+    <QuickActions
+      actions={actions}
+      titleEn="Manage"
+      titleHi="प्रबंधन"
     />
   );
 }

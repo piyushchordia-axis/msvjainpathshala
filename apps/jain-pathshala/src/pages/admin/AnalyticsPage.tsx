@@ -17,7 +17,8 @@ interface OverviewPayload {
   attendance_rate_30d: number;
   punya_awarded_30d: number;
   msv_active: number;
-  donations_total_paise_ytd: number;
+  /** Absent for roles outside DONATION_VIEW_ROLES (sanchalak, shikshak). */
+  donations_total_paise_ytd?: number;
 }
 
 interface TrendPoint {
@@ -33,7 +34,6 @@ const EMPTY: OverviewPayload = {
   attendance_rate_30d: 0,
   punya_awarded_30d: 0,
   msv_active: 0,
-  donations_total_paise_ytd: 0,
 };
 
 const chartConfig = {
@@ -66,8 +66,14 @@ export default function AnalyticsPage() {
     { label: '30-day attendance', value: `${data.attendance_rate_30d.toFixed(1)}%` },
     { label: 'Punya awarded (30d)', value: data.punya_awarded_30d },
     { label: 'MSV approved', value: data.msv_active },
-    { label: 'Pending enrolments', value: data.open_service_requests },
-    { label: 'Donations YTD', value: `₹${(data.donations_total_paise_ytd / 100).toLocaleString('en-IN')}` },
+    { label: 'Open service requests', value: data.open_service_requests },
+    // Only present for city_admin and above — the API omits it for scoped roles.
+    ...(data.donations_total_paise_ytd === undefined
+      ? []
+      : [{
+          label: 'Donations YTD',
+          value: `₹${(data.donations_total_paise_ytd / 100).toLocaleString('en-IN')}`,
+        }]),
   ];
 
   const chartData = useMemo(

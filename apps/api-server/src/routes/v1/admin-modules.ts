@@ -730,6 +730,136 @@ router.post(
   },
 );
 
+const patchCentreHolidaySchema = z.object({
+  is_published: z.boolean(),
+});
+
+/* PATCH /v1/admin/centres/:id/holidays/:holidayId — publish/unpublish only (AT30) */
+router.patch(
+  "/centres/:id/holidays/:holidayId",
+  requireRole("super_admin", "state_admin", "city_admin", "sanchalak"),
+  async (req: Request, res: Response) => {
+    const centreId = String(req.params.id);
+    const holidayId = String(req.params.holidayId);
+    if (!isUuid(centreId) || !isUuid(holidayId)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Holiday not found.");
+      return;
+    }
+    let body: z.infer<typeof patchCentreHolidaySchema>;
+    try {
+      body = patchCentreHolidaySchema.parse(req.body);
+    } catch {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid holiday update.");
+      return;
+    }
+    const scope = await resolveAdminScope(req.authUser!);
+    if (scope.centreIds !== null && !scope.centreIds.includes(centreId)) {
+      fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope.");
+      return;
+    }
+
+    const [existing] = await db
+      .select({
+        id: centre_holidays.id,
+        holiday_date: centre_holidays.holiday_date,
+        is_published: centre_holidays.is_published,
+        centre_id: centre_holidays.centre_id,
+      })
+      .from(centre_holidays)
+      .where(and(eq(centre_holidays.id, holidayId), eq(centre_holidays.centre_id, centreId)))
+      .limit(1);
+    if (!existing) {
+      fail(res, 404, "ERR_NOT_FOUND", "Holiday not found.");
+      return;
+    }
+
+    const [row] = await db
+      .update(centre_holidays)
+      .set({ is_published: body.is_published })
+      .where(eq(centre_holidays.id, existing.id))
+      .returning({
+        id: centre_holidays.id,
+        holiday_date: centre_holidays.holiday_date,
+        is_published: centre_holidays.is_published,
+      });
+
+    // Publication is AT30 public-read only — does NOT touch sessions.
+    await auditFromReq(req, {
+      action: "update",
+      entityKind: "centre_holiday",
+      entityId: row.id,
+      summary: `Holiday ${row.holiday_date} ${body.is_published ? "published" : "unpublished"}.`,
+      metadata: {
+        centre_id: centreId,
+        holiday_date: row.holiday_date,
+        is_published: body.is_published,
+      },
+    });
+
+    ok(res, row);
+  },
+);
+
+/* DELETE /v1/admin/centres/:id/holidays/:holidayId — remove + rematerialise (AT10 undo) */
+router.delete(
+  "/centres/:id/holidays/:holidayId",
+  requireRole("super_admin", "state_admin", "city_admin", "sanchalak"),
+  async (req: Request, res: Response) => {
+    const centreId = String(req.params.id);
+    const holidayId = String(req.params.holidayId);
+    if (!isUuid(centreId) || !isUuid(holidayId)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Holiday not found.");
+      return;
+    }
+    const scope = await resolveAdminScope(req.authUser!);
+    if (scope.centreIds !== null && !scope.centreIds.includes(centreId)) {
+      fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope.");
+      return;
+    }
+
+    const [existing] = await db
+      .select({
+        id: centre_holidays.id,
+        holiday_date: centre_holidays.holiday_date,
+        centre_id: centre_holidays.centre_id,
+      })
+      .from(centre_holidays)
+      .where(and(eq(centre_holidays.id, holidayId), eq(centre_holidays.centre_id, centreId)))
+      .limit(1);
+    if (!existing) {
+      fail(res, 404, "ERR_NOT_FOUND", "Holiday not found.");
+      return;
+    }
+
+    await db.delete(centre_holidays).where(eq(centre_holidays.id, existing.id));
+
+    // Holiday row must be gone before rematerialise so holidayDatesForCentre
+    // no longer skips the date. ON CONFLICT DO NOTHING (AT7) prevents duplicating
+    // any session that AT10 left because it already had attendance.
+    const { rematerialiseCentreBatches } = await import("../../services/session-materialise");
+    const restored = await rematerialiseCentreBatches(centreId);
+
+    await auditFromReq(req, {
+      action: "delete",
+      entityKind: "centre_holiday",
+      entityId: existing.id,
+      summary: `Holiday removed for ${existing.holiday_date}; restored ${restored.inserted} sessions.`,
+      metadata: {
+        centre_id: centreId,
+        holiday_date: existing.holiday_date,
+        sessions_restored: restored.inserted,
+        batches_touched: restored.batches,
+      },
+    });
+
+    ok(res, {
+      id: existing.id,
+      holiday_date: existing.holiday_date,
+      sessions_restored: restored.inserted,
+    });
+  },
+);
+
 const createLibrarySchema = z.object({
   title_en: z.string().min(1).max(500),
   title_hi: z.string().max(500).optional(),

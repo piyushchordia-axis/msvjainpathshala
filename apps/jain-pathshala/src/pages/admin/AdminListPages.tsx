@@ -11,8 +11,10 @@ import {
 } from '@/components/admin/AdminPageShell';
 import { useAdminList } from '@/hooks/useAdminList';
 import { useAuth } from '@/lib/auth-context';
-import { apiGet, apiPost, apiPatch, ApiError } from '@/lib/api-client';
+import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
+import { roleSatisfies } from '@/components/admin/sidebar-nav';
+import type { Role } from '@/lib/auth';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -842,6 +844,7 @@ function canToggleNiyam(role: string | undefined, n: NiyamRow, userStateId?: str
 
 export function NiyamsPage() {
   const { user } = useAuth();
+  const canAuthor = roleSatisfies((user?.role ?? 'guest') as Role, 'city_admin');
   const { items, loading, error, reload } = useAdminList<NiyamRow>('/v1/admin/niyams');
   const [togglingId, setTogglingId] = useState<string | null>(null);
 
@@ -868,7 +871,16 @@ export function NiyamsPage() {
   };
 
   return (
-    <AdminPageShell title="Niyams" subtitle="Spiritual commitments catalogue." actions={<AddNiyamDialog onAdded={reload} />}>
+    <AdminPageShell
+      title="Niyams"
+      subtitle="Spiritual commitments catalogue."
+      actions={canAuthor ? <AddNiyamDialog onAdded={reload} /> : undefined}
+    >
+      {!canAuthor ? (
+        <p className="text-sm text-muted-foreground -mt-2">
+          Niyams are set by city administrators and above.
+        </p>
+      ) : null}
       {error ? <AdminError message={error} /> : null}
       <AdminTable columns={['Title', 'Type', 'Proof', 'Approval', 'Uploads', 'Scope', 'Audience', 'Points', 'Active']} loading={loading} empty="" colSpan={9}>
         {items.length === 0 && !loading ? <AdminEmptyRow colSpan={9} message="No niyams defined." /> : null}
@@ -1185,6 +1197,8 @@ interface HolidayRow {
   centre_name: string;
   holiday_date: string;
   reason: string | null;
+  is_published: boolean;
+  restorable_session_count: number;
 }
 
 function AddHolidayDialog({ onAdded }: { onAdded: () => void }) {
@@ -1245,6 +1259,66 @@ function AddHolidayDialog({ onAdded }: { onAdded: () => void }) {
   );
 }
 
+function HolidayActions({
+  centreId,
+  holiday,
+  onChanged,
+}: {
+  centreId: string;
+  holiday: HolidayRow;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function togglePublished() {
+    setBusy(true);
+    try {
+      await apiPatch(`/v1/admin/centres/${centreId}/holidays/${holiday.id}`, {
+        is_published: !holiday.is_published,
+      });
+      toast.success(holiday.is_published ? 'Holiday unpublished.' : 'Holiday published.');
+      onChanged();
+    } catch (err) {
+      toast.error('Could not update holiday.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove() {
+    const n = holiday.restorable_session_count;
+    const okConfirm = window.confirm(
+      `Delete the holiday on ${holiday.holiday_date}?\n\nThis will restore ${n} cancelled session${n === 1 ? '' : 's'} for this centre.`,
+    );
+    if (!okConfirm) return;
+    setBusy(true);
+    try {
+      const res = await apiDelete<{ sessions_restored: number }>(
+        `/v1/admin/centres/${centreId}/holidays/${holiday.id}`,
+      );
+      toast.success(
+        `Holiday removed. Restored ${res?.sessions_restored ?? n} session${(res?.sessions_restored ?? n) === 1 ? '' : 's'}.`,
+      );
+      onChanged();
+    } catch (err) {
+      toast.error('Could not delete holiday.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="outline" disabled={busy} onClick={() => void togglePublished()}>
+        {holiday.is_published ? 'Unpublish' : 'Publish'}
+      </Button>
+      <Button size="sm" variant="destructive" disabled={busy} onClick={() => void remove()}>
+        Delete
+      </Button>
+    </div>
+  );
+}
+
 export function HolidaysPage() {
   const [centres, setCentres] = useState<GeoOption[]>([]);
   const [centreId, setCentreId] = useState('');
@@ -1264,12 +1338,27 @@ export function HolidaysPage() {
     if (!centreId) return;
     setLoading(true);
     setError(null);
-    apiGet<{ items: Array<HolidayRow & { is_published?: boolean }> }>(
-      `/v1/admin/centres/${centreId}/holidays`,
-    )
+    apiGet<{
+      items: Array<{
+        id: string;
+        holiday_date: string;
+        reason: string | null;
+        is_published?: boolean;
+        restorable_session_count?: number;
+      }>;
+    }>(`/v1/admin/centres/${centreId}/holidays`)
       .then((r) => {
         const centreName = centres.find((c) => c.id === centreId)?.name ?? '';
-        setItems((r?.items ?? []).map((h) => ({ ...h, centre_name: centreName })));
+        setItems(
+          (r?.items ?? []).map((h) => ({
+            id: h.id,
+            holiday_date: h.holiday_date,
+            reason: h.reason,
+            centre_name: centreName,
+            is_published: h.is_published ?? true,
+            restorable_session_count: h.restorable_session_count ?? 0,
+          })),
+        );
       })
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Failed to load holidays.'))
       .finally(() => setLoading(false));
@@ -1297,13 +1386,19 @@ export function HolidaysPage() {
       }
     >
       {error ? <AdminError message={error} /> : null}
-      <AdminTable columns={['Centre', 'Date', 'Reason']} loading={loading} empty="" colSpan={3}>
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={3} message="No holidays scheduled." /> : null}
+      <AdminTable columns={['Centre', 'Date', 'Reason', 'Published', 'Actions']} loading={loading} empty="" colSpan={5}>
+        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={5} message="No holidays scheduled." /> : null}
         {items.map((h) => (
           <tr key={h.id} className="hover:bg-muted/30">
             <td className="px-4 py-3">{h.centre_name}</td>
             <td className="px-4 py-3 text-xs">{h.holiday_date}</td>
             <td className="px-4 py-3 text-xs text-muted-foreground">{h.reason ?? '—'}</td>
+            <td className="px-4 py-3 text-xs">{h.is_published ? 'Yes' : 'No'}</td>
+            <td className="px-4 py-3">
+              {centreId ? (
+                <HolidayActions centreId={centreId} holiday={h} onChanged={reload} />
+              ) : null}
+            </td>
           </tr>
         ))}
       </AdminTable>
@@ -1355,25 +1450,152 @@ export function ServiceRequestsPage() {
 }
 
 export function ReportsPage() {
-  const { items, loading, error } = useAdminList<SessionRow>('/v1/admin/sessions?limit=100');
+  const [centres, setCentres] = useState<GeoOption[]>([]);
+  const [centreId, setCentreId] = useState('');
+  const [month, setMonth] = useState(() =>
+    new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 7),
+  );
+  const [items, setItems] = useState<
+    Array<{
+      id: string;
+      month: string;
+      status: string;
+      pdf_url: string | null;
+      error_message: string | null;
+      created_at: string;
+    }>
+  >([]);
+  const [loading, setLoading] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const maxMonth = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 7);
+
+  useEffect(() => {
+    void apiGet<{ items: GeoOption[] }>('/v1/admin/centres')
+      .then((r) => {
+        const list = r?.items ?? [];
+        setCentres(list);
+        if (list[0]) setCentreId(list[0].id);
+      })
+      .catch(() => setError('Could not load centres.'));
+  }, []);
+
+  const reload = useCallback(() => {
+    if (!centreId || !/^\d{4}-\d{2}$/.test(month)) return;
+    setLoading(true);
+    setError(null);
+    apiGet<{ items: typeof items }>(
+      `/v1/admin/centres/${centreId}/reports?month=${encodeURIComponent(month)}`,
+    )
+      .then((r) => setItems(r?.items ?? []))
+      .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load reports.'))
+      .finally(() => setLoading(false));
+  }, [centreId, month]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
+
+  useEffect(() => {
+    const pending = items.some((r) => r.status === 'queued' || r.status === 'generating');
+    if (!pending) return;
+    const t = setInterval(() => reload(), 2000);
+    return () => clearInterval(t);
+  }, [items, reload]);
+
+  async function onGenerate() {
+    if (!centreId) return;
+    setGenerating(true);
+    setError(null);
+    try {
+      await apiPost(`/v1/admin/centres/${centreId}/reports/monthly`, { month });
+      toast.success('Report queued — it will appear below when ready.');
+      reload();
+    } catch (err) {
+      toast.error(
+        'Could not generate report.',
+        err instanceof ApiError ? err.message : undefined,
+      );
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  const busy = generating || items.some((r) => r.status === 'queued' || r.status === 'generating');
+
   return (
-    <AdminPageShell title="Reports" subtitle="Session attendance summary in your scope.">
+    <AdminPageShell
+      title="Reports"
+      subtitle="Monthly centre PDF for trustees — attendance, Niyam, homework, Punya (no student names)."
+      actions={
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={centreId} onValueChange={setCentreId}>
+            <SelectTrigger className="w-56">
+              <SelectValue placeholder="Select centre" />
+            </SelectTrigger>
+            <SelectContent>
+              {centres.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Input
+            type="month"
+            className="w-40"
+            max={maxMonth}
+            value={month}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v && v <= maxMonth) setMonth(v);
+            }}
+          />
+          <Button size="sm" onClick={() => void onGenerate()} disabled={!centreId || busy}>
+            {busy ? 'Generating…' : 'Generate'}
+          </Button>
+        </div>
+      }
+    >
       {error ? <AdminError message={error} /> : null}
       <AdminTable
-        columns={['Date', 'Centre', 'Batch', 'Present', 'Total', 'Status']}
+        columns={['Month', 'Status', 'Created', 'Download']}
         loading={loading}
         empty=""
-        colSpan={6}
+        colSpan={4}
       >
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={6} message="No session data." /> : null}
-        {items.map((s) => (
-          <tr key={s.id} className="hover:bg-muted/30">
-            <td className="px-4 py-3 text-xs">{s.session_date}</td>
-            <td className="px-4 py-3 text-xs">{s.centre_name}</td>
-            <td className="px-4 py-3 text-xs">{s.batch_name}</td>
-            <td className="px-4 py-3">{s.present_count}</td>
-            <td className="px-4 py-3">{s.total_count}</td>
-            <td className="px-4 py-3 text-xs capitalize">{s.status}</td>
+        {items.length === 0 && !loading ? (
+          <AdminEmptyRow colSpan={4} message="No reports for this month yet." />
+        ) : null}
+        {items.map((r) => (
+          <tr key={r.id} className="hover:bg-muted/30">
+            <td className="px-4 py-3 text-xs font-medium">{r.month}</td>
+            <td className="px-4 py-3 text-xs capitalize">
+              {r.status}
+              {r.error_message ? (
+                <div className="text-destructive mt-1">{r.error_message}</div>
+              ) : null}
+            </td>
+            <td className="px-4 py-3 text-xs text-muted-foreground">
+              {r.created_at ? new Date(r.created_at).toLocaleString('en-IN') : '—'}
+            </td>
+            <td className="px-4 py-3">
+              {r.status === 'ready' && r.pdf_url ? (
+                <a
+                  href={r.pdf_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm font-medium text-primary underline-offset-2 hover:underline"
+                >
+                  Download PDF
+                </a>
+              ) : r.status === 'queued' || r.status === 'generating' ? (
+                <span className="text-xs text-muted-foreground">Generating…</span>
+              ) : (
+                <span className="text-xs text-muted-foreground">—</span>
+              )}
+            </td>
           </tr>
         ))}
       </AdminTable>

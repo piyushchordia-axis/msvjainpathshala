@@ -8,6 +8,7 @@ import { registerDerivedDataJobs } from "./derived-data-jobs";
 import { registerExamJobs } from "./exam-jobs";
 import { registerIdCardJobs } from "./idcard-jobs";
 import { registerBirthdayJobs } from "./birthday-jobs";
+import { registerReportJobs } from "./report-jobs";
 
 let registered = false;
 
@@ -19,4 +20,5 @@ export function registerAllJobs(): void {
   registerExamJobs();
   registerIdCardJobs();
   registerBirthdayJobs();
+  registerReportJobs();
 }

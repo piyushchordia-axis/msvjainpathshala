@@ -1514,12 +1514,13 @@ describe("niyam-submissions", () => {
       .set(auth(shikshak.token));
     expect(pending.status).toBe(200);
     const item = pending.body.data.items[0] as
-      | { batch_id?: string; batch_name?: string; niyam_type?: string }
+      | { batch_id?: string; batch_name?: string; niyam_type?: string; can_decide?: boolean }
       | undefined;
     if (item) {
       expect("batch_id" in item).toBe(true);
       expect("batch_name" in item).toBe(true);
       expect("niyam_type" in item).toBe(true);
+      expect("can_decide" in item).toBe(true);
     }
 
     const daily = await request(app)
@@ -1529,5 +1530,129 @@ describe("niyam-submissions", () => {
     for (const row of daily.body.data.items as Array<{ niyam_type: string }>) {
       expect(row.niyam_type).toBe("daily");
     }
+  });
+
+  /**
+   * Q12 — approve/reject are batch-write scoped; /pending stays centre-scoped with can_decide.
+   */
+  it("Q12: shikshak cannot decide out-of-batch; sanchalak can; pending exposes can_decide", async () => {
+    const sanchalak = await loginAs("sanchalak");
+    const niyamId = await createNiyam(`q12-scope-${Date.now()}`);
+
+    const [stu] = await db
+      .select({
+        id: students.id,
+        batch_id: students.batch_id,
+        centre_id: students.centre_id,
+      })
+      .from(students)
+      .where(eq(students.id, child0))
+      .limit(1);
+    expect(stu?.batch_id).toBeTruthy();
+    expect(stu?.centre_id).toBeTruthy();
+    const originalBatchId = stu!.batch_id!;
+
+    // Same centre, not in Pathshala Shikshak's batch assignments (seed batchA3).
+    const outsider = await pool.query<{ id: string }>(
+      `select id from batches
+       where centre_id = $1 and name = 'Tarun Batch - Unassigned Scope Fixture'
+       limit 1`,
+      [stu!.centre_id],
+    );
+    expect(outsider.rows[0]?.id).toBeTruthy();
+    const outsiderBatchId = outsider.rows[0]!.id;
+
+    await db
+      .update(students)
+      .set({ batch_id: outsiderBatchId, updated_at: new Date() })
+      .where(eq(students.id, child0));
+
+    try {
+      const submit = await request(app)
+        .post("/v1/niyam-submissions")
+        .set(auth(parent.token))
+        .send({
+          niyam_id: niyamId,
+          student_id: child0,
+          submission_date: todayIst(),
+          proof_url: PROOF,
+        });
+      expect(submit.status).toBe(200);
+      const submissionId: string = submit.body.data.id;
+
+      const pendingShik = await request(app)
+        .get("/v1/niyam-submissions/pending?limit=200")
+        .set(auth(shikshak.token));
+      expect(pendingShik.status).toBe(200);
+      const shikRow = (pendingShik.body.data.items as Array<{ id: string; can_decide: boolean }>).find(
+        (r) => r.id === submissionId,
+      );
+      expect(shikRow).toBeTruthy();
+      expect(shikRow!.can_decide).toBe(false);
+
+      const pendingSanch = await request(app)
+        .get("/v1/niyam-submissions/pending?limit=200")
+        .set(auth(sanchalak.token));
+      expect(pendingSanch.status).toBe(200);
+      const sanchRow = (
+        pendingSanch.body.data.items as Array<{ id: string; can_decide: boolean }>
+      ).find((r) => r.id === submissionId);
+      expect(sanchRow).toBeTruthy();
+      expect(sanchRow!.can_decide).toBe(true);
+
+      const denyApprove = await request(app)
+        .post(`/v1/niyam-submissions/${submissionId}/approve`)
+        .set(auth(shikshak.token))
+        .send({});
+      expect(denyApprove.status).toBe(404);
+      expect(denyApprove.body.error.code).toBe("ERR_NOT_FOUND");
+
+      const denyReject = await request(app)
+        .post(`/v1/niyam-submissions/${submissionId}/reject`)
+        .set(auth(shikshak.token))
+        .send({ reason: REJECT_REASON });
+      expect(denyReject.status).toBe(404);
+      expect(denyReject.body.error.code).toBe("ERR_NOT_FOUND");
+
+      const okApprove = await request(app)
+        .post(`/v1/niyam-submissions/${submissionId}/approve`)
+        .set(auth(sanchalak.token))
+        .send({});
+      expect(okApprove.status).toBe(200);
+      expect(okApprove.body.data.status).toBe("approved");
+    } finally {
+      await db
+        .update(students)
+        .set({ batch_id: originalBatchId, updated_at: new Date() })
+        .where(eq(students.id, child0));
+    }
+
+    // In-batch path still succeeds for the shikshak (child0 restored to assigned batch).
+    const niyamIn = await createNiyam(`q12-inbatch-${Date.now()}`);
+    const submitIn = await request(app)
+      .post("/v1/niyam-submissions")
+      .set(auth(parent.token))
+      .send({
+        niyam_id: niyamIn,
+        student_id: child0,
+        submission_date: todayIst(),
+        proof_url: PROOF,
+      });
+    expect(submitIn.status).toBe(200);
+    const inId: string = submitIn.body.data.id;
+
+    const pendingIn = await request(app)
+      .get("/v1/niyam-submissions/pending?limit=200")
+      .set(auth(shikshak.token));
+    const inRow = (pendingIn.body.data.items as Array<{ id: string; can_decide: boolean }>).find(
+      (r) => r.id === inId,
+    );
+    expect(inRow?.can_decide).toBe(true);
+
+    const approveIn = await request(app)
+      .post(`/v1/niyam-submissions/${inId}/approve`)
+      .set(auth(shikshak.token))
+      .send({});
+    expect(approveIn.status).toBe(200);
   });
 });

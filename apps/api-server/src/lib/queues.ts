@@ -62,6 +62,7 @@ const LONG_RUNNING_QUEUES = new Set<string>([
   QUEUE_NAMES.SESSION_MATERIALISE,
   QUEUE_NAMES.PUNYA_RECONCILE,
   QUEUE_NAMES.IDCARD_GENERATION,
+  QUEUE_NAMES.REPORT_GENERATION,
 ]);
 
 /** @internal test + worker wiring — long jobs only. */

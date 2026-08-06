@@ -11,19 +11,21 @@ import {
   donations,
   device_sessions,
   shikshak_batch_assignments,
+  service_requests,
 } from "@workspace/db";
-import { and, asc, count, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
-import type { PgColumn } from "drizzle-orm/pg-core";
+import { and, asc, count, desc, eq, gte, gt, ilike, inArray, isNull, or, sql } from "drizzle-orm";
 import {
   enrolmentActionSchema,
   studentStatusActionSchema,
   enrolmentStatusSchema,
+  studentStatusSchema,
+  canViewDonations,
   type Role,
 } from "@workspace/api-zod";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
-import { resolveAdminScope, type AdminScope } from "../../lib/scope";
+import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { materialiseHomeworkForStudentBatch } from "../../lib/homework-materialise";
 import { signAccessToken, generateRefreshToken, verifyAccessToken, hashSecret } from "../../lib/tokens";
@@ -206,7 +208,7 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
   const centreScope = scopedCentreFilter(scope, centres.id);
-  const enrolCentreFilter = scopedCentreFilter(scope, enrolments.requested_centre_id);
+  const srCentreFilter = scopedCentreFilter(scope, service_requests.centre_id);
   const sinceDate = since.toISOString().slice(0, 10);
   const centreIdsForRate =
     scope.centreIds === null ? null : scope.centreIds.length === 0 ? [] : scope.centreIds;
@@ -214,6 +216,14 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
   const now = new Date();
   const fyStartYear = now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1;
   const fyStart = new Date(Date.UTC(fyStartYear, 3, 1)); // April 1, 00:00 UTC
+
+  // Every other metric here is centre-scoped. `donations` has no centre_id and
+  // no direct city_id (only a nullable campaign_id → donation_campaigns.city_id),
+  // so this sum cannot be narrowed to a sanchalak's centres. Rather than return
+  // the NATIONAL total to a scoped caller — leaking past the city_admin gate the
+  // /admin/donations page draws on purpose — the figure is withheld and the
+  // query skipped for roles outside DONATION_VIEW_ROLES.
+  const showDonations = canViewDonations(req.authUser!.role as Role);
 
   const [
     [activeStudents],
@@ -232,10 +242,17 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
       .select({ n: count() })
       .from(centres)
       .where(and(eq(centres.status, "active"), isNull(centres.deleted_at), centreScope)),
+    // Open unassigned inbox — submitted/in_review with no assignee (badge source).
     db
       .select({ n: count() })
-      .from(enrolments)
-      .where(and(eq(enrolments.status, "pending"), enrolCentreFilter)),
+      .from(service_requests)
+      .where(
+        and(
+          inArray(service_requests.status, ["submitted", "in_review"]),
+          isNull(service_requests.assigned_to),
+          srCentreFilter,
+        ),
+      ),
     db
       .select({ n: count() })
       .from(students)
@@ -250,12 +267,17 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
       .where(
         and(gte(punya_transactions.created_at, since), isNull(students.deleted_at), punyaCentreFilter),
       ),
-    db
-      .select({ sum: sql<number>`coalesce(sum(${donations.amount_paise}),0)::bigint` })
-      .from(donations)
-      .where(
-        and(eq(donations.payment_status, "captured"), gte(donations.payment_captured_at, fyStart)),
-      ),
+    showDonations
+      ? db
+          .select({ sum: sql<number>`coalesce(sum(${donations.amount_paise}),0)::bigint` })
+          .from(donations)
+          .where(
+            and(
+              eq(donations.payment_status, "captured"),
+              gte(donations.payment_captured_at, fyStart),
+            ),
+          )
+      : Promise.resolve([] as Array<{ sum: number }>),
   ]);
 
   const attendanceRate =
@@ -270,7 +292,9 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
     attendance_rate_30d: attendanceRate,
     punya_awarded_30d: Number(punyaRow?.sum ?? 0),
     msv_active: msvActive?.n ?? 0,
-    donations_total_paise_ytd: Number(donationRow?.sum ?? 0),
+    ...(showDonations
+      ? { donations_total_paise_ytd: Number(donationRow?.sum ?? 0) }
+      : {}),
   });
   void msv_enrolments;
 });
@@ -327,14 +351,83 @@ router.get("/analytics/engagement-trend", async (req: Request, res: Response) =>
   }, { count: rows.length });
 });
 
-/* GET /v1/admin/students?limit= */
+/** Escape %/_/\ so a typed query cannot widen the ILIKE pattern. */
+function escapeIlike(raw: string): string {
+  return raw.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
+function encodeStudentCursor(fullName: string, id: string): string {
+  return Buffer.from(`${fullName}\0${id}`, "utf8").toString("base64url");
+}
+
+function decodeStudentCursor(raw: unknown): { fullName: string; id: string } | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const decoded = Buffer.from(raw, "base64url").toString("utf8");
+    const i = decoded.indexOf("\0");
+    if (i < 0) return null;
+    const fullName = decoded.slice(0, i);
+    const id = decoded.slice(i + 1);
+    if (!fullName || !UUID_RE.test(id)) return null;
+    return { fullName, id };
+  } catch {
+    return null;
+  }
+}
+
+/* GET /v1/admin/students?q=&status=&batch_id=&cursor=&limit= */
 router.get("/students", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
-  const limit = clampLimit(req.query.limit, 100, 500);
+  const limit = clampLimit(req.query.limit, 50, 200);
   const centreFilter = scopedCentreFilter(scope, students.centre_id);
   // Shikshak: students in assigned batches only (progress / roster picks).
   // Centre membership alone would list every child at their tagged centres.
   const batchFilter = scopedBatchFilter(scope, students.batch_id);
+
+  let statusFilter;
+  const statusRaw = typeof req.query.status === "string" ? req.query.status.trim() : "";
+  if (statusRaw) {
+    const parsed = studentStatusSchema.safeParse(statusRaw);
+    if (!parsed.success) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Unknown status filter.");
+      return;
+    }
+    statusFilter = eq(students.status, parsed.data);
+  }
+
+  let batchEq;
+  const batchIdRaw = typeof req.query.batch_id === "string" ? req.query.batch_id.trim() : "";
+  if (batchIdRaw) {
+    if (!UUID_RE.test(batchIdRaw)) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "batch_id must be a UUID.");
+      return;
+    }
+    const [batch] = await db
+      .select({ id: batches.id, centre_id: batches.centre_id })
+      .from(batches)
+      .where(and(eq(batches.id, batchIdRaw), isNull(batches.deleted_at)))
+      .limit(1);
+    if (!batch || !inBatchWriteScope(scope, batch.id, batch.centre_id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Batch not found in your scope.");
+      return;
+    }
+    batchEq = eq(students.batch_id, batch.id);
+  }
+
+  let searchFilter;
+  const qRaw = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  if (qRaw) {
+    const pattern = `%${escapeIlike(qRaw.slice(0, 80))}%`;
+    searchFilter = or(ilike(students.full_name, pattern), ilike(students.student_code, pattern));
+  }
+
+  const cursor = decodeStudentCursor(req.query.cursor);
+  const cursorFilter = cursor
+    ? or(
+        gt(students.full_name, cursor.fullName),
+        and(eq(students.full_name, cursor.fullName), gt(students.id, cursor.id)),
+      )
+    : undefined;
 
   const rows = await db
     .select({
@@ -347,13 +440,33 @@ router.get("/students", async (req: Request, res: Response) => {
       status: students.status,
       batch_id: students.batch_id,
       centre_id: students.centre_id,
+      batch_name: batches.name,
+      centre_name: centres.name,
     })
     .from(students)
-    .where(and(isNull(students.deleted_at), centreFilter, batchFilter))
-    .orderBy(asc(students.full_name), desc(students.created_at))
-    .limit(limit);
+    .leftJoin(batches, eq(batches.id, students.batch_id))
+    .leftJoin(centres, eq(centres.id, students.centre_id))
+    .where(
+      and(
+        isNull(students.deleted_at),
+        centreFilter,
+        batchFilter,
+        statusFilter,
+        batchEq,
+        searchFilter,
+        cursorFilter,
+      ),
+    )
+    .orderBy(asc(students.full_name), asc(students.id))
+    .limit(limit + 1);
 
-  ok(res, { items: rows }, { count: rows.length });
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  const nextCursor =
+    hasMore && last ? encodeStudentCursor(last.full_name, last.id) : null;
+
+  ok(res, { items: page, next_cursor: nextCursor }, { count: page.length });
 });
 
 /* POST /v1/admin/students/:id/status */

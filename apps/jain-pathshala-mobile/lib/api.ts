@@ -310,6 +310,19 @@ export async function apiPut<T>(path: string, body: unknown): Promise<T> {
   return unwrap<T>(res);
 }
 
+export async function apiPatch<T>(path: string, body: unknown): Promise<T> {
+  const res = await request<{ data: T } | T>(path, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+  return unwrap<T>(res);
+}
+
+export async function apiDelete<T>(path: string, body?: unknown): Promise<T> {
+  const res = await del<{ data: T } | T>(path, body);
+  return unwrap<T>(res);
+}
+
 export type UploadFileInput = {
   /** Local file URI (native) or object URL / blob URI (web). */
   uri: string;

@@ -13,7 +13,8 @@ interface OverviewPayload {
   attendance_rate_30d: number;
   punya_awarded_30d: number;
   msv_active: number;
-  donations_total_paise_ytd: number;
+  /** Absent for roles outside DONATION_VIEW_ROLES (sanchalak, shikshak). */
+  donations_total_paise_ytd?: number;
 }
 
 interface EnrolmentRow { id: string; created_at: string; }
@@ -32,7 +33,7 @@ function timeAgo(iso: string): string {
   return `${Math.round(hrs / 24)}d ago`;
 }
 
-const EMPTY: OverviewPayload = { active_students: 0, centres: 0, open_service_requests: 0, attendance_rate_30d: 0, punya_awarded_30d: 0, msv_active: 0, donations_total_paise_ytd: 0 };
+const EMPTY: OverviewPayload = { active_students: 0, centres: 0, open_service_requests: 0, attendance_rate_30d: 0, punya_awarded_30d: 0, msv_active: 0 };
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -97,7 +98,13 @@ export default function DashboardPage() {
                 { label: 'Centres', value: overview.centres },
                 { label: 'MSV approved', value: overview.msv_active },
                 { label: 'Open requests', value: overview.open_service_requests },
-                { label: 'Donations YTD', value: `₹${(overview.donations_total_paise_ytd / 100).toLocaleString('en-IN')}` },
+                // Only present for city_admin and above — the API omits it for scoped roles.
+                ...(overview.donations_total_paise_ytd === undefined
+                  ? []
+                  : [{
+                      label: 'Donations YTD',
+                      value: `₹${(overview.donations_total_paise_ytd / 100).toLocaleString('en-IN')}`,
+                    }]),
               ].map(({ label, value }) => (
                 <div key={label}>
                   <dt className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</dt>
