@@ -17,6 +17,7 @@ import { loginAs, auth } from "./helpers";
 import { runBirthdayWishes } from "../src/routes/v1/notifications";
 import { sendParentAttendancePush } from "../src/services/attendance-post-process";
 import { notifyBadgesPush } from "../src/lib/niyam-badges";
+import { notifyUsers } from "../src/lib/notify";
 import * as pushModule from "../src/lib/push";
 import { sendPush, sweepPushReceipts } from "../src/lib/push";
 import { Expo } from "expo-server-sdk";
@@ -488,6 +489,148 @@ describe("notifications — dead token reaping (FIX #3)", () => {
       ).resolves.toEqual([]);
     } finally {
       sendSpy.mockRestore();
+    }
+  });
+});
+
+describe("notifications — preferred language on push (FIX #5)", () => {
+  it("a Hindi-preference user receives the Devanagari push body", async () => {
+    const hiUser = await loginAs("parent");
+    const enUser = await loginAs("shikshak");
+    const hiToken = `ExponentPushToken[fix5-hi-${Date.now()}]`;
+    const enToken = `ExponentPushToken[fix5-en-${Date.now()}]`;
+
+    const [hiLangBefore] = await db
+      .select({ preferred_language: users.preferred_language })
+      .from(users)
+      .where(eq(users.id, hiUser.user.id))
+      .limit(1);
+    const [enLangBefore] = await db
+      .select({ preferred_language: users.preferred_language })
+      .from(users)
+      .where(eq(users.id, enUser.user.id))
+      .limit(1);
+
+    await db.insert(device_push_tokens).values([
+      { user_id: hiUser.user.id, expo_token: hiToken, platform: "ios", is_active: true },
+      { user_id: enUser.user.id, expo_token: enToken, platform: "android", is_active: true },
+    ]);
+
+    const spy = vi.spyOn(pushModule, "sendPush").mockResolvedValue([]);
+    try {
+      await db
+        .update(users)
+        .set({ preferred_language: "hi" })
+        .where(eq(users.id, hiUser.user.id));
+      await db
+        .update(users)
+        .set({ preferred_language: "en" })
+        .where(eq(users.id, enUser.user.id));
+
+      await notifyUsers({
+        userIds: [hiUser.user.id, enUser.user.id],
+        kind: "general",
+        title_en: "English title",
+        title_hi: "हिंदी शीर्षक",
+        body_en: "English body",
+        body_hi: "हिंदी शरीर",
+        push: true,
+      });
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      const payloads = spy.mock.calls[0]![0] as Array<{
+        to: string;
+        title: string;
+        body: string;
+      }>;
+      const hiPayload = payloads.find((p) => p.to === hiToken);
+      const enPayload = payloads.find((p) => p.to === enToken);
+      expect(hiPayload).toEqual(
+        expect.objectContaining({
+          to: hiToken,
+          title: "हिंदी शीर्षक",
+          body: "हिंदी शरीर",
+        }),
+      );
+      expect(enPayload).toEqual(
+        expect.objectContaining({
+          to: enToken,
+          title: "English title",
+          body: "English body",
+        }),
+      );
+    } finally {
+      spy.mockRestore();
+      await db
+        .update(users)
+        .set({ preferred_language: hiLangBefore?.preferred_language ?? "en" })
+        .where(eq(users.id, hiUser.user.id));
+      await db
+        .update(users)
+        .set({ preferred_language: enLangBefore?.preferred_language ?? "en" })
+        .where(eq(users.id, enUser.user.id));
+      await db
+        .delete(device_push_tokens)
+        .where(inArray(device_push_tokens.expo_token, [hiToken, enToken]));
+    }
+  });
+
+  it("a user with no preferred_language falls back to English", async () => {
+    const parent = await loginAs("parent");
+    const expoToken = `ExponentPushToken[fix5-null-${Date.now()}]`;
+    const [langBefore] = await db
+      .select({ preferred_language: users.preferred_language })
+      .from(users)
+      .where(eq(users.id, parent.user.id))
+      .limit(1);
+
+    await db.insert(device_push_tokens).values({
+      user_id: parent.user.id,
+      expo_token: expoToken,
+      platform: "ios",
+      is_active: true,
+    });
+
+    // Column is NOT NULL in schema; drop briefly so we can plant a real null.
+    await pool.query(
+      `ALTER TABLE users ALTER COLUMN preferred_language DROP NOT NULL`,
+    );
+    const spy = vi.spyOn(pushModule, "sendPush").mockResolvedValue([]);
+    try {
+      await pool.query(`UPDATE users SET preferred_language = NULL WHERE id = $1`, [
+        parent.user.id,
+      ]);
+
+      await notifyUsers({
+        userIds: [parent.user.id],
+        kind: "general",
+        title_en: "Fallback title",
+        title_hi: "फ़ॉलबैक शीर्षक",
+        body_en: "Fallback body",
+        body_hi: "फ़ॉलबैक शरीर",
+        push: true,
+      });
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      const payload = (spy.mock.calls[0]![0] as Array<{ to: string; title: string; body: string }>).find(
+        (p) => p.to === expoToken,
+      );
+      expect(payload?.title).toBe("Fallback title");
+      expect(payload?.body).toBe("Fallback body");
+      expect(payload?.body).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+      await pool.query(
+        `UPDATE users SET preferred_language = $2 WHERE id = $1`,
+        [parent.user.id, langBefore?.preferred_language ?? "en"],
+      );
+      await pool.query(
+        `ALTER TABLE users ALTER COLUMN preferred_language SET DEFAULT 'en'`,
+      );
+      await pool.query(
+        `ALTER TABLE users ALTER COLUMN preferred_language SET NOT NULL`,
+      );
+      await db.delete(device_push_tokens).where(eq(device_push_tokens.expo_token, expoToken));
     }
   });
 });
