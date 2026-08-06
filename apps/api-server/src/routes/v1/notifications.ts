@@ -199,6 +199,17 @@ router.get("/", async (req: Request, res: Response) => {
   );
 });
 
+/* POST /v1/notifications/read-all — mark every unread inbox row for the caller */
+router.post("/read-all", async (req: Request, res: Response) => {
+  const uid = req.authUser!.id;
+  const updated = await db
+    .update(notifications)
+    .set({ read_at: new Date() })
+    .where(and(eq(notifications.user_id, uid), isNull(notifications.read_at)))
+    .returning({ id: notifications.id });
+  ok(res, { updated: updated.length });
+});
+
 /* POST /v1/notifications/:id/read — mark the caller's notification read (404 if not theirs) */
 router.post("/:id/read", async (req: Request, res: Response) => {
   const uid = req.authUser!.id;

@@ -495,6 +495,129 @@ describe("notifications — dead token reaping (FIX #3)", () => {
   });
 });
 
+describe("notifications — mark-all-read (FIX #11)", () => {
+  it("mark-all-read clears only the caller's unread notifications", async () => {
+    const userA = await loginAs("parent");
+    const userB = await loginAs("shikshak");
+    const suffix = `${Date.now()}`;
+    const planted: string[] = [];
+
+    try {
+      for (const uid of [userA.user.id, userB.user.id]) {
+        const [row] = await db
+          .insert(notifications)
+          .values({
+            user_id: uid,
+            kind: "general",
+            title_en: `Fix11 unread ${suffix}`,
+            title_hi: "अनरीड",
+            body_en: "Unread row",
+            body_hi: "अपठित",
+          })
+          .returning({ id: notifications.id });
+        planted.push(row!.id);
+      }
+
+      const res = await request(app)
+        .post("/v1/notifications/read-all")
+        .set(auth(userA.token))
+        .send({});
+      expect(res.status).toBe(200);
+      expect(res.body.data.updated).toBeGreaterThanOrEqual(1);
+
+      const listA = await request(app)
+        .get("/v1/notifications?limit=50")
+        .set(auth(userA.token));
+      expect(listA.status).toBe(200);
+      expect(listA.body.data.unread_count).toBe(0);
+
+      const listB = await request(app)
+        .get("/v1/notifications?limit=50")
+        .set(auth(userB.token));
+      expect(listB.status).toBe(200);
+      expect(listB.body.data.unread_count).toBeGreaterThanOrEqual(1);
+      const bRow = (listB.body.data.items as Array<{ id: string; read_at: string | null }>).find(
+        (n) => n.id === planted[1],
+      );
+      expect(bRow?.read_at).toBeNull();
+    } finally {
+      if (planted.length) {
+        await db.delete(notifications).where(inArray(notifications.id, planted));
+      }
+    }
+  });
+
+  it("mark-all-read preserves already-read timestamps", async () => {
+    const session = await loginAs("parent");
+    const uid = session.user.id;
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000);
+
+    const [readRow] = await db
+      .insert(notifications)
+      .values({
+        user_id: uid,
+        kind: "general",
+        title_en: `Fix11 already-read ${Date.now()}`,
+        title_hi: "पहले से पढ़ा",
+        body_en: "Keep timestamp",
+        body_hi: "समय रखें",
+        read_at: yesterday,
+      })
+      .returning({ id: notifications.id, read_at: notifications.read_at });
+
+    const [unreadRow] = await db
+      .insert(notifications)
+      .values({
+        user_id: uid,
+        kind: "general",
+        title_en: `Fix11 to-read ${Date.now()}`,
+        title_hi: "पढ़ना है",
+        body_en: "Mark me",
+        body_hi: "चिह्नित करें",
+      })
+      .returning({ id: notifications.id });
+
+    try {
+      const before = readRow!.read_at!.toISOString();
+      const res = await request(app)
+        .post("/v1/notifications/read-all")
+        .set(auth(session.token))
+        .send({});
+      expect(res.status).toBe(200);
+
+      const [after] = await db
+        .select({ read_at: notifications.read_at })
+        .from(notifications)
+        .where(eq(notifications.id, readRow!.id))
+        .limit(1);
+      expect(after!.read_at!.toISOString()).toBe(before);
+
+      const [marked] = await db
+        .select({ read_at: notifications.read_at })
+        .from(notifications)
+        .where(eq(notifications.id, unreadRow!.id))
+        .limit(1);
+      expect(marked!.read_at).not.toBeNull();
+    } finally {
+      await db
+        .delete(notifications)
+        .where(inArray(notifications.id, [readRow!.id, unreadRow!.id]));
+    }
+  });
+
+  it("mark-all-read on an empty inbox returns 200 with updated: 0", async () => {
+    const session = await loginAs("parent");
+    await db.delete(notifications).where(eq(notifications.user_id, session.user.id));
+
+    const res = await request(app)
+      .post("/v1/notifications/read-all")
+      .set(auth(session.token))
+      .send({});
+    expect(res.status).toBe(200);
+    expect(res.body.data).toEqual({ updated: 0 });
+  });
+});
+
 describe("notifications — inbox keyset pagination (FIX #10)", () => {
   it("the inbox pages through more notifications than the limit", async () => {
     const session = await loginAs("parent");
