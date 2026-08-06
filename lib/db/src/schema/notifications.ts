@@ -61,6 +61,12 @@ export const notifications = pgTable(
   (t) => ({
     // (user_id, created_at DESC) covers inbox list; subsumes old idx_notifications_user.
     user_created_idx: index("idx_notifications_user_created").on(t.user_id, t.created_at),
+    // Keyset pagination (FIX #10): id breaks ties when notifyUsers inserts a batch.
+    user_created_id_idx: index("idx_notifications_user_created_id").on(
+      t.user_id,
+      t.created_at,
+      t.id,
+    ),
     user_read_idx: index("idx_notifications_user_read").on(t.user_id, t.read_at),
   }),
 );

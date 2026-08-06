@@ -495,6 +495,116 @@ describe("notifications — dead token reaping (FIX #3)", () => {
   });
 });
 
+describe("notifications — inbox keyset pagination (FIX #10)", () => {
+  it("the inbox pages through more notifications than the limit", async () => {
+    const session = await loginAs("parent");
+    const uid = session.user.id;
+    const suffix = `${Date.now()}`;
+    const planted: string[] = [];
+
+    // Isolate from leftover inbox rows left by earlier tests.
+    await db.delete(notifications).where(eq(notifications.user_id, uid));
+
+    try {
+      for (let i = 0; i < 5; i++) {
+        const createdAt = new Date(Date.UTC(2024, 5, 1, 12, 0, i));
+        const [row] = await db
+          .insert(notifications)
+          .values({
+            user_id: uid,
+            kind: "general",
+            title_en: `Fix10 page ${i} ${suffix}`,
+            title_hi: `फिक्स10 ${i}`,
+            body_en: `Body ${i}`,
+            body_hi: `शरीर ${i}`,
+            created_at: createdAt,
+            updated_at: createdAt,
+          })
+          .returning({ id: notifications.id });
+        planted.push(row!.id);
+      }
+
+      const seen = new Set<string>();
+      let cursor: string | null = null;
+      for (let page = 0; page < 3; page++) {
+        const qs = cursor
+          ? `limit=2&cursor=${encodeURIComponent(cursor)}`
+          : "limit=2";
+        const res = await request(app)
+          .get(`/v1/notifications?${qs}`)
+          .set(auth(session.token));
+        expect(res.status).toBe(200);
+        const items = res.body.data.items as Array<{ id: string; title_en: string }>;
+        expect(items.length).toBe(page < 2 ? 2 : 1);
+        if (page === 0) {
+          expect(typeof res.body.data.unread_count).toBe("number");
+        } else {
+          expect(res.body.data.unread_count).toBeUndefined();
+        }
+        for (const item of items) {
+          expect(seen.has(item.id)).toBe(false);
+          seen.add(item.id);
+          expect(item.title_en).toContain(suffix);
+        }
+        cursor = res.body.data.next_cursor as string | null;
+        if (page < 2) expect(cursor).toBeTruthy();
+        else expect(cursor).toBeNull();
+      }
+      expect(seen.size).toBe(5);
+      for (const id of planted) expect(seen.has(id)).toBe(true);
+    } finally {
+      await db.delete(notifications).where(eq(notifications.user_id, uid));
+    }
+  });
+
+  it("a cursor from another user's inbox returns that user nothing", async () => {
+    const userA = await loginAs("parent");
+    const userB = await loginAs("shikshak");
+    const suffix = `${Date.now()}`;
+
+    await db.delete(notifications).where(eq(notifications.user_id, userB.user.id));
+
+    const [aRow] = await db
+      .insert(notifications)
+      .values({
+        user_id: userA.user.id,
+        kind: "general",
+        title_en: `Fix10 A ${suffix}`,
+        title_hi: "ए",
+        body_en: "A only",
+        body_hi: "केवल ए",
+      })
+      .returning({ id: notifications.id, created_at: notifications.created_at });
+
+    try {
+      // Cursor is a position only — user_id filter still applies independently.
+      const cursor = Buffer.from(
+        `${aRow!.created_at.toISOString()}|${aRow!.id}`,
+        "utf8",
+      ).toString("base64url");
+
+      const listB = await request(app)
+        .get(`/v1/notifications?limit=50&cursor=${encodeURIComponent(cursor)}`)
+        .set(auth(userB.token));
+      expect(listB.status).toBe(200);
+      const items = listB.body.data.items as Array<{ id: string; title_en: string }>;
+      expect(items).toEqual([]);
+      expect(items.every((n) => n.id !== aRow!.id)).toBe(true);
+    } finally {
+      await db.delete(notifications).where(eq(notifications.id, aRow!.id));
+    }
+  });
+
+  it("an invalid cursor returns 422, not a 500", async () => {
+    const session = await loginAs("parent");
+    const res = await request(app)
+      .get("/v1/notifications?cursor=not-a-valid-cursor")
+      .set(auth(session.token));
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe("ERR_VALIDATION_FAILED");
+  });
+});
+
 describe("notifications — attendance kind (FIX #9)", () => {
   it("attendance notifications are stored with kind 'attendance'", async () => {
     const batchPick = await pool.query<{ batch_id: string; centre_id: string }>(

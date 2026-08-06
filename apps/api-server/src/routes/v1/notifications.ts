@@ -10,7 +10,7 @@
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, notifications, device_push_tokens, students } from "@workspace/db";
-import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
@@ -21,6 +21,27 @@ const router: IRouter = Router();
 router.use(requireAuth);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Keyset cursor — same base64url `a|b` shape as niyam-submissions. */
+function encodeInboxCursor(createdAt: Date, id: string): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}`, "utf8").toString("base64url");
+}
+
+function decodeInboxCursor(raw: unknown): { createdAt: Date; id: string } | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const decoded = Buffer.from(raw, "base64url").toString("utf8");
+    const i = decoded.indexOf("|");
+    if (i < 0) return null;
+    const iso = decoded.slice(0, i);
+    const id = decoded.slice(i + 1);
+    const createdAt = new Date(iso);
+    if (Number.isNaN(createdAt.getTime()) || !UUID_RE.test(id)) return null;
+    return { createdAt, id };
+  } catch {
+    return null;
+  }
+}
 
 
 /* ---- route-local schemas (inline, NOT in api-zod) ---- */
@@ -107,10 +128,30 @@ router.post("/push-token", async (req: Request, res: Response) => {
   ok(res, { ok: true });
 });
 
-/* GET /v1/notifications?limit= — the caller's inbox, newest first + unread_count */
+/* GET /v1/notifications?limit=&cursor= — keyset inbox (created_at DESC, id DESC) */
 router.get("/", async (req: Request, res: Response) => {
   const uid = req.authUser!.id;
   const limit = clampLimit(req.query.limit, 50, 200);
+
+  const cursorRaw = req.query.cursor;
+  let cursor: { createdAt: Date; id: string } | null = null;
+  if (cursorRaw !== undefined && cursorRaw !== null && String(cursorRaw).length > 0) {
+    cursor = decodeInboxCursor(cursorRaw);
+    if (!cursor) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid cursor — request the first page again.");
+      return;
+    }
+  }
+
+  const conds = [eq(notifications.user_id, uid)];
+  if (cursor) {
+    conds.push(
+      or(
+        lt(notifications.created_at, cursor.createdAt),
+        and(eq(notifications.created_at, cursor.createdAt), lt(notifications.id, cursor.id)),
+      )!,
+    );
+  }
 
   const rows = await db
     .select({
@@ -124,21 +165,38 @@ router.get("/", async (req: Request, res: Response) => {
       created_at: notifications.created_at,
     })
     .from(notifications)
-    .where(eq(notifications.user_id, uid))
-    .orderBy(desc(notifications.created_at))
-    .limit(limit);
+    .where(and(...conds))
+    .orderBy(desc(notifications.created_at), desc(notifications.id))
+    .limit(limit + 1);
 
-  const [{ unread }] = await db
-    .select({ unread: sql<number>`count(*)::int` })
-    .from(notifications)
-    .where(and(eq(notifications.user_id, uid), isNull(notifications.read_at)));
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  const nextCursor =
+    hasMore && last ? encodeInboxCursor(last.created_at, last.id) : null;
 
-  const items = rows.map((r) => ({
+  // unread_count only on the first page — paging does not change the badge.
+  let unread_count: number | undefined;
+  if (!cursor) {
+    const [{ unread }] = await db
+      .select({ unread: sql<number>`count(*)::int` })
+      .from(notifications)
+      .where(and(eq(notifications.user_id, uid), isNull(notifications.read_at)));
+    unread_count = Number(unread ?? 0);
+  }
+
+  const items = page.map((r) => ({
     ...r,
     read_at: r.read_at ? r.read_at.toISOString() : null,
     created_at: r.created_at.toISOString(),
   }));
-  ok(res, { items, unread_count: Number(unread ?? 0) }, { count: items.length });
+  ok(
+    res,
+    cursor
+      ? { items, next_cursor: nextCursor }
+      : { items, unread_count: unread_count!, next_cursor: nextCursor },
+    { count: items.length },
+  );
 });
 
 /* POST /v1/notifications/:id/read — mark the caller's notification read (404 if not theirs) */
