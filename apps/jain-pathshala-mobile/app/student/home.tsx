@@ -1,10 +1,11 @@
-import { View } from "react-native";
+import { Pressable, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useAttendance, usePunya } from "@/lib/queries";
+import { calendarEventTone, previewAttendanceLabel } from "@/lib/attendance-calendar";
 import { formatDate } from "@/lib/format";
 import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
@@ -25,8 +26,13 @@ export default function StudentHome() {
   const firstName = user?.full_name?.split(" ")[0] ?? (hi ? "विद्यार्थी" : "Student");
 
   const attendanceRows = attendance.data?.items ?? [];
-  const recentRows = attendanceRows.slice(0, 2);
-  const hasMoreAttendance = attendanceRows.length > 2;
+  const recentRows = attendanceRows
+    .flatMap((r) => {
+      const preview = previewAttendanceLabel(r.status, hi);
+      if (!preview) return [];
+      return [{ id: r.id, session_date: r.session_date, ...preview }];
+    })
+    .slice(0, 2);
   // AT5 — server SQL only.
   const presentRate =
     attendance.data?.attendance_percent ??
@@ -34,13 +40,7 @@ export default function StudentHome() {
       ? Math.round(attendance.data.attendance_rate * 100)
       : null);
 
-  const statusTone = (status: string): "success" | "warning" | "error" | "neutral" => {
-    const s = status.toLowerCase();
-    if (s === "present") return "success";
-    if (s === "late") return "warning";
-    if (s === "absent") return "error";
-    return "neutral";
-  };
+  const openAttendance = () => router.push("/my-attendance");
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
@@ -129,15 +129,21 @@ export default function StudentHome() {
 
             <AnimatedMount delay={180}>
               <Card>
-                <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
-                  <Title style={{ fontSize: 17 }}>{hi ? "उपस्थिति" : "Attendance"}</Title>
-                  {presentRate !== null ? (
-                    <Pill
-                      label={`${presentRate}% ${hi ? "उपस्थित" : "present"}`}
-                      tone={presentRate >= 75 ? "success" : presentRate >= 50 ? "warning" : "error"}
-                    />
-                  ) : null}
-                </Row>
+                <Pressable
+                  onPress={openAttendance}
+                  accessibilityRole="button"
+                  accessibilityLabel={hi ? "उपस्थिति देखें" : "View attendance"}
+                >
+                  <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
+                    <Title style={{ fontSize: 17 }}>{hi ? "उपस्थिति" : "Attendance"}</Title>
+                    {presentRate !== null ? (
+                      <Pill
+                        label={`${presentRate}% ${hi ? "उपस्थित" : "present"}`}
+                        tone={presentRate >= 75 ? "success" : presentRate >= 50 ? "warning" : "error"}
+                      />
+                    ) : null}
+                  </Row>
+                </Pressable>
 
                 {attendance.isLoading ? (
                   <StateView status="loading" emptyText="" />
@@ -150,9 +156,19 @@ export default function StudentHome() {
                     retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
                   />
                 ) : recentRows.length === 0 ? (
-                  <Body muted style={{ marginTop: 10 }}>
-                    {hi ? "अभी कोई उपस्थिति दर्ज नहीं है।" : "No attendance recorded yet."}
-                  </Body>
+                  <View style={{ marginTop: 10, gap: 8 }}>
+                    <Body muted>
+                      {hi ? "अभी कोई उपस्थिति दर्ज नहीं है।" : "No attendance recorded yet."}
+                    </Body>
+                    {activeStudentId ? (
+                      <Button
+                        label={hi ? "और देखें →" : "View more →"}
+                        variant="ghost"
+                        style={{ alignSelf: "flex-start" }}
+                        onPress={openAttendance}
+                      />
+                    ) : null}
+                  </View>
                 ) : (
                   <View style={{ marginTop: 12 }}>
                     {recentRows.map((row, i) => (
@@ -165,25 +181,16 @@ export default function StudentHome() {
                           borderTopColor: c.border,
                         }}
                       >
-                        <View style={{ flex: 1, paddingRight: 10 }}>
-                          <Body style={{ fontSize: 14 }}>{formatDate(row.session_date)}</Body>
-                          {row.topic ? (
-                            <Body muted style={{ fontSize: 12, marginTop: 1 }} numberOfLines={1}>
-                              {row.topic}
-                            </Body>
-                          ) : null}
-                        </View>
-                        <Pill label={row.status} tone={statusTone(row.status)} />
+                        <Body style={{ fontSize: 14 }}>{formatDate(row.session_date)}</Body>
+                        <Pill label={row.label} tone={calendarEventTone(row.kind)} />
                       </Row>
                     ))}
-                    {hasMoreAttendance ? (
-                      <Button
-                        label={hi ? "और देखें →" : "View more →"}
-                        variant="ghost"
-                        style={{ marginTop: 4, alignSelf: "flex-start" }}
-                        onPress={() => router.push("/my-attendance")}
-                      />
-                    ) : null}
+                    <Button
+                      label={hi ? "और देखें →" : "View more →"}
+                      variant="ghost"
+                      style={{ marginTop: 4, alignSelf: "flex-start" }}
+                      onPress={openAttendance}
+                    />
                   </View>
                 )}
               </Card>

@@ -1,10 +1,11 @@
-import { View } from "react-native";
+import { Pressable, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useAttendance, usePunya } from "@/lib/queries";
+import { calendarEventTone, previewAttendanceLabel } from "@/lib/attendance-calendar";
 import { formatDate } from "@/lib/format";
 import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
@@ -39,8 +40,13 @@ export default function ParentHome() {
   };
 
   const rows = attendance.data?.items ?? [];
-  const recent = rows.slice(0, 2);
-  const hasMoreAttendance = rows.length > 2;
+  const recent = rows
+    .flatMap((r) => {
+      const preview = previewAttendanceLabel(r.status, hi);
+      if (!preview) return [];
+      return [{ id: r.id, session_date: r.session_date, ...preview }];
+    })
+    .slice(0, 2);
   // AT5 — server SQL only.
   const presentRate =
     attendance.data?.attendance_percent ??
@@ -48,12 +54,7 @@ export default function ParentHome() {
       ? Math.round(attendance.data.attendance_rate * 100)
       : 0);
 
-  function attendanceTone(status: string): "success" | "warning" | "neutral" {
-    const s = status.toLowerCase();
-    if (s === "present") return "success";
-    if (s === "absent") return "warning";
-    return "neutral";
-  }
+  const openAttendance = () => router.push("/my-attendance");
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
@@ -146,17 +147,23 @@ export default function ParentHome() {
 
             <AnimatedMount delay={180}>
               <Card>
-                <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
-                  <Title style={{ fontSize: 17 }}>{hi ? "उपस्थिति" : "Attendance"}</Title>
-                  {rows.length > 0 ? (
-                    <Pill
-                      label={
-                        hi ? `${presentRate}% उपस्थित` : `${presentRate}% present`
-                      }
-                      tone={presentRate >= 75 ? "success" : "warning"}
-                    />
-                  ) : null}
-                </Row>
+                <Pressable
+                  onPress={openAttendance}
+                  accessibilityRole="button"
+                  accessibilityLabel={hi ? "उपस्थिति देखें" : "View attendance"}
+                >
+                  <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
+                    <Title style={{ fontSize: 17 }}>{hi ? "उपस्थिति" : "Attendance"}</Title>
+                    {rows.length > 0 ? (
+                      <Pill
+                        label={
+                          hi ? `${presentRate}% उपस्थित` : `${presentRate}% present`
+                        }
+                        tone={presentRate >= 75 ? "success" : "warning"}
+                      />
+                    ) : null}
+                  </Row>
+                </Pressable>
 
                 {attendance.isLoading ? (
                   <StateView status="loading" emptyText="" />
@@ -169,9 +176,17 @@ export default function ParentHome() {
                     retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
                   />
                 ) : recent.length === 0 ? (
-                  <Body muted style={{ marginTop: 10 }}>
-                    {hi ? "अभी कोई उपस्थिति दर्ज नहीं है।" : "No attendance recorded yet."}
-                  </Body>
+                  <View style={{ marginTop: 10, gap: 8 }}>
+                    <Body muted>
+                      {hi ? "अभी कोई उपस्थिति दर्ज नहीं है।" : "No attendance recorded yet."}
+                    </Body>
+                    <Button
+                      label={hi ? "और देखें →" : "View more →"}
+                      variant="ghost"
+                      style={{ alignSelf: "flex-start" }}
+                      onPress={openAttendance}
+                    />
+                  </View>
                 ) : (
                   <View style={{ gap: 10, marginTop: 12 }}>
                     {recent.map((r) => (
@@ -185,24 +200,16 @@ export default function ParentHome() {
                       >
                         <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
                           <Body style={{ fontWeight: "600" }}>{formatDate(r.session_date)}</Body>
-                          <Pill label={r.status} tone={attendanceTone(r.status)} />
+                          <Pill label={r.label} tone={calendarEventTone(r.kind)} />
                         </Row>
-                        {r.topic ? (
-                          <Body muted style={{ marginTop: 2 }}>{r.topic}</Body>
-                        ) : null}
-                        {r.batch_name ? (
-                          <Body muted style={{ marginTop: 2, fontSize: 13 }}>{r.batch_name}</Body>
-                        ) : null}
                       </View>
                     ))}
-                    {hasMoreAttendance ? (
-                      <Button
-                        label={hi ? "और देखें →" : "View more →"}
-                        variant="ghost"
-                        style={{ marginTop: 4, alignSelf: "flex-start" }}
-                        onPress={() => router.push("/my-attendance")}
-                      />
-                    ) : null}
+                    <Button
+                      label={hi ? "और देखें →" : "View more →"}
+                      variant="ghost"
+                      style={{ marginTop: 4, alignSelf: "flex-start" }}
+                      onPress={openAttendance}
+                    />
                   </View>
                 )}
               </Card>
