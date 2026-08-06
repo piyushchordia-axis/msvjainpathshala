@@ -17,6 +17,7 @@ import {
 import { notifyParentsOfGalleryWallFeature } from "../lib/gallery-wall-notify";
 import { snapshotMonthlyLeaderboard } from "../services/monthly-leaderboard-snapshot";
 import { todayIst } from "../services/session-materialise";
+import { sweepPushReceipts } from "../lib/push";
 import { db, dbWorker } from "@workspace/db";
 import { sql } from "drizzle-orm";
 import { logger } from "../lib/logger";
@@ -137,6 +138,25 @@ export function registerDerivedDataJobs(): void {
         QUEUE_NAMES.ATTENDANCE_CONSECUTIVE_CHECK,
         {},
         { jobId: dailyCronJobId("consecutive", todayIst()) },
+      );
+    },
+  );
+
+  registerQueueHandler(QUEUE_NAMES.NOTIFICATIONS_PUSH_RECEIPTS, async () => {
+    const result = await sweepPushReceipts();
+    if (result.checked > 0 || result.deactivated > 0) {
+      logger.info(result, "notifications.push_receipts sweep");
+    }
+  });
+
+  registerCron(
+    QUEUE_NAMES.NOTIFICATIONS_PUSH_RECEIPTS,
+    CRON_EXPRESSIONS.NOTIFICATIONS_PUSH_RECEIPTS,
+    async () => {
+      await enqueueJob(
+        QUEUE_NAMES.NOTIFICATIONS_PUSH_RECEIPTS,
+        {},
+        { jobId: slotCronJobId("push_receipts", 30) },
       );
     },
   );

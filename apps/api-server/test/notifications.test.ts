@@ -18,6 +18,8 @@ import { runBirthdayWishes } from "../src/routes/v1/notifications";
 import { sendParentAttendancePush } from "../src/services/attendance-post-process";
 import { notifyBadgesPush } from "../src/lib/niyam-badges";
 import * as pushModule from "../src/lib/push";
+import { sendPush, sweepPushReceipts } from "../src/lib/push";
+import { Expo } from "expo-server-sdk";
 
 function todayIst(): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
@@ -228,6 +230,153 @@ describe("notifications — birthday cron", () => {
     const result = await runBirthdayWishes(new Date("2020-12-25T06:00:00+05:30"));
     expect(result.students).toBe(0);
     expect(result.notifications).toBe(0);
+  });
+});
+
+describe("notifications — dead token reaping (FIX #3)", () => {
+  it("a DeviceNotRegistered ticket deactivates that token and no others", async () => {
+    const parentA = await loginAs("parent");
+    const parentB = await loginAs("shikshak");
+    const tokenA = `ExponentPushToken[fix3-dead-${Date.now()}-a]`;
+    const tokenB = `ExponentPushToken[fix3-dead-${Date.now()}-b]`;
+
+    await db.insert(device_push_tokens).values([
+      { user_id: parentA.user.id, expo_token: tokenA, platform: "ios", is_active: true },
+      { user_id: parentB.user.id, expo_token: tokenB, platform: "android", is_active: true },
+    ]);
+
+    const sendSpy = vi
+      .spyOn(Expo.prototype, "sendPushNotificationsAsync")
+      .mockResolvedValue([
+        {
+          status: "error",
+          message: "Not registered",
+          details: { error: "DeviceNotRegistered" },
+        },
+        { status: "ok", id: `receipt-ok-${Date.now()}` },
+      ] as never);
+
+    try {
+      await sendPush([
+        { to: tokenA, title: "A", body: "a" },
+        { to: tokenB, title: "B", body: "b" },
+      ]);
+
+      const [rowA] = await db
+        .select({ is_active: device_push_tokens.is_active })
+        .from(device_push_tokens)
+        .where(eq(device_push_tokens.expo_token, tokenA))
+        .limit(1);
+      const [rowB] = await db
+        .select({ is_active: device_push_tokens.is_active })
+        .from(device_push_tokens)
+        .where(eq(device_push_tokens.expo_token, tokenB))
+        .limit(1);
+      expect(rowA?.is_active).toBe(false);
+      expect(rowB?.is_active).toBe(true);
+    } finally {
+      sendSpy.mockRestore();
+      await db
+        .delete(device_push_tokens)
+        .where(inArray(device_push_tokens.expo_token, [tokenA, tokenB]));
+    }
+  });
+
+  it("a MessageRateExceeded ticket does NOT deactivate the token", async () => {
+    const parent = await loginAs("parent");
+    const token = `ExponentPushToken[fix3-rate-${Date.now()}]`;
+    await db.insert(device_push_tokens).values({
+      user_id: parent.user.id,
+      expo_token: token,
+      platform: "ios",
+      is_active: true,
+    });
+
+    const sendSpy = vi.spyOn(Expo.prototype, "sendPushNotificationsAsync").mockResolvedValue([
+      {
+        status: "error",
+        message: "Rate exceeded",
+        details: { error: "MessageRateExceeded" },
+      },
+    ] as never);
+
+    try {
+      await sendPush([{ to: token, title: "T", body: "b" }]);
+      const [row] = await db
+        .select({ is_active: device_push_tokens.is_active })
+        .from(device_push_tokens)
+        .where(eq(device_push_tokens.expo_token, token))
+        .limit(1);
+      expect(row?.is_active).toBe(true);
+    } finally {
+      sendSpy.mockRestore();
+      await db.delete(device_push_tokens).where(eq(device_push_tokens.expo_token, token));
+    }
+  });
+
+  it("a DeviceNotRegistered receipt deactivates the token", async () => {
+    const parent = await loginAs("parent");
+    const token = `ExponentPushToken[fix3-receipt-${Date.now()}]`;
+    const ticketId = `ticket-fix3-${Date.now()}`;
+    await db.insert(device_push_tokens).values({
+      user_id: parent.user.id,
+      expo_token: token,
+      platform: "ios",
+      is_active: true,
+    });
+
+    const { push_receipts } = await import("@workspace/db");
+    await db.insert(push_receipts).values({
+      ticket_id: ticketId,
+      expo_token: token,
+    });
+
+    const receiptSpy = vi
+      .spyOn(Expo.prototype, "getPushNotificationReceiptsAsync")
+      .mockResolvedValue({
+        [ticketId]: {
+          status: "error",
+          message: "Not registered",
+          details: { error: "DeviceNotRegistered" },
+        },
+      } as never);
+
+    try {
+      await sweepPushReceipts();
+      const [row] = await db
+        .select({ is_active: device_push_tokens.is_active })
+        .from(device_push_tokens)
+        .where(eq(device_push_tokens.expo_token, token))
+        .limit(1);
+      expect(row?.is_active).toBe(false);
+    } finally {
+      receiptSpy.mockRestore();
+      await db.delete(device_push_tokens).where(eq(device_push_tokens.expo_token, token));
+      try {
+        await db.delete(push_receipts).where(eq(push_receipts.ticket_id, ticketId));
+      } catch {
+        /* table may not exist before migration */
+      }
+    }
+  });
+
+  it("sendPush still resolves when the Expo call throws", async () => {
+    const sendSpy = vi
+      .spyOn(Expo.prototype, "sendPushNotificationsAsync")
+      .mockRejectedValue(new Error("Expo down"));
+    try {
+      await expect(
+        sendPush([
+          {
+            to: `ExponentPushToken[fix3-throw-${Date.now()}]`,
+            title: "T",
+            body: "b",
+          },
+        ]),
+      ).resolves.toEqual([]);
+    } finally {
+      sendSpy.mockRestore();
+    }
   });
 });
 

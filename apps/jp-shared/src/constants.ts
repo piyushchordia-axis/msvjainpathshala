@@ -13,6 +13,8 @@ export const QUEUE_NAMES = {
   ATTENDANCE_CONSECUTIVE_CHECK: "attendance.consecutive_check",
   PARENT_NOTIFY: "notifications.parent",
   NOTIFICATIONS_BIRTHDAY: "notifications.birthday",
+  /** Sweep Expo push receipts and deactivate DeviceNotRegistered tokens. */
+  NOTIFICATIONS_PUSH_RECEIPTS: "notifications.push_receipts",
   /** Daily streak-lapse job (ReplitAgent §9.5) — not a BullMQ queue. */
   NIYAM_STREAK_LAPSE: "niyam-streak-lapse",
   NOTIFICATIONS_MONTHLY_REPORTS: "notifications.monthly_reports",
@@ -42,6 +44,8 @@ export const CRON_EXPRESSIONS = {
   ATTENDANCE_AUTO_CHECKOUT: "*/30 * * * *",
   ATTENDANCE_CONSECUTIVE_CHECK: "0 2 * * *", // AT27 — 02:00 IST following day
   NOTIFICATIONS_BIRTHDAY: "0 6 * * *",
+  /** Expo receipt sweep — every 30 minutes. */
+  NOTIFICATIONS_PUSH_RECEIPTS: "*/30 * * * *",
   NIYAM_STREAK_LAPSE: "0 5 * * *", // ReplitAgent §9.5 — zero lapsed current_streak
   NOTIFICATIONS_MONTHLY_REPORTS: "0 2 1 * *", // 1st of month 02:00 IST
   PUNYA_LEADERBOARD_REFRESH: "*/5 * * * *",

@@ -23,6 +23,25 @@ export const device_push_tokens = pgTable(
   }),
 );
 
+/**
+ * Expo 'ok' ticket ids awaiting receipt sweep (DeviceNotRegistered often
+ * appears only on the async receipt, not the immediate ticket).
+ */
+export const push_receipts = pgTable(
+  "push_receipts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    ticket_id: text("ticket_id").notNull(),
+    expo_token: text("expo_token").notNull(),
+    checked_at: timestamp("checked_at", { withTimezone: true }),
+    ...timestamps(),
+  },
+  (t) => ({
+    ticket_unique: uniqueIndex("push_receipts_ticket_id_unique").on(t.ticket_id),
+    unchecked_idx: index("idx_push_receipts_unchecked").on(t.checked_at, t.created_at),
+  }),
+);
+
 /** In-app notification inbox (also the fallback when push isn't delivered). */
 export const notifications = pgTable(
   "notifications",
@@ -68,5 +87,6 @@ export const enquiries = pgTable(
 );
 
 export type DevicePushToken = typeof device_push_tokens.$inferSelect;
+export type PushReceipt = typeof push_receipts.$inferSelect;
 export type Notification = typeof notifications.$inferSelect;
 export type Enquiry = typeof enquiries.$inferSelect;
