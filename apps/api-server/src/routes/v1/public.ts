@@ -8,7 +8,7 @@ import {
   shivir_events,
   library_items,
 } from "@workspace/db";
-import { and, asc, count, desc, eq, gte, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, isNull, sql } from "drizzle-orm";
 import { ok, fail } from "../../lib/envelope";
 import { clampLimit } from "../../lib/route-helpers";
 
@@ -154,7 +154,13 @@ router.get("/library", async (req: Request, res: Response) => {
       embed_url: library_items.embed_url,
     })
     .from(library_items)
-    .where(and(eq(library_items.is_published, true), eq(library_items.access_tier, "public")))
+    .where(
+      and(
+        isNull(library_items.deleted_at),
+        eq(library_items.is_published, true),
+        eq(library_items.access_tier, "public"),
+      ),
+    )
     .orderBy(desc(library_items.created_at))
     .limit(limit);
 

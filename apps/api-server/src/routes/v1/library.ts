@@ -8,9 +8,10 @@
  *    published item the caller's tier allows (always `public`, plus the tiers
  *    they qualify for) and, crucially, INCLUDES the delivery URL (`file_url`
  *    for stored files, `embed_url` for hosted media) so content is actually
- *    deliverable. A `library_access_logs` row is written when an item's URL is
- *    handed out (idempotent per user+item+url via the POST /:id/access tracker
- *    that the clients call when a resource is opened).
+ *    deliverable. Opening an item (POST /:id/access) upserts one
+ *    `library_access_logs` row per (item, user) — distinct reach. Re-opens bump
+ *    `last_accessed_at` and `access_count`; the admin list's `access_count` is
+ *    the number of distinct members who have opened the item.
  *
  *  - ADMIN authoring (POST / PATCH / DELETE) — admin-panel roles only. The
  *    library is a NETWORK-WIDE resource (library_items has no centre/city
@@ -28,13 +29,15 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, library_items, library_access_logs, students, type User } from "@workspace/db";
 import { LIBRARY_ACCESS_TIERS, LIBRARY_CONTENT_TYPES } from "@workspace/db/enums";
-import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { canAccessAdminPanel } from "@workspace/api-zod";
 import { auditFromReq } from "../../lib/audit";
-import { httpUrl } from "../../lib/validation";
+import { httpUrl, isVideoEmbedUrl } from "../../lib/validation";
+import { signUploadUrl } from "../../lib/file-tokens";
+import { logger } from "../../lib/logger";
 import { clampLimit } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
@@ -44,6 +47,18 @@ type AccessTier = (typeof LIBRARY_ACCESS_TIERS)[number];
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** ~1h for gated tiers so a pasted WhatsApp link expires; public keeps the default. */
+const GATED_LIBRARY_TTL_SECONDS = 3600;
+
+function libraryFileTtl(tier: AccessTier): number | undefined {
+  return tier === "public" ? undefined : GATED_LIBRARY_TTL_SECONDS;
+}
+
+/** Sign our /uploads file_url; leave external URLs and all embed_url values alone. */
+function signedFileUrl(fileUrl: string | null, tier: AccessTier): string | null {
+  if (!fileUrl) return null;
+  return signUploadUrl(fileUrl, libraryFileTtl(tier));
+}
 
 /**
  * The set of access tiers a caller is allowed to read. `public` is always
@@ -82,8 +97,21 @@ async function tiersForUser(user: User): Promise<AccessTier[]> {
   return Array.from(tiers);
 }
 
-/** Pick the deliverable URL for an item (stored file first, then hosted embed). */
-function deliveryUrl(item: { file_url: string | null; embed_url: string | null }): string | null {
+/**
+ * Pick the deliverable URL (stored file first, then hosted embed).
+ * Signs file_url when it points at /uploads; never signs embed_url (YouTube/Vimeo).
+ */
+function deliveryUrl(item: {
+  file_url: string | null;
+  embed_url: string | null;
+  access_tier: AccessTier | string;
+}): string | null {
+  if (item.file_url) return signedFileUrl(item.file_url, item.access_tier as AccessTier);
+  return item.embed_url ?? null;
+}
+
+/** Unsigned deliverable — used for scheme/host guards before signing. */
+function rawDeliveryUrl(item: { file_url: string | null; embed_url: string | null }): string | null {
   return item.file_url ?? item.embed_url ?? null;
 }
 
@@ -106,7 +134,11 @@ router.get("/", async (req: Request, res: Response) => {
     return;
   }
 
-  const conds = [eq(library_items.is_published, true), inArray(library_items.access_tier, tiers)];
+  const conds = [
+    isNull(library_items.deleted_at),
+    eq(library_items.is_published, true),
+    inArray(library_items.access_tier, tiers),
+  ];
   const ct = req.query.content_type;
   if (typeof ct === "string" && (LIBRARY_CONTENT_TYPES as readonly string[]).includes(ct)) {
     conds.push(eq(library_items.content_type, ct as (typeof LIBRARY_CONTENT_TYPES)[number]));
@@ -130,20 +162,24 @@ router.get("/", async (req: Request, res: Response) => {
     .orderBy(desc(library_items.created_at))
     .limit(limit);
 
-  const items = rows.map((r) => ({
-    id: r.id,
-    content_type: r.content_type,
-    title_en: r.title_en,
-    title_hi: r.title_hi,
-    description_en: r.description_en,
-    description_hi: r.description_hi,
-    embed_url: r.embed_url,
-    file_url: r.file_url,
-    // Single field the clients render an open/play/download action from.
-    url: deliveryUrl(r),
-    access_tier: r.access_tier,
-    created_at: r.created_at.toISOString(),
-  }));
+  const items = rows.map((r) => {
+    const tier = r.access_tier as AccessTier;
+    const fileUrl = signedFileUrl(r.file_url, tier);
+    return {
+      id: r.id,
+      content_type: r.content_type,
+      title_en: r.title_en,
+      title_hi: r.title_hi,
+      description_en: r.description_en,
+      description_hi: r.description_hi,
+      embed_url: r.embed_url,
+      file_url: fileUrl,
+      // Single field the clients render an open/play/download action from.
+      url: deliveryUrl({ ...r, access_tier: tier }),
+      access_tier: r.access_tier,
+      created_at: r.created_at.toISOString(),
+    };
+  });
 
   ok(res, { items, tiers: allowed }, { count: items.length });
 });
@@ -169,7 +205,7 @@ router.post("/:id/access", async (req: Request, res: Response) => {
       is_published: library_items.is_published,
     })
     .from(library_items)
-    .where(eq(library_items.id, id))
+    .where(and(eq(library_items.id, id), isNull(library_items.deleted_at)))
     .limit(1);
 
   // 404 (not 403) when the item exists but is out of the caller's tier, so the
@@ -179,23 +215,64 @@ router.post("/:id/access", async (req: Request, res: Response) => {
     return;
   }
 
-  const url = deliveryUrl(item);
-  if (!url) {
+  const rawUrl = rawDeliveryUrl(item);
+  if (!rawUrl) {
     fail(res, 409, "ERR_NO_CONTENT_URL", "This item has no deliverable file or link yet.");
     return;
   }
 
-  // Best-effort log; never block delivery on a logging failure.
+  // Defense for legacy/bypass rows: never hand a non-http(s) or non-whitelisted
+  // video URL to a client. Validate the unsigned URL; log item id only.
   try {
-    await db.insert(library_access_logs).values({
-      library_item_id: item.id,
-      user_id: req.authUser!.id,
-    });
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      logger.warn({ libraryItemId: item.id }, "library delivery URL rejected: non-http(s) scheme");
+      fail(res, 409, "ERR_NO_CONTENT_URL", "This item has no deliverable file or link yet.");
+      return;
+    }
+    // Q7 keys off content_type='video' (schema has no 'video_embed' — see CLAUDE.md).
+    if (item.content_type === "video" && !isVideoEmbedUrl(rawUrl)) {
+      logger.warn({ libraryItemId: item.id }, "library delivery URL rejected: video host not whitelisted");
+      fail(res, 409, "ERR_NO_CONTENT_URL", "This item has no deliverable file or link yet.");
+      return;
+    }
+  } catch {
+    logger.warn({ libraryItemId: item.id }, "library delivery URL rejected: unparseable");
+    fail(res, 409, "ERR_NO_CONTENT_URL", "This item has no deliverable file or link yet.");
+    return;
+  }
+
+  // Distinct reach: one row per (item, user). Re-opens bump counters.
+  // Best-effort — never block delivery on a logging failure.
+  try {
+    const now = new Date();
+    await db
+      .insert(library_access_logs)
+      .values({
+        library_item_id: item.id,
+        user_id: req.authUser!.id,
+        accessed_at: now,
+        last_accessed_at: now,
+        access_count: 1,
+      })
+      .onConflictDoUpdate({
+        target: [library_access_logs.library_item_id, library_access_logs.user_id],
+        targetWhere: sql`${library_access_logs.user_id} is not null`,
+        set: {
+          last_accessed_at: now,
+          access_count: sql`${library_access_logs.access_count} + 1`,
+          updated_at: now,
+        },
+      });
   } catch {
     /* ignore — access logging is non-critical */
   }
 
-  ok(res, { id: item.id, content_type: item.content_type, url });
+  ok(res, {
+    id: item.id,
+    content_type: item.content_type,
+    url: deliveryUrl({ ...item, access_tier: item.access_tier as AccessTier }),
+  });
 });
 
 /* ═══════════════════════════════ ADMIN authoring ═══════════════════════════ */
@@ -222,13 +299,23 @@ const createSchema = z
   .object(baseFields)
   .refine((v) => !!v.embed_url || !!v.file_url, {
     message: "An embed_url or file_url is required so the item is deliverable.",
+  })
+  .superRefine((v, ctx) => {
+    // Q7: schema enum is `video` (not `video_embed` — naming mismatch with CLAUDE.md).
+    if (v.content_type === "video" && v.embed_url && !isVideoEmbedUrl(v.embed_url)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["embed_url"],
+        message: "Video links must be a YouTube or Vimeo URL.",
+      });
+    }
   });
 
 /* GET /v1/library/admin?limit=&content_type=&access_tier=
    Full admin list — every item incl. drafts + both URLs. */
 router.get("/admin", requireAdminPanel, async (req: Request, res: Response) => {
   const limit = clampLimit(req.query.limit, 100, 300);
-  const conds = [];
+  const conds = [isNull(library_items.deleted_at)];
   const ct = req.query.content_type;
   if (typeof ct === "string" && (LIBRARY_CONTENT_TYPES as readonly string[]).includes(ct)) {
     conds.push(eq(library_items.content_type, ct as (typeof LIBRARY_CONTENT_TYPES)[number]));
@@ -237,6 +324,16 @@ router.get("/admin", requireAdminPanel, async (req: Request, res: Response) => {
   if (typeof at === "string" && (LIBRARY_ACCESS_TIERS as readonly string[]).includes(at)) {
     conds.push(eq(library_items.access_tier, at as AccessTier));
   }
+
+  // Distinct members who opened the item (one log row per user after upsert).
+  const accessAgg = db
+    .select({
+      library_item_id: library_access_logs.library_item_id,
+      access_count: sql<number>`count(*)::int`.as("access_count"),
+    })
+    .from(library_access_logs)
+    .groupBy(library_access_logs.library_item_id)
+    .as("library_access_agg");
 
   const rows = await db
     .select({
@@ -251,22 +348,26 @@ router.get("/admin", requireAdminPanel, async (req: Request, res: Response) => {
       access_tier: library_items.access_tier,
       is_published: library_items.is_published,
       created_at: library_items.created_at,
-      access_count: sql<number>`(
-        select count(*)::int from ${library_access_logs}
-        where ${library_access_logs.library_item_id} = ${library_items.id}
-      )`,
+      access_count: sql<number>`coalesce(${accessAgg.access_count}, 0)`,
     })
     .from(library_items)
+    .leftJoin(accessAgg, eq(accessAgg.library_item_id, library_items.id))
     .where(conds.length ? and(...conds) : undefined)
     .orderBy(desc(library_items.created_at))
     .limit(limit);
 
-  const items = rows.map((r) => ({
-    ...r,
-    url: deliveryUrl(r),
-    can_edit: isLibraryEditor(req.authUser!),
-    created_at: r.created_at.toISOString(),
-  }));
+  const items = rows.map((r) => {
+    const tier = r.access_tier as AccessTier;
+    const fileUrl = signedFileUrl(r.file_url, tier);
+    return {
+      ...r,
+      file_url: fileUrl,
+      embed_url: r.embed_url,
+      url: deliveryUrl({ ...r, access_tier: tier }),
+      can_edit: isLibraryEditor(req.authUser!),
+      created_at: r.created_at.toISOString(),
+    };
+  });
   ok(res, { items, can_edit: isLibraryEditor(req.authUser!) }, { count: items.length });
 });
 
@@ -322,7 +423,18 @@ const updateSchema = z
     access_tier: z.enum(LIBRARY_ACCESS_TIERS).optional(),
     is_published: z.boolean().optional(),
   })
-  .refine((v) => Object.keys(v).length > 0, { message: "No fields to update." });
+  .refine((v) => Object.keys(v).length > 0, { message: "No fields to update." })
+  .superRefine((v, ctx) => {
+    // When content_type is in the patch we can check here; if absent the handler
+    // falls back to the stored row (loaded below) before applying.
+    if (v.content_type === "video" && v.embed_url && !isVideoEmbedUrl(v.embed_url)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["embed_url"],
+        message: "Video links must be a YouTube or Vimeo URL.",
+      });
+    }
+  });
 
 /* PATCH /v1/library/:id — edit a library item (super_admin only). */
 router.patch("/:id", requireAdminPanel, async (req: Request, res: Response) => {
@@ -344,9 +456,14 @@ router.patch("/:id", requireAdminPanel, async (req: Request, res: Response) => {
   }
 
   const [existing] = await db
-    .select({ id: library_items.id, file_url: library_items.file_url, embed_url: library_items.embed_url })
+    .select({
+      id: library_items.id,
+      content_type: library_items.content_type,
+      file_url: library_items.file_url,
+      embed_url: library_items.embed_url,
+    })
     .from(library_items)
-    .where(eq(library_items.id, id))
+    .where(and(eq(library_items.id, id), isNull(library_items.deleted_at)))
     .limit(1);
   if (!existing) {
     fail(res, 404, "ERR_NOT_FOUND", "Library item not found.");
@@ -358,6 +475,13 @@ router.patch("/:id", requireAdminPanel, async (req: Request, res: Response) => {
   const nextEmbed = body.embed_url !== undefined ? body.embed_url : existing.embed_url;
   if (!nextFile && !nextEmbed) {
     fail(res, 422, "ERR_VALIDATION_FAILED", "An item must keep an embed_url or file_url.");
+    return;
+  }
+
+  // Q7 — content_type may be absent on PATCH; fall back to the stored row.
+  const nextType = body.content_type ?? existing.content_type;
+  if (nextType === "video" && nextEmbed && !isVideoEmbedUrl(nextEmbed)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Video links must be a YouTube or Vimeo URL.");
     return;
   }
 
@@ -385,7 +509,7 @@ router.patch("/:id", requireAdminPanel, async (req: Request, res: Response) => {
   ok(res, { id });
 });
 
-/* DELETE /v1/library/:id — hard delete (super_admin only). */
+/* DELETE /v1/library/:id — soft delete (super_admin only). Keeps access logs. */
 router.delete("/:id", requireAdminPanel, async (req: Request, res: Response) => {
   if (!isLibraryEditor(req.authUser!)) {
     fail(res, 403, "ERR_FORBIDDEN", "Only a super admin may manage library items.");
@@ -398,8 +522,9 @@ router.delete("/:id", requireAdminPanel, async (req: Request, res: Response) => 
   }
 
   const deleted = await db
-    .delete(library_items)
-    .where(eq(library_items.id, id))
+    .update(library_items)
+    .set({ deleted_at: new Date(), updated_at: new Date() })
+    .where(and(eq(library_items.id, id), isNull(library_items.deleted_at)))
     .returning({ id: library_items.id, title_en: library_items.title_en });
   if (deleted.length === 0) {
     fail(res, 404, "ERR_NOT_FOUND", "Library item not found.");

@@ -330,6 +330,20 @@
       "when": 1789728000000,
       "tag": "0046_notifications_inbox_keyset_index",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1789814400000,
+      "tag": "0047_library_soft_delete",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1789900800000,
+      "tag": "0048_library_access_distinct_reach",
+      "breakpoints": true
     }
   ]
 }

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Plus, Trash2, Pencil, ExternalLink } from 'lucide-react';
 import { apiGet, apiPost, del, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
+import { useAuth } from '@/lib/auth-context';
 import { toast } from '@/components/ui/toast-jp';
 import {
   AdminPageShell,
@@ -390,13 +391,17 @@ function DeleteButton({ row, onDeleted }: { row: LibraryRow; onDeleted: () => vo
 }
 
 export default function LibraryAdminPage() {
+  const { user } = useAuth();
   const { items, loading, loadingMore, error, reload, hasMore, loadMore } = useAdminList<LibraryRow>(
     '/v1/library/admin?limit=200',
   );
-  // can_edit comes per-row; super_admin only. We read it off the first row, but
-  // since every row carries it identically, default to false until loaded.
-  const canEdit = items.some((i) => (i as LibraryRow & { can_edit?: boolean }).can_edit) ||
-    items.length === 0; // allow the New button to render; server still enforces.
+  // Network-wide table — same gate as isLibraryEditor / can_edit on GET /v1/library/admin.
+  // Role (not items.length) so an empty list still shows "New" for super_admin only.
+  const canEdit = user?.role === 'super_admin';
+  const columns = canEdit
+    ? ['Title', 'Type', 'Access', 'Delivery', 'Members', 'Published', 'Actions']
+    : ['Title', 'Type', 'Access', 'Delivery', 'Members', 'Published'];
+  const colSpan = columns.length;
 
   return (
     <AdminPageShell
@@ -420,16 +425,16 @@ export default function LibraryAdminPage() {
     >
       {error ? <AdminError message={error} /> : null}
       <AdminTable
-        columns={['Title', 'Type', 'Access', 'Delivery', 'Opens', 'Published', 'Actions']}
+        columns={columns}
         loading={loading}
         empty=""
-        colSpan={7}
+        colSpan={colSpan}
         footer={
           <AdminLoadMore hasMore={hasMore} loadingMore={loadingMore} onLoadMore={() => void loadMore()} />
         }
       >
         {items.length === 0 && !loading ? (
-          <AdminEmptyRow colSpan={7} message="No library items yet." />
+          <AdminEmptyRow colSpan={colSpan} message="No library items yet." />
         ) : null}
         {items.map((l) => (
           <tr key={l.id} className="hover:bg-muted/30">
@@ -458,32 +463,34 @@ export default function LibraryAdminPage() {
             </td>
             <td className="px-4 py-3 text-xs text-muted-foreground">{l.access_count}</td>
             <td className="px-4 py-3 text-xs">{l.is_published ? 'Yes' : 'Draft'}</td>
-            <td className="px-4 py-3">
-              <div className="flex items-center gap-1">
-                <ItemDialog
-                  mode="edit"
-                  initial={{
-                    id: l.id,
-                    content_type: l.content_type,
-                    title_en: l.title_en,
-                    title_hi: l.title_hi ?? '',
-                    description_en: l.description_en ?? '',
-                    description_hi: l.description_hi ?? '',
-                    embed_url: l.embed_url ?? '',
-                    file_url: l.file_url ?? '',
-                    access_tier: l.access_tier,
-                    is_published: l.is_published,
-                  }}
-                  onSaved={reload}
-                  trigger={
-                    <Button size="sm" variant="ghost" aria-label="Edit">
-                      <Pencil className="h-4 w-4" />
-                    </Button>
-                  }
-                />
-                <DeleteButton row={l} onDeleted={reload} />
-              </div>
-            </td>
+            {canEdit ? (
+              <td className="px-4 py-3">
+                <div className="flex items-center gap-1">
+                  <ItemDialog
+                    mode="edit"
+                    initial={{
+                      id: l.id,
+                      content_type: l.content_type,
+                      title_en: l.title_en,
+                      title_hi: l.title_hi ?? '',
+                      description_en: l.description_en ?? '',
+                      description_hi: l.description_hi ?? '',
+                      embed_url: l.embed_url ?? '',
+                      file_url: l.file_url ?? '',
+                      access_tier: l.access_tier,
+                      is_published: l.is_published,
+                    }}
+                    onSaved={reload}
+                    trigger={
+                      <Button size="sm" variant="ghost" aria-label="Edit">
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    }
+                  />
+                  <DeleteButton row={l} onDeleted={reload} />
+                </div>
+              </td>
+            ) : null}
           </tr>
         ))}
       </AdminTable>

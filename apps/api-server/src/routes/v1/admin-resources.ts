@@ -267,6 +267,7 @@ router.get("/library", async (req: Request, res: Response) => {
       created_at: library_items.created_at,
     })
     .from(library_items)
+    .where(isNull(library_items.deleted_at))
     .orderBy(desc(library_items.created_at))
     .limit(limit);
   const items = rows.map((r) => ({ ...r, created_at: r.created_at.toISOString() }));

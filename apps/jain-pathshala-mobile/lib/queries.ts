@@ -26,7 +26,6 @@ import type {
   OverviewPayload,
   PublicBatchRow,
   PublicGalleryItem,
-  PublicLibraryItem,
   PunyaSummary,
   ShikshakSessionRow,
   ShivirDetail,
@@ -42,7 +41,6 @@ export const qk = {
   centre: (id: string) => ["public", "centre", id] as const,
   shivirs: ["public", "shivirs"] as const,
   shivir: (id: string) => ["public", "shivir", id] as const,
-  library: ["public", "library"] as const,
   notices: ["public", "notices"] as const,
   /** Home carousel — distinct from wall so caches never collide. */
   galleryHome: galleryHomeKey,
@@ -138,12 +136,6 @@ export function useShivir(id?: string) {
   });
 }
 
-export function useLibrary() {
-  return useQuery({
-    queryKey: qk.library,
-    queryFn: () => apiGet<List<PublicLibraryItem>>("/v1/public/library?limit=60"),
-  });
-}
 
 export function useNotices() {
   return useQuery({

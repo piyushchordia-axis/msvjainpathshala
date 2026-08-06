@@ -20,7 +20,6 @@ import {
   niyams,
   punya_configs,
   centre_holidays,
-  library_items,
   type User,
 } from "@workspace/db";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
@@ -28,7 +27,6 @@ import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { canAdministerExams } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
-import { httpUrl } from "../../lib/validation";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
@@ -859,42 +857,6 @@ router.delete(
     });
   },
 );
-
-const createLibrarySchema = z.object({
-  title_en: z.string().min(1).max(500),
-  title_hi: z.string().max(500).optional(),
-  content_type: z.enum(["pdf", "video", "audio", "image"]),
-  access_tier: z.enum(["public", "student", "msv", "shikshak"]).default("public"),
-  embed_url: httpUrl(2000).optional(),
-  file_url: httpUrl(2000).optional(),
-  description_en: z.string().max(2000).optional(),
-  is_published: z.boolean().default(true),
-});
-
-/* POST /v1/admin/library */
-router.post("/library", requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
-  let body: z.infer<typeof createLibrarySchema>;
-  try { body = createLibrarySchema.parse(req.body); }
-  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid library item data."); return; }
-  const [row] = await db.insert(library_items).values({
-    title_en: body.title_en,
-    title_hi: body.title_hi ?? null,
-    content_type: body.content_type,
-    access_tier: body.access_tier,
-    embed_url: body.embed_url ?? null,
-    file_url: body.file_url ?? null,
-    description_en: body.description_en ?? null,
-    is_published: body.is_published,
-  }).returning({ id: library_items.id, title_en: library_items.title_en });
-  await auditFromReq(req, {
-    action: "create",
-    entityKind: "library_item",
-    entityId: row.id,
-    summary: `Created library item "${row.title_en}".`,
-    metadata: { content_type: body.content_type, access_tier: body.access_tier },
-  });
-  ok(res, row);
-});
 
 /* Queues — super_admin only. NOTE: requireRole is applied PER-ROUTE, not via
  * queuesRouter.use(...), because this router is mounted at the admin-modules
