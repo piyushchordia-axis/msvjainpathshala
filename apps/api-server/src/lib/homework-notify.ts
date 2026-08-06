@@ -29,6 +29,7 @@ export async function parentUserIdsForStudents(studentIds: string[]): Promise<st
 export async function notifyParentsHomeworkAssigned(opts: {
   studentIds: string[];
   assignmentTitle: string;
+  assignmentId: string;
 }): Promise<void> {
   try {
     const parentIds = await parentUserIdsForStudents(opts.studentIds);
@@ -41,6 +42,7 @@ export async function notifyParentsHomeworkAssigned(opts: {
       title_hi: "नया गृहकार्य",
       body_en: `Guruji assigned "${title}". Open Homework to view it.`,
       body_hi: `गुरुजी ने "${title}" दिया है। देखने के लिए गृहकार्य खोलें।`,
+      data: { kind: "homework", assignment_id: opts.assignmentId },
     });
   } catch (err) {
     logger.warn({ err }, "notifyParentsHomeworkAssigned failed");
@@ -88,6 +90,9 @@ export async function notifyParentHomeworkGraded(opts: {
       body_hi: starred
         ? `गुरुजी ने ${shortName} के "${assignmentTitle}" कार्य को विशेष बनाया।`
         : `गुरुजी ने ${shortName} के "${assignmentTitle}" कार्य को स्वीकार किया।`,
+      data: opts.assignmentId
+        ? { kind: "homework", assignment_id: opts.assignmentId }
+        : { kind: "homework" },
     });
   } catch (err) {
     logger.warn({ err, studentId: opts.studentId }, "notifyParentHomeworkGraded failed");
@@ -125,6 +130,7 @@ export async function notifyParentsHomeworkBulkGraded(opts: {
       body_hi: starred
         ? `गुरुजी ने "${assignmentTitle}" के कार्य को विशेष बनाया (${n}).`
         : `गुरुजी ने "${assignmentTitle}" के कार्य को स्वीकार किया (${n}).`,
+      data: { kind: "homework", assignment_id: opts.assignmentId },
     });
   } catch (err) {
     logger.warn({ err }, "notifyParentsHomeworkBulkGraded failed");
@@ -168,6 +174,9 @@ export async function notifyParentHomeworkReturned(opts: {
       title_hi: "गृहकार्य वापस",
       body_en: `Guruji returned ${shortName}'s work on "${assignmentTitle}" — please revise and resubmit. ${note}`,
       body_hi: `गुरुजी ने ${shortName} के "${assignmentTitle}" कार्य को वापस किया — कृपया सुधारकर पुनः प्रस्तुत करें। ${note}`,
+      data: opts.assignmentId
+        ? { kind: "homework", assignment_id: opts.assignmentId }
+        : { kind: "homework" },
     });
   } catch (err) {
     logger.warn({ err, studentId: opts.studentId }, "notifyParentHomeworkReturned failed");

@@ -87,6 +87,7 @@ export async function sendParentAttendancePush(
     body_en: `${row.full_name}: ${row.status} on ${row.session_date}`,
     body_hi: `${row.full_name}: ${row.session_date} को ${row.status}`,
     push: true,
+    data: { kind: "attendance", session_id: sessionId, student_id: studentId },
   });
 }
 

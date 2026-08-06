@@ -400,6 +400,7 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
     await notifyParentsHomeworkAssigned({
       studentIds: outcome.targetIds,
       assignmentTitle: titleForAudit,
+      assignmentId: outcome.id,
     });
   } catch (err) {
     if (err && typeof err === "object" && "code" in err && err.code === "ERR_VALIDATION_FAILED") {

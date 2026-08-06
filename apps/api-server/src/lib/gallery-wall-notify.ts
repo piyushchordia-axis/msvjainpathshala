@@ -40,15 +40,18 @@ export async function notifyParentsOfGalleryWallFeature(
       );
 
     // One notification per parent (dedupe if multiple kids featured in same batch).
-    const byParent = new Map<string, string>();
+    const byParent = new Map<string, { fullName: string; galleryItemId: string }>();
     for (const row of rows) {
       if (!row.parentId) continue;
       if (!byParent.has(row.parentId)) {
-        byParent.set(row.parentId, row.firstName || "your child");
+        byParent.set(row.parentId, {
+          fullName: row.firstName || "your child",
+          galleryItemId: row.galleryId,
+        });
       }
     }
 
-    for (const [parentId, fullName] of byParent) {
+    for (const [parentId, { fullName, galleryItemId }] of byParent) {
       const shortName = fullName.trim().split(/\s+/)[0] || "your child";
       await notifyUsers({
         userIds: [parentId],
@@ -57,6 +60,7 @@ export async function notifyParentsOfGalleryWallFeature(
         title_hi: "पुण्य दीवार पर",
         body_en: `${shortName}'s niyam photo is now on the Punya Wall.`,
         body_hi: `${shortName} की नियम तस्वीर अब पुण्य दीवार पर है।`,
+        data: { kind: "gallery", gallery_item_id: galleryItemId },
       });
     }
   } catch (err) {

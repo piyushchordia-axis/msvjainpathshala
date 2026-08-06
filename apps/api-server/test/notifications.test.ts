@@ -493,6 +493,45 @@ describe("notifications — dead token reaping (FIX #3)", () => {
   });
 });
 
+describe("notifications — deep-link data payload (FIX #7)", () => {
+  it("the push payload carries kind and entity id", async () => {
+    const parent = await loginAs("parent");
+    const expoToken = `ExponentPushToken[fix7-data-${Date.now()}]`;
+    await db.insert(device_push_tokens).values({
+      user_id: parent.user.id,
+      expo_token: expoToken,
+      platform: "ios",
+      is_active: true,
+    });
+
+    const entityId = "11111111-1111-4111-8111-111111111111";
+    const spy = vi.spyOn(pushModule, "sendPush").mockResolvedValue([]);
+    try {
+      await notifyUsers({
+        userIds: [parent.user.id],
+        kind: "homework",
+        title_en: "Deep link",
+        title_hi: "गहन लिंक",
+        body_en: "Open the assignment",
+        body_hi: "असाइनमेंट खोलें",
+        push: true,
+        data: { entity_id: entityId },
+      });
+
+      expect(spy).toHaveBeenCalledTimes(1);
+      const payload = (spy.mock.calls[0]![0] as Array<{
+        to: string;
+        data?: { kind?: string; entity_id?: string };
+      }>).find((p) => p.to === expoToken);
+      expect(payload?.data?.kind).toBe("homework");
+      expect(payload?.data?.entity_id).toBe(entityId);
+    } finally {
+      spy.mockRestore();
+      await db.delete(device_push_tokens).where(eq(device_push_tokens.expo_token, expoToken));
+    }
+  });
+});
+
 describe("notifications — inbox insert failures (FIX #6)", () => {
   it("notifyUsers throws when the inbox insert fails", async () => {
     const parent = await loginAs("parent");
@@ -586,6 +625,7 @@ describe("notifications — inbox insert failures (FIX #6)", () => {
         notifyParentsHomeworkAssigned({
           studentIds: [childId!],
           assignmentTitle: "Fix6 fire-and-forget",
+          assignmentId: "00000000-0000-4000-8000-000000000066",
         }),
       ).resolves.toBeUndefined();
       expect(notifySpy).toHaveBeenCalled();
