@@ -15,8 +15,6 @@ import {
   centres,
   batches,
   gallery_items,
-  notifications,
-  device_push_tokens,
   punya_transactions,
   users,
 } from "@workspace/db";
@@ -36,7 +34,7 @@ import {
   scopedCentreFilter,
 } from "../../lib/route-helpers";
 import { rejectionWindowFields, canRejectSubmission } from "../../lib/niyam-constants";
-import { sendPush } from "../../lib/push";
+import { notifyUsers } from "../../lib/notify";
 import { studentCanAccessNiyam } from "../../lib/niyam-audience";
 import { awardNewlyReachedBadges, notifyBadgesPush, type AwardedBadge } from "../../lib/niyam-badges";
 import { resolveNiyamAwardPoints } from "../../lib/niyam-points";
@@ -321,7 +319,7 @@ registerCron(QUEUE_NAMES.NIYAM_STREAK_LAPSE, CRON_EXPRESSIONS.NIYAM_STREAK_LAPSE
   await runNiyamStreakLapse();
 });
 
-/** Post-commit parent alert when a submission is rejected (insert gates push). */
+/** Post-commit parent alert when a submission is rejected. */
 async function notifyParentOfRejection(opts: {
   parentId: string | null;
   studentName: string;
@@ -332,61 +330,16 @@ async function notifyParentOfRejection(opts: {
 }): Promise<void> {
   if (!opts.parentId) return;
 
-  const titleEn = "Niyam submission rejected";
-  const titleHi = "नियम जमा अस्वीकृत";
-  const bodyEn = `${opts.studentName}'s submission for "${opts.niyamTitleEn}" was rejected: ${opts.reason}`;
-  const bodyHi = `${opts.studentName} का "${opts.niyamTitleHi ?? opts.niyamTitleEn}" जमा अस्वीकृत: ${opts.reason}`;
-
-  const [inserted] = await db
-    .insert(notifications)
-    .values({
-      user_id: opts.parentId,
-      kind: "niyam_rejected",
-      title_en: titleEn,
-      title_hi: titleHi,
-      body_en: bodyEn,
-      body_hi: bodyHi,
-    })
-    .returning({ id: notifications.id });
-
-  if (!inserted) return;
-
-  let tokens: { expo_token: string }[] = [];
-  try {
-    tokens = await db
-      .select({ expo_token: device_push_tokens.expo_token })
-      .from(device_push_tokens)
-      .where(
-        and(
-          eq(device_push_tokens.user_id, opts.parentId),
-          eq(device_push_tokens.is_active, true),
-        ),
-      );
-  } catch (err) {
-    logger.warn(
-      { err, userId: opts.parentId, kind: "niyam_rejected" },
-      "Failed to load device_push_tokens for rejection notification",
-    );
-    return;
-  }
-  if (tokens.length === 0) return;
-
-  const [parent] = await db
-    .select({ preferred_language: users.preferred_language })
-    .from(users)
-    .where(eq(users.id, opts.parentId))
-    .limit(1);
-  const hi = parent?.preferred_language === "hi";
-
-  // sendPush never throws — inbox row already committed.
-  await sendPush(
-    tokens.map((t) => ({
-      to: t.expo_token,
-      title: hi ? titleHi : titleEn,
-      body: hi ? bodyHi : bodyEn,
-      data: { kind: "niyam_rejected", submission_id: opts.submissionId },
-    })),
-  );
+  await notifyUsers({
+    userIds: [opts.parentId],
+    kind: "niyam_rejected",
+    title_en: "Niyam submission rejected",
+    title_hi: "नियम जमा अस्वीकृत",
+    body_en: `${opts.studentName}'s submission for "${opts.niyamTitleEn}" was rejected: ${opts.reason}`,
+    body_hi: `${opts.studentName} का "${opts.niyamTitleHi ?? opts.niyamTitleEn}" जमा अस्वीकृत: ${opts.reason}`,
+    push: true,
+    data: { kind: "niyam_rejected", submission_id: opts.submissionId },
+  });
 }
 
 function encodeSubmissionCursor(submissionDate: string, id: string): string {

@@ -14,7 +14,7 @@ import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
-import { sendPush } from "../../lib/push";
+import { notifyUsers } from "../../lib/notify";
 import { clampLimit } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
@@ -242,31 +242,21 @@ export async function runBirthdayWishes(today?: Date): Promise<{ students: numbe
     return { students: birthdayStudents.length, notifications: 0 };
   }
 
-  // Best-effort push to the newly-notified users' active devices. Done OUTSIDE
-  // the transaction (and only for the users THIS run actually inserted) so the
-  // external Expo call never holds the advisory lock and never double-sends:
-  // the at-most-once insert above gates the at-most-once push.
-  const newlyNotifiedIds = toInsert.map((r) => r.userId);
-  const tokens = await db
-    .select({ user_id: device_push_tokens.user_id, expo_token: device_push_tokens.expo_token })
-    .from(device_push_tokens)
-    .where(
-      and(
-        inArray(device_push_tokens.user_id, newlyNotifiedIds),
-        eq(device_push_tokens.is_active, true),
-      ),
-    );
-
-  if (tokens.length > 0) {
-    const nameByUser = new Map(toInsert.map((r) => [r.userId, r.studentName]));
-    await sendPush(
-      tokens.map((t) => ({
-        to: t.expo_token,
-        title: "Happy Birthday!",
-        body: `Wishing ${nameByUser.get(t.user_id) ?? "your child"} a joyful and blessed birthday.`,
-        data: { kind: "birthday" },
-      })),
-    );
+  // Best-effort push OUTSIDE the transaction. Inbox rows already inserted above;
+  // inbox:false so push-opt-out does not suppress the durable birthday notice.
+  // Per-recipient body (student name) — one notifyUsers call each.
+  for (const r of toInsert) {
+    await notifyUsers({
+      userIds: [r.userId],
+      kind: "birthday",
+      title_en: "Happy Birthday!",
+      title_hi: "जन्मदिन की शुभकामनाएँ!",
+      body_en: `Wishing ${r.studentName} a joyful and blessed birthday.`,
+      body_hi: `जैन पाठशाला परिवार की ओर से ${r.studentName} को जन्मदिन की हार्दिक शुभकामनाएँ।`,
+      inbox: false,
+      push: true,
+      data: { kind: "birthday" },
+    });
   }
 
   return { students: birthdayStudents.length, notifications: toInsert.length };

@@ -1,5 +1,7 @@
 /**
- * Best-effort in-app notifications (+ optional Expo push). Never throws.
+ * Best-effort in-app notifications (+ optional Expo push).
+ * Push delivery never throws. Inbox insert failures currently still swallow
+ * (FIX #6 will surface them); preference gating always applies before push.
  */
 import {
   db,
@@ -14,7 +16,8 @@ import { and, eq, inArray } from "drizzle-orm";
 import { sendPush } from "./push";
 import { logger } from "./logger";
 
-function prefsAllowKind(prefs: unknown, kind: string): boolean {
+/** Honour users.notification_preferences before enqueueing a given kind. */
+export function prefsAllowKind(prefs: unknown, kind: string): boolean {
   if (!prefs || typeof prefs !== "object") return true;
   const p = prefs as Record<string, unknown>;
   if (p.push === false) return false;
@@ -40,13 +43,24 @@ export async function notifyUsers(opts: {
   body_en: string;
   body_hi: string;
   push?: boolean;
+  /**
+   * When false, skip the durable inbox insert (caller already wrote the row —
+   * e.g. birthday cron under its advisory lock). Default true.
+   */
+  inbox?: boolean;
+  /** Deep-link payload; merged with `{ kind }` so kind is always present. */
+  data?: Record<string, unknown>;
 }): Promise<void> {
   const ids = [...new Set(opts.userIds)].filter(Boolean);
   if (ids.length === 0) return;
   try {
     // AT31 — honour users.notification_preferences before enqueueing.
     const prefRows = await db
-      .select({ id: users.id, prefs: users.notification_preferences })
+      .select({
+        id: users.id,
+        prefs: users.notification_preferences,
+        preferred_language: users.preferred_language,
+      })
       .from(users)
       .where(inArray(users.id, ids));
     const kind = opts.kind ?? "general";
@@ -58,30 +72,48 @@ export async function notifyUsers(opts: {
     for (const id of ids) if (!known.has(id)) allowedIds.push(id);
     if (allowedIds.length === 0) return;
 
-    await db.insert(notifications).values(
-      allowedIds.map((user_id) => ({
-        user_id,
-        kind,
-        title_en: opts.title_en,
-        title_hi: opts.title_hi,
-        body_en: opts.body_en,
-        body_hi: opts.body_hi,
-      })),
+    const langByUser = new Map(
+      prefRows.map((r) => [r.id, r.preferred_language] as const),
     );
+
+    if (opts.inbox !== false) {
+      await db.insert(notifications).values(
+        allowedIds.map((user_id) => ({
+          user_id,
+          kind,
+          title_en: opts.title_en,
+          title_hi: opts.title_hi,
+          body_en: opts.body_en,
+          body_hi: opts.body_hi,
+        })),
+      );
+    }
+
     if (opts.push !== false) {
       const tokens = await db
-        .select({ expo_token: device_push_tokens.expo_token })
+        .select({
+          user_id: device_push_tokens.user_id,
+          expo_token: device_push_tokens.expo_token,
+        })
         .from(device_push_tokens)
         .where(
-          and(inArray(device_push_tokens.user_id, allowedIds), eq(device_push_tokens.is_active, true)),
+          and(
+            inArray(device_push_tokens.user_id, allowedIds),
+            eq(device_push_tokens.is_active, true),
+          ),
         );
       if (tokens.length > 0) {
+        const data = { kind, ...(opts.data ?? {}) };
         await sendPush(
-          tokens.map((t) => ({
-            to: t.expo_token,
-            title: opts.title_en,
-            body: opts.body_en,
-          })),
+          tokens.map((t) => {
+            const hi = langByUser.get(t.user_id) === "hi";
+            return {
+              to: t.expo_token,
+              title: hi ? opts.title_hi : opts.title_en,
+              body: hi ? opts.body_hi : opts.body_en,
+              data,
+            };
+          }),
         );
       }
     }

@@ -1,4 +1,4 @@
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, vi } from "vitest";
 import request from "supertest";
 import app from "../src/app";
 import {
@@ -9,11 +9,25 @@ import {
   students,
   sessions,
   attendance,
+  device_push_tokens,
+  upload_objects,
 } from "@workspace/db";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { loginAs, auth } from "./helpers";
 import { runBirthdayWishes } from "../src/routes/v1/notifications";
 import { sendParentAttendancePush } from "../src/services/attendance-post-process";
+import { notifyBadgesPush } from "../src/lib/niyam-badges";
+import * as pushModule from "../src/lib/push";
+
+function todayIst(): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(new Date());
+}
+
+function daysAgoIst(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(d);
+}
 
 afterAll(async () => {
   await pool.end(); // close the shared pg pool so vitest exits cleanly
@@ -214,6 +228,208 @@ describe("notifications — birthday cron", () => {
     const result = await runBirthdayWishes(new Date("2020-12-25T06:00:00+05:30"));
     expect(result.students).toBe(0);
     expect(result.notifications).toBe(0);
+  });
+});
+
+describe("notifications — preference gate (FIX #2)", () => {
+  it("a parent with push disabled gets no niyam-rejection push", async () => {
+    const parent = await loginAs("parent");
+    const shikshak = await loginAs("shikshak");
+    const children = await request(app).get("/v1/me/children").set(auth(parent.token));
+    const childId = (children.body.data.items as Array<{ id: string }>)[0]?.id;
+    expect(childId).toBeTruthy();
+
+    const [prefsBefore] = await db
+      .select({ prefs: users.notification_preferences })
+      .from(users)
+      .where(eq(users.id, parent.user.id))
+      .limit(1);
+
+    const expoToken = `ExponentPushToken[fix2-reject-${Date.now()}]`;
+    await db.insert(device_push_tokens).values({
+      user_id: parent.user.id,
+      expo_token: expoToken,
+      platform: "ios",
+      is_active: true,
+    });
+
+    const spy = vi.spyOn(pushModule, "sendPush").mockResolvedValue([]);
+    try {
+      await db
+        .update(users)
+        .set({ notification_preferences: { push: false } })
+        .where(eq(users.id, parent.user.id));
+
+      const admin = await loginAs("super_admin");
+      const proofKey = `niyam-proof/fix2-reject-${Date.now()}.jpg`;
+      const proofUrl = `http://localhost:8080/uploads/${proofKey}`;
+      await db
+        .insert(upload_objects)
+        .values({ key: proofKey, uploaded_by: parent.user.id, content_type: "image/jpeg" })
+        .onConflictDoUpdate({
+          target: upload_objects.key,
+          set: { uploaded_by: parent.user.id, content_type: "image/jpeg" },
+        });
+
+      const create = await request(app)
+        .post("/v1/admin/niyams")
+        .set(auth(admin.token))
+        .send({
+          title_en: `Fix2 reject ${Date.now()}`,
+          title_hi: "फिक्स दो",
+          niyam_type: "daily",
+          proof_type: "either",
+          approval_mode: "review",
+          proof_required: false,
+          max_uploads: 3,
+          points: 5,
+          start_date: daysAgoIst(60),
+        });
+      expect([200, 201]).toContain(create.status);
+      const niyamId = create.body.data.id as string;
+
+      const submit = await request(app)
+        .post("/v1/niyam-submissions")
+        .set(auth(parent.token))
+        .send({
+          niyam_id: niyamId,
+          student_id: childId,
+          submission_date: todayIst(),
+          proof_url: proofUrl,
+        });
+      expect(submit.status).toBe(200);
+
+      const reject = await request(app)
+        .post(`/v1/niyam-submissions/${submit.body.data.id}/reject`)
+        .set(auth(shikshak.token))
+        .send({
+          reason: "Needs a clearer photo of the practice — please resubmit.",
+        });
+      expect(reject.status).toBe(200);
+
+      const calledWithParentToken = spy.mock.calls.some((call) =>
+        (call[0] as Array<{ to: string }>).some((p) => p.to === expoToken),
+      );
+      expect(calledWithParentToken).toBe(false);
+    } finally {
+      spy.mockRestore();
+      await db
+        .update(users)
+        .set({ notification_preferences: prefsBefore?.prefs ?? {} })
+        .where(eq(users.id, parent.user.id));
+      await db.delete(device_push_tokens).where(eq(device_push_tokens.expo_token, expoToken));
+    }
+  });
+
+  it("a parent with niyam_badge disabled still gets birthday notifications", async () => {
+    const parent = await loginAs("parent");
+    const [prefsBefore] = await db
+      .select({ prefs: users.notification_preferences })
+      .from(users)
+      .where(eq(users.id, parent.user.id))
+      .limit(1);
+
+    const expoToken = `ExponentPushToken[fix2-badge-${Date.now()}]`;
+    await db.insert(device_push_tokens).values({
+      user_id: parent.user.id,
+      expo_token: expoToken,
+      platform: "ios",
+      is_active: true,
+    });
+
+    const spy = vi.spyOn(pushModule, "sendPush").mockResolvedValue([]);
+    try {
+      await db
+        .update(users)
+        .set({ notification_preferences: { niyam_badge: false } })
+        .where(eq(users.id, parent.user.id));
+
+      await db
+        .delete(notifications)
+        .where(and(eq(notifications.user_id, parent.user.id), eq(notifications.kind, "niyam_badge")));
+
+      await notifyBadgesPush({
+        parentUserId: parent.user.id,
+        studentName: "Fix2 Badge Child",
+        badges: [
+          { badge_key: "daily_7", streak_length: 7, points_awarded: 25 },
+        ],
+      });
+
+      const badgePush = spy.mock.calls
+        .flatMap((c) => c[0] as Array<{ to: string; data?: { kind?: string } }>)
+        .find((p) => p.to === expoToken && p.data?.kind === "niyam_badge");
+      expect(badgePush).toBeUndefined();
+
+      await db
+        .delete(notifications)
+        .where(and(eq(notifications.user_id, parent.user.id), eq(notifications.kind, "birthday")));
+
+      const birthday = await runBirthdayWishes(new Date("2020-04-12T06:00:00+05:30"));
+      expect(birthday.notifications).toBeGreaterThanOrEqual(1);
+
+      const birthdayPush = spy.mock.calls
+        .flatMap((c) => c[0] as Array<{ to: string; data?: { kind?: string } }>)
+        .find((p) => p.to === expoToken && p.data?.kind === "birthday");
+      expect(birthdayPush).toBeTruthy();
+    } finally {
+      spy.mockRestore();
+      await db
+        .update(users)
+        .set({ notification_preferences: prefsBefore?.prefs ?? {} })
+        .where(eq(users.id, parent.user.id));
+      await db.delete(device_push_tokens).where(eq(device_push_tokens.expo_token, expoToken));
+    }
+  });
+
+  it("a parent with push disabled gets no birthday push but still gets the inbox row", async () => {
+    const parent = await loginAs("parent");
+    const [prefsBefore] = await db
+      .select({ prefs: users.notification_preferences })
+      .from(users)
+      .where(eq(users.id, parent.user.id))
+      .limit(1);
+
+    const expoToken = `ExponentPushToken[fix2-bday-${Date.now()}]`;
+    await db.insert(device_push_tokens).values({
+      user_id: parent.user.id,
+      expo_token: expoToken,
+      platform: "ios",
+      is_active: true,
+    });
+
+    const spy = vi.spyOn(pushModule, "sendPush").mockResolvedValue([]);
+    try {
+      await db
+        .update(users)
+        .set({ notification_preferences: { push: false } })
+        .where(eq(users.id, parent.user.id));
+
+      await db
+        .delete(notifications)
+        .where(and(eq(notifications.user_id, parent.user.id), eq(notifications.kind, "birthday")));
+
+      const result = await runBirthdayWishes(new Date("2020-04-12T06:00:00+05:30"));
+      expect(result.notifications).toBeGreaterThanOrEqual(1);
+
+      const inbox = await db
+        .select({ id: notifications.id })
+        .from(notifications)
+        .where(and(eq(notifications.user_id, parent.user.id), eq(notifications.kind, "birthday")));
+      expect(inbox.length).toBeGreaterThanOrEqual(1);
+
+      const birthdayPush = spy.mock.calls
+        .flatMap((c) => c[0] as Array<{ to: string; data?: { kind?: string } }>)
+        .find((p) => p.to === expoToken && p.data?.kind === "birthday");
+      expect(birthdayPush).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+      await db
+        .update(users)
+        .set({ notification_preferences: prefsBefore?.prefs ?? {} })
+        .where(eq(users.id, parent.user.id));
+      await db.delete(device_push_tokens).where(eq(device_push_tokens.expo_token, expoToken));
+    }
   });
 });
 

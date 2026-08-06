@@ -4,12 +4,11 @@
  * A rejection that breaks a streak does NOT revoke an earned badge — badges are
  * historical achievements. This module only inserts newly reached milestones.
  */
-import { db, niyam_badges, notifications, device_push_tokens, users } from "@workspace/db";
+import { db, niyam_badges } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { niyamBadgeLabel, niyamBadgeLadder } from "@workspace/api-zod";
 import { awardPunya } from "./punya";
-import { sendPush } from "./push";
-import { logger } from "./logger";
+import { notifyUsers } from "./notify";
 import type { NiyamPeriodType } from "./niyam-period";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -93,8 +92,8 @@ export async function awardNewlyReachedBadges(
 
 /**
  * Post-commit parent alert when streak badges are earned.
- * Inserts the bilingual inbox row first (gates at-most-once push), then
- * best-effort push in the parent's preferred_language.
+ * Routes through notifyUsers so notification_preferences are honoured and
+ * push copy uses preferred_language (FIX #5 pulled forward with FIX #2).
  */
 export async function notifyBadgesPush(opts: {
   parentUserId: string | null;
@@ -105,58 +104,18 @@ export async function notifyBadgesPush(opts: {
 
   const labelsEn = opts.badges.map((b) => niyamBadgeLabel(b.badge_key, "en")).join(", ");
   const labelsHi = opts.badges.map((b) => niyamBadgeLabel(b.badge_key, "hi")).join(", ");
-  const titleEn = "Streak badge earned!";
-  const titleHi = "लकीर बैज मिला!";
-  const bodyEn = `${opts.studentName} earned: ${labelsEn}`;
-  const bodyHi = `${opts.studentName} ने अर्जित किया: ${labelsHi}`;
 
-  const [inserted] = await db
-    .insert(notifications)
-    .values({
-      user_id: opts.parentUserId,
+  await notifyUsers({
+    userIds: [opts.parentUserId],
+    kind: "niyam_badge",
+    title_en: "Streak badge earned!",
+    title_hi: "लकीर बैज मिला!",
+    body_en: `${opts.studentName} earned: ${labelsEn}`,
+    body_hi: `${opts.studentName} ने अर्जित किया: ${labelsHi}`,
+    push: true,
+    data: {
       kind: "niyam_badge",
-      title_en: titleEn,
-      title_hi: titleHi,
-      body_en: bodyEn,
-      body_hi: bodyHi,
-    })
-    .returning({ id: notifications.id });
-
-  if (!inserted) return;
-
-  let tokens: { expo_token: string }[] = [];
-  try {
-    tokens = await db
-      .select({ expo_token: device_push_tokens.expo_token })
-      .from(device_push_tokens)
-      .where(
-        and(
-          eq(device_push_tokens.user_id, opts.parentUserId),
-          eq(device_push_tokens.is_active, true),
-        ),
-      );
-  } catch (err) {
-    logger.warn(
-      { err, userId: opts.parentUserId, kind: "niyam_badge" },
-      "Failed to load device_push_tokens for badge notification",
-    );
-    return;
-  }
-  if (tokens.length === 0) return;
-
-  const [parent] = await db
-    .select({ preferred_language: users.preferred_language })
-    .from(users)
-    .where(eq(users.id, opts.parentUserId))
-    .limit(1);
-  const hi = parent?.preferred_language === "hi";
-
-  await sendPush(
-    tokens.map((t) => ({
-      to: t.expo_token,
-      title: hi ? titleHi : titleEn,
-      body: hi ? bodyHi : bodyEn,
-      data: { kind: "niyam_badge", badges: opts.badges.map((b) => b.badge_key) },
-    })),
-  );
+      badges: opts.badges.map((b) => b.badge_key),
+    },
+  });
 }
