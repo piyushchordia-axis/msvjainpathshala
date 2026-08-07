@@ -30,14 +30,17 @@ import { signUploadUrl } from "../../lib/file-tokens";
 import { PdfBuilder } from "../../lib/pdf";
 import { inScope, scopedCentreFilter } from "../../lib/route-helpers";
 import { getStudentHomeworkCompletionRate } from "../../lib/homework-completion-rate";
+import {
+  CourseProgressError,
+  COURSE_PROGRESS_STATUSES,
+  upsertCourseProgress,
+} from "../../services/course-progress";
 
 const router: IRouter = Router();
 router.use(requireAuth);
 
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const CURRICULUM_LEVELS = ["not_started", "in_progress", "completed", "mastered"] as const;
 
 /**
  * Monthly reports use period_label = YYYY-MM. Other labels leave the window open
@@ -252,7 +255,7 @@ router.get(
 /* ════════════════ shikshak/admin: set a level for one item ════════════════ */
 
 const setLevelSchema = z.object({
-  level: z.enum(CURRICULUM_LEVELS),
+  level: z.enum(COURSE_PROGRESS_STATUSES),
   note: z.string().max(1000).optional(),
 });
 
@@ -283,42 +286,24 @@ router.post(
       return;
     }
 
-    const [item] = await db
-      .select({ id: course_subsections.id })
-      .from(course_subsections)
-      .where(eq(course_subsections.id, itemId))
-      .limit(1);
-    if (!item) {
-      fail(res, 404, "ERR_NOT_FOUND", "Curriculum item not found.");
-      return;
-    }
-
-    await db
-      .insert(student_course_progress)
-      .values({
-        student_id: student.id,
-        subsection_id: item.id,
+    try {
+      const row = await upsertCourseProgress({
+        studentId: student.id,
+        nodeKind: "subsection",
+        nodeId: itemId,
         status: body.level,
         note: body.note ?? null,
-        updated_by: req.authUser!.id,
-        updated_by_role: req.authUser!.role,
-      })
-      .onConflictDoUpdate({
-        target: [
-          student_course_progress.student_id,
-          student_course_progress.subsection_id,
-        ],
-        targetWhere: sql`${student_course_progress.subsection_id} is not null`,
-        set: {
-          status: body.level,
-          note: body.note ?? null,
-          updated_by: req.authUser!.id,
-          updated_by_role: req.authUser!.role,
-          updated_at: new Date(),
-        },
+        updatedBy: req.authUser!.id,
+        updatedByRole: req.authUser!.role,
       });
-
-    ok(res, { item_id: item.id, level: body.level });
+      ok(res, { item_id: row.subsection_id, level: row.status });
+    } catch (err) {
+      if (err instanceof CourseProgressError) {
+        fail(res, err.httpStatus, err.code, err.message);
+        return;
+      }
+      throw err;
+    }
   },
 );
 

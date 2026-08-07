@@ -13,7 +13,7 @@ afterAll(async () => {
  * student+period_kind+period_label), so this test is rerun-safe against a
  * non-reset DB. It picks an in-scope Mumbai student (seeded Foundation
  * curriculum is city-scoped to Mumbai), reads the curriculum items via the
- * progress endpoint, sets one to 'mastered', generates a report, releases it,
+ * progress endpoint, sets one to 'completed', generates a report, releases it,
  * and verifies the report is readable. A unique period_label per run keeps
  * the audit/snapshot clean.
  */
@@ -68,15 +68,15 @@ describe("progress", () => {
     expect(items.length).toBeGreaterThan(0);
     const targetItemId = items[0].item_id;
 
-    // POST set level to 'mastered'.
+    // POST set level to 'completed' (CU11 — mastered is never written).
     const setLevel = await request(app)
       .post(`/v1/progress/students/${studentId}/items/${targetItemId}`)
       .set(auth(admin.token))
-      .send({ level: "mastered", note: "Excellent grasp." });
+      .send({ level: "completed", note: "Excellent grasp." });
     expect(setLevel.status).toBe(200);
-    expect(setLevel.body.data.level).toBe("mastered");
+    expect(setLevel.body.data.level).toBe("completed");
 
-    // GET again -> the item now reads 'mastered'.
+    // GET again -> the item now reads 'completed'.
     const grid2 = await request(app)
       .get(`/v1/progress/students/${studentId}`)
       .set(auth(admin.token));
@@ -84,7 +84,7 @@ describe("progress", () => {
     const updated = (grid2.body.data.items as Array<{ item_id: string; level: string }>).find(
       (r) => r.item_id === targetItemId,
     );
-    expect(updated?.level).toBe("mastered");
+    expect(updated?.level).toBe("completed");
 
     // POST generate a report -> pdf_url points at the uploads path.
     const periodLabel = `test-${Date.now()}`;

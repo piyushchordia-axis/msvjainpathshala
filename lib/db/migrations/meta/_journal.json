@@ -365,6 +365,13 @@
       "when": 1790160000000,
       "tag": "0051_curriculum_courses",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1790246400000,
+      "tag": "0052_fn_course_progress",
+      "breakpoints": true
     }
   ]
 }

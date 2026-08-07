@@ -370,7 +370,7 @@ describe("progress cross-city scope isolation", () => {
     const writeDenied = await request(app)
       .post(`/v1/progress/students/${foreignStudent!.id}/items/${UUID_NONEXISTENT}`)
       .set(auth(cityAdmin.token))
-      .send({ level: "mastered" });
+      .send({ level: "completed" });
     expect(writeDenied.status).toBe(404);
 
     const reportsDenied = await request(app)
