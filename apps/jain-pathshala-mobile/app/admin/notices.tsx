@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Modal,
   Pressable,
@@ -12,6 +13,7 @@ import {
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { bodyFamily } from "@/constants/typography";
+import { apiGet, apiPost } from "@/lib/api";
 import {
   useAdminBatches,
   useAdminCentres,
@@ -37,8 +39,11 @@ type FormState = {
   content_hi: string;
   audience: AudienceKind;
   batch_id: string | null;
+  is_public: boolean;
   pinned: boolean;
   is_critical: boolean;
+  /** YYYY-MM-DD for the optional end date; empty = never expires. */
+  ends_on: string;
 };
 
 const emptyForm = (): FormState => ({
@@ -48,9 +53,32 @@ const emptyForm = (): FormState => ({
   content_hi: "",
   audience: "centre",
   batch_id: null,
+  is_public: false,
   pinned: false,
   is_critical: false,
+  ends_on: "",
 });
+
+/** ISO → YYYY-MM-DD in Asia/Kolkata for the ends-on field. */
+function isoToEndsOn(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
+/** YYYY-MM-DD → end-of-day IST ISO, or null when blank. */
+function endsOnToIso(date: string): string | null {
+  const trimmed = date.trim();
+  if (!trimmed) return null;
+  const d = new Date(`${trimmed}T23:59:59.999+05:30`);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
 
 function Field({
   label,
@@ -113,10 +141,50 @@ function NoticeEditor({
   const c = useColors();
   const { hi } = useLocale();
   const [form, setForm] = useState<FormState>(emptyForm());
+  const [translateAvailable, setTranslateAvailable] = useState(false);
+  const [translating, setTranslating] = useState<"title" | "content" | null>(null);
+  const [titleHiSuggested, setTitleHiSuggested] = useState(false);
+  const [contentHiSuggested, setContentHiSuggested] = useState(false);
 
   useEffect(() => {
-    if (open) setForm(initial ?? emptyForm());
+    if (!open) return;
+    setForm(initial ?? emptyForm());
+    setTitleHiSuggested(false);
+    setContentHiSuggested(false);
+    setTranslating(null);
+    void apiGet<{ available: boolean }>("/v1/translate")
+      .then((r) => setTranslateAvailable(r?.available === true))
+      .catch(() => setTranslateAvailable(false));
   }, [open, initial]);
+
+  async function translateField(field: "title" | "content") {
+    const source = field === "title" ? form.title_en.trim() : form.content_en.trim();
+    if (!source || !translateAvailable || translating) return;
+    setTranslating(field);
+    try {
+      const res = await apiPost<{ text: string }>("/v1/translate", {
+        text: source,
+        target: "hi",
+        context: "notice",
+      });
+      const text = res?.text?.trim() ?? "";
+      if (!text) throw new Error("Empty translation");
+      if (field === "title") {
+        setForm((f) => ({ ...f, title_hi: text }));
+        setTitleHiSuggested(true);
+      } else {
+        setForm((f) => ({ ...f, content_hi: text }));
+        setContentHiSuggested(true);
+      }
+    } catch (e) {
+      Alert.alert(
+        hi ? "अनुवाद नहीं हुआ" : "Could not translate",
+        e instanceof Error ? e.message : hi ? "फिर कोशिश करें।" : "Try again.",
+      );
+    } finally {
+      setTranslating(null);
+    }
+  }
 
   function submit() {
     const title_en = form.title_en.trim();
@@ -145,8 +213,10 @@ function NoticeEditor({
       content_en,
       content_hi,
       audience: form.audience,
+      is_public: form.is_public,
       pinned: form.pinned,
       is_critical: form.is_critical,
+      expires_at: endsOnToIso(form.ends_on),
       ...(form.audience === "centre"
         ? { centre_id: centreId }
         : { batch_id: form.batch_id! }),
@@ -188,9 +258,48 @@ function NoticeEditor({
           <Field
             label={hi ? "शीर्षक (हिंदी)" : "Title (Hindi)"}
             value={form.title_hi}
-            onChange={(title_hi) => setForm((f) => ({ ...f, title_hi }))}
+            onChange={(title_hi) => {
+              setTitleHiSuggested(false);
+              setForm((f) => ({ ...f, title_hi }));
+            }}
             hi={hi}
           />
+          {translateAvailable ? (
+            <Pressable
+              onPress={() => void translateField("title")}
+              disabled={!form.title_en.trim() || translating !== null}
+              style={{
+                alignSelf: "flex-start",
+                marginBottom: titleHiSuggested ? 4 : 12,
+                opacity: !form.title_en.trim() || translating !== null ? 0.5 : 1,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              {translating === "title" ? (
+                <ActivityIndicator color={c.primary} size="small" />
+              ) : null}
+              <Text
+                style={{
+                  color: c.primary,
+                  fontFamily: bodyFamily(hi, "semibold"),
+                  fontSize: 14,
+                  lineHeight: 22,
+                }}
+              >
+                {hi ? "हिंदी में अनुवाद करें" : "Translate to Hindi"}
+              </Text>
+            </Pressable>
+          ) : null}
+          {titleHiSuggested ? (
+            <Body muted style={{ fontSize: 12, marginBottom: 12, lineHeight: 22 }}>
+              {hi
+                ? "मशीन अनुवाद — प्रकाशित करने से पहले जाँचें।"
+                : "Machine translation — please check before publishing."}
+            </Body>
+          ) : null}
+
           <Field
             label={hi ? "सामग्री (अंग्रेज़ी)" : "Content (English)"}
             value={form.content_en}
@@ -201,10 +310,48 @@ function NoticeEditor({
           <Field
             label={hi ? "सामग्री (हिंदी)" : "Content (Hindi)"}
             value={form.content_hi}
-            onChange={(content_hi) => setForm((f) => ({ ...f, content_hi }))}
+            onChange={(content_hi) => {
+              setContentHiSuggested(false);
+              setForm((f) => ({ ...f, content_hi }));
+            }}
             multiline
             hi={hi}
           />
+          {translateAvailable ? (
+            <Pressable
+              onPress={() => void translateField("content")}
+              disabled={!form.content_en.trim() || translating !== null}
+              style={{
+                alignSelf: "flex-start",
+                marginBottom: contentHiSuggested ? 4 : 12,
+                opacity: !form.content_en.trim() || translating !== null ? 0.5 : 1,
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              {translating === "content" ? (
+                <ActivityIndicator color={c.primary} size="small" />
+              ) : null}
+              <Text
+                style={{
+                  color: c.primary,
+                  fontFamily: bodyFamily(hi, "semibold"),
+                  fontSize: 14,
+                  lineHeight: 22,
+                }}
+              >
+                {hi ? "हिंदी में अनुवाद करें" : "Translate to Hindi"}
+              </Text>
+            </Pressable>
+          ) : null}
+          {contentHiSuggested ? (
+            <Body muted style={{ fontSize: 12, marginBottom: 12, lineHeight: 22 }}>
+              {hi
+                ? "मशीन अनुवाद — प्रकाशित करने से पहले जाँचें।"
+                : "Machine translation — please check before publishing."}
+            </Body>
+          ) : null}
 
           <Body muted style={{ fontSize: 12, marginBottom: 6, lineHeight: 22 }}>
             {hi ? "दर्शक" : "Audience"}
@@ -299,7 +446,7 @@ function NoticeEditor({
               trackColor={{ true: c.primary, false: c.border }}
             />
           </Row>
-          <Row style={{ justifyContent: "space-between", marginBottom: 18 }}>
+          <Row style={{ justifyContent: "space-between", marginBottom: 10 }}>
             <Body style={{ lineHeight: 22 }}>{hi ? "महत्वपूर्ण" : "Critical"}</Body>
             <Switch
               value={form.is_critical}
@@ -307,6 +454,18 @@ function NoticeEditor({
               trackColor={{ true: c.primary, false: c.border }}
             />
           </Row>
+
+          <Field
+            label={hi ? "समाप्ति तिथि (वैकल्पिक)" : "Ends on (optional)"}
+            value={form.ends_on}
+            onChange={(ends_on) => setForm((f) => ({ ...f, ends_on }))}
+            hi={hi}
+          />
+          <Body muted style={{ fontSize: 12, marginBottom: 18, lineHeight: 22 }}>
+            {hi
+              ? "खाली छोड़ें तो यह सूचना अनिश्चितकाल तक दिखेगी।"
+              : "Leave blank to keep this notice up indefinitely."}
+          </Body>
 
           <Button
             label={initial ? (hi ? "सहेजें" : "Save changes") : hi ? "प्रकाशित करें" : "Publish"}
@@ -363,8 +522,10 @@ export default function NoticesScreen() {
         content_hi: editing.content_hi ?? "",
         audience: editing.audience === "batch" ? "batch" : "centre",
         batch_id: editing.batch_id,
+        is_public: editing.is_public,
         pinned: editing.pinned,
         is_critical: editing.is_critical,
+        ends_on: isoToEndsOn(editing.expires_at),
       }
     : null;
 
@@ -445,6 +606,9 @@ export default function NoticesScreen() {
                   <Pill tone="neutral" label={audienceLabel} />
                   {n.is_critical ? (
                     <Pill tone="error" label={hi ? "महत्वपूर्ण" : "Critical"} />
+                  ) : null}
+                  {n.is_expired ? (
+                    <Pill tone="neutral" label={hi ? "समाप्त" : "Expired"} />
                   ) : null}
                 </Row>
                 {content ? (

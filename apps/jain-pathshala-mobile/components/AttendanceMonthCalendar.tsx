@@ -70,6 +70,12 @@ export function AttendanceMonthCalendar({
   const weekdays = hi
     ? ["सो", "मं", "बु", "गु", "शु", "श", "र"]
     : ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"];
+  // Week rows with flex:1 — percentage width + flexWrap rounds past 100% and
+  // wraps the Sunday column onto the next line.
+  const weeks: CalendarDayCell[][] = [];
+  for (let i = 0; i < cells.length; i += 7) {
+    weeks.push(cells.slice(i, i + 7));
+  }
 
   return (
     <Card style={{ gap: 12 }}>
@@ -124,58 +130,63 @@ export function AttendanceMonthCalendar({
         ))}
       </View>
 
-      <View style={{ flexDirection: "row", flexWrap: "wrap" }}>
-        {cells.map((cell, idx) => {
-          if (!cell.date || cell.day == null) {
-            return <View key={`pad-${idx}`} style={{ width: `${100 / 7}%`, aspectRatio: 1 }} />;
-          }
-          const accent = cellAccent(cell, c);
-          const hasEvent = !!(cell.markStatus || cell.onLeave || cell.isHoliday);
-          return (
-            <View
-              key={cell.date}
-              style={{
-                width: `${100 / 7}%`,
-                aspectRatio: 1,
-                padding: 2,
-              }}
-            >
-              <View
-                style={{
-                  flex: 1,
-                  borderRadius: 8,
-                  alignItems: "center",
-                  justifyContent: "center",
-                  backgroundColor: hasEvent ? accent.bg : "transparent",
-                  borderWidth: cell.isHoliday && cell.markStatus ? 1.5 : 0,
-                  borderColor: cell.isHoliday && cell.markStatus ? c.border : "transparent",
-                }}
-              >
-                <Text
+      <View>
+        {weeks.map((week, weekIdx) => (
+          <View key={`week-${weekIdx}`} style={{ flexDirection: "row" }}>
+            {week.map((cell, colIdx) => {
+              const idx = weekIdx * 7 + colIdx;
+              if (!cell.date || cell.day == null) {
+                return <View key={`pad-${idx}`} style={{ flex: 1, aspectRatio: 1 }} />;
+              }
+              const accent = cellAccent(cell, c);
+              const hasEvent = !!(cell.markStatus || cell.onLeave || cell.isHoliday);
+              return (
+                <View
+                  key={cell.date}
                   style={{
-                    fontFamily: bodyFamily(hi, hasEvent ? "semibold" : "regular"),
-                    fontSize: 13,
-                    color: hasEvent ? accent.fg : c.foreground,
+                    flex: 1,
+                    aspectRatio: 1,
+                    padding: 2,
                   }}
                 >
-                  {cell.day}
-                </Text>
-                {cell.isHoliday && cell.markStatus ? (
                   <View
                     style={{
-                      position: "absolute",
-                      bottom: 3,
-                      width: 4,
-                      height: 4,
-                      borderRadius: 999,
-                      backgroundColor: c.mutedForeground,
+                      flex: 1,
+                      borderRadius: 8,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      backgroundColor: hasEvent ? accent.bg : "transparent",
+                      borderWidth: cell.isHoliday && cell.markStatus ? 1.5 : 0,
+                      borderColor: cell.isHoliday && cell.markStatus ? c.border : "transparent",
                     }}
-                  />
-                ) : null}
-              </View>
-            </View>
-          );
-        })}
+                  >
+                    <Text
+                      style={{
+                        fontFamily: bodyFamily(hi, hasEvent ? "semibold" : "regular"),
+                        fontSize: 13,
+                        color: hasEvent ? accent.fg : c.foreground,
+                      }}
+                    >
+                      {cell.day}
+                    </Text>
+                    {cell.isHoliday && cell.markStatus ? (
+                      <View
+                        style={{
+                          position: "absolute",
+                          bottom: 3,
+                          width: 4,
+                          height: 4,
+                          borderRadius: 999,
+                          backgroundColor: c.mutedForeground,
+                        }}
+                      />
+                    ) : null}
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        ))}
       </View>
     </Card>
   );

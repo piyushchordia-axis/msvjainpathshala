@@ -22,6 +22,7 @@ function initials(name: string, phone: string): string {
 
 function navLabel(href: string, fallback: string, locale: Locale): string {
   if (href === '/admin/media-curation') return t('mediaCuration.navLabel', locale);
+  if (href === '/admin/service-requests') return t('requests.navLabel', locale);
   return fallback;
 }
 

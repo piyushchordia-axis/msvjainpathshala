@@ -1,17 +1,64 @@
 /**
  * report.generation — centre monthly aggregate PDF + course certificate PDFs (CU26).
  * Discriminator on payload.kind / report_id — do not add a new QUEUE_NAMES entry.
+ * notifications.monthly_reports — 1st-of-month fan-out that queues one report per active centre.
  */
-import { db, centre_monthly_reports } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { db, centre_monthly_reports, centres } from "@workspace/db";
+import { and, eq, isNull } from "drizzle-orm";
 import { QUEUE_NAMES } from "@jp/shared/constants";
-import { registerQueueHandler } from "../lib/queues";
+import { registerQueueHandler, enqueueJob } from "../lib/queues";
 import { generateCentreMonthlyReport } from "../lib/centre-monthly-report";
 import { storage, makeKey } from "../lib/storage";
+import { todayIst } from "../services/session-materialise";
 import { logger } from "../lib/logger";
 import { processCourseCertificatePdf } from "./course-certificate-pdf";
 
 let registered = false;
+
+/** Previous calendar month in Asia/Kolkata as YYYY-MM. */
+export function lastCompletedMonthYmIst(today = todayIst()): string {
+  const [ys, ms] = today.split("-");
+  const y = Number(ys);
+  const m = Number(ms);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || m < 1 || m > 12) {
+    throw new Error(`lastCompletedMonthYmIst: bad todayIst "${today}"`);
+  }
+  if (m === 1) return `${y - 1}-12`;
+  return `${y}-${String(m - 1).padStart(2, "0")}`;
+}
+
+/**
+ * Insert a queued row per active centre for `month` (idempotent on UNIQUE
+ * centre_id+month) and enqueue report.generation for each newly inserted row.
+ */
+export async function queueMonthlyReportsForAllCentres(
+  month: string,
+): Promise<{ centres: number; queued: number }> {
+  const active = await db
+    .select({ id: centres.id })
+    .from(centres)
+    .where(and(eq(centres.status, "active"), isNull(centres.deleted_at)));
+
+  let queued = 0;
+  for (const c of active) {
+    const [row] = await db
+      .insert(centre_monthly_reports)
+      .values({
+        centre_id: c.id,
+        month,
+        status: "queued",
+      })
+      .onConflictDoNothing({
+        target: [centre_monthly_reports.centre_id, centre_monthly_reports.month],
+      })
+      .returning({ id: centre_monthly_reports.id });
+
+    if (!row) continue;
+    await enqueueJob(QUEUE_NAMES.REPORT_GENERATION, { report_id: row.id });
+    queued += 1;
+  }
+  return { centres: active.length, queued };
+}
 
 export async function processCentreMonthlyReport(data: {
   report_id: string;
@@ -86,5 +133,10 @@ export function registerReportJobs(): void {
     await processCentreMonthlyReport({
       report_id: String(payload.report_id ?? ""),
     });
+  });
+  registerQueueHandler(QUEUE_NAMES.NOTIFICATIONS_MONTHLY_REPORTS, async () => {
+    const month = lastCompletedMonthYmIst();
+    const result = await queueMonthlyReportsForAllCentres(month);
+    logger.info({ month, ...result }, "notifications.monthly_reports fan-out complete");
   });
 }

@@ -1,4 +1,4 @@
-import { index, jsonb, pgTable, text, uuid, varchar } from "drizzle-orm/pg-core";
+import { index, jsonb, pgTable, text, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 
 import { timestamps } from "./_helpers";
 import { centres } from "./centres";
@@ -22,6 +22,10 @@ export const centre_monthly_reports = pgTable(
     ...timestamps(),
   },
   (t) => ({
+    centre_month_uq: uniqueIndex("centre_monthly_reports_centre_month_uq").on(
+      t.centre_id,
+      t.month,
+    ),
     centre_month_idx: index("idx_centre_monthly_reports_centre_month").on(
       t.centre_id,
       t.month,

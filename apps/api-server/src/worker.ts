@@ -16,11 +16,21 @@ import { pool, workerPool } from "@workspace/db";
 import { logger } from "./lib/logger";
 import { startScheduler } from "./lib/scheduler";
 import { assertProductionRedisConfigured } from "./lib/assert-production-redis";
+import { assertDevanagariFontAvailable } from "./lib/pdf";
 import { registerAllJobs } from "./jobs/register-all";
 import { startQueueWorkers, shutdownQueues } from "./lib/queues";
 
 // One libvips job at a time in the worker — avoid RAM spikes from parallel sharp.
 sharp.concurrency(1);
+
+// Bilingual monthly reports need the inlined Devanagari font — fail at boot,
+// not on the first report of the month with a raw ENOENT.
+try {
+  assertDevanagariFontAvailable();
+} catch (err) {
+  logger.fatal({ err }, "Devanagari font unavailable; refusing to start worker");
+  process.exit(1);
+}
 
 registerAllJobs();
 startQueueWorkers();

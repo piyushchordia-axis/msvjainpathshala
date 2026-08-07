@@ -80,7 +80,12 @@ export default function DashboardScreen() {
                   <Title style={{ fontSize: 17 }}>{hi ? "आपकी स्वीकृति की प्रतीक्षा" : "Awaiting your approval"}</Title>
                   <Ionicons name="clipboard-outline" size={20} color={c.primary} />
                 </Row>
-                <Body muted style={{ marginTop: 4, fontSize: 13 }}>{hi ? "लंबित नामांकनों की समीक्षा करें" : "Review pending enrolments"}</Body>
+                <Numeric style={{ fontSize: 28, marginTop: 10 }}>
+                  {data?.pending_enrolments ?? 0}
+                </Numeric>
+                <Body muted style={{ marginTop: 4, fontSize: 13 }}>
+                  {hi ? "लंबित नामांकन — समीक्षा करें" : "Pending enrolments — review them"}
+                </Body>
                 <Button
                   label={hi ? "नामांकन देखें" : "Review enrolments"}
                   variant="outline"

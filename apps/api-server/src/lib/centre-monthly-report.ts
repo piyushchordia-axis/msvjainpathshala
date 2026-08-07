@@ -3,9 +3,12 @@
  * Attendance via AT5 SQL only; homework via F4 SQL; no student names.
  */
 import { db, centres, batches, students, sessions, enrolments, centre_holidays } from "@workspace/db";
-import { and, eq, gte, lte, isNull, sql, count } from "drizzle-orm";
-import { getCentresAttendanceRate, rateToPercent1 } from "./attendance-rate";
-import { getCentresHomeworkCompletionRate } from "./homework-completion-rate";
+import { and, asc, eq, gte, lte, isNull, sql, count } from "drizzle-orm";
+import { getCentresAttendanceRate, getBatchAttendanceRates, rateToPercent1 } from "./attendance-rate";
+import {
+  getCentresHomeworkCompletionRate,
+  getBatchHomeworkCompletionRates,
+} from "./homework-completion-rate";
 import { getCentresNiyamCompletionRate } from "./niyam-completion-rate";
 import { PdfBuilder } from "./pdf";
 
@@ -172,95 +175,35 @@ export async function composeCentreMonthlySnapshot(
   }));
   const punya_total = punya_by_feature.reduce((s, r) => s + r.points, 0);
 
-  // Per-batch: AT5 FILTER arithmetic in SQL (same as attendance_percentage_for_centres).
-  const batchAttResult = await db.execute(sql`
-    select
-      b.id as batch_id,
-      b.name as batch_name,
-      (
+  // Every active batch (including those with no marks yet — null rate, not dropped).
+  // Rates come from AT5 SRFs; LEFT JOIN semantics via Map lookup (not inline arithmetic).
+  const batchMeta = await db
+    .select({
+      batch_id: batches.id,
+      batch_name: batches.name,
+      student_count: sql<number>`(
         select count(*)::int
         from students st2
-        where st2.batch_id = b.id
+        where st2.batch_id = ${batches.id}
           and st2.status = 'active'
           and st2.deleted_at is null
-      ) as student_count,
-      (
-        count(*) filter (where a.status in ('present', 'late'))::numeric
-        / nullif(count(*) filter (where a.status in ('present', 'late', 'absent')), 0)
-      ) as attendance_rate
-    from batches b
-    left join sessions s
-      on s.batch_id = b.id
-      and s.status <> 'cancelled'
-      and s.scheduled_date >= ${from}::date
-      and s.scheduled_date <= ${to}::date
-    left join attendance a on a.session_id = s.id
-    left join students st on st.id = a.student_id
-      and (
-        st.deactivated_at is null
-        or s.scheduled_date < ((st.deactivated_at at time zone 'Asia/Kolkata')::date)
-      )
-    where b.centre_id = ${centreId}::uuid
-      and b.deleted_at is null
-    group by b.id, b.name
-    order by b.name
-  `);
-  const batchAttRows =
-    (
-      batchAttResult as unknown as {
-        rows?: Array<{
-          batch_id: string;
-          batch_name: string;
-          student_count: number;
-          attendance_rate: string | number | null;
-        }>;
-      }
-    ).rows ?? [];
+      )`,
+    })
+    .from(batches)
+    .where(and(eq(batches.centre_id, centreId), isNull(batches.deleted_at)))
+    .orderBy(asc(batches.name));
 
-  const batchHwResult = await db.execute(sql`
-    select
-      b.id as batch_id,
-      (
-        count(*) filter (
-          where hs.status in (
-            'submitted', 'late', 'acknowledged', 'approved', 'starred', 'returned'
-          )
-        )::numeric
-        / nullif(count(*) filter (where hs.id is not null), 0)
-      ) as homework_rate
-    from batches b
-    left join homework_assignments ha
-      on ha.batch_id = b.id
-      and ha.deleted_at is null
-      and ha.due_date >= ${from}::date
-      and ha.due_date <= ${to}::date
-    left join homework_submissions hs on hs.assignment_id = ha.id
-    left join students st on st.id = hs.student_id
-      and (
-        st.deactivated_at is null
-        or ha.due_date < ((st.deactivated_at at time zone 'Asia/Kolkata')::date)
-      )
-    where b.centre_id = ${centreId}::uuid
-      and b.deleted_at is null
-    group by b.id
-  `);
-  const hwByBatch = new Map<string, number | null>();
-  for (const r of (
-    batchHwResult as unknown as {
-      rows?: Array<{ batch_id: string; homework_rate: string | number | null }>;
-    }
-  ).rows ?? []) {
-    const n = r.homework_rate == null ? null : Number(r.homework_rate);
-    hwByBatch.set(String(r.batch_id), n != null && Number.isFinite(n) ? n : null);
-  }
+  const [attByBatch, hwByBatch] = await Promise.all([
+    getBatchAttendanceRates(centreId, from, to),
+    getBatchHomeworkCompletionRates(centreId, from, to),
+  ]);
 
-  const batchRows: BatchReportRow[] = batchAttRows.map((r) => {
-    const ar = r.attendance_rate == null ? null : Number(r.attendance_rate);
-    const attendance_rate = ar != null && Number.isFinite(ar) ? ar : null;
-    const homework_rate = hwByBatch.get(String(r.batch_id)) ?? null;
+  const batchRows: BatchReportRow[] = batchMeta.map((r) => {
+    const attendance_rate = attByBatch.get(r.batch_id) ?? null;
+    const homework_rate = hwByBatch.get(r.batch_id) ?? null;
     return {
-      batch_id: String(r.batch_id),
-      batch_name: String(r.batch_name),
+      batch_id: r.batch_id,
+      batch_name: r.batch_name,
       student_count: Number(r.student_count ?? 0),
       attendance_rate,
       attendance_pct: pctOrNull(attendance_rate),

@@ -40,6 +40,8 @@ export interface SessionUser {
   state_id?: string | null;
   city_id?: string | null;
   photo_url?: string | null;
+  /** Q6 — present on API SessionUser; web admin does not edit this today. */
+  gallery_visibility_opt_in?: boolean;
 }
 
 export interface AuthTokens {

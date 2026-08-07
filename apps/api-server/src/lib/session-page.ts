@@ -2,8 +2,9 @@
  * Page sessions first, then LATERAL aggregate counts for that page only.
  * Avoids GROUP BY … ORDER BY … LIMIT over the full sessions × attendance product.
  */
-import { db, sessions, batches, centres } from "@workspace/db";
+import { db, sessions, batches, centres, users } from "@workspace/db";
 import { and, desc, eq, gte, lt, or, sql, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const DEFAULT_WINDOW_DAYS = 180;
@@ -64,6 +65,8 @@ export type PagedSessionRow = {
   duration_minutes?: number | null;
   auto_checked_out?: boolean;
   has_gps?: boolean;
+  conducted_by?: string | null;
+  conducted_by_name?: string | null;
   present_count: number;
   total_count: number;
 };
@@ -118,6 +121,8 @@ export async function pageSessionsWithAttendanceCounts(opts: {
     centre_id: batches.centre_id,
   };
 
+  const conductor = alias(users, "session_conductor");
+
   const todaySelect = opts.forToday
     ? {
         ...baseSelect,
@@ -133,11 +138,15 @@ export async function pageSessionsWithAttendanceCounts(opts: {
         check_out_distance_m: sessions.check_out_distance_m,
         duration_minutes: sessions.duration_minutes,
         auto_checked_out: sessions.auto_checked_out,
+        conducted_by: sessions.conducted_by,
+        conducted_by_name: conductor.full_name,
         has_gps: sql<boolean>`(${centres.lat} is not null and ${centres.lng} is not null)`,
       }
     : {
         ...baseSelect,
         gps_required: sessions.gps_required,
+        conducted_by: sessions.conducted_by,
+        conducted_by_name: conductor.full_name,
       };
 
   const pageRows = await db
@@ -145,6 +154,7 @@ export async function pageSessionsWithAttendanceCounts(opts: {
     .from(sessions)
     .innerJoin(batches, eq(batches.id, sessions.batch_id))
     .innerJoin(centres, eq(centres.id, batches.centre_id))
+    .leftJoin(conductor, eq(conductor.id, sessions.conducted_by))
     .where(and(...filters))
     .orderBy(
       desc(sessions.scheduled_date),
@@ -191,9 +201,19 @@ export async function pageSessionsWithAttendanceCounts(opts: {
 
   const items: PagedSessionRow[] = page.map((r) => {
     const c = countById.get(r.id) ?? { present_count: 0, total_count: 0 };
+    const row = r as typeof r & {
+      check_in_at?: Date | null;
+      check_out_at?: Date | null;
+      conducted_by?: string | null;
+      conducted_by_name?: string | null;
+    };
     return {
-      ...r,
-      session_date: String(r.session_date),
+      ...row,
+      session_date: String(row.session_date),
+      check_in_at: row.check_in_at ?? null,
+      check_out_at: row.check_out_at ?? null,
+      conducted_by: row.conducted_by ?? null,
+      conducted_by_name: row.conducted_by_name ?? null,
       present_count: c.present_count,
       total_count: c.total_count,
     };

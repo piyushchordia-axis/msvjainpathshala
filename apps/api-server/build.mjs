@@ -3,12 +3,33 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build as esbuild } from "esbuild";
 import esbuildPluginPino from "esbuild-plugin-pino";
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
 
 // Plugins (e.g. 'esbuild-plugin-pino') may use `require` to resolve dependencies
 globalThis.require = createRequire(import.meta.url);
 
 const artifactDir = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Inline .ttf as Uint8Array via Buffer.from(base64). Prefer this over
+ * esbuild's `loader: { ".ttf": "binary" }`, which emits Uint8Array.fromBase64
+ * unless target is set carefully — that API is missing on Node 22–24 (Docker
+ * and many local installs), so bilingual PDF boot would throw at import time.
+ */
+function ttfBinaryPlugin() {
+  return {
+    name: "ttf-binary",
+    setup(build) {
+      build.onLoad({ filter: /\.ttf$/ }, async (args) => {
+        const b64 = (await readFile(args.path)).toString("base64");
+        return {
+          contents: `export default new Uint8Array(Buffer.from(${JSON.stringify(b64)}, "base64"));`,
+          loader: "js",
+        };
+      });
+    },
+  };
+}
 
 async function buildAll() {
   const distDir = path.resolve(artifactDir, "dist");
@@ -20,6 +41,8 @@ async function buildAll() {
       path.resolve(artifactDir, "src/worker.ts"),
     ],
     platform: "node",
+    // Match Dockerfile node:22 — keeps feature transforms honest for Node APIs.
+    target: "node22",
     bundle: true,
     format: "esm",
     outdir: distDir,
@@ -106,6 +129,7 @@ async function buildAll() {
     ],
     sourcemap: "linked",
     plugins: [
+      ttfBinaryPlugin(),
       // pino relies on workers to handle logging, instead of externalizing it we use a plugin to handle it
       esbuildPluginPino({ transports: ["pino-pretty"] })
     ],

@@ -22,10 +22,11 @@ import {
   punya_transactions,
   niyams,
   niyam_submissions,
+  niyam_submission_media,
   niyam_streaks,
   niyam_badges,
 } from "@workspace/db";
-import { and, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
@@ -43,6 +44,7 @@ import { clampLimit, ownedStudentId } from "../../lib/route-helpers";
 import { studentCanAccessNiyam } from "../../lib/niyam-audience";
 import { toSessionUser } from "../../lib/session-user";
 import { invalidateAuthUserCache } from "../../lib/auth-user-cache";
+import { galleryVisibilityBodySchema } from "@workspace/api-zod";
 
 const router: IRouter = Router();
 
@@ -115,6 +117,59 @@ router.put("/photo", async (req: Request, res: Response) => {
   ok(res, { user: toSessionUser(updated!) });
 });
 
+/**
+ * PATCH /v1/me/gallery-visibility — Q6 blanket parent consent.
+ * Sets users.gallery_visibility_opt_in only. Visibility is resolved at query
+ * time in GET /v1/gallery — no per-item backfill.
+ */
+router.patch("/gallery-visibility", async (req: Request, res: Response) => {
+  const parsed = galleryVisibilityBodySchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    fail(
+      res,
+      422,
+      "ERR_VALIDATION_FAILED",
+      "opt_in must be a boolean — send { opt_in: true } or { opt_in: false }.",
+    );
+    return;
+  }
+
+  const uid = req.authUser!.id;
+  const [row] = await db
+    .select()
+    .from(users)
+    .where(and(eq(users.id, uid), isNull(users.deleted_at)))
+    .limit(1);
+  if (!row) {
+    fail(res, 404, "ERR_NOT_FOUND", "User not found.");
+    return;
+  }
+
+  const optIn = parsed.data.opt_in;
+  const [updated] = await db
+    .update(users)
+    .set({ gallery_visibility_opt_in: optIn, updated_at: new Date() })
+    .where(eq(users.id, uid))
+    .returning();
+
+  await invalidateAuthUserCache(uid);
+
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "user",
+    entityId: uid,
+    summary: optIn
+      ? "Gallery visibility opted in (blanket — all children)."
+      : "Gallery visibility opted out (blanket — all children).",
+    metadata: { gallery_visibility_opt_in: optIn },
+  });
+
+  ok(res, {
+    gallery_visibility_opt_in: optIn,
+    user: toSessionUser(updated!),
+  });
+});
+
 /* GET /v1/me/children — students owned by the caller (parent: kids; student: self) */
 router.get("/children", async (req: Request, res: Response) => {
   const uid = req.authUser!.id;
@@ -124,6 +179,7 @@ router.get("/children", async (req: Request, res: Response) => {
       full_name: students.full_name,
       student_code: students.student_code,
       age_group: students.age_group,
+      centre_id: students.centre_id,
       centre_name: centres.name,
       batch_name: batches.name,
       msv_status: students.msv_status,
@@ -284,7 +340,7 @@ router.get("/students/:id/punya", async (req: Request, res: Response) => {
   });
 });
 
-/* GET /v1/me/students/:id/niyams — recent niyam submissions */
+/* GET /v1/me/students/:id/niyams — recent niyam submissions (with signed proof) */
 router.get("/students/:id/niyams", async (req: Request, res: Response) => {
   const id = String(req.params.id);
   if (!UUID_RE.test(id) || !(await ownedStudentId(req, id))) {
@@ -302,6 +358,9 @@ router.get("/students/:id/niyams", async (req: Request, res: Response) => {
       status: niyam_submissions.status,
       points_awarded: niyam_submissions.points_awarded,
       is_featured: niyam_submissions.is_featured,
+      notes: niyam_submissions.notes,
+      rejection_reason: niyam_submissions.rejection_reason,
+      proof_url: niyam_submissions.proof_url,
     })
     .from(niyam_submissions)
     .innerJoin(niyams, eq(niyams.id, niyam_submissions.niyam_id))
@@ -309,7 +368,53 @@ router.get("/students/:id/niyams", async (req: Request, res: Response) => {
     .orderBy(desc(niyam_submissions.submission_date))
     .limit(limit);
 
-  ok(res, { items: rows }, { count: rows.length });
+  // Same batched media shape as GET /v1/niyam-submissions/pending — no N+1.
+  const ids = rows.map((r) => r.id);
+  const mediaAll = ids.length
+    ? await db
+        .select({
+          id: niyam_submission_media.id,
+          submission_id: niyam_submission_media.submission_id,
+          url: niyam_submission_media.url,
+          kind: niyam_submission_media.kind,
+          mime: niyam_submission_media.mime,
+          size_bytes: niyam_submission_media.size_bytes,
+          ordinal: niyam_submission_media.ordinal,
+        })
+        .from(niyam_submission_media)
+        .where(inArray(niyam_submission_media.submission_id, ids))
+        .orderBy(asc(niyam_submission_media.ordinal))
+    : [];
+  const bySub = new Map<string, typeof mediaAll>();
+  for (const m of mediaAll) {
+    const list = bySub.get(m.submission_id) ?? [];
+    list.push(m);
+    bySub.set(m.submission_id, list);
+  }
+
+  const items = rows.map((r) => ({
+    id: r.id,
+    niyam_title_en: r.niyam_title_en,
+    niyam_title_hi: r.niyam_title_hi,
+    niyam_type: r.niyam_type,
+    submission_date: r.submission_date,
+    status: r.status,
+    points_awarded: r.points_awarded,
+    is_featured: r.is_featured,
+    notes: r.notes,
+    rejection_reason: r.rejection_reason,
+    proof_url: signUploadUrl(r.proof_url),
+    media: (bySub.get(r.id) ?? []).map((m) => ({
+      id: m.id,
+      url: signUploadUrl(m.url),
+      kind: m.kind,
+      mime: m.mime,
+      size_bytes: m.size_bytes,
+      ordinal: m.ordinal,
+    })),
+  }));
+
+  ok(res, { items }, { count: items.length });
 });
 
 /* GET /v1/me/niyam-catalog?student_id= — active niyams visible to this student */

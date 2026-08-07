@@ -1,5 +1,7 @@
 import { useRouter } from "expo-router";
-import { View } from "react-native";
+import { useState } from "react";
+import { Alert, Switch, View } from "react-native";
+import { t } from "@workspace/i18n";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -9,6 +11,8 @@ import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { DeleteAccountButton } from "@/components/DeleteAccountButton";
 import { StudentPhotoEditor } from "@/components/StudentPhotoEditor";
 import { UserPhotoEditor } from "@/components/UserPhotoEditor";
+import { apiPatch, ApiError } from "@/lib/api";
+import type { SessionUser } from "@/lib/auth";
 import { Body, Button, Card, Kicker, Pill, Row, Screen, Title } from "@/components/ui";
 
 const ROLE_LABELS: Record<string, { en: string; hi: string }> = {
@@ -24,16 +28,41 @@ const ROLE_LABELS: Record<string, { en: string; hi: string }> = {
 
 export default function ParentProfile() {
   const c = useColors();
-  const { hi } = useLocale();
-  const { user, logout } = useAuth();
+  const { hi, locale } = useLocale();
+  const { user, logout, updateUser } = useAuth();
   const router = useRouter();
   const { activeStudentId, activeChild } = useSessionView();
+  const [galleryBusy, setGalleryBusy] = useState(false);
+  const galleryOptIn = user?.gallery_visibility_opt_in === true;
 
   const roleLabel = user
     ? hi
       ? ROLE_LABELS[user.role]?.hi ?? user.role
       : ROLE_LABELS[user.role]?.en ?? user.role
     : "";
+
+  async function setGalleryVisibility(optIn: boolean) {
+    if (!user || galleryBusy) return;
+    setGalleryBusy(true);
+    try {
+      const res = await apiPatch<{
+        gallery_visibility_opt_in: boolean;
+        user: SessionUser;
+      }>("/v1/me/gallery-visibility", { opt_in: optIn });
+      await updateUser(res.user);
+    } catch (err) {
+      Alert.alert(
+        hi ? "सहमति सहेजी नहीं गई" : "Could not save",
+        err instanceof ApiError
+          ? err.message
+          : hi
+            ? "कृपया पुनः प्रयास करें।"
+            : "Please try again.",
+      );
+    } finally {
+      setGalleryBusy(false);
+    }
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
@@ -96,13 +125,34 @@ export default function ParentProfile() {
         <Card>
           <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
             <View style={{ flex: 1, paddingRight: 12 }}>
-              <Title style={{ fontSize: 16 }}>{hi ? "सहायता" : "Support"}</Title>
+              <Title style={{ fontSize: 16 }}>
+                {hi ? "गैलरी में दिखाएँ" : "Gallery visibility"}
+              </Title>
+              <Body muted style={{ marginTop: 4, fontSize: 13, lineHeight: 20 }}>
+                {hi
+                  ? "अपने बच्चों की स्वीकृत फ़ोटो पुण्य दीवार और सार्वजनिक साइट पर दिखाने की अनुमति दें। आप कभी भी बंद कर सकते हैं — फ़ोटो तुरंत गायब हो जाती हैं।"
+                  : "Allow your children's approved photos to appear on the Punya Wall and the public site. You can turn this off at any time — photos disappear immediately."}
+              </Body>
+            </View>
+            <Switch
+              value={galleryOptIn}
+              disabled={galleryBusy || !user}
+              onValueChange={(v) => void setGalleryVisibility(v)}
+              trackColor={{ true: c.primary, false: c.border }}
+            />
+          </Row>
+        </Card>
+
+        <Card>
+          <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Title style={{ fontSize: 16 }}>{t("requests.myTitle", locale)}</Title>
               <Body muted style={{ marginTop: 4, fontSize: 13 }}>
-                {hi ? "सेवा अनुरोध भेजें" : "Send a service request"}
+                {t("requests.profileHint", locale)}
               </Body>
             </View>
             <Button
-              label={hi ? "खोलें" : "Open"}
+              label={t("requests.open", locale)}
               variant="outline"
               icon="chatbubbles-outline"
               onPress={() => router.push("/service-requests")}

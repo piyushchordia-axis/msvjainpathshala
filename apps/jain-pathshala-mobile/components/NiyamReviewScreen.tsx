@@ -15,14 +15,19 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Image as ExpoImage } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
-import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
+import {
+  firstProofPreview,
+  ImageViewerModal,
+  openProofExternally,
+  ProofThumb,
+  type NiyamProofKind,
+} from "@/components/NiyamProof";
 import {
   useAdminBatches,
   useApproveNiyam,
@@ -50,102 +55,6 @@ const NIYAM_TYPES: Array<{ key: string | null; en: string; hi: string }> = [
   { key: "weekly", en: "Weekly", hi: "साप्ताहिक" },
   { key: "monthly", en: "Monthly", hi: "मासिक" },
 ];
-
-function firstPhotoUrl(row: PendingNiyamRow): string | null {
-  const fromMedia = row.media?.find((m) => m.kind === "photo" && m.url)?.url;
-  return fromMedia ?? row.proof_url ?? null;
-}
-
-function ProofThumb({
-  uri,
-  onPress,
-}: {
-  uri: string | null;
-  onPress: () => void;
-}) {
-  const c = useColors();
-  return (
-    <Pressable
-      onPress={onPress}
-      disabled={!uri}
-      style={{
-        width: 56,
-        height: 56,
-        borderRadius: c.radius,
-        overflow: "hidden",
-        backgroundColor: c.muted,
-        alignItems: "center",
-        justifyContent: "center",
-      }}
-    >
-      {uri ? (
-        <ExpoImage source={{ uri }} style={{ width: 56, height: 56 }} contentFit="cover" />
-      ) : (
-        <Ionicons name="image-outline" size={22} color={c.mutedForeground} />
-      )}
-    </Pressable>
-  );
-}
-
-function ImageViewerModal({
-  uri,
-  open,
-  onClose,
-}: {
-  uri: string | null;
-  open: boolean;
-  onClose: () => void;
-}) {
-  const c = useColors();
-  const { hi } = useLocale();
-  const scale = useSharedValue(1);
-  const savedScale = useSharedValue(1);
-
-  useEffect(() => {
-    if (open) {
-      scale.value = 1;
-      savedScale.value = 1;
-    }
-  }, [open, scale, savedScale]);
-
-  const pinch = Gesture.Pinch()
-    .onUpdate((e) => {
-      scale.value = Math.min(4, Math.max(1, savedScale.value * e.scale));
-    })
-    .onEnd(() => {
-      savedScale.value = scale.value;
-      if (scale.value < 1) {
-        scale.value = withTiming(1);
-        savedScale.value = 1;
-      }
-    });
-
-  const animStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
-  }));
-
-  return (
-    <Modal visible={open && !!uri} animationType="fade" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: c.foreground }}>
-        <Pressable
-          onPress={onClose}
-          style={{ position: "absolute", top: 48, right: 20, zIndex: 2, padding: 8 }}
-        >
-          <Text style={{ color: c.cream, fontSize: 16, fontFamily: bodyFamily(hi, "semibold") }}>
-            {hi ? "बंद करें" : "Close"}
-          </Text>
-        </Pressable>
-        {uri ? (
-          <GestureDetector gesture={pinch}>
-            <Animated.View style={[{ flex: 1, justifyContent: "center" }, animStyle]}>
-              <ExpoImage source={{ uri }} style={{ width: "100%", height: "100%" }} contentFit="contain" />
-            </Animated.View>
-          </GestureDetector>
-        ) : null}
-      </View>
-    </Modal>
-  );
-}
 
 function RejectSheet({
   open,
@@ -308,9 +217,15 @@ function ReviewRow({
   const c = useColors();
   const { hi } = useLocale();
   const title = hi ? row.niyam_title_hi || row.niyam_title_en : row.niyam_title_en;
-  const photo = firstPhotoUrl(row);
+  const preview = firstProofPreview(row);
   const canReject = row.can_reject !== false;
   const canDecide = row.can_decide !== false;
+
+  function openProof(uri: string | null, kind: NiyamProofKind | null) {
+    if (!uri) return;
+    if (kind === "photo") onOpenImage(uri);
+    else void openProofExternally(uri);
+  }
 
   return (
     <Pressable
@@ -328,10 +243,9 @@ function ReviewRow({
     >
       <Row style={{ alignItems: "center", gap: 10 }}>
         <ProofThumb
-          uri={photo}
-          onPress={() => {
-            if (photo) onOpenImage(photo);
-          }}
+          uri={preview.uri}
+          kind={preview.kind}
+          onPress={() => openProof(preview.uri, preview.kind)}
         />
         <View style={{ flex: 1, minWidth: 0 }}>
           <Body
@@ -389,35 +303,31 @@ function ReviewRow({
           {row.media?.length ? (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginVertical: 4 }}>
               <Row style={{ gap: 8 }}>
-                {row.media.map((m) =>
-                  m.kind === "photo" && m.url ? (
-                    <Pressable key={m.id} onPress={() => onOpenImage(m.url)}>
-                      <ExpoImage
-                        source={{ uri: m.url }}
-                        style={{ width: 72, height: 72, borderRadius: c.radius }}
-                        contentFit="cover"
-                      />
-                    </Pressable>
-                  ) : (
-                    <View
+                {row.media.map((m) => {
+                  const kind = (m.kind === "video" || m.kind === "audio" || m.kind === "photo"
+                    ? m.kind
+                    : "photo") as NiyamProofKind;
+                  if (kind === "photo" && m.url) {
+                    return (
+                      <Pressable key={m.id} onPress={() => onOpenImage(m.url!)}>
+                        <ExpoImage
+                          source={{ uri: m.url }}
+                          style={{ width: 72, height: 72, borderRadius: c.radius }}
+                          contentFit="cover"
+                        />
+                      </Pressable>
+                    );
+                  }
+                  return (
+                    <ProofThumb
                       key={m.id}
-                      style={{
-                        width: 72,
-                        height: 72,
-                        borderRadius: c.radius,
-                        backgroundColor: c.muted,
-                        alignItems: "center",
-                        justifyContent: "center",
-                      }}
-                    >
-                      <Ionicons
-                        name={m.kind === "video" ? "videocam-outline" : "musical-notes-outline"}
-                        size={22}
-                        color={c.mutedForeground}
-                      />
-                    </View>
-                  ),
-                )}
+                      uri={m.url ?? null}
+                      kind={kind}
+                      size={72}
+                      onPress={() => openProof(m.url ?? null, kind)}
+                    />
+                  );
+                })}
               </Row>
             </ScrollView>
           ) : null}

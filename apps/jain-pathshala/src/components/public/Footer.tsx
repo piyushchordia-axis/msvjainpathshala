@@ -1,8 +1,10 @@
 import { Link } from 'wouter';
+import { t } from '@workspace/i18n';
 import { useLocale } from '@/lib/locale-context';
 
 export function Footer() {
-  const hi = useLocale() === 'hi';
+  const locale = useLocale();
+  const hi = locale === 'hi';
   return (
     <footer className="mt-24 border-t border-border bg-muted/30">
       <div className="container flex flex-col gap-6 py-12 md:flex-row md:items-start md:justify-between">
@@ -20,7 +22,7 @@ export function Footer() {
           <Link className="text-muted-foreground hover:text-foreground" href="/contact">{hi ? 'संपर्क' : 'Contact'}</Link>
           <Link className="text-muted-foreground hover:text-foreground" href="/donate">{hi ? 'दान करें' : 'Donate'}</Link>
           <Link className="text-muted-foreground hover:text-foreground" href="/enquire">{hi ? 'पूछताछ' : 'Enquire'}</Link>
-          <Link className="text-muted-foreground hover:text-foreground" href="/my-requests">{hi ? 'मेरे अनुरोध' : 'My requests'}</Link>
+          <Link className="text-muted-foreground hover:text-foreground" href="/my-requests">{t('requests.myTitle', locale)}</Link>
           <Link className="text-muted-foreground hover:text-foreground" href="/admin/login">{hi ? 'एडमिन' : 'Admin'}</Link>
         </nav>
       </div>

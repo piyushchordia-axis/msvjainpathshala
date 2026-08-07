@@ -236,8 +236,15 @@ export const sessionUserSchema = z.object({
   state_id: z.string().nullable().optional(),
   city_id: z.string().nullable().optional(),
   photo_url: z.string().nullable().optional(),
+  /** Q6 — blanket parent consent for children's gallery items on public surfaces. */
+  gallery_visibility_opt_in: z.boolean(),
 });
 export type SessionUser = z.infer<typeof sessionUserSchema>;
+
+export const galleryVisibilityBodySchema = z.object({
+  opt_in: z.boolean(),
+});
+export type GalleryVisibilityBody = z.infer<typeof galleryVisibilityBodySchema>;
 
 export const authTokensSchema = z.object({
   access_token: z.string(),
@@ -261,6 +268,7 @@ export const overviewSchema = z.object({
   active_students: z.number(),
   centres: z.number(),
   open_service_requests: z.number(),
+  pending_enrolments: z.number(),
   attendance_rate_30d: z.number(),
   punya_awarded_30d: z.number(),
   msv_active: z.number(),
@@ -475,6 +483,41 @@ export const noticeItemSchema = z.object({
 });
 export type NoticeItem = z.infer<typeof noticeItemSchema>;
 
+/** Shared write body for POST/PATCH /v1/notices/admin (and any legacy admin create). */
+export const noticeWriteSchema = z
+  .object({
+    title_en: z.string().min(1).max(300),
+    title_hi: z.string().max(300).optional(),
+    content_en: z.string().max(8000).optional(),
+    content_hi: z.string().max(8000).optional(),
+    audience: z.enum(["batch", "centre", "city", "state", "national", "msv"]),
+    state_id: z.string().uuid().optional(),
+    city_id: z.string().uuid().optional(),
+    centre_id: z.string().uuid().optional(),
+    batch_id: z.string().uuid().optional(),
+    is_public: z.boolean().optional(),
+    pinned: z.boolean().optional(),
+    is_critical: z.boolean().optional(),
+    expires_at: z.string().datetime().nullable().optional(),
+    publish_at: z.string().datetime().nullable().optional(),
+    publish_now: z.boolean().optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.audience === "state" && !v.state_id) {
+      ctx.addIssue({ code: "custom", message: "state_id required for state audience", path: ["state_id"] });
+    }
+    if (v.audience === "city" && !v.city_id) {
+      ctx.addIssue({ code: "custom", message: "city_id required for city audience", path: ["city_id"] });
+    }
+    if (v.audience === "centre" && !v.centre_id) {
+      ctx.addIssue({ code: "custom", message: "centre_id required for centre audience", path: ["centre_id"] });
+    }
+    if (v.audience === "batch" && !v.batch_id) {
+      ctx.addIssue({ code: "custom", message: "batch_id required for batch audience", path: ["batch_id"] });
+    }
+  });
+export type NoticeWrite = z.infer<typeof noticeWriteSchema>;
+
 export const libraryItemSchema = z.object({
   id: z.string(),
   content_type: libraryContentTypeSchema,
@@ -510,6 +553,7 @@ export const childRowSchema = z.object({
   full_name: z.string(),
   student_code: z.string(),
   age_group: z.string(),
+  centre_id: z.string().uuid().nullable().optional(),
   centre_name: z.string().nullable(),
   batch_name: z.string().nullable(),
   msv_status: z.string(),
@@ -539,6 +583,20 @@ export const studentAttendancePayloadSchema = z.object({
 });
 export type StudentAttendancePayload = z.infer<typeof studentAttendancePayloadSchema>;
 
+export const absenceNotificationRowSchema = z.object({
+  id: z.string().uuid(),
+  start_date: z.string(),
+  end_date: z.string(),
+  reason: z.string().nullable(),
+  resolved_at: z.string().nullable().optional(),
+});
+export type AbsenceNotificationRow = z.infer<typeof absenceNotificationRowSchema>;
+
+export const studentAbsencesPayloadSchema = z.object({
+  items: z.array(absenceNotificationRowSchema),
+});
+export type StudentAbsencesPayload = z.infer<typeof studentAbsencesPayloadSchema>;
+
 export const createSessionBodySchema = z.object({
   batch_id: z.string().uuid(),
   /** API field name kept as session_date; persists as sessions.scheduled_date. */
@@ -565,6 +623,16 @@ export const punyaSummarySchema = z.object({
 });
 export type PunyaSummary = z.infer<typeof punyaSummarySchema>;
 
+export const niyamSubmissionMediaSchema = z.object({
+  id: z.string(),
+  url: z.string().nullable(),
+  kind: z.string(),
+  mime: z.string().nullable().optional(),
+  size_bytes: z.number().nullable().optional(),
+  ordinal: z.number().optional(),
+});
+export type NiyamSubmissionMedia = z.infer<typeof niyamSubmissionMediaSchema>;
+
 export const niyamSubmissionRowSchema = z.object({
   id: z.string(),
   niyam_title_en: z.string(),
@@ -574,6 +642,10 @@ export const niyamSubmissionRowSchema = z.object({
   status: z.string(),
   points_awarded: z.number(),
   is_featured: z.boolean(),
+  notes: z.string().nullable().optional(),
+  rejection_reason: z.string().nullable().optional(),
+  proof_url: z.string().nullable().optional(),
+  media: z.array(niyamSubmissionMediaSchema).optional(),
 });
 export type NiyamSubmissionRow = z.infer<typeof niyamSubmissionRowSchema>;
 

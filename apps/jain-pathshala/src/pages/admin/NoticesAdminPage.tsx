@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Plus, Megaphone, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Megaphone, Pencil, Trash2, Loader2 } from 'lucide-react';
 import { apiGet, apiPost, del, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
@@ -15,6 +15,8 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+
+const MACHINE_TRANSLATION_HINT = 'Machine translation — please check before publishing.';
 
 type Audience = 'batch' | 'centre' | 'city' | 'state' | 'national' | 'msv';
 
@@ -35,6 +37,8 @@ interface NoticeRow {
   pinned: boolean;
   is_critical: boolean;
   published_at: string | null;
+  expires_at: string | null;
+  is_expired: boolean;
   created_at: string;
 }
 
@@ -62,6 +66,27 @@ function fmtDate(iso: string | null): string {
   return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString('en-GB');
 }
 
+/** ISO → YYYY-MM-DD for `<input type="date">` in Asia/Kolkata. */
+function isoToEndsOn(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(d);
+}
+
+/** YYYY-MM-DD → end-of-day IST ISO for expires_at. */
+function endsOnToIso(date: string): string | null {
+  const trimmed = date.trim();
+  if (!trimmed) return null;
+  const d = new Date(`${trimmed}T23:59:59.999+05:30`);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
 interface FormState {
   title_en: string;
   title_hi: string;
@@ -75,13 +100,14 @@ interface FormState {
   is_public: boolean;
   pinned: boolean;
   is_critical: boolean;
+  ends_on: string;
 }
 
 function emptyForm(): FormState {
   return {
     title_en: '', title_hi: '', content_en: '', content_hi: '',
     audience: 'national', state_id: '', city_id: '', centre_id: '', batch_id: '',
-    is_public: true, pinned: false, is_critical: false,
+    is_public: true, pinned: false, is_critical: false, ends_on: '',
   };
 }
 
@@ -99,6 +125,7 @@ function formFromRow(n: NoticeRow): FormState {
     is_public: n.is_public,
     pinned: n.pinned,
     is_critical: n.is_critical,
+    ends_on: isoToEndsOn(n.expires_at),
   };
 }
 
@@ -117,6 +144,7 @@ function toBody(f: FormState) {
     is_public: f.is_public,
     pinned: f.pinned,
     is_critical: f.is_critical,
+    expires_at: endsOnToIso(f.ends_on),
   };
 }
 
@@ -138,6 +166,10 @@ function NoticeForm({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<FormState>(initial ? formFromRow(initial) : emptyForm());
+  const [translateAvailable, setTranslateAvailable] = useState(false);
+  const [translating, setTranslating] = useState<'title' | 'content' | null>(null);
+  const [titleHiSuggested, setTitleHiSuggested] = useState(false);
+  const [contentHiSuggested, setContentHiSuggested] = useState(false);
 
   // Targeting option sources, loaded lazily when the dialog opens.
   const [centres, setCentres] = useState<CentreOption[]>([]);
@@ -148,16 +180,51 @@ function NoticeForm({
   useEffect(() => {
     if (!open) return;
     setForm(initial ? formFromRow(initial) : emptyForm());
+    setTitleHiSuggested(false);
+    setContentHiSuggested(false);
+    setTranslating(null);
     void apiGet<{ items: CentreOption[] }>('/v1/admin/centres').then((r) => setCentres(r?.items ?? [])).catch(() => {});
     void apiGet<{ items: BatchOption[] }>('/v1/admin/batches').then((r) => setBatches(r?.items ?? [])).catch(() => {});
     void apiGet<{ states: StateOption[]; cities: CityOption[] }>('/v1/admin/geography')
       .then((r) => { setStates(r?.states ?? []); setCities(r?.cities ?? []); })
       .catch(() => {});
+    void apiGet<{ available: boolean }>('/v1/translate')
+      .then((r) => setTranslateAvailable(r?.available === true))
+      .catch(() => setTranslateAvailable(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   function set<K extends keyof FormState>(key: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function translateField(field: 'title' | 'content') {
+    const source = field === 'title' ? form.title_en.trim() : form.content_en.trim();
+    if (!source || !translateAvailable || translating) return;
+    setTranslating(field);
+    try {
+      const res = await apiPost<{ text: string }>('/v1/translate', {
+        text: source,
+        target: 'hi',
+        context: 'notice',
+      });
+      const hi = res?.text?.trim() ?? '';
+      if (!hi) throw new Error('Empty translation');
+      if (field === 'title') {
+        set('title_hi', hi);
+        setTitleHiSuggested(true);
+      } else {
+        set('content_hi', hi);
+        setContentHiSuggested(true);
+      }
+    } catch (err) {
+      toast.error(
+        'Could not translate to Hindi.',
+        err instanceof ApiError ? err.message : undefined,
+      );
+    } finally {
+      setTranslating(null);
+    }
   }
 
   const canSubmit = form.title_en.trim().length > 0 && targetValid(form);
@@ -257,13 +324,68 @@ function NoticeForm({
             <Input value={form.title_en} onChange={(e) => set('title_en', e.target.value)} placeholder="e.g. Pathshala closed on Mahavir Jayanti" required />
           </FormRow>
           <FormRow label="Title (हिन्दी)">
-            <Input value={form.title_hi} onChange={(e) => set('title_hi', e.target.value)} placeholder="शीर्षक (वैकल्पिक)" />
+            <div className="flex items-start gap-2">
+              <Input
+                className="flex-1"
+                value={form.title_hi}
+                onChange={(e) => {
+                  set('title_hi', e.target.value);
+                  setTitleHiSuggested(false);
+                }}
+                placeholder="शीर्षक (वैकल्पिक)"
+              />
+              {translateAvailable ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0"
+                  disabled={!form.title_en.trim() || translating !== null}
+                  onClick={() => void translateField('title')}
+                >
+                  {translating === 'title' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                  ) : null}
+                  Translate to Hindi
+                </Button>
+              ) : null}
+            </div>
+            {titleHiSuggested ? (
+              <p className="text-xs text-muted-foreground">{MACHINE_TRANSLATION_HINT}</p>
+            ) : null}
           </FormRow>
           <FormRow label="Content (English)">
             <Textarea value={form.content_en} onChange={(e) => set('content_en', e.target.value)} rows={3} placeholder="Optional details" />
           </FormRow>
           <FormRow label="Content (हिन्दी)">
-            <Textarea value={form.content_hi} onChange={(e) => set('content_hi', e.target.value)} rows={3} placeholder="विवरण (वैकल्पिक)" />
+            <div className="space-y-2">
+              <Textarea
+                value={form.content_hi}
+                onChange={(e) => {
+                  set('content_hi', e.target.value);
+                  setContentHiSuggested(false);
+                }}
+                rows={3}
+                placeholder="विवरण (वैकल्पिक)"
+              />
+              {translateAvailable ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={!form.content_en.trim() || translating !== null}
+                  onClick={() => void translateField('content')}
+                >
+                  {translating === 'content' ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
+                  ) : null}
+                  Translate to Hindi
+                </Button>
+              ) : null}
+            </div>
+            {contentHiSuggested ? (
+              <p className="text-xs text-muted-foreground">{MACHINE_TRANSLATION_HINT}</p>
+            ) : null}
           </FormRow>
 
           <div className="space-y-2 rounded-md border border-border p-3">
@@ -280,6 +402,17 @@ function NoticeForm({
               Mark as important
             </label>
           </div>
+
+          <FormRow label="Ends on (optional)">
+            <Input
+              type="date"
+              value={form.ends_on}
+              onChange={(e) => set('ends_on', e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">
+              Leave blank to keep this notice up indefinitely.
+            </p>
+          </FormRow>
 
           <DialogFooter className="pt-2">
             <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
@@ -377,6 +510,7 @@ export default function NoticesAdminPage() {
               <span className="ml-2 inline-flex gap-1">
                 {n.pinned ? <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700">Pinned</span> : null}
                 {n.is_critical ? <span className="rounded bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-rose-700">Important</span> : null}
+                {n.is_expired ? <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">Expired</span> : null}
               </span>
               {n.title_hi ? <span className="block text-xs text-muted-foreground">{n.title_hi}</span> : null}
             </td>

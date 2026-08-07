@@ -133,8 +133,8 @@ Student view toggle via `POST /v1/auth/switch-view` is blocked if `students.dob`
 ### Q5 — Niyam rejection: 30-day window only
 A niyam submission can only be rejected within 30 days of submission. After 30 days, the reject button in admin UI is disabled AND the API returns `ERR_NIYAM_REVERSAL_WINDOW_EXPIRED` (409). On rejection: Punya is reversed, streak is recomputed, gallery item (if any) is hidden.
 
-### Q6 — Gallery opt-in: blanket, per parent
-`users.gallery_visibility_opt_in` is a **single toggle per parent** covering all their children. When toggled off, ALL existing gallery items from their children are hidden (backfill). When toggled on, all hidden-due-to-opt-out items are restored (backfill).
+### Q6 — Gallery opt-in: blanket, per parent (query-time; no backfill)
+`users.gallery_visibility_opt_in` is a **single toggle per parent** covering all their children. Parents set it via `PATCH /v1/me/gallery-visibility`. Consent is resolved at **query time** by the join in `GET /v1/gallery` (and admin `can_publish`) — toggling is instant and needs **no backfill**. Gallery rows are created for every approved submission regardless of opt-in; visibility is decided on read. Do not replace this with a write-time check or a per-item hide/restore job. (Older wording that described a backfill is stale; the shipped design is query-time — see `.cursor/rules/20-niyam-fix-pass.mdc` and SPEC.md § gallery consent.)
 
 ### Q7 — Library videos: embed URLs only
 Library items of `type='video_embed'` store a YouTube or Vimeo URL in `embed_url`. No video files are uploaded to S3/R2. Validate that the URL is a valid YouTube or Vimeo link on creation. The mobile and web apps render these as embedded iframes/WebViews.
@@ -318,7 +318,7 @@ Source of truth: `CRON_EXPRESSIONS` in `apps/jp-shared/src/constants.ts` (`@jp/s
 | `notifications.birthday` | `0 6 * * *` | queue | |
 | `notifications.push_receipts` | `*/30 * * * *` | queue | Expo receipt sweep / dead-token reap |
 | `niyam-streak-lapse` | `0 5 * * *` | schedule | Zero lapsed `current_streak` (not BullMQ) |
-| `notifications.monthly_reports` | `0 2 1 * *` (1st 02:00 IST) | schedule | Tick registered; report worker hooks later |
+| `notifications.monthly_reports` | `0 2 1 * *` (1st 02:00 IST) | queue | Fan-out: insert last-month `centre_monthly_reports` per active centre (UNIQUE centre+month) and enqueue `report.generation` |
 | `punya.leaderboard.refresh` | `*/5 * * * *` | queue | Monthly leaderboard snapshot |
 | `punya.reconcile` | `0 3 * * *` | queue | Balance rebuild from ledger |
 | `analytics.refresh_views` | `0 4 * * *` | queue | Materialised view refresh |
@@ -329,7 +329,7 @@ Source of truth: `CRON_EXPRESSIONS` in `apps/jp-shared/src/constants.ts` (`@jp/s
 | `exam.attempt_abandon` | `*/30 * * * *` | queue | Abandon `in_progress` after `window_end + 2h` |
 | `exam.top_score` | `15 3 * * *` | queue | Top-score Punya catch-up (primary path is enqueue on release) |
 
-Event-driven queue names that are **not** in `CRON_EXPRESSIONS` (still in `QUEUE_NAMES`): `attendance.post_process`, `notifications.parent`, `idcard.generation`, `report.generation`.
+Event-driven queue names that are **not** in `CRON_EXPRESSIONS` (still in `QUEUE_NAMES`): `attendance.post_process`, `notifications.parent`, `idcard.generation`, `report.generation` (also enqueued by `notifications.monthly_reports` and by admin POST).
 
 ---
 
@@ -478,7 +478,8 @@ exam.top_score                   idcard.generation                report.generat
 
 Notes:
 - `niyam-streak-lapse` is listed in `QUEUE_NAMES` for cron registration identity but is **not** a BullMQ queue (constants comment).
-- `attendance.post_process`, `notifications.parent`, `idcard.generation`, `report.generation` are event/enqueue-driven and have **no** `CRON_EXPRESSIONS` entry.
+- `attendance.post_process`, `notifications.parent`, `idcard.generation` are event/enqueue-driven and have **no** `CRON_EXPRESSIONS` entry.
+- `report.generation` is event/enqueue-driven (admin POST + fan-out from `notifications.monthly_reports`); it has **no** direct `CRON_EXPRESSIONS` entry.
 
 ### Scheduled jobs
 **Deleted as a separate list.** The single frozen cron table (matching `CRON_EXPRESSIONS`) lives under **"Cron table (frozen — single list)"** above. Do not maintain a second copy.

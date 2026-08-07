@@ -369,4 +369,84 @@ describe("notices", () => {
       await request(app).delete(`/v1/notices/admin/${id}`).set(auth(admin.token));
     }
   });
+
+  /* ───────────────────── scheduling: draft + expiry ───────────────────── */
+
+  it("hides expired notices from /public and /feed but keeps them on /admin with is_expired", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const mark = tag();
+
+    const publishedAt = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const expiresAt = new Date(Date.now() - 60 * 1000); // already expired
+
+    const id = await createNotice(admin.token, {
+      title_en: `EXPIRED ${mark}`,
+      audience: "national",
+      is_public: true,
+      publish_at: publishedAt.toISOString(),
+      expires_at: expiresAt.toISOString(),
+    });
+
+    const pub = await request(app).get("/v1/notices/public?limit=200");
+    expect(pub.status).toBe(200);
+    expect(pub.body.data.items.find((n: { id: string }) => n.id === id)).toBeUndefined();
+
+    const { items: feedItems } = await feed(parent.token);
+    expect(feedItems.find((n) => n.id === id)).toBeUndefined();
+
+    const adminList = await request(app).get("/v1/notices/admin?limit=300").set(auth(admin.token));
+    expect(adminList.status).toBe(200);
+    const listed = adminList.body.data.items.find((n: { id: string }) => n.id === id);
+    expect(listed).toBeTruthy();
+    expect(listed.is_expired).toBe(true);
+    expect(listed.expires_at).toBeTruthy();
+
+    await request(app).delete(`/v1/notices/admin/${id}`).set(auth(admin.token));
+  });
+
+  it("keeps publish_now:false drafts off /public", async () => {
+    const admin = await loginAs("super_admin");
+    const mark = tag();
+
+    const id = await createNotice(admin.token, {
+      title_en: `DRAFT ${mark}`,
+      audience: "national",
+      is_public: true,
+      publish_now: false,
+    });
+
+    const pub = await request(app).get("/v1/notices/public?limit=200");
+    expect(pub.status).toBe(200);
+    expect(pub.body.data.items.find((n: { id: string }) => n.id === id)).toBeUndefined();
+
+    // Still visible to admins (draft, not expired).
+    const adminList = await request(app).get("/v1/notices/admin?limit=300").set(auth(admin.token));
+    const listed = adminList.body.data.items.find((n: { id: string }) => n.id === id);
+    expect(listed).toBeTruthy();
+    expect(listed.published_at).toBeNull();
+    expect(listed.is_expired).toBe(false);
+
+    await request(app).delete(`/v1/notices/admin/${id}`).set(auth(admin.token));
+  });
+
+  it("rejects expires_at <= published_at with 400 ERR_VALIDATION_FAILED", async () => {
+    const admin = await loginAs("super_admin");
+    const publishedAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() - 60 * 1000).toISOString(); // before publish
+
+    const res = await request(app)
+      .post("/v1/notices/admin")
+      .set(auth(admin.token))
+      .send({
+        title_en: `BAD EXPIRY ${tag()}`,
+        audience: "national",
+        publish_at: publishedAt,
+        expires_at: expiresAt,
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("ERR_VALIDATION_FAILED");
+    expect(res.body.error.message).toMatch(/end date must be after the publish date/i);
+  });
 });

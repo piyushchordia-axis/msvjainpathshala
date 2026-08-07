@@ -1,7 +1,8 @@
 /**
  * Thin wrappers around the canonical PostgreSQL attendance_percentage functions (AT5).
  * Never re-implement the FILTER arithmetic in TypeScript — MVs and every surface
- * must share one implementation or the numbers drift.
+ * must share one implementation or the numbers drift. Per-batch callers must use
+ * getBatchAttendanceRates (attendance_rate_by_batch) rather than writing their own SQL.
  */
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
@@ -52,6 +53,37 @@ export async function getCentresAttendanceRate(
   `);
   const rows = (result as unknown as { rows?: Array<{ rate: string | number | null }> }).rows ?? [];
   return asRate(rows[0]?.rate);
+}
+
+/**
+ * Per-batch rates for a centre (AT5 SRF attendance_rate_by_batch).
+ * Only batches with countable attendance rows appear — callers that need every
+ * active batch should LEFT JOIN / look up into this map (null = no rate yet).
+ */
+export async function getBatchAttendanceRates(
+  centreId: string,
+  from?: string | null,
+  to?: string | null,
+): Promise<Map<string, number | null>> {
+  const result = await db.execute(sql`
+    select batch_id, attendance_rate
+    from attendance_rate_by_batch(
+      ${centreId}::uuid,
+      ${from ?? null}::date,
+      ${to ?? null}::date
+    )
+  `);
+  const rows =
+    (
+      result as unknown as {
+        rows?: Array<{ batch_id: string; attendance_rate: string | number | null }>;
+      }
+    ).rows ?? [];
+  const map = new Map<string, number | null>();
+  for (const r of rows) {
+    map.set(String(r.batch_id), asRate(r.attendance_rate));
+  }
+  return map;
 }
 
 /** Display helper: percent with one decimal (matches admin overview). */

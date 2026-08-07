@@ -73,6 +73,9 @@ export const ERROR_CODES = [
   "ERR_PAYMENT_NOT_CAPTURED",
   "ERR_SIGNATURE_INVALID",
   "ERR_SMS_UNAVAILABLE",
+  // Translation (notice composition assist)
+  "ERR_TRANSLATION_UNAVAILABLE",
+  "ERR_TRANSLATION_FAILED",
   // Manual Punya award limits
   "ERR_AWARD_LIMIT_EXCEEDED",
   "ERR_AWARD_DAILY_LIMIT_EXCEEDED",
@@ -148,6 +151,8 @@ export const ErrorCode = {
   PAYMENT_NOT_CAPTURED: "ERR_PAYMENT_NOT_CAPTURED",
   SIGNATURE_INVALID: "ERR_SIGNATURE_INVALID",
   SMS_UNAVAILABLE: "ERR_SMS_UNAVAILABLE",
+  TRANSLATION_UNAVAILABLE: "ERR_TRANSLATION_UNAVAILABLE",
+  TRANSLATION_FAILED: "ERR_TRANSLATION_FAILED",
   AWARD_LIMIT_EXCEEDED: "ERR_AWARD_LIMIT_EXCEEDED",
   AWARD_DAILY_LIMIT_EXCEEDED: "ERR_AWARD_DAILY_LIMIT_EXCEEDED",
   PUSH_TOKEN_CLAIMED: "ERR_PUSH_TOKEN_CLAIMED",
@@ -214,5 +219,13 @@ export const ERROR_MESSAGES = {
   ERR_PUSH_TOKEN_CLAIMED: {
     en: "That device is registered to another account — sign out on that device first.",
     hi: "यह डिवाइस किसी अन्य खाते से जुड़ा है — पहले उस डिवाइस पर साइन आउट करें।",
+  },
+  ERR_TRANSLATION_UNAVAILABLE: {
+    en: "Hindi translation is not configured on this server — ask an admin to set TRANSLATION_PROVIDER, or type the Hindi yourself.",
+    hi: "इस सर्वर पर हिंदी अनुवाद उपलब्ध नहीं है — एडमिन से TRANSLATION_PROVIDER सेट करवाएँ, या हिंदी स्वयं लिखें।",
+  },
+  ERR_TRANSLATION_FAILED: {
+    en: "The translation could not be used — check the English text and try again, or type the Hindi yourself.",
+    hi: "अनुवाद उपयोग नहीं हो सका — अंग्रेज़ी पाठ जाँचकर फिर कोशिश करें, या हिंदी स्वयं लिखें।",
   },
 } as const satisfies Partial<Record<ErrorCode, { en: string; hi: string }>>;

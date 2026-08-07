@@ -1309,11 +1309,12 @@ interface SessionRow {
   total_count: number;
 }
 
+/** Dead export — never routed; label kept consistent until cleanup deletes this page. */
 export function ServiceRequestsPage() {
   const { items, loading, error } = useAdminList<SessionRow>('/v1/admin/sessions?limit=50');
   return (
     <AdminPageShell
-      title="Service requests"
+      title="Requests"
       subtitle="Recent batch sessions — use Enrolments for pending approvals."
     >
       {error ? <AdminError message={error} /> : null}

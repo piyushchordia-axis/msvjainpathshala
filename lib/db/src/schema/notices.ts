@@ -25,6 +25,8 @@ export const notices = pgTable(
     pinned: boolean("pinned").notNull().default(false),
     is_critical: boolean("is_critical").notNull().default(false),
     published_at: timestamp("published_at", { withTimezone: true }),
+    // Nullable end of visibility. Null = standing announcement (never expires).
+    expires_at: timestamp("expires_at", { withTimezone: true }),
     created_by: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
     ...timestamps(),
   },

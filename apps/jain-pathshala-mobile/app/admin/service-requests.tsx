@@ -1,11 +1,12 @@
 /**
- * Sanchalak / admin service-request inbox — separate from the parent surface.
+ * Sanchalak / admin request inbox — separate from the parent surface.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Pressable, TextInput, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
+import { t, type Locale } from "@workspace/i18n";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -13,6 +14,10 @@ import { apiGet, apiPost, ApiError } from "@/lib/api";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+
+function tr(locale: Locale, key: string, vars?: Record<string, string | number>): string {
+  return t(`requests.${key}`, locale, vars);
+}
 
 const VIEWED_KEY = "jp.admin.sr.viewed";
 
@@ -65,10 +70,10 @@ function statusTone(status: RequestStatus): "success" | "warning" | "info" {
   return "warning";
 }
 
-function statusLabel(status: RequestStatus, hi: boolean): string {
-  if (status === "resolved") return hi ? "सुलझाया गया" : "Resolved";
-  if (status === "in_review") return hi ? "समीक्षाधीन" : "In review";
-  return hi ? "प्रस्तुत" : "Submitted";
+function statusLabel(status: RequestStatus, locale: Locale): string {
+  if (status === "resolved") return tr(locale, "statusResolved");
+  if (status === "in_review") return tr(locale, "statusInReview");
+  return tr(locale, "statusSubmitted");
 }
 
 function formatStamp(value: string): string {
@@ -127,7 +132,7 @@ function ThreadView({
   onBack: () => void;
 }) {
   const c = useColors();
-  const { hi } = useLocale();
+  const { hi, locale } = useLocale();
   const { user } = useAuth();
   const qc = useQueryClient();
   const [reply, setReply] = useState("");
@@ -161,12 +166,8 @@ function ThreadView({
     },
     onError: (err) =>
       Alert.alert(
-        hi ? "उत्तर नहीं भेजा गया" : "Could not send reply",
-        err instanceof ApiError
-          ? err.message
-          : hi
-            ? "संदेश भेजने में समस्या हुई — जाँचें और फिर कोशिश करें।"
-            : "That reply did not send — check your connection and try again.",
+        tr(locale, "toastReplyFailedTitle"),
+        err instanceof ApiError ? err.message : tr(locale, "pleaseRetry"),
       ),
   });
 
@@ -176,12 +177,8 @@ function ThreadView({
     onSuccess: invalidate,
     onError: (err) =>
       Alert.alert(
-        hi ? "दावा नहीं हुआ" : "Could not claim",
-        err instanceof ApiError
-          ? err.message
-          : hi
-            ? "कृपया पुनः प्रयास करें।"
-            : "Please try again.",
+        tr(locale, "toastClaimFailed"),
+        err instanceof ApiError ? err.message : tr(locale, "pleaseRetry"),
       ),
   });
 
@@ -194,37 +191,27 @@ function ThreadView({
     },
     onError: (err) =>
       Alert.alert(
-        hi ? "सुलझाया नहीं जा सका" : "Could not resolve",
-        err instanceof ApiError
-          ? err.message
-          : hi
-            ? "कृपया पुनः प्रयास करें।"
-            : "Please try again.",
+        tr(locale, "toastResolveFailed"),
+        err instanceof ApiError ? err.message : tr(locale, "pleaseRetry"),
       ),
   });
 
   function confirmResolve() {
-    Alert.alert(
-      hi ? "अनुरोध सुलझाएँ?" : "Resolve this request?",
-      hi
-        ? "अभिभावक का उत्तर आने पर यह अनुरोध फिर से खुल जाएगा — यह अंतिम बंद नहीं है।"
-        : "A parent reply will reopen this request — resolving is not a final close.",
-      [
-        { text: hi ? "रद्द करें" : "Cancel", style: "cancel" },
-        {
-          text: hi ? "सुलझाएँ" : "Resolve",
-          style: "default",
-          onPress: () => resolve.mutate(),
-        },
-      ],
-    );
+    Alert.alert(tr(locale, "resolveConfirm"), tr(locale, "resolveConfirmBody"), [
+      { text: tr(locale, "cancel"), style: "cancel" },
+      {
+        text: tr(locale, "resolve"),
+        style: "default",
+        onPress: () => resolve.mutate(),
+      },
+    ]);
   }
 
   const backControl = (
     <Pressable onPress={onBack} hitSlop={12} style={{ paddingRight: 4 }}>
       <Row style={{ gap: 4 }}>
         <Ionicons name="chevron-back" size={22} color={c.primary} />
-        <Body style={{ color: c.primary, fontSize: 14 }}>{hi ? "वापस" : "Back"}</Body>
+        <Body style={{ color: c.primary, fontSize: 14 }}>{tr(locale, "back")}</Body>
       </Row>
     </Pressable>
   );
@@ -232,7 +219,7 @@ function ThreadView({
   if (detail.isLoading) {
     return (
       <View style={{ flex: 1, backgroundColor: c.background }}>
-        <AppHeader title={hi ? "अनुरोध" : "Request"} right={backControl} />
+        <AppHeader title={tr(locale, "itemTitle")} right={backControl} />
         <StateView status="loading" emptyText="" />
       </View>
     );
@@ -241,13 +228,13 @@ function ThreadView({
   if (detail.isError || !detail.data) {
     return (
       <View style={{ flex: 1, backgroundColor: c.background }}>
-        <AppHeader title={hi ? "अनुरोध" : "Request"} right={backControl} />
+        <AppHeader title={tr(locale, "itemTitle")} right={backControl} />
         <StateView
           status="error"
           emptyText=""
-          errorText={hi ? "अनुरोध लोड नहीं हुआ।" : "Could not load this request."}
+          errorText={tr(locale, "loadFailed")}
           onRetry={detail.refetch}
-          retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
+          retryLabel={tr(locale, "tryAgain")}
         />
       </View>
     );
@@ -267,7 +254,7 @@ function ThreadView({
         title={data.subject}
         subtitle={
           [data.student_name, data.parent_name].filter(Boolean).join(" · ") ||
-          (hi ? "सेवा अनुरोध" : "Service request")
+          tr(locale, "itemTitle")
         }
         right={backControl}
       />
@@ -281,19 +268,17 @@ function ThreadView({
               </Body>
               <Body style={{ marginTop: 10, fontSize: 14, lineHeight: 22 }}>{data.description}</Body>
             </View>
-            <Pill label={statusLabel(data.status, hi)} tone={statusTone(data.status)} />
+            <Pill label={statusLabel(data.status, locale)} tone={statusTone(data.status)} />
           </Row>
 
           <Row style={{ marginTop: 14, gap: 8, flexWrap: "wrap" }}>
             {assignedToOther ? (
               <Body muted style={{ fontSize: 13, lineHeight: 22, flex: 1 }}>
-                {hi
-                  ? `सौंपा गया: ${data.assigned_name ?? "—"}`
-                  : `Assigned to ${data.assigned_name ?? "—"}`}
+                {tr(locale, "assignedToName", { name: data.assigned_name ?? "—" })}
               </Body>
             ) : canClaim && data.assigned_to !== me ? (
               <Button
-                label={hi ? "दावा करें" : "Claim"}
+                label={tr(locale, "claim")}
                 variant="outline"
                 icon="hand-left-outline"
                 onPress={() => claim.mutate()}
@@ -302,12 +287,12 @@ function ThreadView({
               />
             ) : data.assigned_to === me ? (
               <Body muted style={{ fontSize: 13, lineHeight: 22 }}>
-                {hi ? "आपके पास" : "Assigned to you"}
+                {tr(locale, "assignedToYou")}
               </Body>
             ) : null}
             {data.status !== "resolved" ? (
               <Button
-                label={hi ? "सुलझाएँ" : "Resolve"}
+                label={tr(locale, "resolve")}
                 icon="checkmark-circle-outline"
                 onPress={confirmResolve}
                 loading={resolve.isPending}
@@ -317,10 +302,10 @@ function ThreadView({
           </Row>
         </Card>
 
-        <Title style={{ fontSize: 16, marginLeft: 2 }}>{hi ? "बातचीत" : "Conversation"}</Title>
+        <Title style={{ fontSize: 16, marginLeft: 2 }}>{tr(locale, "conversation")}</Title>
         {data.messages.length === 0 ? (
           <Card>
-            <Body muted>{hi ? "अभी कोई उत्तर नहीं है।" : "No replies yet."}</Body>
+            <Body muted>{tr(locale, "noReplies")}</Body>
           </Card>
         ) : (
           data.messages.map((m) => {
@@ -332,11 +317,7 @@ function ThreadView({
               >
                 <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
                   <Body style={{ fontWeight: "600", fontSize: 13 }}>
-                    {mine
-                      ? hi
-                        ? "आप"
-                        : "You"
-                      : m.author_name ?? (hi ? "अभिभावक" : "Parent")}
+                    {mine ? tr(locale, "you") : m.author_name ?? tr(locale, "parent")}
                   </Body>
                   <Body muted style={{ fontSize: 12 }}>
                     {formatStamp(m.created_at)}
@@ -350,24 +331,18 @@ function ThreadView({
 
         {data.status === "resolved" ? (
           <Body muted style={{ fontSize: 12, marginLeft: 2, lineHeight: 22 }}>
-            {hi
-              ? "सुलझाया गया। अभिभावक का उत्तर आने पर यह फिर से खुल जाएगा।"
-              : "Resolved. A parent reply will reopen this request."}
+            {tr(locale, "resolvedReopenHint")}
           </Body>
         ) : null}
 
         <Card>
           <Body style={{ fontSize: 13, marginBottom: 6, lineHeight: 22 }}>
-            {hi ? "अभिभावक को उत्तर" : "Reply to parent"}
+            {tr(locale, "replyToParent")}
           </Body>
           <TextInput
             value={reply}
             onChangeText={setReply}
-            placeholder={
-              hi
-                ? "कम से कम 5 अक्षर — स्पष्ट और सहायक लिखें…"
-                : "At least 5 characters — be clear and helpful…"
-            }
+            placeholder={tr(locale, "replyMinPlaceholder")}
             placeholderTextColor={c.mutedForeground}
             multiline
             numberOfLines={3}
@@ -390,23 +365,16 @@ function ThreadView({
           />
           {trimmed.length > 0 && trimmed.length < 5 ? (
             <Body muted style={{ fontSize: 12, marginTop: 6, lineHeight: 22 }}>
-              {hi
-                ? "उत्तर कम से कम 5 अक्षर का होना चाहिए।"
-                : "Write at least 5 characters so the parent has a clear reply."}
+              {tr(locale, "replyMinHint")}
             </Body>
           ) : null}
           <Row style={{ marginTop: 12, justifyContent: "flex-end" }}>
             <Button
-              label={hi ? "उत्तर भेजें" : "Send reply"}
+              label={tr(locale, "sendReply")}
               icon="paper-plane-outline"
               onPress={() => {
                 if (trimmed.length < 5) {
-                  Alert.alert(
-                    hi ? "उत्तर बहुत छोटा है" : "Reply is too short",
-                    hi
-                      ? "अभिभावक को स्पष्ट उत्तर दें — कम से कम 5 अक्षर लिखें।"
-                      : "Give the parent a clear reply — write at least 5 characters.",
-                  );
+                  Alert.alert(tr(locale, "replyTooShort"), tr(locale, "replyMinAlert"));
                   return;
                 }
                 send.mutate(trimmed);
@@ -423,7 +391,7 @@ function ThreadView({
 
 export default function AdminServiceRequestsScreen() {
   const c = useColors();
-  const { hi } = useLocale();
+  const { hi, locale } = useLocale();
   const { user } = useAuth();
   const [filter, setFilter] = useState<FilterChip>("open");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -462,17 +430,17 @@ export default function AdminServiceRequestsScreen() {
     );
   }
 
-  const chips: { id: FilterChip; en: string; hi: string }[] = [
-    { id: "open", en: "Open", hi: "खुले" },
-    { id: "mine", en: "Mine", hi: "मेरे" },
-    { id: "resolved", en: "Resolved", hi: "सुलझे" },
+  const chips: { id: FilterChip; key: string }[] = [
+    { id: "open", key: "filterOpen" },
+    { id: "mine", key: "filterMine" },
+    { id: "resolved", key: "filterResolved" },
   ];
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <AppHeader
-        title={hi ? "सेवा अनुरोध" : "Service requests"}
-        subtitle={hi ? "अभिभावकों के संदेश" : "Parent messages"}
+        title={tr(locale, "title")}
+        subtitle={tr(locale, "adminSubtitle")}
       />
       <Screen refreshing={list.isRefetching} onRefresh={() => list.refetch()}>
         <Row style={{ gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
@@ -497,7 +465,7 @@ export default function AdminServiceRequestsScreen() {
                     fontWeight: active ? "600" : "400",
                   }}
                 >
-                  {hi ? chip.hi : chip.en}
+                  {tr(locale, chip.key)}
                 </Body>
               </Pressable>
             );
@@ -510,25 +478,19 @@ export default function AdminServiceRequestsScreen() {
           <StateView
             status="error"
             emptyText=""
-            errorText={hi ? "अनुरोध लोड नहीं हुए।" : "Could not load service requests."}
+            errorText={tr(locale, "loadAdminListFailed")}
             onRetry={list.refetch}
-            retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
+            retryLabel={tr(locale, "tryAgain")}
           />
         ) : items.length === 0 ? (
           <StateView
             status="empty"
             emptyText={
               filter === "open"
-                ? hi
-                  ? "कोई खुला अनुरोध नहीं।"
-                  : "No open requests."
+                ? tr(locale, "emptyOpen")
                 : filter === "mine"
-                  ? hi
-                    ? "आपके पास कोई सौंपा अनुरोध नहीं।"
-                    : "Nothing assigned to you yet."
-                  : hi
-                    ? "कोई सुलझाया अनुरोध नहीं।"
-                    : "No resolved requests."
+                  ? tr(locale, "emptyMineAssigned")
+                  : tr(locale, "emptyResolvedList")
             }
           />
         ) : (
@@ -563,7 +525,7 @@ export default function AdminServiceRequestsScreen() {
                         {relativeAge(row.created_at, hi)}
                       </Body>
                     </View>
-                    <Pill label={statusLabel(row.status, hi)} tone={statusTone(row.status)} />
+                    <Pill label={statusLabel(row.status, locale)} tone={statusTone(row.status)} />
                   </Row>
                   <Row style={{ marginTop: 8, justifyContent: "flex-end", alignItems: "center" }}>
                     <Ionicons name="chevron-forward" size={18} color={c.mutedForeground} />

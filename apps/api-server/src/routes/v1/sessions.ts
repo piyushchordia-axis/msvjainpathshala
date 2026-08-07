@@ -116,7 +116,11 @@ function handleLifecycleError(res: Response, err: unknown): boolean {
  */
 router.get("/today", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
-  const date = todayIst();
+  const dateRaw =
+    typeof req.query.date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.date)
+      ? req.query.date
+      : null;
+  const date = dateRaw ?? todayIst();
   const limit = clampLimit(req.query.limit, 50, 100);
   const onlyId =
     typeof req.query.session_id === "string" && req.query.session_id.length > 0
@@ -168,12 +172,38 @@ router.get("/today", async (req: Request, res: Response) => {
     centreId !== null ||
     scope.batchIds !== null;
 
-  type TodayItem = (typeof result.items)[number] & {
+  type TodayItem = Omit<
+    (typeof result.items)[number],
+    "check_in_at" | "check_out_at"
+  > & {
     scheduled_date: string;
+    check_in_at: string | null;
+    check_out_at: string | null;
+    conducted_by_name: string | null;
     roster?: Awaited<ReturnType<typeof loadRostersForSessions>> extends Map<string, infer V>
       ? V
       : never;
   };
+
+  function serializeSession(r: (typeof result.items)[number]): Omit<TodayItem, "roster"> {
+    const { check_in_at, check_out_at, ...rest } = r;
+    return {
+      ...rest,
+      scheduled_date: r.session_date,
+      check_in_at: check_in_at
+        ? check_in_at instanceof Date
+          ? check_in_at.toISOString()
+          : String(check_in_at)
+        : null,
+      check_out_at: check_out_at
+        ? check_out_at instanceof Date
+          ? check_out_at.toISOString()
+          : String(check_out_at)
+        : null,
+      conducted_by_name: r.conducted_by_name ?? null,
+    };
+  }
+
   let items: TodayItem[];
   if (includeRoster && result.items.length > 0) {
     const rosters = await loadRostersForSessions(
@@ -184,15 +214,11 @@ router.get("/today", async (req: Request, res: Response) => {
       })),
     );
     items = result.items.map((r) => ({
-      ...r,
-      scheduled_date: r.session_date,
+      ...serializeSession(r),
       roster: rosters.get(r.id) ?? [],
     }));
   } else {
-    items = result.items.map((r) => ({
-      ...r,
-      scheduled_date: r.session_date,
-    }));
+    items = result.items.map((r) => serializeSession(r));
   }
 
   ok(

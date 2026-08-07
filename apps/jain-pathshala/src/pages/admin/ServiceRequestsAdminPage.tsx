@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
+import { t, type Locale } from '@workspace/i18n';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
+import { useLocale } from '@/lib/locale-context';
 import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow } from '@/components/admin/AdminPageShell';
@@ -53,10 +55,20 @@ interface RequestDetail {
   messages: ThreadMessage[];
 }
 
+function tr(locale: Locale, key: string): string {
+  return t(`requests.${key}`, locale);
+}
+
 function statusVariant(status: string): 'default' | 'secondary' | 'outline' {
   if (status === 'resolved') return 'secondary';
   if (status === 'in_review') return 'default';
   return 'outline';
+}
+
+function statusLabel(status: string, locale: Locale): string {
+  if (status === 'resolved') return tr(locale, 'statusResolved');
+  if (status === 'in_review') return tr(locale, 'statusInReview');
+  return tr(locale, 'statusSubmitted');
 }
 
 function fmt(ts: string): string {
@@ -74,6 +86,7 @@ function ThreadDialog({
   onOpenChange: (v: boolean) => void;
   onChanged: () => void;
 }) {
+  const locale = useLocale();
   const [detail, setDetail] = useState<RequestDetail | null>(null);
   const [loading, setLoading] = useState(false);
   const [reply, setReply] = useState('');
@@ -85,7 +98,7 @@ function ThreadDialog({
       const res = await apiGet<RequestDetail>(`/v1/service-requests/${id}`);
       setDetail(res);
     } catch (err) {
-      toast.error('Failed to load request.', err instanceof ApiError ? err.message : undefined);
+      toast.error(tr(locale, 'loadFailed'), err instanceof ApiError ? err.message : undefined);
     } finally {
       setLoading(false);
     }
@@ -107,12 +120,12 @@ function ThreadDialog({
     setBusy('reply');
     try {
       await apiPost(`/v1/service-requests/${request.id}/messages`, { message: reply.trim() });
-      toast.success('Reply sent.');
+      toast.success(tr(locale, 'toastReplySent'));
       setReply('');
       await loadDetail(request.id);
       onChanged();
     } catch (err) {
-      toast.error('Failed to send reply.', err instanceof ApiError ? err.message : undefined);
+      toast.error(tr(locale, 'toastReplyFailed'), err instanceof ApiError ? err.message : undefined);
     } finally {
       setBusy(null);
     }
@@ -123,11 +136,11 @@ function ThreadDialog({
     setBusy(action);
     try {
       await apiPost(`/v1/service-requests/${request.id}/${action}`, {});
-      toast.success(action === 'assign' ? 'Assigned to you.' : 'Marked resolved.');
+      toast.success(action === 'assign' ? tr(locale, 'toastAssigned') : tr(locale, 'toastResolved'));
       await loadDetail(request.id);
       onChanged();
     } catch (err) {
-      toast.error('Action failed.', err instanceof ApiError ? err.message : undefined);
+      toast.error(tr(locale, 'toastActionFailed'), err instanceof ApiError ? err.message : undefined);
     } finally {
       setBusy(null);
     }
@@ -139,16 +152,16 @@ function ThreadDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{request?.subject ?? 'Service request'}</DialogTitle>
+          <DialogTitle>{request?.subject ?? tr(locale, 'itemTitle')}</DialogTitle>
         </DialogHeader>
 
         {loading || !detail ? (
-          <div className="py-8 text-center text-muted-foreground">Loading…</div>
+          <div className="py-8 text-center text-muted-foreground">{tr(locale, 'loading')}</div>
         ) : (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <Badge variant={statusVariant(detail.status)} className="capitalize">
-                {detail.status.replace('_', ' ')}
+              <Badge variant={statusVariant(detail.status)}>
+                {statusLabel(detail.status, locale)}
               </Badge>
               <span className="capitalize">{detail.category}</span>
               <span>·</span>
@@ -162,15 +175,15 @@ function ThreadDialog({
             </div>
 
             <div className="space-y-2">
-              <Label className="text-xs font-medium">Thread</Label>
+              <Label className="text-xs font-medium">{tr(locale, 'thread')}</Label>
               <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
                 {detail.messages.length === 0 ? (
-                  <div className="text-sm text-muted-foreground">No replies yet.</div>
+                  <div className="text-sm text-muted-foreground">{tr(locale, 'noReplies')}</div>
                 ) : (
                   detail.messages.map((m) => (
                     <div key={m.id} className="rounded-md border px-3 py-2">
                       <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span className="font-medium text-foreground">{m.author_name ?? 'Unknown'}</span>
+                        <span className="font-medium text-foreground">{m.author_name ?? tr(locale, 'unknown')}</span>
                         <span>{fmt(m.created_at)}</span>
                       </div>
                       <div className="mt-1 text-sm whitespace-pre-wrap">{m.message}</div>
@@ -181,16 +194,16 @@ function ThreadDialog({
             </div>
 
             <div className="space-y-2">
-              <Label className="text-xs font-medium">Reply</Label>
+              <Label className="text-xs font-medium">{tr(locale, 'reply')}</Label>
               <Textarea
                 value={reply}
                 onChange={(e) => setReply(e.target.value)}
                 rows={3}
-                placeholder="Write a response…"
+                placeholder={tr(locale, 'replyPlaceholderAdmin')}
               />
               <div className="flex justify-end">
                 <Button size="sm" onClick={sendReply} disabled={busy !== null || !reply.trim()}>
-                  {busy === 'reply' ? 'Sending…' : 'Send reply'}
+                  {busy === 'reply' ? tr(locale, 'sending') : tr(locale, 'sendReply')}
                 </Button>
               </div>
             </div>
@@ -202,14 +215,14 @@ function ThreadDialog({
                 onClick={() => doAction('assign')}
                 disabled={busy !== null || status === 'resolved'}
               >
-                {busy === 'assign' ? 'Assigning…' : 'Assign to me'}
+                {busy === 'assign' ? tr(locale, 'assigning') : tr(locale, 'assignToMe')}
               </Button>
               <Button
                 size="sm"
                 onClick={() => doAction('resolve')}
                 disabled={busy !== null || status === 'resolved'}
               >
-                {busy === 'resolve' ? 'Resolving…' : 'Resolve'}
+                {busy === 'resolve' ? tr(locale, 'resolving') : tr(locale, 'resolve')}
               </Button>
             </div>
           </div>
@@ -220,6 +233,7 @@ function ThreadDialog({
 }
 
 export default function ServiceRequestsAdminPage() {
+  const locale = useLocale();
   const { items, loading, error, reload } = useAdminList<RequestRow>('/v1/service-requests?limit=100');
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState<RequestRow | null>(null);
@@ -231,18 +245,26 @@ export default function ServiceRequestsAdminPage() {
 
   return (
     <AdminPageShell
-      title="Service requests"
-      subtitle="Parent support requests in your scope. Open a request to reply, assign, or resolve."
+      title={tr(locale, 'title')}
+      subtitle={tr(locale, 'subtitle')}
     >
       {error ? <AdminError message={error} /> : null}
       <AdminTable
-        columns={['Parent', 'Subject', 'Category', 'Status', 'Assigned', 'Created', '']}
+        columns={[
+          tr(locale, 'colParent'),
+          tr(locale, 'colSubject'),
+          tr(locale, 'colCategory'),
+          tr(locale, 'colStatus'),
+          tr(locale, 'colAssigned'),
+          tr(locale, 'colCreated'),
+          '',
+        ]}
         loading={loading}
         empty=""
         colSpan={7}
       >
         {items.length === 0 && !loading ? (
-          <AdminEmptyRow colSpan={7} message="No service requests yet." />
+          <AdminEmptyRow colSpan={7} message={tr(locale, 'empty')} />
         ) : null}
         {items.map((r) => (
           <tr key={r.id} className="hover:bg-muted/30">
@@ -255,8 +277,8 @@ export default function ServiceRequestsAdminPage() {
             <td className="px-4 py-3">{r.subject}</td>
             <td className="px-4 py-3 text-xs capitalize">{r.category}</td>
             <td className="px-4 py-3">
-              <Badge variant={statusVariant(r.status)} className="capitalize">
-                {r.status.replace('_', ' ')}
+              <Badge variant={statusVariant(r.status)}>
+                {statusLabel(r.status, locale)}
               </Badge>
             </td>
             <td className="px-4 py-3 text-xs text-muted-foreground">{r.assigned_name ?? '—'}</td>
@@ -265,7 +287,7 @@ export default function ServiceRequestsAdminPage() {
             </td>
             <td className="px-4 py-3 text-right">
               <Button size="sm" variant="outline" onClick={() => openThread(r)}>
-                Open
+                {tr(locale, 'open')}
               </Button>
             </td>
           </tr>

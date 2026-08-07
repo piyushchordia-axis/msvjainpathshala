@@ -3,6 +3,7 @@ import { Alert, Pressable, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
+import { t, type Locale } from "@workspace/i18n";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useChildren } from "@/lib/queries";
@@ -27,15 +28,18 @@ interface MyRequestRow {
 
 type Tone = "success" | "warning" | "info" | "primary" | "neutral";
 
-/** Category options kept in parity with the web member form. */
-const CATEGORIES: { value: string; en: string; hi: string }[] = [
-  { value: "attendance", en: "Attendance", hi: "उपस्थिति" },
-  { value: "enrolment", en: "Enrolment", hi: "नामांकन" },
-  { value: "fees", en: "Fees & donations", hi: "शुल्क व दान" },
-  { value: "id_card", en: "ID card", hi: "पहचान पत्र" },
-  { value: "technical", en: "App / technical", hi: "ऐप / तकनीकी" },
-  { value: "other", en: "Other", hi: "अन्य" },
-];
+const CATEGORY_KEYS = [
+  { value: "attendance", key: "catAttendance" },
+  { value: "enrolment", key: "catEnrolment" },
+  { value: "fees", key: "catFees" },
+  { value: "id_card", key: "catIdCard" },
+  { value: "technical", key: "catTechnical" },
+  { value: "other", key: "catOther" },
+] as const;
+
+function tr(locale: Locale, key: string): string {
+  return t(`requests.${key}`, locale);
+}
 
 function statusTone(status: RequestStatus): Tone {
   if (status === "resolved") return "success";
@@ -43,16 +47,16 @@ function statusTone(status: RequestStatus): Tone {
   return "warning";
 }
 
-function statusLabel(status: RequestStatus, hi: boolean): string {
-  if (status === "resolved") return hi ? "सुलझाया गया" : "Resolved";
-  if (status === "in_review") return hi ? "समीक्षाधीन" : "In review";
-  return hi ? "प्रस्तुत" : "Submitted";
+function statusLabel(status: RequestStatus, locale: Locale): string {
+  if (status === "resolved") return tr(locale, "statusResolved");
+  if (status === "in_review") return tr(locale, "statusInReview");
+  return tr(locale, "statusSubmitted");
 }
 
-function categoryLabel(value: string, hi: boolean): string {
-  const c = CATEGORIES.find((x) => x.value === value);
+function categoryLabel(value: string, locale: Locale): string {
+  const c = CATEGORY_KEYS.find((x) => x.value === value);
   if (!c) return value;
-  return hi ? c.hi : c.en;
+  return tr(locale, c.key);
 }
 
 /* ─────────────────────────── create form ─────────────────────────── */
@@ -65,7 +69,7 @@ function CreateForm({
   onCancel: () => void;
 }) {
   const c = useColors();
-  const { hi } = useLocale();
+  const { locale } = useLocale();
   const qc = useQueryClient();
   // Optional student picker for parents; absent silently if no children.
   const children = useChildren();
@@ -89,8 +93,8 @@ function CreateForm({
     },
     onError: (err) =>
       Alert.alert(
-        hi ? "अनुरोध नहीं भेजा गया" : "Could not submit",
-        err instanceof ApiError ? err.message : hi ? "कृपया पुनः प्रयास करें।" : "Please try again.",
+        tr(locale, "toastSubmitFailedTitle"),
+        err instanceof ApiError ? err.message : tr(locale, "pleaseRetry"),
       ),
   });
 
@@ -98,7 +102,7 @@ function CreateForm({
     !!category && subject.trim().length > 0 && description.trim().length > 0 && !create.isPending;
 
   const inputStyle = {
-    fontFamily: bodyFamily(hi),
+    fontFamily: bodyFamily(locale === "hi"),
     fontSize: 15,
     color: c.foreground,
     backgroundColor: c.background,
@@ -121,18 +125,16 @@ function CreateForm({
 
   return (
     <Card>
-      <Title style={{ fontSize: 18 }}>{hi ? "नया अनुरोध" : "New request"}</Title>
+      <Title style={{ fontSize: 18 }}>{tr(locale, "newRequest")}</Title>
       <Body muted style={{ marginTop: 4 }}>
-        {hi
-          ? "अपनी समस्या बताएं — आपके केंद्र की टीम उत्तर देगी।"
-          : "Describe your issue — your centre team will respond."}
+        {tr(locale, "formIntroShort")}
       </Body>
 
       <Body style={{ marginTop: 16, marginBottom: 6, fontSize: 13 }}>
-        {hi ? "श्रेणी" : "Category"}
+        {tr(locale, "category")}
       </Body>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
-        {CATEGORIES.map((cat) => {
+        {CATEGORY_KEYS.map((cat) => {
           const active = category === cat.value;
           return (
             <Pressable
@@ -148,7 +150,7 @@ function CreateForm({
               }}
             >
               <Body style={{ fontSize: 13, color: active ? c.primaryForeground : c.foreground }}>
-                {hi ? cat.hi : cat.en}
+                {tr(locale, cat.key)}
               </Body>
             </Pressable>
           );
@@ -158,7 +160,7 @@ function CreateForm({
       {childRows.length > 0 ? (
         <>
           <Body style={{ marginTop: 16, marginBottom: 6, fontSize: 13 }}>
-            {hi ? "विद्यार्थी (वैकल्पिक)" : "Student (optional)"}
+            {tr(locale, "studentOptional")}
           </Body>
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
             {childRows.map((s) => {
@@ -187,24 +189,24 @@ function CreateForm({
       ) : null}
 
       <Body style={{ marginTop: 16, marginBottom: 6, fontSize: 13 }}>
-        {hi ? "विषय" : "Subject"}
+        {tr(locale, "subject")}
       </Body>
       <TextInput
         value={subject}
         onChangeText={setSubject}
-        placeholder={hi ? "संक्षिप्त विषय" : "A short subject"}
+        placeholder={tr(locale, "subjectPlaceholder")}
         placeholderTextColor={c.mutedForeground}
         maxLength={200}
         style={inputStyle}
       />
 
       <Body style={{ marginTop: 14, marginBottom: 6, fontSize: 13 }}>
-        {hi ? "विवरण" : "Description"}
+        {tr(locale, "description")}
       </Body>
       <TextInput
         value={description}
         onChangeText={setDescription}
-        placeholder={hi ? "अपनी समस्या विस्तार से लिखें…" : "Describe your issue in detail…"}
+        placeholder={tr(locale, "descriptionPlaceholder")}
         placeholderTextColor={c.mutedForeground}
         multiline
         numberOfLines={4}
@@ -214,14 +216,14 @@ function CreateForm({
 
       <Row style={{ marginTop: 16, gap: 10 }}>
         <Button
-          label={hi ? "रद्द करें" : "Cancel"}
+          label={tr(locale, "cancel")}
           variant="outline"
           onPress={onCancel}
           disabled={create.isPending}
           style={{ flex: 1 }}
         />
         <Button
-          label={hi ? "भेजें" : "Submit"}
+          label={tr(locale, "submit")}
           icon="paper-plane-outline"
           onPress={submit}
           loading={create.isPending}
@@ -237,7 +239,7 @@ function CreateForm({
 
 export default function ServiceRequestsScreen() {
   const c = useColors();
-  const { hi } = useLocale();
+  const { locale } = useLocale();
   const router = useRouter();
   const [creating, setCreating] = useState(false);
 
@@ -252,14 +254,14 @@ export default function ServiceRequestsScreen() {
       <Screen refreshing={requests.isRefetching} onRefresh={() => requests.refetch()}>
         <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
           <View style={{ flex: 1, paddingRight: 10 }}>
-            <Title style={{ fontSize: 22 }}>{hi ? "मेरे अनुरोध" : "My requests"}</Title>
+            <Title style={{ fontSize: 22 }}>{tr(locale, "myTitle")}</Title>
             <Body muted style={{ marginTop: -2 }}>
-              {hi ? "अपने केंद्र की टीम से सहायता" : "Support from your centre team"}
+              {tr(locale, "profileHint")}
             </Body>
           </View>
           {!creating ? (
             <Button
-              label={hi ? "नया" : "New"}
+              label={tr(locale, "new")}
               icon="add"
               onPress={() => setCreating(true)}
             />
@@ -276,14 +278,14 @@ export default function ServiceRequestsScreen() {
           <StateView
             status="error"
             emptyText=""
-            errorText={hi ? "अनुरोध लोड नहीं हुए।" : "Could not load your requests."}
+            errorText={tr(locale, "loadListFailed")}
             onRetry={requests.refetch}
-            retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
+            retryLabel={tr(locale, "tryAgain")}
           />
         ) : rows.length === 0 ? (
           <StateView
             status="empty"
-            emptyText={hi ? "अभी आपका कोई अनुरोध नहीं है।" : "You have no requests yet."}
+            emptyText={tr(locale, "emptyMine")}
           />
         ) : (
           rows.map((r) => (
@@ -293,11 +295,11 @@ export default function ServiceRequestsScreen() {
                   <View style={{ flex: 1, paddingRight: 10 }}>
                     <Title style={{ fontSize: 16 }}>{r.subject}</Title>
                     <Body muted style={{ fontSize: 12, marginTop: 2 }}>
-                      {categoryLabel(r.category, hi)}
+                      {categoryLabel(r.category, locale)}
                       {r.student_name ? ` · ${r.student_name}` : ""}
                     </Body>
                   </View>
-                  <Pill label={statusLabel(r.status, hi)} tone={statusTone(r.status)} />
+                  <Pill label={statusLabel(r.status, locale)} tone={statusTone(r.status)} />
                 </Row>
                 <Row style={{ marginTop: 10, justifyContent: "space-between", alignItems: "center" }}>
                   <Body muted style={{ fontSize: 12 }}>
@@ -305,7 +307,7 @@ export default function ServiceRequestsScreen() {
                   </Body>
                   <Row style={{ gap: 4 }}>
                     <Body style={{ fontSize: 12, color: c.primary }}>
-                      {hi ? "खोलें" : "Open"}
+                      {tr(locale, "open")}
                     </Body>
                     <Ionicons name="chevron-forward" size={14} color={c.primary} />
                   </Row>

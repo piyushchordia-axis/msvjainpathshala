@@ -5,13 +5,17 @@
  * Visibility model. A notice carries an `audience` (national | state | city |
  * centre | batch | msv) plus the matching scope column (state_id / city_id /
  * centre_id / batch_id) and an `is_public` flag.
- *  - GET /public  : unauthenticated; only is_public=true notices.
- *  - GET /feed    : authenticated; every notice the caller may see by role +
+ *  - GET /public  : unauthenticated; only live is_public=true notices.
+ *  - GET /feed    : authenticated; every live notice the caller may see by role +
  *                   geography/centre/batch, INCLUDING internal (is_public=false)
  *                   ones. Members see notices that match any centre/batch they
  *                   belong to (and their own city/state), plus national; MSV
  *                   members additionally see audience='msv'. Admin-panel users
  *                   see everything within their resolveAdminScope.
+ *
+ * "Live" means published_at is set and <= now(), and expires_at is null or
+ * still in the future. Drafts (published_at null) and expired notices are
+ * hidden from /public and /feed but remain visible on /admin.
  *
  * Authoring (admin-panel roles via requireAdminPanel) is constrained by
  * resolveAdminScope: a centre/batch target must lie inside the caller's scope;
@@ -28,9 +32,9 @@ import {
   centres,
   students,
 } from "@workspace/db";
-import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
-import { z } from "zod";
-import type { ErrorCode } from "@workspace/api-zod";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import type { ErrorCode, NoticeWrite } from "@workspace/api-zod";
+import { noticeWriteSchema } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState, type AdminScope } from "../../lib/scope";
@@ -46,9 +50,38 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const ORDER = [desc(notices.pinned), desc(notices.published_at), desc(notices.created_at)] as const;
 
+/** A notice is live when it is published and has not expired. */
+const LIVE = and(
+  sql`${notices.published_at} is not null`,
+  sql`${notices.published_at} <= now()`,
+  or(isNull(notices.expires_at), sql`${notices.expires_at} > now()`),
+);
+
+const EXPIRES_AFTER_PUBLISH_MSG =
+  "The end date must be after the publish date — pick a later date.";
+
+/**
+ * Resolve published_at for create. publish_now:false → draft (null).
+ * publish_at schedules; otherwise publish immediately.
+ */
+function resolvePublishedAt(body: NoticeWrite): Date | null {
+  if (body.publish_now === false) return null;
+  if (body.publish_at != null) return new Date(body.publish_at);
+  return new Date();
+}
+
+/** Reject expires_at <= published_at when both are set (matches DB CHECK). */
+function expiresAfterPublish(
+  expiresAtIso: string | null | undefined,
+  publishedAt: Date | null,
+): boolean {
+  if (expiresAtIso == null || publishedAt == null) return true;
+  return new Date(expiresAtIso).getTime() > publishedAt.getTime();
+}
+
 /* ════════════════════════════════ PUBLIC ════════════════════════════════ */
 
-/* GET /v1/notices/public?limit= — public (is_public=true) notices, no auth */
+/* GET /v1/notices/public?limit= — public live (is_public=true) notices, no auth */
 router.get("/public", async (req: Request, res: Response) => {
   const limit = clampLimit(req.query.limit, 50, 200);
   const rows = await db
@@ -63,7 +96,7 @@ router.get("/public", async (req: Request, res: Response) => {
       created_at: notices.created_at,
     })
     .from(notices)
-    .where(eq(notices.is_public, true))
+    .where(and(eq(notices.is_public, true), LIVE))
     .orderBy(...ORDER)
     .limit(limit);
 
@@ -111,12 +144,12 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
   const user = req.authUser!;
   const limit = clampLimit(req.query.limit, 50, 200);
 
-  let where;
+  let scopeWhere;
   if (canSeeEverythingInScope(user.role)) {
     // Admin-panel users: every notice whose scope intersects their centre scope.
     // National/state/city audiences (which have no centre) stay visible too.
     const scope = await resolveAdminScope(user);
-    where = adminFeedWhere(scope, user.state_id ?? null, user.city_id ?? null);
+    scopeWhere = adminFeedWhere(scope, user.state_id ?? null, user.city_id ?? null);
   } else {
     // Member: resolve the centres/batches they belong to (own student records or
     // children they parent), then build the visibility predicate.
@@ -129,7 +162,7 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
     const batchIds = Array.from(new Set(owned.map((o) => o.batch_id).filter((x): x is string => !!x)));
     const isMsv = owned.some((o) => o.msv_status === "approved");
 
-    where = memberVisibility({
+    scopeWhere = memberVisibility({
       cityId: user.city_id ?? null,
       stateId: user.state_id ?? null,
       centreIds,
@@ -137,6 +170,8 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
       isMsv,
     });
   }
+
+  const where = scopeWhere ? and(scopeWhere, LIVE) : LIVE;
 
   const rows = await db
     .select({
@@ -266,6 +301,7 @@ router.get("/admin", requireAuth, requireAdminPanel, async (req: Request, res: R
       pinned: notices.pinned,
       is_critical: notices.is_critical,
       published_at: notices.published_at,
+      expires_at: notices.expires_at,
       created_at: notices.created_at,
     })
     .from(notices)
@@ -275,38 +311,18 @@ router.get("/admin", requireAuth, requireAdminPanel, async (req: Request, res: R
     .orderBy(...ORDER)
     .limit(limit);
 
+  const now = Date.now();
   const items = rows.map((r) => ({
     ...r,
     published_at: r.published_at ? r.published_at.toISOString() : null,
+    expires_at: r.expires_at ? r.expires_at.toISOString() : null,
+    is_expired: r.expires_at != null && r.expires_at.getTime() <= now,
     created_at: r.created_at.toISOString(),
   }));
   ok(res, { items }, { count: items.length });
 });
 
-const noticeBodySchema = z
-  .object({
-    title_en: z.string().min(1).max(300),
-    title_hi: z.string().max(300).optional(),
-    content_en: z.string().max(8000).optional(),
-    content_hi: z.string().max(8000).optional(),
-    audience: z.enum(["batch", "centre", "city", "state", "national", "msv"]),
-    state_id: z.string().uuid().optional(),
-    city_id: z.string().uuid().optional(),
-    centre_id: z.string().uuid().optional(),
-    batch_id: z.string().uuid().optional(),
-    is_public: z.boolean().optional(),
-    pinned: z.boolean().optional(),
-    is_critical: z.boolean().optional(),
-  })
-  .superRefine((v, ctx) => {
-    // The targeting column must match the chosen audience.
-    if (v.audience === "state" && !v.state_id) ctx.addIssue({ code: "custom", message: "state_id required for state audience", path: ["state_id"] });
-    if (v.audience === "city" && !v.city_id) ctx.addIssue({ code: "custom", message: "city_id required for city audience", path: ["city_id"] });
-    if (v.audience === "centre" && !v.centre_id) ctx.addIssue({ code: "custom", message: "centre_id required for centre audience", path: ["centre_id"] });
-    if (v.audience === "batch" && !v.batch_id) ctx.addIssue({ code: "custom", message: "batch_id required for batch audience", path: ["batch_id"] });
-  });
-
-type NoticeBody = z.infer<typeof noticeBodySchema>;
+type NoticeBody = NoticeWrite;
 
 /**
  * Reduce a request body to ONLY the scope columns that match its audience (the
@@ -397,9 +413,15 @@ async function authorizeWrite(
 router.post("/admin", requireAuth, requireAdminPanel, async (req: Request, res: Response) => {
   let body: NoticeBody;
   try {
-    body = noticeBodySchema.parse(req.body);
+    body = noticeWriteSchema.parse(req.body);
   } catch {
     fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid notice data.");
+    return;
+  }
+
+  const publishedAt = resolvePublishedAt(body);
+  if (!expiresAfterPublish(body.expires_at, publishedAt)) {
+    fail(res, 400, "ERR_VALIDATION_FAILED", EXPIRES_AFTER_PUBLISH_MSG);
     return;
   }
 
@@ -430,7 +452,8 @@ router.post("/admin", requireAuth, requireAdminPanel, async (req: Request, res: 
       is_public: body.is_public ?? false,
       pinned: body.pinned ?? false,
       is_critical: body.is_critical ?? false,
-      published_at: new Date(),
+      published_at: publishedAt,
+      expires_at: body.expires_at != null ? new Date(body.expires_at) : null,
       created_by: req.authUser!.id,
     })
     .returning({ id: notices.id });
@@ -449,28 +472,46 @@ router.post("/admin", requireAuth, requireAdminPanel, async (req: Request, res: 
 /** Load a notice and confirm the caller may act on it within their scope. */
 async function loadScoped(
   req: Request,
-): Promise<{ ok: true; centre_id: string | null } | { ok: false }> {
+): Promise<
+  | { ok: true; centre_id: string | null; published_at: Date | null; expires_at: Date | null }
+  | { ok: false }
+> {
   const id = String(req.params.id);
   if (!UUID_RE.test(id)) return { ok: false };
   const [row] = await db
-    .select({ id: notices.id, audience: notices.audience, centre_id: notices.centre_id, state_id: notices.state_id, city_id: notices.city_id })
+    .select({
+      id: notices.id,
+      audience: notices.audience,
+      centre_id: notices.centre_id,
+      state_id: notices.state_id,
+      city_id: notices.city_id,
+      published_at: notices.published_at,
+      expires_at: notices.expires_at,
+    })
     .from(notices)
     .where(eq(notices.id, id))
     .limit(1);
   if (!row) return { ok: false };
 
+  const scoped = {
+    ok: true as const,
+    centre_id: row.centre_id,
+    published_at: row.published_at,
+    expires_at: row.expires_at,
+  };
+
   const role = req.authUser!.role;
-  if (role === "super_admin") return { ok: true, centre_id: row.centre_id };
+  if (role === "super_admin") return scoped;
 
   const scope = await resolveAdminScope(req.authUser!);
   if ((row.audience === "centre" || row.audience === "batch") && inScope(scope, row.centre_id)) {
-    return { ok: true, centre_id: row.centre_id };
+    return scoped;
   }
   if (row.audience === "state" && role === "state_admin" && req.authUser!.state_id && row.state_id === req.authUser!.state_id) {
-    return { ok: true, centre_id: row.centre_id };
+    return scoped;
   }
   if (row.audience === "city" && role === "city_admin" && req.authUser!.city_id && row.city_id === req.authUser!.city_id) {
-    return { ok: true, centre_id: row.centre_id };
+    return scoped;
   }
   return { ok: false };
 }
@@ -488,9 +529,32 @@ const editNotice = async (req: Request, res: Response): Promise<void> => {
 
   let body: NoticeBody;
   try {
-    body = noticeBodySchema.parse(req.body);
+    body = noticeWriteSchema.parse(req.body);
   } catch {
     fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid notice data.");
+    return;
+  }
+
+  // Publish fields are optional on edit: omit → keep current published_at.
+  let publishedAt = existing.published_at;
+  if (body.publish_now === false) publishedAt = null;
+  else if (body.publish_now === true) publishedAt = new Date();
+  else if (body.publish_at !== undefined) {
+    publishedAt = body.publish_at != null ? new Date(body.publish_at) : null;
+  }
+
+  // expires_at: undefined = leave unchanged; null/string = set.
+  const nextExpires =
+    body.expires_at === undefined
+      ? existing.expires_at
+      : body.expires_at != null
+        ? new Date(body.expires_at)
+        : null;
+
+  const expiresIsoForCheck =
+    nextExpires != null ? nextExpires.toISOString() : null;
+  if (!expiresAfterPublish(expiresIsoForCheck, publishedAt)) {
+    fail(res, 400, "ERR_VALIDATION_FAILED", EXPIRES_AFTER_PUBLISH_MSG);
     return;
   }
 
@@ -522,6 +586,8 @@ const editNotice = async (req: Request, res: Response): Promise<void> => {
       is_public: body.is_public ?? false,
       pinned: body.pinned ?? false,
       is_critical: body.is_critical ?? false,
+      published_at: publishedAt,
+      expires_at: nextExpires,
       updated_at: new Date(),
     })
     .where(eq(notices.id, id));

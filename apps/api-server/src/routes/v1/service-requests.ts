@@ -52,7 +52,7 @@ const createRequestSchema = z.object({
 router.post("/", async (req: Request, res: Response) => {
   let body: z.infer<typeof createRequestSchema>;
   try { body = createRequestSchema.parse(req.body); }
-  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid service request data."); return; }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "That request could not be saved — check the category, subject, and description, then try again."); return; }
 
   let centreId: string | null = null;
   let cityId: string | null = null;
@@ -214,7 +214,7 @@ async function loadAccessible(req: Request): Promise<
 router.get("/:id", async (req: Request, res: Response) => {
   const access = await loadAccessible(req);
   if (!access.ok) {
-    fail(res, 404, "ERR_NOT_FOUND", "Service request not found."); return;
+    fail(res, 404, "ERR_NOT_FOUND", "That request was not found — refresh the list and open it again, or ask your centre team if it is still available."); return;
   }
 
   const assignee = alias(users, "assignee");
@@ -298,7 +298,7 @@ router.post("/:id/messages", async (req: Request, res: Response) => {
 
   const access = await loadAccessible(req);
   if (!access.ok) {
-    fail(res, 404, "ERR_NOT_FOUND", "Service request not found."); return;
+    fail(res, 404, "ERR_NOT_FOUND", "That request was not found — refresh the list and open it again, or ask your centre team if it is still available."); return;
   }
 
   const now = new Date();
@@ -341,7 +341,7 @@ router.post("/:id/messages", async (req: Request, res: Response) => {
 async function loadInAdminScope(req: Request, res: Response): Promise<{ id: string } | null> {
   const id = String(req.params.id);
   if (!UUID_RE.test(id)) {
-    fail(res, 404, "ERR_NOT_FOUND", "Service request not found."); return null;
+    fail(res, 404, "ERR_NOT_FOUND", "That request was not found — refresh the list and open it again, or ask your centre team if it is still available."); return null;
   }
   const scope = await resolveAdminScope(req.authUser!);
   const [row] = await db
@@ -350,7 +350,7 @@ async function loadInAdminScope(req: Request, res: Response): Promise<{ id: stri
     .where(eq(service_requests.id, id))
     .limit(1);
   if (!row || !inScope(scope, row.centre_id)) {
-    fail(res, 404, "ERR_NOT_FOUND", "Service request not found."); return null;
+    fail(res, 404, "ERR_NOT_FOUND", "That request was not found — refresh the list and open it again, or ask your centre team if it is still available."); return null;
   }
   return { id: row.id };
 }

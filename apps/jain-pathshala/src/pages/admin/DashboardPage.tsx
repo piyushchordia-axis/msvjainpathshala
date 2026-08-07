@@ -1,15 +1,18 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2, Flame, GraduationCap, Sparkles } from 'lucide-react';
+import { t } from '@workspace/i18n';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { useAuth } from '@/lib/auth-context';
+import { useLocale } from '@/lib/locale-context';
 import { apiGet } from '@/lib/api-client';
 
 interface OverviewPayload {
   active_students: number;
   centres: number;
   open_service_requests: number;
+  pending_enrolments: number;
   attendance_rate_30d: number;
   punya_awarded_30d: number;
   msv_active: number;
@@ -33,10 +36,19 @@ function timeAgo(iso: string): string {
   return `${Math.round(hrs / 24)}d ago`;
 }
 
-const EMPTY: OverviewPayload = { active_students: 0, centres: 0, open_service_requests: 0, attendance_rate_30d: 0, punya_awarded_30d: 0, msv_active: 0 };
+const EMPTY: OverviewPayload = {
+  active_students: 0,
+  centres: 0,
+  open_service_requests: 0,
+  pending_enrolments: 0,
+  attendance_rate_30d: 0,
+  punya_awarded_30d: 0,
+  msv_active: 0,
+};
 
 export default function DashboardPage() {
   const { user } = useAuth();
+  const locale = useLocale();
   const firstName = (user?.full_name ?? '').split(/\s+/)[0] || 'there';
 
   const [overview, setOverview] = useState<OverviewPayload>(EMPTY);
@@ -55,7 +67,7 @@ export default function DashboardPage() {
     { label: 'Active students', value: overview.active_students.toLocaleString('en-IN'), delta: `${overview.centres} centres in scope`, icon: GraduationCap },
     { label: '30-day attendance', value: `${overview.attendance_rate_30d.toFixed(1)}%`, delta: 'rolling window', icon: CheckCircle2 },
     { label: 'Punya awarded', value: overview.punya_awarded_30d.toLocaleString('en-IN'), delta: 'this month', icon: Sparkles },
-    { label: 'Pending enrolments', value: String(pending.length), delta: 'awaiting your approval', icon: Flame },
+    { label: 'Pending enrolments', value: overview.pending_enrolments.toLocaleString('en-IN'), delta: 'awaiting your approval', icon: Flame },
   ];
 
   return (
@@ -97,7 +109,8 @@ export default function DashboardPage() {
               {[
                 { label: 'Centres', value: overview.centres },
                 { label: 'MSV approved', value: overview.msv_active },
-                { label: 'Open requests', value: overview.open_service_requests },
+                { label: t('requests.kpiOpen', locale), value: overview.open_service_requests },
+                { label: 'Pending enrolments', value: overview.pending_enrolments },
                 // Only present for city_admin and above — the API omits it for scoped roles.
                 ...(overview.donations_total_paise_ytd === undefined
                   ? []

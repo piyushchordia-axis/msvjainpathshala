@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'wouter';
+import { t, type Locale } from '@workspace/i18n';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-context';
 import { useLocale } from '@/lib/locale-context';
@@ -62,15 +63,18 @@ interface ChildOption {
   student_code: string;
 }
 
-// Category options keep parity with the values an admin sees on the list.
-const CATEGORIES: { value: string; en: string; hi: string }[] = [
-  { value: 'attendance', en: 'Attendance', hi: 'उपस्थिति' },
-  { value: 'enrolment', en: 'Enrolment', hi: 'नामांकन' },
-  { value: 'fees', en: 'Fees & donations', hi: 'शुल्क व दान' },
-  { value: 'id_card', en: 'ID card', hi: 'पहचान पत्र' },
-  { value: 'technical', en: 'App / technical', hi: 'ऐप / तकनीकी' },
-  { value: 'other', en: 'Other', hi: 'अन्य' },
-];
+const CATEGORY_KEYS = [
+  { value: 'attendance', key: 'catAttendance' },
+  { value: 'enrolment', key: 'catEnrolment' },
+  { value: 'fees', key: 'catFees' },
+  { value: 'id_card', key: 'catIdCard' },
+  { value: 'technical', key: 'catTechnical' },
+  { value: 'other', key: 'catOther' },
+] as const;
+
+function tr(locale: Locale, key: string): string {
+  return t(`requests.${key}`, locale);
+}
 
 function statusVariant(status: RequestStatus): 'default' | 'secondary' | 'outline' {
   if (status === 'resolved') return 'secondary';
@@ -78,16 +82,16 @@ function statusVariant(status: RequestStatus): 'default' | 'secondary' | 'outlin
   return 'outline';
 }
 
-function statusLabel(status: RequestStatus, hi: boolean): string {
-  if (status === 'resolved') return hi ? 'सुलझाया गया' : 'Resolved';
-  if (status === 'in_review') return hi ? 'समीक्षाधीन' : 'In review';
-  return hi ? 'प्रस्तुत' : 'Submitted';
+function statusLabel(status: RequestStatus, locale: Locale): string {
+  if (status === 'resolved') return tr(locale, 'statusResolved');
+  if (status === 'in_review') return tr(locale, 'statusInReview');
+  return tr(locale, 'statusSubmitted');
 }
 
-function categoryLabel(value: string, hi: boolean): string {
-  const c = CATEGORIES.find((x) => x.value === value);
+function categoryLabel(value: string, locale: Locale): string {
+  const c = CATEGORY_KEYS.find((x) => x.value === value);
   if (!c) return value;
-  return hi ? c.hi : c.en;
+  return tr(locale, c.key);
 }
 
 function fmt(ts: string): string {
@@ -97,7 +101,7 @@ function fmt(ts: string): string {
 /* ─────────────────────────── create form ─────────────────────────── */
 
 function CreateForm({ onCreated }: { onCreated: () => void }) {
-  const { hi } = useLocaleFlags();
+  const locale = useLocale();
   const [children, setChildren] = useState<ChildOption[]>([]);
   const [category, setCategory] = useState('');
   const [subject, setSubject] = useState('');
@@ -134,7 +138,7 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
         description: description.trim(),
         student_id: studentId !== 'none' ? studentId : undefined,
       });
-      toast.success(hi ? 'अनुरोध भेजा गया।' : 'Request submitted.');
+      toast.success(tr(locale, 'toastSubmitted'));
       setCategory('');
       setSubject('');
       setDescription('');
@@ -142,7 +146,7 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
       onCreated();
     } catch (err) {
       toast.error(
-        hi ? 'अनुरोध नहीं भेजा जा सका।' : 'Could not submit your request.',
+        tr(locale, 'toastSubmitFailed'),
         err instanceof ApiError ? err.message : undefined,
       );
     } finally {
@@ -153,28 +157,26 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
   return (
     <Card className="p-6 md:p-8">
       <h2 className="font-display text-2xl text-secondary">
-        {hi ? 'नया अनुरोध' : 'New request'}
+        {tr(locale, 'newRequest')}
       </h2>
       <p className="mt-2 text-sm text-muted-foreground">
-        {hi
-          ? 'अपनी समस्या या प्रश्न बताएं — आपके केंद्र की टीम उत्तर देगी।'
-          : 'Describe your issue or question — your centre team will respond.'}
+        {tr(locale, 'formIntro')}
       </p>
 
       <form className="mt-6 space-y-5" onSubmit={submit}>
         <div className="grid gap-5 md:grid-cols-2">
           <div className="space-y-1.5">
             <Label className="text-sm font-medium">
-              {hi ? 'श्रेणी' : 'Category'} <span className="text-destructive">*</span>
+              {tr(locale, 'category')} <span className="text-destructive">*</span>
             </Label>
             <Select value={category} onValueChange={setCategory}>
               <SelectTrigger>
-                <SelectValue placeholder={hi ? 'श्रेणी चुनें' : 'Choose a category'} />
+                <SelectValue placeholder={tr(locale, 'chooseCategory')} />
               </SelectTrigger>
               <SelectContent>
-                {CATEGORIES.map((c) => (
+                {CATEGORY_KEYS.map((c) => (
                   <SelectItem key={c.value} value={c.value}>
-                    {hi ? c.hi : c.en}
+                    {tr(locale, c.key)}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -184,14 +186,14 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
           {children.length > 0 ? (
             <div className="space-y-1.5">
               <Label className="text-sm font-medium">
-                {hi ? 'विद्यार्थी (वैकल्पिक)' : 'Student (optional)'}
+                {tr(locale, 'studentOptional')}
               </Label>
               <Select value={studentId} onValueChange={setStudentId}>
                 <SelectTrigger>
-                  <SelectValue placeholder={hi ? 'कोई नहीं' : 'None'} />
+                  <SelectValue placeholder={tr(locale, 'none')} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="none">{hi ? 'कोई नहीं' : 'None'}</SelectItem>
+                  <SelectItem value="none">{tr(locale, 'none')}</SelectItem>
                   {children.map((s) => (
                     <SelectItem key={s.id} value={s.id}>
                       {s.full_name} · {s.student_code}
@@ -205,33 +207,33 @@ function CreateForm({ onCreated }: { onCreated: () => void }) {
 
         <div className="space-y-1.5">
           <Label className="text-sm font-medium">
-            {hi ? 'विषय' : 'Subject'} <span className="text-destructive">*</span>
+            {tr(locale, 'subject')} <span className="text-destructive">*</span>
           </Label>
           <Input
             value={subject}
             onChange={(e) => setSubject(e.target.value)}
             maxLength={200}
-            placeholder={hi ? 'संक्षिप्त विषय' : 'A short subject'}
+            placeholder={tr(locale, 'subjectPlaceholder')}
             required
           />
         </div>
 
         <div className="space-y-1.5">
           <Label className="text-sm font-medium">
-            {hi ? 'विवरण' : 'Description'} <span className="text-destructive">*</span>
+            {tr(locale, 'description')} <span className="text-destructive">*</span>
           </Label>
           <Textarea
             rows={5}
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             maxLength={5000}
-            placeholder={hi ? 'अपनी समस्या विस्तार से लिखें…' : 'Describe your issue in detail…'}
+            placeholder={tr(locale, 'descriptionPlaceholder')}
             required
           />
         </div>
 
         <Button type="submit" disabled={!canSubmit || submitting}>
-          {submitting ? (hi ? 'भेजा जा रहा है…' : 'Submitting…') : hi ? 'अनुरोध भेजें' : 'Submit request'}
+          {submitting ? tr(locale, 'submitting') : tr(locale, 'submitRequest')}
         </Button>
       </form>
     </Card>
@@ -249,7 +251,7 @@ function ThreadPanel({
   onChanged: () => void;
   onClose: () => void;
 }) {
-  const { hi } = useLocaleFlags();
+  const locale = useLocale();
   const { user } = useAuth();
   const [detail, setDetail] = useState<RequestDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -264,12 +266,12 @@ function ThreadPanel({
       const res = await apiGet<RequestDetail>(`/v1/service-requests/${requestId}`);
       setDetail(res);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : hi ? 'अनुरोध लोड नहीं हुआ।' : 'Could not load this request.');
+      setError(err instanceof ApiError ? err.message : tr(locale, 'loadFailed'));
       setDetail(null);
     } finally {
       setLoading(false);
     }
-  }, [requestId, hi]);
+  }, [requestId, locale]);
 
   useEffect(() => {
     void load();
@@ -281,13 +283,13 @@ function ThreadPanel({
     setSending(true);
     try {
       await apiPost(`/v1/service-requests/${requestId}/messages`, { message: reply.trim() });
-      toast.success(hi ? 'उत्तर भेजा गया।' : 'Reply sent.');
+      toast.success(tr(locale, 'toastReplySent'));
       setReply('');
       await load();
       onChanged();
     } catch (err) {
       toast.error(
-        hi ? 'उत्तर नहीं भेजा जा सका।' : 'Could not send your reply.',
+        tr(locale, 'toastReplyFailed'),
         err instanceof ApiError ? err.message : undefined,
       );
     } finally {
@@ -300,12 +302,12 @@ function ThreadPanel({
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="font-display text-2xl text-secondary">
-            {detail?.subject ?? (hi ? 'अनुरोध' : 'Request')}
+            {detail?.subject ?? tr(locale, 'itemTitle')}
           </h2>
           {detail ? (
             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-              <Badge variant={statusVariant(detail.status)}>{statusLabel(detail.status, hi)}</Badge>
-              <span>{categoryLabel(detail.category, hi)}</span>
+              <Badge variant={statusVariant(detail.status)}>{statusLabel(detail.status, locale)}</Badge>
+              <span>{categoryLabel(detail.category, locale)}</span>
               {detail.student_name ? (
                 <>
                   <span>·</span>
@@ -322,17 +324,17 @@ function ThreadPanel({
           ) : null}
         </div>
         <Button variant="ghost" size="sm" onClick={onClose}>
-          {hi ? '← वापस' : '← Back'}
+          ← {tr(locale, 'back')}
         </Button>
       </div>
 
       {loading ? (
-        <p className="py-10 text-center text-muted-foreground">{hi ? 'लोड हो रहा है…' : 'Loading…'}</p>
+        <p className="py-10 text-center text-muted-foreground">{tr(locale, 'loading')}</p>
       ) : error ? (
         <div className="mt-6 space-y-3">
           <p className="text-sm text-destructive">{error}</p>
           <Button variant="outline" size="sm" onClick={() => void load()}>
-            {hi ? 'पुनः प्रयास करें' : 'Try again'}
+            {tr(locale, 'tryAgain')}
           </Button>
         </div>
       ) : detail ? (
@@ -342,10 +344,10 @@ function ThreadPanel({
           </div>
 
           <div className="space-y-2">
-            <Label className="text-xs font-medium">{hi ? 'बातचीत' : 'Conversation'}</Label>
+            <Label className="text-xs font-medium">{tr(locale, 'conversation')}</Label>
             {detail.messages.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                {hi ? 'अभी कोई उत्तर नहीं है।' : 'No replies yet.'}
+                {tr(locale, 'noReplies')}
               </p>
             ) : (
               <div className="space-y-2">
@@ -358,7 +360,7 @@ function ThreadPanel({
                     >
                       <div className="flex items-center justify-between text-xs text-muted-foreground">
                         <span className="font-medium text-foreground">
-                          {mine ? (hi ? 'आप' : 'You') : m.author_name ?? (hi ? 'टीम' : 'Team')}
+                          {mine ? tr(locale, 'you') : m.author_name ?? tr(locale, 'team')}
                         </span>
                         <span>{fmt(m.created_at)}</span>
                       </div>
@@ -372,24 +374,22 @@ function ThreadPanel({
 
           {detail.status === 'resolved' ? (
             <p className="rounded-md bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-              {hi
-                ? 'यह अनुरोध सुलझाया जा चुका है। उत्तर भेजने पर यह फिर से खुल जाएगा।'
-                : 'This request was resolved. Replying will reopen it.'}
+              {tr(locale, 'resolvedHint')}
             </p>
           ) : null}
 
           <form className="space-y-2" onSubmit={sendReply}>
-            <Label className="text-xs font-medium">{hi ? 'उत्तर लिखें' : 'Write a reply'}</Label>
+            <Label className="text-xs font-medium">{tr(locale, 'writeReply')}</Label>
             <Textarea
               rows={3}
               value={reply}
               onChange={(e) => setReply(e.target.value)}
               maxLength={5000}
-              placeholder={hi ? 'अपना संदेश लिखें…' : 'Type your message…'}
+              placeholder={tr(locale, 'replyPlaceholder')}
             />
             <div className="flex justify-end">
               <Button type="submit" size="sm" disabled={!reply.trim() || sending}>
-                {sending ? (hi ? 'भेजा जा रहा है…' : 'Sending…') : hi ? 'उत्तर भेजें' : 'Send reply'}
+                {sending ? tr(locale, 'sending') : tr(locale, 'sendReply')}
               </Button>
             </div>
           </form>
@@ -401,14 +401,8 @@ function ThreadPanel({
 
 /* ─────────────────────────── page ─────────────────────────── */
 
-// Small wrapper so children components read the boolean without re-deriving it.
-function useLocaleFlags() {
-  const locale = useLocale();
-  return { hi: locale === 'hi' };
-}
-
 export default function MyServiceRequestsPage() {
-  const { hi } = useLocaleFlags();
+  const locale = useLocale();
   const { user, loading: authLoading } = useAuth();
 
   const [items, setItems] = useState<MyRequestRow[]>([]);
@@ -423,12 +417,12 @@ export default function MyServiceRequestsPage() {
       const res = await apiGet<{ items: MyRequestRow[] }>('/v1/service-requests/mine?limit=100');
       setItems(res?.items ?? []);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : hi ? 'अनुरोध लोड नहीं हुए।' : 'Could not load your requests.');
+      setError(err instanceof ApiError ? err.message : tr(locale, 'loadListFailed'));
       setItems([]);
     } finally {
       setLoading(false);
     }
-  }, [hi]);
+  }, [locale]);
 
   useEffect(() => {
     if (user) void load();
@@ -438,7 +432,7 @@ export default function MyServiceRequestsPage() {
   if (authLoading) {
     return (
       <section className="container py-12 md:py-16">
-        <p className="text-muted-foreground">{hi ? 'लोड हो रहा है…' : 'Loading…'}</p>
+        <p className="text-muted-foreground">{tr(locale, 'loading')}</p>
       </section>
     );
   }
@@ -447,19 +441,17 @@ export default function MyServiceRequestsPage() {
     return (
       <section className="container py-12 md:py-16">
         <p className="text-sm font-medium uppercase tracking-[0.18em] text-primary">
-          {hi ? 'सहायता' : 'Support'}
+          {tr(locale, 'supportLabel')}
         </p>
         <h1 className="mt-3 font-display text-4xl text-secondary md:text-5xl">
-          {hi ? 'मेरे अनुरोध' : 'My requests'}
+          {tr(locale, 'myTitle')}
         </h1>
         <Card className="mt-8 max-w-xl p-8">
           <p className="text-muted-foreground">
-            {hi
-              ? 'सहायता अनुरोध बनाने और देखने के लिए कृपया अपने पंजीकृत मोबाइल नंबर से लॉगिन करें।'
-              : 'Please sign in with your registered mobile number to create and view support requests.'}
+            {tr(locale, 'signInPrompt')}
           </p>
           <Button asChild className="mt-6">
-            <Link href="/admin/login">{hi ? 'लॉगिन करें' : 'Sign in'}</Link>
+            <Link href="/admin/login">{tr(locale, 'signIn')}</Link>
           </Button>
         </Card>
       </section>
@@ -469,15 +461,13 @@ export default function MyServiceRequestsPage() {
   return (
     <section className="container py-12 md:py-16">
       <p className="text-sm font-medium uppercase tracking-[0.18em] text-primary">
-        {hi ? 'सहायता' : 'Support'}
+        {tr(locale, 'supportLabel')}
       </p>
       <h1 className="mt-3 font-display text-4xl text-secondary md:text-5xl">
-        {hi ? 'मेरे अनुरोध' : 'My requests'}
+        {tr(locale, 'myTitle')}
       </h1>
       <p className="mt-3 max-w-2xl text-muted-foreground">
-        {hi
-          ? 'अपने केंद्र की टीम से सहायता मांगें और बातचीत यहीं देखें।'
-          : 'Raise a request with your centre team and follow the conversation here.'}
+        {tr(locale, 'mySubtitle')}
       </p>
 
       <div className="mt-8 grid gap-8 lg:grid-cols-2">
@@ -495,22 +485,22 @@ export default function MyServiceRequestsPage() {
 
         <div className="space-y-4">
           <h2 className="font-display text-xl text-secondary">
-            {hi ? 'मेरे पिछले अनुरोध' : 'Your requests'}
+            {tr(locale, 'yourRequests')}
           </h2>
 
           {loading ? (
-            <p className="text-muted-foreground">{hi ? 'लोड हो रहा है…' : 'Loading…'}</p>
+            <p className="text-muted-foreground">{tr(locale, 'loading')}</p>
           ) : error ? (
             <div className="space-y-3">
               <p className="text-sm text-destructive">{error}</p>
               <Button variant="outline" size="sm" onClick={() => void load()}>
-                {hi ? 'पुनः प्रयास करें' : 'Try again'}
+                {tr(locale, 'tryAgain')}
               </Button>
             </div>
           ) : items.length === 0 ? (
             <Card className="p-6">
               <p className="text-muted-foreground">
-                {hi ? 'अभी आपका कोई अनुरोध नहीं है।' : 'You have no requests yet.'}
+                {tr(locale, 'emptyMine')}
               </p>
             </Card>
           ) : (
@@ -528,10 +518,10 @@ export default function MyServiceRequestsPage() {
                   >
                     <div className="flex items-center justify-between gap-3">
                       <span className="font-medium text-foreground">{r.subject}</span>
-                      <Badge variant={statusVariant(r.status)}>{statusLabel(r.status, hi)}</Badge>
+                      <Badge variant={statusVariant(r.status)}>{statusLabel(r.status, locale)}</Badge>
                     </div>
                     <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                      <span>{categoryLabel(r.category, hi)}</span>
+                      <span>{categoryLabel(r.category, locale)}</span>
                       {r.student_name ? (
                         <>
                           <span>·</span>

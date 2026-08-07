@@ -370,6 +370,11 @@ export default function MediaCurationPage() {
         </Card>
       ) : (
         <>
+          {selectableCount === 0 ? (
+            <Card className="mb-4 border-border bg-muted/40 p-4">
+              <p className="text-sm text-muted-foreground">{tr(locale, 'consentQueueBlocked')}</p>
+            </Card>
+          ) : null}
           {selectableCount > 0 ? (
             <div className="mb-3 flex items-center gap-2">
               <Checkbox

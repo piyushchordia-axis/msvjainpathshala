@@ -15,5 +15,6 @@ export function toSessionUser(u: User): SessionUser {
     state_id: u.state_id ?? null,
     city_id: u.city_id ?? null,
     photo_url: signUploadUrl(u.photo_url ?? null),
+    gallery_visibility_opt_in: u.gallery_visibility_opt_in === true,
   };
 }

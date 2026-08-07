@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
+import { t } from '@workspace/i18n';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { AdminError, AdminPageShell } from '@/components/admin/AdminPageShell';
+import { useLocale } from '@/lib/locale-context';
 import { apiGet } from '@/lib/api-client';
 import {
   ChartContainer,
@@ -14,6 +16,7 @@ interface OverviewPayload {
   active_students: number;
   centres: number;
   open_service_requests: number;
+  pending_enrolments: number;
   attendance_rate_30d: number;
   punya_awarded_30d: number;
   msv_active: number;
@@ -31,6 +34,7 @@ const EMPTY: OverviewPayload = {
   active_students: 0,
   centres: 0,
   open_service_requests: 0,
+  pending_enrolments: 0,
   attendance_rate_30d: 0,
   punya_awarded_30d: 0,
   msv_active: 0,
@@ -42,6 +46,7 @@ const chartConfig = {
 } satisfies ChartConfig;
 
 export default function AnalyticsPage() {
+  const locale = useLocale();
   const [data, setData] = useState<OverviewPayload>(EMPTY);
   const [trend, setTrend] = useState<TrendPoint[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -66,7 +71,8 @@ export default function AnalyticsPage() {
     { label: '30-day attendance', value: `${data.attendance_rate_30d.toFixed(1)}%` },
     { label: 'Punya awarded (30d)', value: data.punya_awarded_30d },
     { label: 'MSV approved', value: data.msv_active },
-    { label: 'Open service requests', value: data.open_service_requests },
+    { label: t('requests.kpiOpen', locale), value: data.open_service_requests },
+    { label: 'Pending enrolments', value: data.pending_enrolments },
     // Only present for city_admin and above — the API omits it for scoped roles.
     ...(data.donations_total_paise_ytd === undefined
       ? []

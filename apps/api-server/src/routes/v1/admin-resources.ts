@@ -369,6 +369,7 @@ router.get("/niyam-submissions", async (req: Request, res: Response) => {
       niyam_title_hi: niyams.title_hi,
       proof_url: niyam_submissions.proof_url,
       notes: niyam_submissions.notes,
+      rejection_reason: niyam_submissions.rejection_reason,
       submission_date: niyam_submissions.submission_date,
       status: niyam_submissions.status,
       points_awarded: niyam_submissions.points_awarded,
@@ -441,6 +442,7 @@ router.get("/niyam-submissions", async (req: Request, res: Response) => {
     niyam_title_hi: r.niyam_title_hi,
     proof_url: signUploadUrl(r.proof_url),
     notes: r.notes,
+    rejection_reason: r.rejection_reason,
     media: (mediaBySub.get(r.id) ?? []).map((m) => ({
       id: m.id,
       url: signUploadUrl(m.url),
@@ -752,6 +754,7 @@ router.post(
       return;
     }
 
+    // UNIQUE (centre_id, month) — re-queue overwrites a prior ready/failed row.
     const [row] = await db
       .insert(centre_monthly_reports)
       .values({
@@ -759,6 +762,17 @@ router.post(
         month,
         status: "queued",
         generated_by: req.authUser!.id,
+      })
+      .onConflictDoUpdate({
+        target: [centre_monthly_reports.centre_id, centre_monthly_reports.month],
+        set: {
+          status: "queued",
+          pdf_url: null,
+          error_message: null,
+          snapshot: null,
+          generated_by: req.authUser!.id,
+          updated_at: new Date(),
+        },
       })
       .returning({ id: centre_monthly_reports.id });
 
@@ -1694,78 +1708,9 @@ router.post("/students", async (req: Request, res: Response) => {
   ok(res, { ...row, parent_created: parent.created });
 });
 
-const createNoticeSchema = z.object({
-  title_en: z.string().min(1).max(500),
-  title_hi: z.string().max(500).optional(),
-  content_en: z.string().max(5000).optional(),
-  content_hi: z.string().max(5000).optional(),
-  audience: z.enum(["batch", "centre", "city", "state", "national", "msv"]).default("national"),
-  is_public: z.boolean().default(false),
-  pinned: z.boolean().default(false),
-  is_critical: z.boolean().default(false),
-  centre_id: z.string().uuid().optional(),
-  publish_now: z.boolean().default(true),
-});
-
-/* POST /v1/admin/notices */
-router.post("/notices", async (req: Request, res: Response) => {
-  let body: z.infer<typeof createNoticeSchema>;
-  try { body = createNoticeSchema.parse(req.body); }
-  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid notice data."); return; }
-  const scope = await resolveAdminScope(req.authUser!);
-  // Audience-based authorization (mirrors authorizeWrite in notices.ts):
-  //  - national / msv  → super_admin only
-  //  - state           → state_admin (their own state) or super_admin
-  //  - city            → city_admin (their own city) / state_admin / super_admin
-  //  - centre / batch  → target centre must be inside the caller's scope
-  // Without this, createNoticeSchema's defaults (audience="national",
-  // publish_now=true) let any admin-panel role publish an org-wide notice.
-  const role = req.authUser!.role;
-  if (role !== "super_admin") {
-    switch (body.audience) {
-      case "national":
-      case "msv":
-        fail(res, 403, "ERR_FORBIDDEN", "Only national admins can publish to this audience."); return;
-      case "state":
-        if (role !== "state_admin" || !req.authUser!.state_id) {
-          fail(res, 403, "ERR_FORBIDDEN", "You cannot target this state."); return;
-        }
-        break;
-      case "city":
-        if (role !== "city_admin" && role !== "state_admin") {
-          fail(res, 403, "ERR_FORBIDDEN", "You cannot target this city."); return;
-        }
-        break;
-      case "centre":
-      case "batch":
-        if (!inScope(scope, body.centre_id ?? null)) {
-          fail(res, 403, "ERR_FORBIDDEN", "Target is not in your scope."); return;
-        }
-        break;
-    }
-  }
-  const [row] = await db.insert(notices).values({
-    title_en: body.title_en,
-    title_hi: body.title_hi ?? null,
-    content_en: body.content_en ?? null,
-    content_hi: body.content_hi ?? null,
-    audience: body.audience,
-    is_public: body.is_public,
-    pinned: body.pinned,
-    is_critical: body.is_critical,
-    centre_id: body.centre_id ?? null,
-    created_by: req.authUser!.id,
-    published_at: body.publish_now ? new Date() : null,
-  }).returning({ id: notices.id, title_en: notices.title_en });
-  await auditFromReq(req, {
-    action: "create",
-    entityKind: "notice",
-    entityId: row.id,
-    summary: `Created notice "${row.title_en}".`,
-    metadata: { audience: body.audience, centre_id: body.centre_id ?? null },
-  });
-  ok(res, row);
-});
+/* POST /v1/admin/notices removed — authoring lives at POST /v1/notices/admin
+ * (noticeWriteSchema + LIVE visibility). The only caller was unrouted dead code
+ * in AdminListPages.NoticesPage. */
 
 const createShivirSchema = z.object({
   name: z.string().min(1).max(300),

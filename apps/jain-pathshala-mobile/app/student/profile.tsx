@@ -1,5 +1,6 @@
 import { useRouter } from "expo-router";
-import { View } from "react-native";
+import { Switch, View } from "react-native";
+import { t } from "@workspace/i18n";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -12,7 +13,7 @@ import { Body, Button, Card, Row, Screen, StateView, Title } from "@/components/
 export default function StudentProfile() {
   const c = useColors();
   const router = useRouter();
-  const { hi } = useLocale();
+  const { hi, locale } = useLocale();
   const { user, loading, logout } = useAuth();
   const { activeStudentId, activeChild, loading: childLoading } = useSessionView();
 
@@ -83,13 +84,34 @@ export default function StudentProfile() {
             <Card>
               <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
                 <View style={{ flex: 1, paddingRight: 12 }}>
-                  <Title style={{ fontSize: 16 }}>{hi ? "सहायता" : "Support"}</Title>
+                  <Title style={{ fontSize: 16 }}>
+                    {hi ? "गैलरी में दिखाएँ" : "Gallery visibility"}
+                  </Title>
+                  <Body muted style={{ marginTop: 4, fontSize: 13, lineHeight: 20 }}>
+                    {hi
+                      ? "यह परिवार की सहमति है — केवल अभिभावक इसे बदल सकते हैं। चालू होने पर स्वीकृत फ़ोटो पुण्य दीवार पर दिख सकती हैं।"
+                      : "This is your family's consent setting — only a parent can change it. When on, approved photos may appear on the Punya Wall."}
+                  </Body>
+                </View>
+                {/* Read-only in student view (Q4 context switch / family consent). */}
+                <Switch
+                  value={user.gallery_visibility_opt_in === true}
+                  disabled
+                  trackColor={{ true: c.primary, false: c.border }}
+                />
+              </Row>
+            </Card>
+
+            <Card>
+              <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
+                <View style={{ flex: 1, paddingRight: 12 }}>
+                  <Title style={{ fontSize: 16 }}>{t("requests.myTitle", locale)}</Title>
                   <Body muted style={{ marginTop: 4, fontSize: 13 }}>
-                    {hi ? "सेवा अनुरोध भेजें" : "Send a service request"}
+                    {t("requests.profileHint", locale)}
                   </Body>
                 </View>
                 <Button
-                  label={hi ? "खोलें" : "Open"}
+                  label={t("requests.open", locale)}
                   variant="outline"
                   icon="chatbubbles-outline"
                   onPress={() => router.push("/service-requests")}

@@ -165,7 +165,11 @@ export function registerDerivedDataJobs(): void {
     QUEUE_NAMES.NOTIFICATIONS_MONTHLY_REPORTS,
     CRON_EXPRESSIONS.NOTIFICATIONS_MONTHLY_REPORTS,
     async () => {
-      logger.info("notifications.monthly_reports tick (report worker hooks later)");
+      await enqueueJob(
+        QUEUE_NAMES.NOTIFICATIONS_MONTHLY_REPORTS,
+        {},
+        { jobId: dailyCronJobId("monthly_reports", todayIst()) },
+      );
     },
   );
 

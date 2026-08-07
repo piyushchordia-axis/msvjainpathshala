@@ -21,7 +21,10 @@ Three things worth knowing before reading the prompts, because they change the s
 
 **Every Guruji rejection currently sends the same sentence.** `rejectSchema` requires `reason` at 20–300 chars (`niyam-submissions.ts:986`), and `niyam-review.tsx:56` supplies a hardcoded fallback for every rejection. So the parent-facing feedback on a rejected Niyam is identical boilerplate regardless of what was wrong. Prompt 3 fixes this.
 
-**Note, not mandated:** `POST /:id/approve` and `POST /:id/reject` also use `inScope` (centre-level), so a shikshak can approve Niyams for students they don't teach. Tightening that to `inBatchWriteScope` is a product decision — a Sanchalak may legitimately want any Guruji at the centre to clear the queue. Decide it explicitly rather than by default; if you want it changed, say so in prompt 3.
+**Note (resolved Q12, 2026-08-05):** `POST /:id/approve` and `POST /:id/reject` now gate on
+`inBatchWriteScope` (batch-bound for shikshak; centre reach for sanchalak+). `GET /pending` stays
+centre-scoped and returns `can_decide`. Bulk-approve inherits the same gate via `approveNiyamSubmission`.
+Sanchalak mobile access is required in the same release — see the Q12 prompt.
 
 ---
 

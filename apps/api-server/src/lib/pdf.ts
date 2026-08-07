@@ -5,21 +5,19 @@
  *
  * Helvetica encodes WinAnsi only — Devanagari is stripped via `sanitize`
  * unless `createBilingual()` embeds Noto Sans Devanagari via @pdf-lib/fontkit.
+ *
+ * The Devanagari TTF is inlined by the api-server esbuild ttf-binary plugin so
+ * the built dist/*.mjs has no filesystem dependency on assets/.
  */
-import { readFileSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import "regenerator-runtime/runtime.js";
 import fontkit from "@pdf-lib/fontkit";
 import { PDFDocument, StandardFonts, rgb, type PDFFont, type PDFPage } from "pdf-lib";
+import devanagariFont from "../../assets/fonts/NotoSansDevanagari-Regular.ttf";
 
 const A4: [number, number] = [595.28, 841.89];
 const MARGIN = 50;
 const INK = rgb(0.12, 0.12, 0.14);
 const MUTED = rgb(0.45, 0.45, 0.5);
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const DEVANAGARI_FONT_PATH = join(__dirname, "../../assets/fonts/NotoSansDevanagari-Regular.ttf");
 
 /** Replace characters outside WinAnsi (e.g. Devanagari) so Helvetica won't throw. */
 export function sanitize(text: string): string {
@@ -29,6 +27,18 @@ export function sanitize(text: string): string {
 
 function hasDevanagari(text: string): boolean {
   return /[\u0900-\u097F]/.test(text);
+}
+
+/**
+ * Fail at boot (or before embed) if the inlined font is missing/empty —
+ * better than a Sanchalak seeing a raw ENOENT on the first report of the month.
+ */
+export function assertDevanagariFontAvailable(): void {
+  if (!devanagariFont || devanagariFont.byteLength < 1_000) {
+    throw new Error(
+      "Devanagari font is missing from the API bundle — bilingual centre monthly reports cannot run. Rebuild the API so NotoSansDevanagari-Regular.ttf is inlined (esbuild ttf-binary plugin), then redeploy.",
+    );
+  }
 }
 
 export class PdfBuilder {
@@ -50,11 +60,18 @@ export class PdfBuilder {
 
   /** Helvetica + embedded Noto Sans Devanagari for bilingual centre reports. */
   static async createBilingual(): Promise<PdfBuilder> {
-    const b = await PdfBuilder.create();
-    b.doc.registerFontkit(fontkit);
-    const bytes = readFileSync(DEVANAGARI_FONT_PATH);
-    b.hiFont = await b.doc.embedFont(bytes, { subset: true });
-    return b;
+    assertDevanagariFontAvailable();
+    try {
+      const b = await PdfBuilder.create();
+      b.doc.registerFontkit(fontkit);
+      b.hiFont = await b.doc.embedFont(devanagariFont, { subset: true });
+      return b;
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Could not embed the Devanagari font required for bilingual reports (${detail}). Rebuild the API so NotoSansDevanagari-Regular.ttf is inlined, then try again.`,
+      );
+    }
   }
 
   private fontFor(text: string, preferBold = false): PDFFont {

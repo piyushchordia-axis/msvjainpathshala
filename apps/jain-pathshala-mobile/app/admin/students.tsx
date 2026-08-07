@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   FlatList,
+  Modal,
   Platform,
   Pressable,
   RefreshControl,
@@ -14,12 +15,23 @@ import {
 import { fonts, bodyFamily } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
-import { useAdminStudents, useStudentStatusAction } from "@/lib/queries";
+import {
+  useAdminBatches,
+  useAdminCentres,
+  useAdminStudents,
+  useCreateAdminStudent,
+  useStudentStatusAction,
+} from "@/lib/queries";
 import type { AdminStudentRow } from "@/lib/types";
 import { formatDate } from "@/lib/format";
-import { formatAgeGroup } from "@workspace/api-zod";
+import { ageGroupFromDob, formatAgeGroup } from "@workspace/api-zod";
+import { ApiError } from "@/lib/api";
 import { AppHeader } from "@/components/AppHeader";
+import { CentreSwitcher, usePersistedCentreId } from "@/components/CentreSwitcher";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+
+const CENTRE_KEY = "jp.sanchalak.selectedCentreId";
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 const STATUS_FILTERS = [
   { key: "", en: "All", hi: "सभी" },
@@ -27,12 +39,380 @@ const STATUS_FILTERS = [
   { key: "inactive", en: "Inactive", hi: "निष्क्रिय" },
 ];
 
+const BLOOD_GROUPS = ["A+", "A-", "B+", "B-", "AB+", "AB-", "O+", "O-"] as const;
+
+const GUARDIAN_RELATIONS = [
+  { value: "father" as const, en: "Father", hi: "पिता" },
+  { value: "mother" as const, en: "Mother", hi: "माता" },
+  { value: "guardian" as const, en: "Guardian", hi: "अभिभावक" },
+];
+
+function normalizePhone(raw: string): string {
+  const digits = raw.replace(/\D/g, "");
+  if (raw.trim().startsWith("+")) return `+${digits}`;
+  if (digits.length === 10) return `+91${digits}`;
+  if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
+  return raw.trim();
+}
+
+function Chip({
+  label,
+  active,
+  onPress,
+  disabled,
+}: {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+  disabled?: boolean;
+}) {
+  const c = useColors();
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      style={{
+        backgroundColor: active ? c.primary : c.muted,
+        borderRadius: 999,
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderWidth: 1,
+        borderColor: active ? c.primary : c.border,
+        opacity: disabled ? 0.5 : 1,
+      }}
+    >
+      <Text
+        style={{
+          fontFamily: fonts.bodySemiBold,
+          fontSize: 13,
+          color: active ? c.primaryForeground : c.mutedForeground,
+        }}
+      >
+        {label}
+      </Text>
+    </Pressable>
+  );
+}
+
+function FieldLabel({ children }: { children: string }) {
+  const { hi } = useLocale();
+  return (
+    <Body muted style={{ fontSize: 12, marginBottom: 4, lineHeight: 22, fontFamily: bodyFamily(hi) }}>
+      {children}
+    </Body>
+  );
+}
+
+function TextField(props: {
+  value: string;
+  onChangeText: (t: string) => void;
+  placeholder?: string;
+  keyboardType?: "default" | "numeric" | "phone-pad";
+  autoCapitalize?: "none" | "words";
+}) {
+  const c = useColors();
+  const { hi } = useLocale();
+  return (
+    <TextInput
+      value={props.value}
+      onChangeText={props.onChangeText}
+      placeholder={props.placeholder}
+      placeholderTextColor={c.mutedForeground}
+      keyboardType={props.keyboardType}
+      autoCapitalize={props.autoCapitalize ?? "none"}
+      autoCorrect={false}
+      style={{
+        fontFamily: bodyFamily(hi),
+        fontSize: 16,
+        lineHeight: 22,
+        color: c.foreground,
+        backgroundColor: c.muted,
+        borderRadius: c.radius ?? 12,
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        marginBottom: 12,
+      }}
+    />
+  );
+}
+
+function AddStudentModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const c = useColors();
+  const { hi } = useLocale();
+  const centresQ = useAdminCentres(open);
+  const batchesQ = useAdminBatches(open);
+  const createMut = useCreateAdminStudent();
+
+  const centres = useMemo(
+    () =>
+      (centresQ.data?.items ?? []).map((x) => ({
+        centre_id: x.id,
+        centre_name: x.name,
+      })),
+    [centresQ.data?.items],
+  );
+  const [centreId, setCentreId] = usePersistedCentreId(centres, CENTRE_KEY);
+
+  const [fullName, setFullName] = useState("");
+  const [dob, setDob] = useState("");
+  const [batchId, setBatchId] = useState("");
+  const [gender, setGender] = useState<"" | "male" | "female" | "other">("");
+  const [bloodGroup, setBloodGroup] = useState("");
+  const [guardianRelation, setGuardianRelation] = useState<"father" | "mother" | "guardian">("father");
+  const [parentName, setParentName] = useState("");
+  const [parentPhone, setParentPhone] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setFullName("");
+    setDob("");
+    setBatchId("");
+    setGender("");
+    setBloodGroup("");
+    setGuardianRelation("father");
+    setParentName("");
+    setParentPhone("");
+  }, [open]);
+
+  useEffect(() => {
+    setBatchId("");
+  }, [centreId]);
+
+  const derivedAgeGroup = dob && DATE_RE.test(dob) ? ageGroupFromDob(dob) : null;
+
+  const filteredBatches = useMemo(() => {
+    const all = batchesQ.data?.items ?? [];
+    return all.filter((b) => {
+      if (centreId && b.centre_id && b.centre_id !== centreId) return false;
+      if (centreId && !b.centre_id) {
+        // fall back: match centre name when centre_id missing
+        const centre = centres.find((x) => x.centre_id === centreId);
+        if (centre && b.centre_name !== centre.centre_name) return false;
+      }
+      if (derivedAgeGroup && b.age_groups?.length && !b.age_groups.includes(derivedAgeGroup)) {
+        return false;
+      }
+      return b.status === "active";
+    });
+  }, [batchesQ.data?.items, centreId, centres, derivedAgeGroup]);
+
+  function submit() {
+    const phone = normalizePhone(parentPhone);
+    if (!fullName.trim() || !centreId || !DATE_RE.test(dob) || !parentName.trim() || !phone.startsWith("+")) {
+      Alert.alert(
+        hi ? "अधूरा फ़ॉर्म" : "Incomplete form",
+        hi
+          ? "नाम, केंद्र, जन्म तिथि (YYYY-MM-DD), अभिभावक नाम और मोबाइल भरें।"
+          : "Fill name, centre, date of birth (YYYY-MM-DD), parent name and mobile.",
+      );
+      return;
+    }
+    if (!derivedAgeGroup) {
+      Alert.alert(
+        hi ? "जन्म तिथि गलत" : "Invalid date of birth",
+        hi
+          ? "आयु 5 से 21 वर्ष के बीच होनी चाहिए।"
+          : "Date of birth must be between 5 and 21 years of age.",
+      );
+      return;
+    }
+    createMut.mutate(
+      {
+        full_name: fullName.trim(),
+        centre_id: centreId,
+        dob,
+        batch_id: batchId || undefined,
+        gender: gender || undefined,
+        blood_group: bloodGroup || undefined,
+        parent_full_name: parentName.trim(),
+        parent_phone: phone,
+        guardian_relation: guardianRelation,
+      },
+      {
+        onSuccess: (res) => {
+          Alert.alert(
+            hi ? "विद्यार्थी जोड़ा" : "Student registered",
+            res.parent_created
+              ? hi
+                ? `कोड ${res.student_code}. अभिभावक लॉगिन बनाया गया।`
+                : `Code ${res.student_code}. Parent login created.`
+              : hi
+                ? `कोड ${res.student_code}. मौजूदा अभिभावक से जोड़ा गया।`
+                : `Code ${res.student_code}. Linked to existing parent.`,
+          );
+          onClose();
+        },
+        onError: (e) =>
+          Alert.alert(
+            hi ? "त्रुटि" : "Error",
+            e instanceof ApiError ? e.message : e instanceof Error ? e.message : "Action failed",
+          ),
+      },
+    );
+  }
+
+  return (
+    <Modal visible={open} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: c.background }}>
+        <View
+          style={{
+            paddingHorizontal: 18,
+            paddingTop: 18,
+            paddingBottom: 12,
+            borderBottomWidth: 1,
+            borderBottomColor: c.border,
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <Title style={{ fontSize: 18, lineHeight: 26, flex: 1, paddingRight: 12 }}>
+            {hi ? "विद्यार्थी जोड़ें" : "Add student"}
+          </Title>
+          <Pressable onPress={onClose} hitSlop={12} disabled={createMut.isPending}>
+            <Text style={{ color: c.primary, fontFamily: bodyFamily(hi, "semibold") }}>
+              {hi ? "बंद करें" : "Close"}
+            </Text>
+          </Pressable>
+        </View>
+        <ScrollView
+          contentContainerStyle={{ padding: 18, paddingBottom: 40 }}
+          keyboardShouldPersistTaps="handled"
+        >
+          <FieldLabel>{hi ? "पूरा नाम *" : "Full name *"}</FieldLabel>
+          <TextField
+            value={fullName}
+            onChangeText={setFullName}
+            placeholder={hi ? "विद्यार्थी का नाम" : "Student name"}
+            autoCapitalize="words"
+          />
+
+          <FieldLabel>{hi ? "केंद्र *" : "Centre *"}</FieldLabel>
+          <CentreSwitcher
+            centres={centres}
+            storageKey={CENTRE_KEY}
+            selectedId={centreId}
+            onChange={setCentreId}
+          />
+
+          <FieldLabel>{hi ? "जन्म तिथि * (YYYY-MM-DD)" : "Date of birth * (YYYY-MM-DD)"}</FieldLabel>
+          <TextField value={dob} onChangeText={setDob} placeholder="2015-08-15" />
+          <Body muted style={{ marginTop: -4, marginBottom: 12, lineHeight: 22, fontSize: 13 }}>
+            {dob
+              ? derivedAgeGroup
+                ? `${hi ? "आयु समूह" : "Age group"}: ${formatAgeGroup(derivedAgeGroup, hi ? "hi" : "en")}`
+                : hi
+                  ? "आयु 5–21 वर्ष के बाहर"
+                  : "Outside 5–21 years"
+              : hi
+                ? "आयु समूह जन्म तिथि से निकलेगा"
+                : "Age group is derived from date of birth"}
+          </Body>
+
+          <FieldLabel>{hi ? "बैच (वैकल्पिक)" : "Batch (optional)"}</FieldLabel>
+          <Row style={{ flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+            <Chip
+              label={hi ? "कोई नहीं" : "None"}
+              active={!batchId}
+              onPress={() => setBatchId("")}
+            />
+            {filteredBatches.map((b) => (
+              <Chip
+                key={b.id}
+                label={b.name ?? b.id.slice(0, 8)}
+                active={batchId === b.id}
+                onPress={() => setBatchId(b.id)}
+              />
+            ))}
+          </Row>
+
+          <FieldLabel>{hi ? "लिंग" : "Gender"}</FieldLabel>
+          <Row style={{ flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+            {(
+              [
+                { v: "" as const, en: "—", hi: "—" },
+                { v: "male" as const, en: "Male", hi: "पुरुष" },
+                { v: "female" as const, en: "Female", hi: "महिला" },
+                { v: "other" as const, en: "Other", hi: "अन्य" },
+              ] as const
+            ).map((g) => (
+              <Chip
+                key={g.v || "none"}
+                label={hi ? g.hi : g.en}
+                active={gender === g.v}
+                onPress={() => setGender(g.v)}
+              />
+            ))}
+          </Row>
+
+          <FieldLabel>{hi ? "रक्त समूह" : "Blood group"}</FieldLabel>
+          <Row style={{ flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+            <Chip label="—" active={!bloodGroup} onPress={() => setBloodGroup("")} />
+            {BLOOD_GROUPS.map((g) => (
+              <Chip
+                key={g}
+                label={g}
+                active={bloodGroup === g}
+                onPress={() => setBloodGroup(g)}
+              />
+            ))}
+          </Row>
+
+          <Title style={{ fontSize: 15, marginBottom: 10, lineHeight: 22 }}>
+            {hi ? "अभिभावक लॉगिन" : "Parent / guardian login"}
+          </Title>
+
+          <FieldLabel>{hi ? "संबंध *" : "Relation *"}</FieldLabel>
+          <Row style={{ flexWrap: "wrap", gap: 8, marginBottom: 12 }}>
+            {GUARDIAN_RELATIONS.map((r) => (
+              <Chip
+                key={r.value}
+                label={hi ? r.hi : r.en}
+                active={guardianRelation === r.value}
+                onPress={() => setGuardianRelation(r.value)}
+              />
+            ))}
+          </Row>
+
+          <FieldLabel>{hi ? "अभिभावक का नाम *" : "Parent name *"}</FieldLabel>
+          <TextField
+            value={parentName}
+            onChangeText={setParentName}
+            placeholder={hi ? "पूरा नाम" : "Full name"}
+            autoCapitalize="words"
+          />
+
+          <FieldLabel>{hi ? "मोबाइल *" : "Mobile *"}</FieldLabel>
+          <TextField
+            value={parentPhone}
+            onChangeText={setParentPhone}
+            placeholder="+91 98XXXXXXXX"
+            keyboardType="phone-pad"
+          />
+          <Body muted style={{ marginTop: -4, marginBottom: 16, lineHeight: 22, fontSize: 13 }}>
+            {hi
+              ? "वे इस नंबर से ओटीपी से साइन इन कर सकेंगे।"
+              : "They can sign in with this number (OTP) to manage the student."}
+          </Body>
+
+          <Button
+            label={hi ? "पंजीकृत करें" : "Register"}
+            onPress={submit}
+            loading={createMut.isPending}
+          />
+        </ScrollView>
+      </View>
+    </Modal>
+  );
+}
+
 export default function StudentsScreen() {
   const c = useColors();
   const { hi } = useLocale();
   const [status, setStatus] = useState("");
   const [qInput, setQInput] = useState("");
   const [q, setQ] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
   const list = useAdminStudents({ status: status || undefined, q: q || undefined });
   const mutate = useStudentStatusAction();
 
@@ -132,6 +512,13 @@ export default function StudentsScreen() {
       <AppHeader
         title={hi ? "विद्यार्थी" : "Students"}
         subtitle={hi ? "आपके केंद्रों की सूची" : "Roster across your centres"}
+        right={
+          <Button
+            label={hi ? "जोड़ें" : "Add"}
+            onPress={() => setAddOpen(true)}
+            style={{ paddingHorizontal: 12, minHeight: 36 }}
+          />
+        }
       />
       <View
         style={{
@@ -253,6 +640,7 @@ export default function StudentsScreen() {
           />
         )}
       </Screen>
+      <AddStudentModal open={addOpen} onClose={() => setAddOpen(false)} />
     </View>
   );
 }
