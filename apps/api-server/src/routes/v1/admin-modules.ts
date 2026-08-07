@@ -348,6 +348,12 @@ router.post("/curricula", requireRole("super_admin", "state_admin", "city_admin"
       fail(res, 403, "ERR_FORBIDDEN", "City not in your scope."); return;
     }
   }
+  // Q2 / CU8 — kind='msv' (and national city_id null, already blocked above for
+  // non-super) is super_admin only at the service layer.
+  if (body.kind === "msv" && req.authUser!.role !== "super_admin") {
+    fail(res, 403, "ERR_FORBIDDEN", "Only a super_admin may create MSV courses.");
+    return;
+  }
   const [row] = await db.insert(courses).values({
     name_en: body.name,
     kind: body.kind,

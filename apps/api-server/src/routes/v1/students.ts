@@ -10,7 +10,7 @@ import {
   batches,
   absence_notifications,
 } from "@workspace/db";
-import { and, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, gte, isNull, lte } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
@@ -21,6 +21,17 @@ import {
 } from "../../lib/attendance-rate";
 import { canAccessAdminPanel } from "@workspace/api-zod";
 import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
+
+/** Parse YYYY-MM into inclusive session_date bounds, or null if invalid. */
+function monthBounds(monthRaw: string | null): { from: string; to: string } | null {
+  if (!monthRaw || !/^\d{4}-\d{2}$/.test(monthRaw)) return null;
+  const [y, m] = monthRaw.split("-").map(Number) as [number, number];
+  const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
+  return {
+    from: `${monthRaw}-01`,
+    to: `${monthRaw}-${String(last).padStart(2, "0")}`,
+  };
+}
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -76,16 +87,17 @@ router.get("/:id/attendance", async (req: Request, res: Response) => {
   }
 
   const monthRaw = typeof req.query.month === "string" ? req.query.month : null;
-  let from: string | null = null;
-  let to: string | null = null;
-  if (monthRaw && /^\d{4}-\d{2}$/.test(monthRaw)) {
-    from = `${monthRaw}-01`;
-    const [y, m] = monthRaw.split("-").map(Number) as [number, number];
-    const last = new Date(Date.UTC(y, m, 0)).getUTCDate();
-    to = `${monthRaw}-${String(last).padStart(2, "0")}`;
-  }
+  const bounds = monthBounds(monthRaw);
+  const from = bounds?.from ?? null;
+  const to = bounds?.to ?? null;
 
-  const limit = clampLimit(req.query.limit, 40, 120);
+  // Month views need a full calendar window; unscoped history stays smaller.
+  const limit = clampLimit(req.query.limit, bounds ? 120 : 40, 120);
+  const itemFilters = [eq(attendance.student_id, id)];
+  if (bounds) {
+    itemFilters.push(gte(attendance.session_date, bounds.from));
+    itemFilters.push(lte(attendance.session_date, bounds.to));
+  }
   const rows = await db
     .select({
       id: attendance.id,
@@ -98,10 +110,11 @@ router.get("/:id/attendance", async (req: Request, res: Response) => {
     .from(attendance)
     .innerJoin(sessions, eq(sessions.id, attendance.session_id))
     .leftJoin(batches, eq(batches.id, sessions.batch_id))
-    .where(eq(attendance.student_id, id))
+    .where(and(...itemFilters))
     .orderBy(desc(attendance.session_date))
     .limit(limit);
 
+  // AT5 — rate from SQL only; never derive from filtered items.
   const rate = await getStudentAttendanceRate(id, from, to);
   ok(
     res,
@@ -118,6 +131,59 @@ const absenceSchema = z.object({
   start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   reason: z.string().min(1).max(500).optional(),
+});
+
+/* GET /v1/students/:id/absences?month=YYYY-MM — pending + recent leave windows */
+router.get("/:id/absences", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  if (!UUID_RE.test(id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
+    return;
+  }
+  const access = await studentAccess(req, id);
+  if (access === "missing") {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
+    return;
+  }
+  if (access === "forbidden") {
+    fail(res, 403, "ERR_FORBIDDEN", "Student is outside your scope.");
+    return;
+  }
+
+  const monthRaw = typeof req.query.month === "string" ? req.query.month : null;
+  const bounds = monthBounds(monthRaw);
+  const limit = clampLimit(req.query.limit, 40, 120);
+
+  const filters = [eq(absence_notifications.student_id, id)];
+  if (bounds) {
+    // Range intersects the month window.
+    filters.push(lte(absence_notifications.start_date, bounds.to));
+    filters.push(gte(absence_notifications.end_date, bounds.from));
+  }
+
+  const rows = await db
+    .select({
+      id: absence_notifications.id,
+      start_date: absence_notifications.start_date,
+      end_date: absence_notifications.end_date,
+      reason: absence_notifications.reason,
+      resolved_at: absence_notifications.resolved_at,
+    })
+    .from(absence_notifications)
+    .where(and(...filters))
+    .orderBy(desc(absence_notifications.start_date))
+    .limit(limit);
+
+  ok(
+    res,
+    {
+      items: rows.map((r) => ({
+        ...r,
+        resolved_at: r.resolved_at ? r.resolved_at.toISOString() : null,
+      })),
+    },
+    { count: rows.length },
+  );
 });
 
 /* POST /v1/students/:id/absences — parent advance absence (AT4) */
@@ -171,6 +237,28 @@ router.post("/:id/absences", async (req: Request, res: Response) => {
     return;
   }
   ok(res, row);
+});
+
+/* GET /v1/students/:id/course-progress?course_id= — CU28 via fn_course_progress */
+router.get("/:id/course-progress", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  const courseId = typeof req.query.course_id === "string" ? req.query.course_id : null;
+  if (!UUID_RE.test(id) || !courseId || !UUID_RE.test(courseId)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "student id and course_id are required.");
+    return;
+  }
+  const access = await studentAccess(req, id);
+  if (access === "missing") {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
+    return;
+  }
+  if (access === "forbidden") {
+    fail(res, 403, "ERR_COURSE_STUDENT_OUT_OF_SCOPE", "That student is outside your scope.");
+    return;
+  }
+  const { getCourseProgress } = await import("../../lib/course-progress");
+  const stats = await getCourseProgress(id, courseId);
+  ok(res, stats);
 });
 
 export default router;

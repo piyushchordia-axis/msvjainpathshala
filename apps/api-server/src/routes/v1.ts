@@ -27,12 +27,14 @@ import notificationsRouter from "./v1/notifications";
 import shivirScannerRouter from "./v1/shivir-scanner";
 import enquiriesRouter from "./v1/enquiries";
 import curriculumRouter from "./v1/curriculum";
+import coursesRouter from "./v1/courses";
 import libraryRouter from "./v1/library";
 import enrolmentsRouter from "./v1/enrolments";
 import clientSettingsRouter from "./v1/client-settings";
 import syncRouter from "./v1/sync";
 import studentsRouter from "./v1/students";
 import centresRouter from "./v1/centres";
+import translateRouter from "./v1/translate";
 
 const router: IRouter = Router();
 
@@ -63,8 +65,10 @@ router.use("/notifications", notificationsRouter);
 router.use("/shivir-scanner", shivirScannerRouter);
 router.use("/enquiries", enquiriesRouter);
 router.use("/curriculum", curriculumRouter);
+router.use("/courses", coursesRouter);
 router.use("/library", libraryRouter);
 router.use("/enrolments", enrolmentsRouter);
 router.use("/students", studentsRouter);
+router.use("/translate", translateRouter);
 
 export default router;

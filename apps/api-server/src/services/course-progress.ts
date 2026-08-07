@@ -1,12 +1,22 @@
 /**
- * Course progress writes — CU9–CU12, CU15.
+ * Course progress writes — CU9–CU15.
  * Single implementation for the online route and (later) offline sync/batch.
  * Never a parallel offline-only path.
  */
-import { db, course_sections, course_subsections, student_course_progress } from "@workspace/db";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import {
+  db,
+  course_sections,
+  course_subsections,
+  student_course_progress,
+  students,
+} from "@workspace/db";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { ErrorCode } from "@workspace/api-zod";
 import { ErrorCode as Err } from "@workspace/api-zod";
+import type { AdminScope } from "../lib/scope";
+import { inBatchWriteScope } from "../lib/scope";
+import { writeAudits, type AuditInput } from "../lib/audit";
+import type { Role } from "@workspace/api-zod";
 
 /** Live status values only — 'mastered' is reserved and never written (CU11). */
 export const COURSE_PROGRESS_STATUSES = ["not_started", "in_progress", "completed"] as const;
@@ -248,4 +258,295 @@ export async function upsertCourseProgress(
     certified_at: row.certified_at,
     revision: row.revision,
   };
+}
+
+const STATUS_RANK: Record<CourseProgressStatus, number> = {
+  not_started: 0,
+  in_progress: 1,
+  completed: 2,
+};
+
+export function statusRank(status: string | null | undefined): number {
+  if (!status || status === "not_started") return 0;
+  if (status === "in_progress") return 1;
+  if (status === "completed" || status === "mastered") return 2;
+  return 0;
+}
+
+export type BulkProgressInput = {
+  nodeKind: CourseProgressNodeKind;
+  nodeId: string;
+  status: CourseProgressStatus;
+  note?: string | null;
+  batchId?: string | null;
+  studentIds?: string[] | null;
+  scope: AdminScope;
+  updatedBy: string;
+  updatedByRole: string;
+};
+
+/**
+ * CU13/CU14 — bulk advance only. Exactly one of batch_id / student_ids.
+ * Out-of-scope student_ids → 403 whole, nothing applied.
+ */
+export async function bulkUpsertCourseProgress(input: BulkProgressInput): Promise<{
+  applied: number;
+  skipped: number;
+  student_ids: string[];
+}> {
+  assertLiveStatus(input.status);
+  const hasBatch = !!input.batchId;
+  const hasIds = Array.isArray(input.studentIds) && input.studentIds.length > 0;
+  if (hasBatch === hasIds) {
+    throw new CourseProgressError(
+      422,
+      Err.VALIDATION_FAILED,
+      "Provide exactly one of batch_id or student_ids.",
+    );
+  }
+
+  let roster: Array<{ id: string; batch_id: string | null; centre_id: string | null }>;
+  if (hasBatch) {
+    roster = await db
+      .select({
+        id: students.id,
+        batch_id: students.batch_id,
+        centre_id: students.centre_id,
+      })
+      .from(students)
+      .where(
+        and(
+          eq(students.batch_id, input.batchId!),
+          eq(students.status, "active"),
+          isNull(students.deleted_at),
+        ),
+      );
+  } else {
+    roster = await db
+      .select({
+        id: students.id,
+        batch_id: students.batch_id,
+        centre_id: students.centre_id,
+      })
+      .from(students)
+      .where(
+        and(
+          inArray(students.id, input.studentIds!),
+          eq(students.status, "active"),
+          isNull(students.deleted_at),
+        ),
+      );
+    if (roster.length !== input.studentIds!.length) {
+      throw new CourseProgressError(
+        403,
+        Err.COURSE_STUDENT_OUT_OF_SCOPE,
+        "One or more students are outside your scope — nothing was applied.",
+      );
+    }
+  }
+
+  for (const s of roster) {
+    if (!inBatchWriteScope(input.scope, s.batch_id, s.centre_id)) {
+      throw new CourseProgressError(
+        403,
+        Err.COURSE_STUDENT_OUT_OF_SCOPE,
+        "One or more students are outside your scope — nothing was applied.",
+      );
+    }
+  }
+
+  // Resolve node once (throws 404 if missing).
+  await resolveNode(input.nodeKind, input.nodeId);
+
+  let applied = 0;
+  let skipped = 0;
+  const appliedIds: string[] = [];
+  const targetRank = STATUS_RANK[input.status];
+
+  for (const s of roster) {
+    const [existing] = await db
+      .select({
+        status: student_course_progress.status,
+        certified_at: student_course_progress.certified_at,
+      })
+      .from(student_course_progress)
+      .where(
+        input.nodeKind === "subsection"
+          ? and(
+              eq(student_course_progress.student_id, s.id),
+              eq(student_course_progress.subsection_id, input.nodeId),
+            )
+          : and(
+              eq(student_course_progress.student_id, s.id),
+              eq(student_course_progress.section_id, input.nodeId),
+              isNull(student_course_progress.subsection_id),
+            ),
+      )
+      .limit(1);
+
+    // CU12 — certified rows excluded from every bulk write.
+    if (existing?.certified_at) {
+      skipped += 1;
+      continue;
+    }
+    // CU14 — advance only; silence (no row) ranks as not_started.
+    if (statusRank(existing?.status) >= targetRank) {
+      skipped += 1;
+      continue;
+    }
+
+    await upsertCourseProgress({
+      studentId: s.id,
+      nodeKind: input.nodeKind,
+      nodeId: input.nodeId,
+      status: input.status,
+      note: input.note ?? null,
+      updatedBy: input.updatedBy,
+      updatedByRole: input.updatedByRole,
+    });
+    applied += 1;
+    appliedIds.push(s.id);
+  }
+
+  return { applied, skipped, student_ids: appliedIds };
+}
+
+export type ResetProgressInput = {
+  nodeKind: CourseProgressNodeKind;
+  nodeId: string;
+  status: CourseProgressStatus;
+  note?: string | null;
+  batchId?: string | null;
+  studentIds?: string[] | null;
+  scope: AdminScope;
+  updatedBy: string;
+  updatedByRole: Role;
+  ip?: string | null;
+};
+
+/** CU14 reset — explicit regression, audited per student. Certified rows excluded. */
+export async function resetCourseProgress(input: ResetProgressInput): Promise<{
+  applied: number;
+  skipped: number;
+}> {
+  assertLiveStatus(input.status);
+  const hasBatch = !!input.batchId;
+  const hasIds = Array.isArray(input.studentIds) && input.studentIds.length > 0;
+  if (hasBatch === hasIds) {
+    throw new CourseProgressError(
+      422,
+      Err.VALIDATION_FAILED,
+      "Provide exactly one of batch_id or student_ids.",
+    );
+  }
+
+  let roster: Array<{ id: string; batch_id: string | null; centre_id: string | null }>;
+  if (hasBatch) {
+    roster = await db
+      .select({
+        id: students.id,
+        batch_id: students.batch_id,
+        centre_id: students.centre_id,
+      })
+      .from(students)
+      .where(
+        and(
+          eq(students.batch_id, input.batchId!),
+          eq(students.status, "active"),
+          isNull(students.deleted_at),
+        ),
+      );
+  } else {
+    roster = await db
+      .select({
+        id: students.id,
+        batch_id: students.batch_id,
+        centre_id: students.centre_id,
+      })
+      .from(students)
+      .where(and(inArray(students.id, input.studentIds!), isNull(students.deleted_at)));
+    if (roster.length !== input.studentIds!.length) {
+      throw new CourseProgressError(
+        403,
+        Err.COURSE_STUDENT_OUT_OF_SCOPE,
+        "One or more students are outside your scope — nothing was applied.",
+      );
+    }
+  }
+
+  for (const s of roster) {
+    if (!inBatchWriteScope(input.scope, s.batch_id, s.centre_id)) {
+      throw new CourseProgressError(
+        403,
+        Err.COURSE_STUDENT_OUT_OF_SCOPE,
+        "One or more students are outside your scope — nothing was applied.",
+      );
+    }
+  }
+
+  await resolveNode(input.nodeKind, input.nodeId);
+
+  let applied = 0;
+  let skipped = 0;
+  const audits: AuditInput[] = [];
+
+  for (const s of roster) {
+    const [existing] = await db
+      .select({
+        status: student_course_progress.status,
+        certified_at: student_course_progress.certified_at,
+      })
+      .from(student_course_progress)
+      .where(
+        input.nodeKind === "subsection"
+          ? and(
+              eq(student_course_progress.student_id, s.id),
+              eq(student_course_progress.subsection_id, input.nodeId),
+            )
+          : and(
+              eq(student_course_progress.student_id, s.id),
+              eq(student_course_progress.section_id, input.nodeId),
+              isNull(student_course_progress.subsection_id),
+            ),
+      )
+      .limit(1);
+
+    if (existing?.certified_at) {
+      skipped += 1;
+      continue;
+    }
+    if (!existing) {
+      skipped += 1;
+      continue;
+    }
+
+    await upsertCourseProgress({
+      studentId: s.id,
+      nodeKind: input.nodeKind,
+      nodeId: input.nodeId,
+      status: input.status,
+      note: input.note ?? null,
+      updatedBy: input.updatedBy,
+      updatedByRole: input.updatedByRole,
+    });
+    applied += 1;
+    audits.push({
+      actorId: input.updatedBy,
+      actorRole: input.updatedByRole,
+      action: "update",
+      entityKind: "student_course_progress",
+      entityId: s.id,
+      summary: `Reset course progress to ${input.status}.`,
+      metadata: {
+        student_id: s.id,
+        node_kind: input.nodeKind,
+        node_id: input.nodeId,
+        status: input.status,
+      },
+      ip: input.ip ?? null,
+    });
+  }
+
+  await writeAudits(audits);
+  return { applied, skipped };
 }

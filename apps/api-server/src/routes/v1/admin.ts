@@ -33,6 +33,7 @@ import { setAuthCookies, setImpersonationCookies, clearAuthCookies } from "../..
 import { toSessionUser } from "../../lib/session-user";
 import adminResourcesRouter from "./admin-resources";
 import adminModulesRouter from "./admin-modules";
+import adminCoursesRouter from "./admin-courses";
 import adminStaffingRouter from "./admin-staffing";
 import { canTransitionEnrolment } from "./enrolments";
 import { clampLimit, inScope, scopedCentreFilter, scopedBatchFilter } from "../../lib/route-helpers";
@@ -118,6 +119,7 @@ router.post("/impersonate/stop", async (req: Request, res: Response) => {
 router.use(requireAuth, requireAdminPanel);
 router.use(adminResourcesRouter);
 router.use(adminModulesRouter);
+router.use(adminCoursesRouter);
 router.use(adminStaffingRouter);
 
 /** Returns a Drizzle condition limiting `column` to the user's scope, or undefined for unrestricted. */
@@ -209,6 +211,7 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
 
   const centreScope = scopedCentreFilter(scope, centres.id);
   const srCentreFilter = scopedCentreFilter(scope, service_requests.centre_id);
+  const enrolmentCentreFilter = scopedCentreFilter(scope, enrolments.requested_centre_id);
   const sinceDate = since.toISOString().slice(0, 10);
   const centreIdsForRate =
     scope.centreIds === null ? null : scope.centreIds.length === 0 ? [] : scope.centreIds;
@@ -229,6 +232,7 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
     [activeStudents],
     [centreCount],
     [openReq],
+    [pendingEnrol],
     [msvActive],
     attendanceRateRaw,
     [punyaRow],
@@ -253,6 +257,11 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
           srCentreFilter,
         ),
       ),
+    // Pending enrolments queue — distinct from open_service_requests (do not conflate).
+    db
+      .select({ n: count() })
+      .from(enrolments)
+      .where(and(eq(enrolments.status, "pending"), enrolmentCentreFilter)),
     db
       .select({ n: count() })
       .from(students)
@@ -289,6 +298,7 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
     active_students: activeStudents?.n ?? 0,
     centres: centreCount?.n ?? 0,
     open_service_requests: openReq?.n ?? 0,
+    pending_enrolments: pendingEnrol?.n ?? 0,
     attendance_rate_30d: attendanceRate,
     punya_awarded_30d: Number(punyaRow?.sum ?? 0),
     msv_active: msvActive?.n ?? 0,

@@ -12,7 +12,7 @@ afterAll(async () => {
  * Curriculum authoring (/v1/curriculum) owns the section + item CRUD beneath a
  * curriculum shell. Authoring is CITY-scoped via the parent curriculum's
  * city_id; a CENTRAL / MSV curriculum (city_id IS NULL) is national content
- * editable only by super_admin / state_admin.
+ * editable only by super_admin (Q2 / CU8).
  *
  * This test is additive & rerun-safe: it mints its own curricula via the admin
  * create endpoint each run (super_admin can target any city), so it never
@@ -306,12 +306,12 @@ describe("curriculum cross-city authoring isolation", () => {
       .send({ title_en: "National", title_hi: "राष्ट्रीय" });
     expect(adminSection.status).toBe(200);
 
-    // state_admin is also a permitted national author.
+    // Q2 / CU8 — state_admin is NOT a national author.
     const stateSection = await request(app)
       .post(`/v1/curriculum/${centralCurriculum}/sections`)
       .set(auth(stateAdmin.token))
       .send({ title_en: "State authored", title_hi: "राज्य" });
-    expect(stateSection.status).toBe(200);
+    expect(stateSection.status).toBe(403);
 
     // city_admin is explicitly excluded from national content -> 403 (not 404).
     const denied = await request(app)

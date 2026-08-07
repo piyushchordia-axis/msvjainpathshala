@@ -9,10 +9,8 @@
  * Authoring is CITY-scoped via the parent curriculum's city_id:
  *  - A city-scoped curriculum (city_id set) may be authored only by an admin
  *    whose city scope covers that city.
- *  - A CENTRAL / MSV curriculum (city_id IS NULL) is national content, gated to
- *    super_admin / state_admin only — a city_admin must not author national
- *    courses. (state_admin authoring of central content is intentionally
- *    allowed, matching how national content is curated.)
+ *  - A CENTRAL / MSV curriculum (city_id IS NULL) or kind='msv' is gated to
+ *    super_admin only (Q2 / CU8).
  *
  * Every mutation is audited. Reorder is transactional so a partial reorder can
  * never leave inconsistent order_index values.
@@ -68,10 +66,9 @@ function cityInScope(cityIds: string[] | null, cityId: string | null): boolean {
 }
 
 /**
- * Roles allowed to author CENTRAL / MSV (city-agnostic) courses. A city_admin
- * is deliberately excluded so they cannot edit national content.
+ * Roles allowed to author CENTRAL / MSV courses — Q2 / CU8: super_admin only.
  */
-const NATIONAL_AUTHOR_ROLES = ["super_admin", "state_admin"];
+const NATIONAL_AUTHOR_ROLES = ["super_admin"];
 
 /**
  * Load a curriculum and enforce the caller may AUTHOR its children.
@@ -82,13 +79,13 @@ async function loadAuthorableCurriculum(
   req: Request,
   res: Response,
   curriculumId: string,
-): Promise<{ id: string; city_id: string | null } | null> {
+): Promise<{ id: string; city_id: string | null; kind: string } | null> {
   if (!UUID_RE.test(curriculumId)) {
     fail(res, 404, "ERR_NOT_FOUND", "Curriculum not found.");
     return null;
   }
   const [curriculum] = await db
-    .select({ id: courses.id, city_id: courses.city_id })
+    .select({ id: courses.id, city_id: courses.city_id, kind: courses.kind })
     .from(courses)
     .where(eq(courses.id, curriculumId))
     .limit(1);
@@ -97,10 +94,10 @@ async function loadAuthorableCurriculum(
     return null;
   }
 
-  // Central / MSV (no city) content: only national authors.
-  if (!curriculum.city_id) {
+  // Central (no city) OR kind='msv': super_admin only (Q2 / CU8).
+  if (!curriculum.city_id || curriculum.kind === "msv") {
     if (!NATIONAL_AUTHOR_ROLES.includes(req.authUser!.role)) {
-      fail(res, 403, "ERR_FORBIDDEN", "Only state or super admins may author central courses.");
+      fail(res, 403, "ERR_FORBIDDEN", "Only a super_admin may author MSV or national courses.");
       return null;
     }
     return curriculum;
@@ -123,7 +120,10 @@ async function loadAuthorableSection(
   req: Request,
   res: Response,
   sectionId: string,
-): Promise<{ section: { id: string; course_id: string }; curriculum: { id: string; city_id: string | null } } | null> {
+): Promise<{
+  section: { id: string; course_id: string };
+  curriculum: { id: string; city_id: string | null; kind: string };
+} | null> {
   if (!UUID_RE.test(sectionId)) {
     fail(res, 404, "ERR_NOT_FOUND", "Section not found.");
     return null;
@@ -154,7 +154,7 @@ async function loadAuthorableItem(
   | {
       item: { id: string; section_id: string };
       section: { id: string; course_id: string };
-      curriculum: { id: string; city_id: string | null };
+      curriculum: { id: string; city_id: string | null; kind: string };
     }
   | null
 > {
