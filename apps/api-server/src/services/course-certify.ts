@@ -203,6 +203,10 @@ export type CertifyInput = {
   note?: string | null;
   /** Soft-transition when offline (CU17). Online defaults false → 409 if not completed. */
   softTransition?: boolean;
+  /** AT19 per-item id from offline queue (optional online). */
+  clientOpId?: string | null;
+  /** Client clock for certification (offline certified_at). */
+  certifiedAt?: Date | null;
   ip?: string | null;
 };
 
@@ -220,6 +224,8 @@ export type CertifyResult = {
   course_award_key: string | null;
   /** New certificate rows — caller enqueues PDF after commit (CU26). */
   certificate_ids: string[];
+  /** false when already certified — sync maps to duplicate (CU31). */
+  applied: boolean;
 };
 
 export async function certifyCourseNode(input: CertifyInput): Promise<CertifyResult> {
@@ -302,6 +308,7 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
         course_transaction_id: null,
         course_award_key: null,
         certificate_ids: [],
+        applied: false,
       };
     }
 
@@ -316,7 +323,7 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
       }
     }
 
-    const now = new Date();
+    const now = input.certifiedAt ?? new Date();
     const values = {
       student_id: input.studentId,
       section_id: sectionId,
@@ -330,6 +337,7 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
       certification_note: input.note ?? null,
       updated_by: input.actorId,
       updated_by_role: input.actorRole,
+      client_op_id: input.clientOpId ?? existing?.client_op_id ?? null,
     };
 
     let progressRow: typeof existing | undefined;
@@ -350,6 +358,7 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
             updated_by: input.actorId,
             updated_by_role: input.actorRole,
             updated_at: now,
+            ...(input.clientOpId ? { client_op_id: input.clientOpId } : {}),
           },
           setWhere: sql`${student_course_progress.certified_at} is null`,
         })
@@ -372,6 +381,7 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
             updated_by: input.actorId,
             updated_by_role: input.actorRole,
             updated_at: now,
+            ...(input.clientOpId ? { client_op_id: input.clientOpId } : {}),
           },
           setWhere: sql`${student_course_progress.certified_at} is null`,
         })
@@ -535,6 +545,7 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
       course_transaction_id: courseTxId,
       course_award_key: courseKey,
       certificate_ids: certificateIds,
+      applied: true,
     };
   });
 }

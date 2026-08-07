@@ -623,6 +623,33 @@ type PendingHomeworkSubmissionOp = {
   client_timestamp: string;
 };
 
+// jp.queue.course_progress
+type PendingCourseProgressOp = {
+  submission_op_id: string;   // ULID char(26)
+  node_kind: 'section' | 'subsection';
+  node_id: string;            // uuid
+  marks: Array<{
+    student_id: string;
+    status: 'not_started' | 'in_progress' | 'completed';
+    note?: string;
+    client_op_id: string;     // ULID char(26) — per item (AT19)
+  }>;
+  marked_at: string;          // ISO-8601 — client clock → client_marked_at (CU9)
+  client_timestamp: string;
+};
+
+// jp.queue.course_certification
+type PendingCourseCertificationOp = {
+  submission_op_id: string;
+  node_kind: 'section' | 'subsection';
+  node_id: string;
+  student_id: string;         // always exactly one — CU18 forbids bulk
+  certification_note?: string;
+  client_op_id: string;
+  certified_at: string;       // ISO-8601 — client clock
+  client_timestamp: string;
+};
+
 // jp.queue.acknowledgements
 type PendingAcknowledgementOp = {
   submission_op_id: string;
@@ -638,7 +665,7 @@ type PendingAcknowledgementOp = {
 
 ```
 checkin → attendance → checkout → shivir_scans → niyam_submissions
-→ homework_submissions → acknowledgements
+→ homework_submissions → course_progress → course_certification → acknowledgements
 ```
 
 A session must be `in_progress` before marks land against it, and check-out must not close a session before its marks arrive. `jp.queue.checkin` is part of this chain; omitting it lets marks race a session that does not yet exist on the server.
@@ -674,6 +701,8 @@ Both are **ULIDs** stored as `char(26)` with a format CHECK constraint — **not
       | 'shivir_scan'
       | 'niyam_submission'
       | 'homework_submission'
+      | 'course_progress'
+      | 'course_certification'
       | 'acknowledgement';
     payload: unknown;         // typed by op_type — see §1
     client_timestamp: string; // ISO-8601
@@ -720,6 +749,8 @@ Restated unambiguously (replaces SPEC §8.11):
 - **Attendance status:** newest `marked_at` wins; ties broken by server receipt order. If the stored row already has a newer `marked_at`, return `status='duplicate'` and do not apply. This comparison lives in the **shared service method**, not the sync layer — the online path is governed by it too.
 - **Metadata (notes):** last-write-wins by `client_timestamp`.
 - **State-machine violations** (e.g. marking a cancelled session): HTTP 409 / result `conflict` — never silently accepted (AT24).
+- **Course progress:** newest `marked_at` wins, compared against the stored `client_marked_at`; ties broken by server receipt order. If the stored row is newer, return `status='duplicate'` and do not apply. This comparison lives in the **shared service method**, so the online path is governed by it too.
+- **Course certification:** if the row is already certified, return `status='duplicate'`, not `conflict`. Out of scope returns `conflict` and is terminal.
 
 ### 7. Retry
 

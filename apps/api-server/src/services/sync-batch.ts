@@ -29,6 +29,8 @@ const OP_TYPES = [
   "shivir_scan",
   "niyam_submission",
   "homework_submission",
+  "course_progress",
+  "course_certification",
   "acknowledgement",
 ] as const;
 
@@ -47,6 +49,10 @@ function normalizeOpType(raw: string): SyncOpType | null {
     "niyam.submit": "niyam_submission",
     homework_submission: "homework_submission",
     "homework.submit": "homework_submission",
+    course_progress: "course_progress",
+    "course.progress": "course_progress",
+    course_certification: "course_certification",
+    "course.certification": "course_certification",
     acknowledgement: "acknowledgement",
     "notice.acknowledge": "acknowledgement",
   };
@@ -456,6 +462,190 @@ async function handleHomeworkSubmission(
   }
 }
 
+async function handleCourseProgress(
+  actor: User,
+  submissionOpId: string,
+  payload: unknown,
+): Promise<SyncResult> {
+  const { upsertCourseProgress, COURSE_PROGRESS_STATUSES, CourseProgressError } = await import(
+    "./course-progress"
+  );
+  const { assertCourseProgressWriteAccess } = await import("./course-access");
+
+  let p: {
+    node_kind: "section" | "subsection";
+    node_id: string;
+    marks: Array<{
+      student_id: string;
+      status: (typeof COURSE_PROGRESS_STATUSES)[number];
+      note?: string;
+      client_op_id: string;
+    }>;
+    marked_at: string;
+  };
+  try {
+    p = z
+      .object({
+        node_kind: z.enum(["section", "subsection"]),
+        node_id: z.string().uuid(),
+        marks: z
+          .array(
+            z.object({
+              student_id: z.string().uuid(),
+              status: z.enum(COURSE_PROGRESS_STATUSES),
+              note: z.string().max(1000).optional(),
+              client_op_id: ulidSchema,
+            }),
+          )
+          .min(1)
+          .max(200),
+        marked_at: z.string().min(1),
+      })
+      .parse(payload);
+  } catch (err) {
+    const message =
+      err instanceof z.ZodError
+        ? (err.issues[0]?.message ?? "Invalid course_progress payload.")
+        : "Invalid course_progress payload.";
+    return {
+      submission_op_id: submissionOpId,
+      status: "failed",
+      error: { code: "ERR_VALIDATION_FAILED", message },
+    };
+  }
+
+  const markedAt = new Date(p.marked_at);
+  const results: Array<{ student_id: string; applied: boolean; id?: string }> = [];
+  let anyApplied = false;
+
+  try {
+    for (const mark of p.marks) {
+      const access = await assertCourseProgressWriteAccess(actor, mark.student_id);
+      if (!access.ok) {
+        return {
+          submission_op_id: submissionOpId,
+          status: "conflict",
+          error: { code: access.code, message: access.message },
+        };
+      }
+      const row = await upsertCourseProgress({
+        studentId: mark.student_id,
+        nodeKind: p.node_kind,
+        nodeId: p.node_id,
+        status: mark.status,
+        note: mark.note ?? null,
+        updatedBy: actor.id,
+        updatedByRole: actor.role,
+        clientOpId: mark.client_op_id,
+        clientMarkedAt: markedAt,
+      });
+      if (row.applied) anyApplied = true;
+      results.push({ student_id: mark.student_id, applied: row.applied, id: row.id });
+    }
+  } catch (err) {
+    if (err instanceof CourseProgressError) {
+      return {
+        submission_op_id: submissionOpId,
+        status: err.httpStatus === 409 || err.httpStatus === 403 ? "conflict" : "failed",
+        error: { code: err.code, message: err.message },
+      };
+    }
+    throw err;
+  }
+
+  return {
+    submission_op_id: submissionOpId,
+    status: anyApplied ? "success" : "duplicate",
+    server_id: results[0]?.id,
+    data: { marks: results },
+  };
+}
+
+async function handleCourseCertification(
+  actor: User,
+  submissionOpId: string,
+  payload: unknown,
+): Promise<SyncResult> {
+  const { certifyCourseNode, CourseCertifyError } = await import("./course-certify");
+  const { assertCourseCertifyAccess } = await import("./course-access");
+  const { enqueueCertificatePdf } = await import("./course-certificates");
+
+  let p: {
+    node_kind: "section" | "subsection";
+    node_id: string;
+    student_id: string;
+    certification_note?: string;
+    client_op_id: string;
+    certified_at: string;
+  };
+  try {
+    p = z
+      .object({
+        node_kind: z.enum(["section", "subsection"]),
+        node_id: z.string().uuid(),
+        student_id: z.string().uuid(),
+        certification_note: z.string().max(1000).optional(),
+        client_op_id: ulidSchema,
+        certified_at: z.string().min(1),
+      })
+      .parse(payload);
+  } catch (err) {
+    const message =
+      err instanceof z.ZodError
+        ? (err.issues[0]?.message ?? "Invalid course_certification payload.")
+        : "Invalid course_certification payload.";
+    return {
+      submission_op_id: submissionOpId,
+      status: "failed",
+      error: { code: "ERR_VALIDATION_FAILED", message },
+    };
+  }
+
+  const access = await assertCourseCertifyAccess(actor, p.student_id);
+  if (!access.ok) {
+    return {
+      submission_op_id: submissionOpId,
+      status: "conflict",
+      error: { code: access.code, message: access.message },
+    };
+  }
+
+  try {
+    // CU17 soft-transition — never 409 ERR_COURSE_NODE_NOT_COMPLETE offline.
+    const result = await certifyCourseNode({
+      nodeKind: p.node_kind,
+      nodeId: p.node_id,
+      studentId: p.student_id,
+      actorId: actor.id,
+      actorRole: actor.role,
+      note: p.certification_note ?? null,
+      softTransition: true,
+      clientOpId: p.client_op_id,
+      certifiedAt: new Date(p.certified_at),
+    });
+    if (result.applied) {
+      for (const certId of result.certificate_ids) {
+        await enqueueCertificatePdf(certId);
+      }
+    }
+    return {
+      submission_op_id: submissionOpId,
+      status: result.applied ? "success" : "duplicate",
+      server_id: result.progress_id,
+      data: result,
+    };
+  } catch (err) {
+    if (err instanceof CourseCertifyError) {
+      return {
+        submission_op_id: submissionOpId,
+        status: err.httpStatus === 409 || err.httpStatus === 403 ? "conflict" : "failed",
+        error: { code: err.code, message: err.message },
+      };
+    }
+    throw err;
+  }
+}
+
 async function handleAcknowledgement(
   actor: User,
   submissionOpId: string,
@@ -539,8 +729,10 @@ async function executeOp(
       return handleNiyamSubmission(actor, submissionOpId, payload);
     case "homework_submission":
       return handleHomeworkSubmission(actor, submissionOpId, payload, clientTimestamp);
-    case "acknowledgement":
-      return handleAcknowledgement(actor, submissionOpId, payload, clientTimestamp);
+    case "course_progress":
+      return handleCourseProgress(actor, submissionOpId, payload);
+    case "course_certification":
+      return handleCourseCertification(actor, submissionOpId, payload);
     default:
       return {
         submission_op_id: submissionOpId,

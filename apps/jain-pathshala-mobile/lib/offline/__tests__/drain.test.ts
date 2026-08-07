@@ -61,6 +61,8 @@ function emptyQueues(): Record<QueueKey, QueuedOp[]> {
     [QUEUE_KEYS.shivir_scans]: [],
     [QUEUE_KEYS.niyam_submissions]: [],
     [QUEUE_KEYS.homework_submissions]: [],
+    [QUEUE_KEYS.course_progress]: [],
+    [QUEUE_KEYS.course_certification]: [],
     [QUEUE_KEYS.acknowledgements]: [],
   };
 }
@@ -256,6 +258,60 @@ describe("homework offline queue", () => {
     const hwIdx = DRAIN_ORDER.indexOf(QUEUE_KEYS.homework_submissions);
     const niyamIdx = DRAIN_ORDER.indexOf(QUEUE_KEYS.niyam_submissions);
     expect(hwIdx).toBeGreaterThan(niyamIdx);
+  });
+
+  it("course_progress drains before course_certification before acknowledgements", () => {
+    const queues = {
+      ...emptyQueues(),
+      [QUEUE_KEYS.course_progress]: [
+        op("01COURSEPROG00000000000001", "queued", {
+          node_kind: "section",
+          node_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          marks: [],
+          marked_at: new Date().toISOString(),
+        }),
+      ],
+      [QUEUE_KEYS.course_certification]: [
+        op("01COURSECERT00000000000001", "queued", {
+          node_kind: "section",
+          node_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          student_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        }),
+      ],
+      [QUEUE_KEYS.acknowledgements]: [
+        op("01ACK000000000000000000002", "queued", {
+          kind: "notice",
+          entity_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        }),
+      ],
+    } as Record<QueueKey, QueuedOp[]>;
+
+    const planned = planDrain(queues);
+    expect(planned.map((x) => x.queue)).toEqual([
+      QUEUE_KEYS.course_progress,
+      QUEUE_KEYS.course_certification,
+      QUEUE_KEYS.acknowledgements,
+    ]);
+
+    // Failed progress must not block certification (no ordering guard).
+    const blocked = {
+      ...emptyQueues(),
+      [QUEUE_KEYS.course_progress]: [
+        op("01COURSEPROG00000000000002", "failed", {
+          node_kind: "section",
+          node_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        }),
+      ],
+      [QUEUE_KEYS.course_certification]: [
+        op("01COURSECERT00000000000002", "queued", {
+          node_kind: "section",
+          node_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          student_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        }),
+      ],
+    } as Record<QueueKey, QueuedOp[]>;
+    const plannedAfterFail = planDrain(blocked);
+    expect(plannedAfterFail.map((x) => x.queue)).toEqual([QUEUE_KEYS.course_certification]);
   });
 
   it("a failed homework op moves to the `failed` UI state and is not discarded", async () => {

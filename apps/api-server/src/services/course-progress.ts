@@ -63,6 +63,8 @@ export type UpsertCourseProgressResult = {
   completed_at: Date | null;
   certified_at: Date | null;
   revision: number;
+  /** false when stored client_marked_at is newer (CU31 / AT26) — sync maps to duplicate. */
+  applied: boolean;
 };
 
 function assertLiveStatus(status: string): asserts status is CourseProgressStatus {
@@ -113,12 +115,63 @@ async function resolveNode(
 /**
  * UPSERT one (student, node) progress row (CU10).
  * Partial unique indexes require targetWhere — omitting it fails at runtime.
+ * Newest client_marked_at wins (CU31) — comparison lives here so online obeys it too.
  */
 export async function upsertCourseProgress(
   input: UpsertCourseProgressInput,
 ): Promise<UpsertCourseProgressResult> {
   assertLiveStatus(input.status);
   const { sectionId, subsectionId } = await resolveNode(input.nodeKind, input.nodeId);
+
+  const existingWhere = subsectionId
+    ? and(
+        eq(student_course_progress.student_id, input.studentId),
+        eq(student_course_progress.subsection_id, subsectionId),
+      )
+    : and(
+        eq(student_course_progress.student_id, input.studentId),
+        eq(student_course_progress.section_id, sectionId!),
+        isNull(student_course_progress.subsection_id),
+      );
+
+  // CU31 — newest marked_at vs stored client_marked_at (never server receipt).
+  if (input.clientMarkedAt) {
+    const [prior] = await db
+      .select({
+        id: student_course_progress.id,
+        student_id: student_course_progress.student_id,
+        section_id: student_course_progress.section_id,
+        subsection_id: student_course_progress.subsection_id,
+        status: student_course_progress.status,
+        note: student_course_progress.note,
+        started_at: student_course_progress.started_at,
+        completed_at: student_course_progress.completed_at,
+        certified_at: student_course_progress.certified_at,
+        revision: student_course_progress.revision,
+        client_marked_at: student_course_progress.client_marked_at,
+      })
+      .from(student_course_progress)
+      .where(existingWhere)
+      .limit(1);
+    if (
+      prior?.client_marked_at &&
+      prior.client_marked_at.getTime() > input.clientMarkedAt.getTime()
+    ) {
+      return {
+        id: prior.id,
+        student_id: prior.student_id,
+        section_id: prior.section_id,
+        subsection_id: prior.subsection_id,
+        status: prior.status as CourseProgressStatus,
+        note: prior.note,
+        started_at: prior.started_at,
+        completed_at: prior.completed_at,
+        certified_at: prior.certified_at,
+        revision: prior.revision,
+        applied: false,
+      };
+    }
+  }
 
   const now = new Date();
   const startedAtInsert = input.status === "not_started" ? null : now;
@@ -219,18 +272,7 @@ export async function upsertCourseProgress(
         status: student_course_progress.status,
       })
       .from(student_course_progress)
-      .where(
-        subsectionId
-          ? and(
-              eq(student_course_progress.student_id, input.studentId),
-              eq(student_course_progress.subsection_id, subsectionId),
-            )
-          : and(
-              eq(student_course_progress.student_id, input.studentId),
-              eq(student_course_progress.section_id, sectionId!),
-              isNull(student_course_progress.subsection_id),
-            ),
-      )
+      .where(existingWhere)
       .limit(1);
     if (existing[0]?.certified_at) {
       throw new CourseProgressError(
@@ -257,6 +299,7 @@ export async function upsertCourseProgress(
     completed_at: row.completed_at,
     certified_at: row.certified_at,
     revision: row.revision,
+    applied: true,
   };
 }
 

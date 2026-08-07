@@ -13,6 +13,8 @@ import type {
   PendingAttendanceOp,
   PendingCheckInOp,
   PendingCheckOutOp,
+  PendingCourseCertificationOp,
+  PendingCourseProgressOp,
   PendingHomeworkSubmissionOp,
   QueuedOp,
   SyncUiState,
@@ -237,6 +239,68 @@ export async function enqueueHomeworkSubmission(input: {
   return submission_op_id;
 }
 
+export async function enqueueCourseProgress(input: {
+  node_kind: "section" | "subsection";
+  node_id: string;
+  marks: PendingCourseProgressOp["marks"];
+  marked_at?: string;
+}): Promise<string> {
+  const submission_op_id = ulid();
+  const marked_at = input.marked_at ?? new Date().toISOString();
+  const payload: PendingCourseProgressOp = {
+    submission_op_id,
+    node_kind: input.node_kind,
+    node_id: input.node_id,
+    marks: input.marks.map((m) => ({
+      ...m,
+      client_op_id: m.client_op_id || ulid(),
+    })),
+    marked_at,
+    client_timestamp: new Date().toISOString(),
+  };
+  await enqueueOp(QUEUE_KEYS.course_progress, {
+    submission_op_id,
+    payload,
+    state: "queued",
+    attempts: 0,
+    next_attempt_at: 0,
+    created_at: payload.client_timestamp,
+  });
+  return submission_op_id;
+}
+
+/** Exactly one student_id — CU18 forbids bulk certification offline too. */
+export async function enqueueCourseCertification(input: {
+  node_kind: "section" | "subsection";
+  node_id: string;
+  student_id: string;
+  certification_note?: string;
+  certified_at?: string;
+  client_op_id?: string;
+}): Promise<string> {
+  const submission_op_id = ulid();
+  const certified_at = input.certified_at ?? new Date().toISOString();
+  const payload: PendingCourseCertificationOp = {
+    submission_op_id,
+    node_kind: input.node_kind,
+    node_id: input.node_id,
+    student_id: input.student_id,
+    certification_note: input.certification_note,
+    client_op_id: input.client_op_id || ulid(),
+    certified_at,
+    client_timestamp: new Date().toISOString(),
+  };
+  await enqueueOp(QUEUE_KEYS.course_certification, {
+    submission_op_id,
+    payload,
+    state: "queued",
+    attempts: 0,
+    next_attempt_at: 0,
+    created_at: payload.client_timestamp,
+  });
+  return submission_op_id;
+}
+
 /** Parent mark-done acknowledgement — drains via jp.queue.acknowledgements (F1). */
 export async function enqueueHomeworkMarkDone(input: {
   submission_id: string;
@@ -276,12 +340,39 @@ export async function retryOp(queue: QueueKey, submissionOpId: string): Promise<
   void drainQueues();
 }
 
+/**
+ * After a kill mid-POST, ops can remain `syncing` forever — planDrain only
+ * picks `queued`. Re-queue orphans so relaunch does not lose work.
+ */
+async function requeueOrphanedSyncing(
+  queues: Record<QueueKey, QueuedOp[]>,
+  dirty: Set<QueueKey>,
+): Promise<void> {
+  for (const key of DRAIN_ORDER) {
+    const arr = queues[key] ?? [];
+    let changed = false;
+    for (let i = 0; i < arr.length; i += 1) {
+      if (arr[i]!.state === "syncing") {
+        arr[i] = { ...arr[i]!, state: "queued", next_attempt_at: 0 };
+        changed = true;
+      }
+    }
+    if (changed) {
+      queues[key] = arr;
+      dirty.add(key);
+    }
+  }
+}
+
 export async function drainQueues(): Promise<DrainOpResult[]> {
   if (draining) return [];
   draining = true;
   try {
     const queues = await readAllQueues();
     const dirty = new Set<QueueKey>();
+
+    await requeueOrphanedSyncing(queues, dirty);
+    if (dirty.size > 0) await flushDirtyQueues(queues, dirty);
 
     const planned = planDrain(
       Object.fromEntries(

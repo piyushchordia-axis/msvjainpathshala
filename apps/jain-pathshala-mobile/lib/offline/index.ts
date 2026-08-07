@@ -7,8 +7,15 @@ export {
   enqueueAttendance,
   enqueueCheckOut,
   enqueueHomeworkSubmission,
+  enqueueCourseProgress,
+  enqueueCourseCertification,
   drainQueues,
   retryOp,
   startSyncLoop,
 } from "./sync-engine";
-export type { SyncUiState, QueuedOp } from "./types";
+export type {
+  SyncUiState,
+  QueuedOp,
+  PendingCourseProgressOp,
+  PendingCourseCertificationOp,
+} from "./types";

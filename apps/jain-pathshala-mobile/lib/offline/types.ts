@@ -71,6 +71,33 @@ export type PendingHomeworkSubmissionOp = {
   client_timestamp: string;
 };
 
+export type CourseProgressStatus = "not_started" | "in_progress" | "completed";
+
+export type PendingCourseProgressOp = {
+  submission_op_id: string;
+  node_kind: "section" | "subsection";
+  node_id: string;
+  marks: Array<{
+    student_id: string;
+    status: CourseProgressStatus;
+    note?: string;
+    client_op_id: string;
+  }>;
+  marked_at: string;
+  client_timestamp: string;
+};
+
+export type PendingCourseCertificationOp = {
+  submission_op_id: string;
+  node_kind: "section" | "subsection";
+  node_id: string;
+  student_id: string;
+  certification_note?: string;
+  client_op_id: string;
+  certified_at: string;
+  client_timestamp: string;
+};
+
 export type PendingAcknowledgementOp = {
   submission_op_id: string;
   kind: string;
@@ -85,6 +112,8 @@ export type PendingOpPayload =
   | PendingShivirScanOp
   | PendingNiyamSubmissionOp
   | PendingHomeworkSubmissionOp
+  | PendingCourseProgressOp
+  | PendingCourseCertificationOp
   | PendingAcknowledgementOp;
 
 export type QueuedOp<T extends PendingOpPayload = PendingOpPayload> = {
