@@ -12,10 +12,10 @@ import {
   db,
   students,
   centres,
-  curricula,
-  curriculum_sections,
-  curriculum_items,
-  student_curriculum_progress,
+  courses,
+  course_sections,
+  course_subsections,
+  student_course_progress,
   progress_reports,
 } from "@workspace/db";
 import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
@@ -158,7 +158,7 @@ async function cityForStudent(centreId: string | null): Promise<string | null> {
 
 /* ════════════════ shikshak/admin: read a student's progress ════════════════ */
 
-/* GET /v1/progress/students/:id?curriculum_id= — curriculum items left-joined to this student's progress */
+/* GET /v1/progress/students/:id?course_id= — curriculum items left-joined to this student's progress */
 router.get(
   "/students/:id",
   requireAdminPanel,
@@ -176,8 +176,8 @@ router.get(
     }
 
     const curriculumId =
-      typeof req.query.curriculum_id === "string" && UUID_RE.test(req.query.curriculum_id)
-        ? req.query.curriculum_id
+      typeof req.query.course_id === "string" && UUID_RE.test(req.query.course_id)
+        ? req.query.course_id
         : null;
 
     let itemFilter;
@@ -186,9 +186,9 @@ router.get(
       // (or city-agnostic / central) before returning its items — a curriculum
       // from another city must not be readable through this student.
       const [curriculum] = await db
-        .select({ id: curricula.id, city_id: curricula.city_id })
-        .from(curricula)
-        .where(eq(curricula.id, curriculumId))
+        .select({ id: courses.id, city_id: courses.city_id })
+        .from(courses)
+        .where(eq(courses.id, curriculumId))
         .limit(1);
       const studentCity = await cityForStudent(student.centre_id);
       const relevant =
@@ -198,44 +198,44 @@ router.get(
         ok(res, { items: [] }, { count: 0 });
         return;
       }
-      itemFilter = eq(curricula.id, curriculumId);
+      itemFilter = eq(courses.id, curriculumId);
     } else {
-      // No curriculum_id: default to curricula relevant to THIS student — their
-      // city's curricula plus city-agnostic / central ones. This closes the
+      // No course_id: default to courses relevant to THIS student — their
+      // city's courses plus city-agnostic / central ones. This closes the
       // cross-curriculum leak where a missing filter returned items from EVERY
       // curriculum across all cities & tracks.
       const studentCity = await cityForStudent(student.centre_id);
       itemFilter = studentCity
-        ? or(isNull(curricula.city_id), eq(curricula.city_id, studentCity))
-        : isNull(curricula.city_id);
+        ? or(isNull(courses.city_id), eq(courses.city_id, studentCity))
+        : isNull(courses.city_id);
     }
 
     const rows = await db
       .select({
-        item_id: curriculum_items.id,
-        title_en: curriculum_items.title_en,
-        title_hi: curriculum_items.title_hi,
-        section_title: curriculum_sections.title_en,
-        order_index: curriculum_items.order_index,
-        section_order: curriculum_sections.order_index,
-        level: student_curriculum_progress.level,
-        note: student_curriculum_progress.note,
+        item_id: course_subsections.id,
+        title_en: course_subsections.title_en,
+        title_hi: course_subsections.title_hi,
+        section_title: course_sections.title_en,
+        order_index: course_subsections.order_index,
+        section_order: course_sections.order_index,
+        level: student_course_progress.status,
+        note: student_course_progress.note,
       })
-      .from(curriculum_items)
+      .from(course_subsections)
       .innerJoin(
-        curriculum_sections,
-        eq(curriculum_sections.id, curriculum_items.section_id),
+        course_sections,
+        eq(course_sections.id, course_subsections.section_id),
       )
-      .innerJoin(curricula, eq(curricula.id, curriculum_sections.curriculum_id))
+      .innerJoin(courses, eq(courses.id, course_sections.course_id))
       .leftJoin(
-        student_curriculum_progress,
+        student_course_progress,
         and(
-          eq(student_curriculum_progress.curriculum_item_id, curriculum_items.id),
-          eq(student_curriculum_progress.student_id, student.id),
+          eq(student_course_progress.subsection_id, course_subsections.id),
+          eq(student_course_progress.student_id, student.id),
         ),
       )
       .where(itemFilter)
-      .orderBy(asc(curriculum_sections.order_index), asc(curriculum_items.order_index));
+      .orderBy(asc(course_sections.order_index), asc(course_subsections.order_index));
 
     const items = rows.map((r) => ({
       item_id: r.item_id,
@@ -284,9 +284,9 @@ router.post(
     }
 
     const [item] = await db
-      .select({ id: curriculum_items.id })
-      .from(curriculum_items)
-      .where(eq(curriculum_items.id, itemId))
+      .select({ id: course_subsections.id })
+      .from(course_subsections)
+      .where(eq(course_subsections.id, itemId))
       .limit(1);
     if (!item) {
       fail(res, 404, "ERR_NOT_FOUND", "Curriculum item not found.");
@@ -294,23 +294,26 @@ router.post(
     }
 
     await db
-      .insert(student_curriculum_progress)
+      .insert(student_course_progress)
       .values({
         student_id: student.id,
-        curriculum_item_id: item.id,
-        level: body.level,
+        subsection_id: item.id,
+        status: body.level,
         note: body.note ?? null,
         updated_by: req.authUser!.id,
+        updated_by_role: req.authUser!.role,
       })
       .onConflictDoUpdate({
         target: [
-          student_curriculum_progress.student_id,
-          student_curriculum_progress.curriculum_item_id,
+          student_course_progress.student_id,
+          student_course_progress.subsection_id,
         ],
+        targetWhere: sql`${student_course_progress.subsection_id} is not null`,
         set: {
-          level: body.level,
+          status: body.level,
           note: body.note ?? null,
           updated_by: req.authUser!.id,
+          updated_by_role: req.authUser!.role,
           updated_at: new Date(),
         },
       });
@@ -355,25 +358,25 @@ router.post(
     // Build a snapshot of the student's progress rows (joined to item titles).
     const progressRows = await db
       .select({
-        item_id: curriculum_items.id,
-        title_en: curriculum_items.title_en,
-        section_title: curriculum_sections.title_en,
-        section_order: curriculum_sections.order_index,
-        item_order: curriculum_items.order_index,
-        level: student_curriculum_progress.level,
-        note: student_curriculum_progress.note,
+        item_id: course_subsections.id,
+        title_en: course_subsections.title_en,
+        section_title: course_sections.title_en,
+        section_order: course_sections.order_index,
+        item_order: course_subsections.order_index,
+        level: student_course_progress.status,
+        note: student_course_progress.note,
       })
-      .from(student_curriculum_progress)
+      .from(student_course_progress)
       .innerJoin(
-        curriculum_items,
-        eq(curriculum_items.id, student_curriculum_progress.curriculum_item_id),
+        course_subsections,
+        eq(course_subsections.id, student_course_progress.subsection_id),
       )
       .innerJoin(
-        curriculum_sections,
-        eq(curriculum_sections.id, curriculum_items.section_id),
+        course_sections,
+        eq(course_sections.id, course_subsections.section_id),
       )
-      .where(eq(student_curriculum_progress.student_id, student.id))
-      .orderBy(asc(curriculum_sections.order_index), asc(curriculum_items.order_index));
+      .where(eq(student_course_progress.student_id, student.id))
+      .orderBy(asc(course_sections.order_index), asc(course_subsections.order_index));
 
     const snapshotItems = progressRows.map((r) => ({
       item_id: r.item_id,

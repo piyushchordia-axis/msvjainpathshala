@@ -38,9 +38,9 @@ import {
   library_items,
   gallery_items,
   settings,
-  curricula,
-  curriculum_sections,
-  curriculum_items,
+  courses,
+  course_sections,
+  course_subsections,
   online_exams,
   exam_questions,
   exam_question_options,
@@ -55,7 +55,7 @@ import {
   registration_form_responses,
   service_requests,
   service_request_messages,
-  student_curriculum_progress,
+  student_course_progress,
   progress_reports,
   audit_logs,
   competitions,
@@ -130,10 +130,11 @@ async function main(): Promise<void> {
       homework_submissions, homework_assignments,
       registration_form_responses, registration_form_configs,
       service_request_messages, service_requests,
-      progress_reports, student_curriculum_progress,
+      progress_reports, student_course_progress, course_certificates,
+      course_template_subsections, course_template_sections, course_templates,
       queue_dlq_jobs, queue_stats, donations, donation_campaigns,
       exam_answers, exam_attempts, exam_question_options, exam_questions, online_exams,
-      curriculum_items, curriculum_sections, curricula,
+      course_subsections, course_sections, courses,
       gallery_items, library_items, shivir_events, notices,
       niyam_streaks, niyam_submission_media, niyam_submissions, niyams,
       punya_balances, punya_transactions, punya_configs, punya_features, punya_award_limits,
@@ -159,6 +160,8 @@ async function main(): Promise<void> {
     { key: "quiz_win", label: "Quiz win", is_active: true, min_points: 0, max_points: 25 },
     { key: "push_quiz_completion", label: "Push quiz completion", is_active: true, min_points: 0, max_points: 5 },
     { key: "manual_award", label: "Manual admin award", is_active: true, min_points: 0, max_points: 500 },
+    { key: "course_section_certified", label: "Course section certified", is_active: true, min_points: 0, max_points: 1000 },
+    { key: "course_completed", label: "Course completed", is_active: true, min_points: 0, max_points: 2000 },
   ]);
 
   await db.insert(punya_configs).values([
@@ -167,6 +170,9 @@ async function main(): Promise<void> {
     { feature_key: "quiz_participation", points: 5, city_id: null, is_active: true },
     { feature_key: "quiz_win", points: 25, city_id: null, is_active: true },
     { feature_key: "push_quiz_completion", points: 5, city_id: null, is_active: true },
+    // CU22 — integer percent multipliers (100 = 1×)
+    { feature_key: "course_section_certified", points: 100, city_id: null, is_active: true },
+    { feature_key: "course_completed", points: 100, city_id: null, is_active: true },
   ]);
 
   await db.insert(punya_award_limits).values([
@@ -1005,29 +1011,32 @@ async function main(): Promise<void> {
     },
   ]);
 
-  /* ---------------- Curriculum ---------------- */
+  /* ---------------- Courses (CU1) ---------------- */
   const [curriculumStd] = await db
-    .insert(curricula)
+    .insert(courses)
     .values({
       city_id: mumbai.id,
-      name: "Foundation Jain Studies 2025-26",
+      name_en: "Foundation Jain Studies 2025-26",
+      name_hi: "आधारभूत जैन अध्ययन 2025-26",
       kind: "standard",
       academic_year: "2025-26",
       status: "active",
+      punya_points: 0,
     })
     .returning();
 
   const [sec1] = await db
-    .insert(curriculum_sections)
+    .insert(course_sections)
     .values({
-      curriculum_id: curriculumStd.id,
+      course_id: curriculumStd.id,
       title_en: "Core Values",
       title_hi: "मूल मूल्य",
       order_index: 1,
+      punya_points: 20,
     })
     .returning();
 
-  await db.insert(curriculum_items).values([
+  await db.insert(course_subsections).values([
     {
       section_id: sec1.id,
       title_en: "Ahimsa in daily life",
@@ -1042,12 +1051,13 @@ async function main(): Promise<void> {
     },
   ]);
 
-  await db.insert(curricula).values({
+  await db.insert(courses).values({
     city_id: pune.id,
-    name: "MSV Advanced Curriculum",
+    name_en: "MSV Advanced Curriculum",
     kind: "msv",
     academic_year: "2025-26",
-    status: "active",
+    status: "draft",
+    punya_points: 0,
   });
 
   /* ---------------- Exams ---------------- */
@@ -1317,15 +1327,17 @@ async function main(): Promise<void> {
   ]);
 
   /* ---------------- Student progress + report (Wave 2) ---------------- */
-  const [firstCurriculumItem] = await db.select({ id: curriculum_items.id }).from(curriculum_items).limit(1);
+  const [firstCurriculumItem] = await db.select({ id: course_subsections.id }).from(course_subsections).limit(1);
   if (firstCurriculumItem) {
-    await db.insert(student_curriculum_progress).values([
+    await db.insert(student_course_progress).values([
       {
         student_id: insertedStudents[0].id,
-        curriculum_item_id: firstCurriculumItem.id,
-        level: "mastered" as const,
+        subsection_id: firstCurriculumItem.id,
+        status: "completed" as const,
         note: "Strong understanding demonstrated.",
         updated_by: shikshak.id,
+        updated_by_role: "shikshak",
+        completed_at: new Date(),
       },
     ]);
   }

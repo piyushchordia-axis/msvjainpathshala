@@ -3207,7 +3207,7 @@ describe("homework", () => {
         batch_id: batchId,
         title: `F12 link ${Date.now()}`,
         due_date: tomorrow(),
-        curriculum_item_id: topic.id,
+        subsection_id: topic.id,
       });
     expect(create.status).toBe(200);
 
@@ -3216,10 +3216,10 @@ describe("homework", () => {
       .set(auth(admin.token));
     const row = (list.body.data.items as Array<{
       id: string;
-      curriculum_item_id: string | null;
+      subsection_id: string | null;
       curriculum_topic_en: string | null;
     }>).find((a) => a.id === create.body.data.id);
-    expect(row?.curriculum_item_id).toBe(topic.id);
+    expect(row?.subsection_id).toBe(topic.id);
     expect(row?.curriculum_topic_en).toContain(":");
   });
 
@@ -3229,10 +3229,10 @@ describe("homework", () => {
     const studentId = await firstChildId(parent.token);
     const batchId = await studentBatchId(studentId);
 
-    // Plant a curriculum + item in a city that is not this batch's city.
+    // Plant a course + subsection in a city that is not this batch's city.
     const foreign = await pool.query<{ item_id: string }>(
       `with c as (
-         insert into curricula (city_id, name, kind, status)
+         insert into courses (city_id, name_en, kind, status)
          select id, 'F12 foreign ' || gen_random_uuid()::text, 'standard', 'active'
            from cities
           where id <> (
@@ -3244,11 +3244,11 @@ describe("homework", () => {
          returning id
        ),
        s as (
-         insert into curriculum_sections (curriculum_id, title_en, title_hi, order_index)
+         insert into course_sections (course_id, title_en, title_hi, order_index)
          select id, 'Foreign section', 'विदेशी', 0 from c
          returning id
        )
-       insert into curriculum_items (section_id, title_en, title_hi, order_index)
+       insert into course_subsections (section_id, title_en, title_hi, order_index)
        select id, 'Foreign item', 'विदेशी विषय', 0 from s
        returning id as item_id`,
       [batchId],
@@ -3263,7 +3263,7 @@ describe("homework", () => {
         batch_id: batchId,
         title: `F12 reject ${Date.now()}`,
         due_date: tomorrow(),
-        curriculum_item_id: foreignItemId,
+        subsection_id: foreignItemId,
       });
     expect(create.status).toBe(422);
     expect(create.body.error.code).toBe("ERR_VALIDATION_FAILED");
@@ -3288,7 +3288,7 @@ describe("homework", () => {
         batch_id: batchId,
         title: `F12 survive ${Date.now()}`,
         due_date: tomorrow(),
-        curriculum_item_id: topic.id,
+        subsection_id: topic.id,
       });
     expect(create.status).toBe(200);
     const assignmentId = create.body.data.id as string;
@@ -3298,7 +3298,7 @@ describe("homework", () => {
       .set(auth(admin.token))
       .send({ title: `F12 survive edited ${Date.now()}` });
     expect(patch.status).toBe(200);
-    expect(patch.body.data.curriculum_item_id).toBe(topic.id);
+    expect(patch.body.data.subsection_id).toBe(topic.id);
 
     const feed = await request(app)
       .get(`/v1/homework/mine?student_id=${studentId}&limit=50`)
@@ -3306,10 +3306,10 @@ describe("homework", () => {
     expect(feed.status).toBe(200);
     const row = (feed.body.data.items as Array<{
       assignment_id: string;
-      curriculum_item_id: string | null;
+      subsection_id: string | null;
       curriculum_topic_en: string | null;
     }>).find((r) => r.assignment_id === assignmentId);
-    expect(row?.curriculum_item_id).toBe(topic.id);
+    expect(row?.subsection_id).toBe(topic.id);
     expect(row?.curriculum_topic_en).toBeTruthy();
   });
 });

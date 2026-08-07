@@ -3,16 +3,16 @@
  * Validates that a topic belongs to an active curriculum available for the
  * batch's city (and MSV vs standard kind). Does not touch progress rows.
  */
-import { db, batches, centres, curricula, curriculum_items, curriculum_sections } from "@workspace/db";
+import { db, batches, centres, courses, course_subsections, course_sections } from "@workspace/db";
 import { and, asc, eq, or, sql } from "drizzle-orm";
 
 export type CurriculumTopicLabel = {
-  curriculum_item_id: string;
+  subsection_id: string;
   topic_en: string;
   topic_hi: string;
   section_title_en: string;
   section_title_hi: string;
-  curriculum_id: string;
+  course_id: string;
 };
 
 /** "Section: Item" display label for feeds. */
@@ -26,7 +26,7 @@ export function formatCurriculumTopicLabel(section: string, item: string): strin
 
 /**
  * Returns the topic when it is valid for this batch + is_msv track; otherwise null.
- * City-agnostic curricula (city_id null) are allowed for any batch.
+ * City-agnostic courses (city_id null) are allowed for any batch.
  */
 export async function resolveCurriculumItemForBatch(opts: {
   batchId: string;
@@ -36,23 +36,23 @@ export async function resolveCurriculumItemForBatch(opts: {
   const kind = opts.isMsv ? "msv" : "standard";
   const [row] = await db
     .select({
-      curriculum_item_id: curriculum_items.id,
-      topic_en: curriculum_items.title_en,
-      topic_hi: curriculum_items.title_hi,
-      section_title_en: curriculum_sections.title_en,
-      section_title_hi: curriculum_sections.title_hi,
-      curriculum_id: curricula.id,
-      city_id: curricula.city_id,
-      kind: curricula.kind,
-      status: curricula.status,
+      subsection_id: course_subsections.id,
+      topic_en: course_subsections.title_en,
+      topic_hi: course_subsections.title_hi,
+      section_title_en: course_sections.title_en,
+      section_title_hi: course_sections.title_hi,
+      course_id: courses.id,
+      city_id: courses.city_id,
+      kind: courses.kind,
+      status: courses.status,
       centre_city_id: centres.city_id,
     })
-    .from(curriculum_items)
-    .innerJoin(curriculum_sections, eq(curriculum_sections.id, curriculum_items.section_id))
-    .innerJoin(curricula, eq(curricula.id, curriculum_sections.curriculum_id))
+    .from(course_subsections)
+    .innerJoin(course_sections, eq(course_sections.id, course_subsections.section_id))
+    .innerJoin(courses, eq(courses.id, course_sections.course_id))
     .innerJoin(batches, eq(batches.id, opts.batchId))
     .innerJoin(centres, eq(centres.id, batches.centre_id))
-    .where(eq(curriculum_items.id, opts.curriculumItemId))
+    .where(eq(course_subsections.id, opts.curriculumItemId))
     .limit(1);
 
   if (!row) return null;
@@ -61,12 +61,12 @@ export async function resolveCurriculumItemForBatch(opts: {
   if (row.city_id != null && row.city_id !== row.centre_city_id) return null;
 
   return {
-    curriculum_item_id: row.curriculum_item_id,
+    subsection_id: row.subsection_id,
     topic_en: row.topic_en,
     topic_hi: row.topic_hi,
     section_title_en: row.section_title_en,
     section_title_hi: row.section_title_hi,
-    curriculum_id: row.curriculum_id,
+    course_id: row.course_id,
   };
 }
 
@@ -93,26 +93,26 @@ export async function listCurriculumTopicsForBatch(opts: {
 
   const rows = await db
     .select({
-      id: curriculum_items.id,
-      topic_en: curriculum_items.title_en,
-      topic_hi: curriculum_items.title_hi,
-      section_en: curriculum_sections.title_en,
-      section_hi: curriculum_sections.title_hi,
-      curriculum_name: curricula.name,
-      order_section: curriculum_sections.order_index,
-      order_item: curriculum_items.order_index,
+      id: course_subsections.id,
+      topic_en: course_subsections.title_en,
+      topic_hi: course_subsections.title_hi,
+      section_en: course_sections.title_en,
+      section_hi: course_sections.title_hi,
+      curriculum_name: courses.name_en,
+      order_section: course_sections.order_index,
+      order_item: course_subsections.order_index,
     })
-    .from(curriculum_items)
-    .innerJoin(curriculum_sections, eq(curriculum_sections.id, curriculum_items.section_id))
-    .innerJoin(curricula, eq(curricula.id, curriculum_sections.curriculum_id))
+    .from(course_subsections)
+    .innerJoin(course_sections, eq(course_sections.id, course_subsections.section_id))
+    .innerJoin(courses, eq(courses.id, course_sections.course_id))
     .where(
       and(
-        eq(curricula.status, "active"),
-        eq(curricula.kind, kind),
-        or(sql`${curricula.city_id} is null`, eq(curricula.city_id, batch.city_id)),
+        eq(courses.status, "active"),
+        eq(courses.kind, kind),
+        or(sql`${courses.city_id} is null`, eq(courses.city_id, batch.city_id)),
       ),
     )
-    .orderBy(asc(curriculum_sections.order_index), asc(curriculum_items.order_index));
+    .orderBy(asc(course_sections.order_index), asc(course_subsections.order_index));
 
   return rows.map((r) => ({
     id: r.id,

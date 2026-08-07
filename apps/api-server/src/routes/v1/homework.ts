@@ -15,7 +15,7 @@
  * detail/action is a 404; an out-of-scope batch on create is a 403.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, homework_assignments, homework_submissions, batches, centres, students, punya_balances, curriculum_items, curriculum_sections } from "@workspace/db";
+import { db, homework_assignments, homework_submissions, batches, centres, students, punya_balances, course_subsections, course_sections } from "@workspace/db";
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
@@ -254,7 +254,7 @@ const createAssignmentSchema = z.object({
   attachment_url: httpUrl(1000).optional(),
   is_msv: z.boolean().optional(),
   /** Advisory curriculum topic (F12) — null/omit = none. */
-  curriculum_item_id: z.string().uuid().nullable().optional(),
+  subsection_id: z.string().uuid().nullable().optional(),
   // Create-time subset only — not persisted (FIX #14 dropped the column).
   target_student_ids: z.array(z.string().uuid()).max(500).optional(),
 });
@@ -295,10 +295,10 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
 
   const isMsv = body.is_msv === true;
   let curriculumItemId: string | null = null;
-  if (body.curriculum_item_id) {
+  if (body.subsection_id) {
     const topic = await resolveCurriculumItemForBatch({
       batchId: batch.id,
-      curriculumItemId: body.curriculum_item_id,
+      curriculumItemId: body.subsection_id,
       isMsv,
     });
     if (!topic) {
@@ -310,7 +310,7 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
       );
       return;
     }
-    curriculumItemId = topic.curriculum_item_id;
+    curriculumItemId = topic.subsection_id;
   }
 
   // F2 — attachment must be an owned homework upload; admin may paste an
@@ -375,7 +375,7 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
           due_date: body.due_date,
           attachment_url: body.attachment_url ?? null,
           is_msv: isMsv,
-          curriculum_item_id: curriculumItemId,
+          subsection_id: curriculumItemId,
           created_by: req.authUser!.id,
         })
         .returning({ id: homework_assignments.id });
@@ -428,7 +428,7 @@ const patchAssignmentSchema = z
     due_date: z.string().regex(DUE_DATE_RE).optional(),
     attachment_url: httpUrl(1000).nullable().optional(),
     is_msv: z.boolean().optional(),
-    curriculum_item_id: z.string().uuid().nullable().optional(),
+    subsection_id: z.string().uuid().nullable().optional(),
     /** Required when PATCH sets due_date to a past Kolkata calendar day. */
     allow_past_due_date: z.boolean().optional(),
   })
@@ -458,7 +458,7 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
       due_date: homework_assignments.due_date,
       attachment_url: homework_assignments.attachment_url,
       is_msv: homework_assignments.is_msv,
-      curriculum_item_id: homework_assignments.curriculum_item_id,
+      subsection_id: homework_assignments.subsection_id,
     })
     .from(homework_assignments)
     .innerJoin(batches, eq(batches.id, homework_assignments.batch_id))
@@ -479,7 +479,7 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
     due_date?: string;
     attachment_url?: string | null;
     is_msv?: boolean;
-    curriculum_item_id?: string | null;
+    subsection_id?: string | null;
   } = {};
   if (Object.prototype.hasOwnProperty.call(body, "title") && body.title !== undefined) {
     patch.title = body.title;
@@ -523,13 +523,13 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
   }
 
   const nextIsMsv = patch.is_msv ?? assignment.is_msv;
-  if (Object.prototype.hasOwnProperty.call(body, "curriculum_item_id")) {
-    if (body.curriculum_item_id == null) {
-      patch.curriculum_item_id = null;
+  if (Object.prototype.hasOwnProperty.call(body, "subsection_id")) {
+    if (body.subsection_id == null) {
+      patch.subsection_id = null;
     } else {
       const topic = await resolveCurriculumItemForBatch({
         batchId: assignment.batch_id,
-        curriculumItemId: body.curriculum_item_id,
+        curriculumItemId: body.subsection_id,
         isMsv: nextIsMsv,
       });
       if (!topic) {
@@ -541,13 +541,13 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
         );
         return;
       }
-      patch.curriculum_item_id = topic.curriculum_item_id;
+      patch.subsection_id = topic.subsection_id;
     }
-  } else if (patch.is_msv !== undefined && assignment.curriculum_item_id) {
+  } else if (patch.is_msv !== undefined && assignment.subsection_id) {
     // Track flip must keep an already-linked topic valid for the new kind.
     const topic = await resolveCurriculumItemForBatch({
       batchId: assignment.batch_id,
-      curriculumItemId: assignment.curriculum_item_id,
+      curriculumItemId: assignment.subsection_id,
       isMsv: nextIsMsv,
     });
     if (!topic) {
@@ -573,7 +573,7 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
       attachment_url: homework_assignments.attachment_url,
       is_msv: homework_assignments.is_msv,
       batch_id: homework_assignments.batch_id,
-      curriculum_item_id: homework_assignments.curriculum_item_id,
+      subsection_id: homework_assignments.subsection_id,
     });
 
   await auditFromReq(req, {
@@ -749,9 +749,9 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
       due_date: homework_assignments.due_date,
       attachment_url: homework_assignments.attachment_url,
       is_msv: homework_assignments.is_msv,
-      curriculum_item_id: homework_assignments.curriculum_item_id,
-      curriculum_topic_en: sql<string | null>`case when ${curriculum_items.id} is null then null else ${curriculum_sections.title_en} || ': ' || ${curriculum_items.title_en} end`,
-      curriculum_topic_hi: sql<string | null>`case when ${curriculum_items.id} is null then null else ${curriculum_sections.title_hi} || ': ' || ${curriculum_items.title_hi} end`,
+      subsection_id: homework_assignments.subsection_id,
+      curriculum_topic_en: sql<string | null>`case when ${course_subsections.id} is null then null else ${course_sections.title_en} || ': ' || ${course_subsections.title_en} end`,
+      curriculum_topic_hi: sql<string | null>`case when ${course_subsections.id} is null then null else ${course_sections.title_hi} || ': ' || ${course_subsections.title_hi} end`,
       batch_id: homework_assignments.batch_id,
       batch_name: batches.name,
       centre_id: batches.centre_id,
@@ -761,8 +761,8 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
     .from(homework_assignments)
     .innerJoin(batches, eq(batches.id, homework_assignments.batch_id))
     .innerJoin(centres, eq(centres.id, batches.centre_id))
-    .leftJoin(curriculum_items, eq(curriculum_items.id, homework_assignments.curriculum_item_id))
-    .leftJoin(curriculum_sections, eq(curriculum_sections.id, curriculum_items.section_id))
+    .leftJoin(course_subsections, eq(course_subsections.id, homework_assignments.subsection_id))
+    .leftJoin(course_sections, eq(course_sections.id, course_subsections.section_id))
     .where(and(...filters))
     .orderBy(desc(homework_assignments.created_at), desc(homework_assignments.id))
     .limit(limit + 1);
@@ -1739,9 +1739,9 @@ router.get("/mine", async (req: Request, res: Response) => {
       due_date: homework_assignments.due_date,
       attachment_url: homework_assignments.attachment_url,
       is_msv: homework_assignments.is_msv,
-      curriculum_item_id: homework_assignments.curriculum_item_id,
-      curriculum_topic_en: sql<string | null>`case when ${curriculum_items.id} is null then null else ${curriculum_sections.title_en} || ': ' || ${curriculum_items.title_en} end`,
-      curriculum_topic_hi: sql<string | null>`case when ${curriculum_items.id} is null then null else ${curriculum_sections.title_hi} || ': ' || ${curriculum_items.title_hi} end`,
+      subsection_id: homework_assignments.subsection_id,
+      curriculum_topic_en: sql<string | null>`case when ${course_subsections.id} is null then null else ${course_sections.title_en} || ': ' || ${course_subsections.title_en} end`,
+      curriculum_topic_hi: sql<string | null>`case when ${course_subsections.id} is null then null else ${course_sections.title_hi} || ': ' || ${course_subsections.title_hi} end`,
       status: homework_submissions.status,
       submission_url: homework_submissions.submission_url,
       feedback_note: homework_submissions.feedback_note,
@@ -1749,8 +1749,8 @@ router.get("/mine", async (req: Request, res: Response) => {
     })
     .from(homework_submissions)
     .innerJoin(homework_assignments, eq(homework_assignments.id, homework_submissions.assignment_id))
-    .leftJoin(curriculum_items, eq(curriculum_items.id, homework_assignments.curriculum_item_id))
-    .leftJoin(curriculum_sections, eq(curriculum_sections.id, curriculum_items.section_id))
+    .leftJoin(course_subsections, eq(course_subsections.id, homework_assignments.subsection_id))
+    .leftJoin(course_sections, eq(course_sections.id, course_subsections.section_id))
     .where(and(...filters))
     .orderBy(desc(homework_assignments.due_date), desc(homework_submissions.id))
     .limit(limit + 1);

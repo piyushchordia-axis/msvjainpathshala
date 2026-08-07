@@ -11,7 +11,7 @@
  * student record stays the single source of truth for badges/cards.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, msv_enrolments, students, centres, curricula } from "@workspace/db";
+import { db, msv_enrolments, students, centres, courses } from "@workspace/db";
 import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
@@ -38,7 +38,7 @@ async function ownedStudent(req: Request, id: string) {
 }
 
 /**
- * An approved MSV student maps to the MSV-track curriculum (curricula.kind='msv').
+ * An approved MSV student maps to the MSV-track curriculum (courses.kind='msv').
  * The curriculum is city-scoped: pick the active MSV curriculum for the student's
  * city, falling back to a city-agnostic (city_id is null) active MSV curriculum.
  * Returns a map student_id -> {id,name,academic_year} for the supplied students;
@@ -63,16 +63,16 @@ async function msvCurriculumByStudent(
     for (const c of cRows) if (c.city_id) centreCity.set(c.id, c.city_id);
   }
 
-  // Active MSV-track curricula, indexed by city (null city = city-agnostic fallback).
+  // Active MSV-track courses, indexed by city (null city = city-agnostic fallback).
   const msvCurricula = await db
     .select({
-      id: curricula.id,
-      name: curricula.name,
-      city_id: curricula.city_id,
-      academic_year: curricula.academic_year,
+      id: courses.id,
+      name: courses.name_en,
+      city_id: courses.city_id,
+      academic_year: courses.academic_year,
     })
-    .from(curricula)
-    .where(and(eq(curricula.kind, "msv"), eq(curricula.status, "active")));
+    .from(courses)
+    .where(and(eq(courses.kind, "msv"), eq(courses.status, "active")));
 
   const byCity = new Map<string, { id: string; name: string; academic_year: string | null }>();
   let fallback: { id: string; name: string; academic_year: string | null } | null = null;
@@ -205,7 +205,7 @@ router.get("/mine", async (req: Request, res: Response) => {
     if (!latestByStudent.has(e.student_id)) latestByStudent.set(e.student_id, e);
   }
 
-  // Approved students map to the MSV-track curriculum (curricula.kind='msv').
+  // Approved students map to the MSV-track curriculum (courses.kind='msv').
   const curriculumByStudent = await msvCurriculumByStudent(kids);
 
   const items = kids.map((k) => {

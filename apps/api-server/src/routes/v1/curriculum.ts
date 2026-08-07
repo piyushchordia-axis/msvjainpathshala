@@ -3,7 +3,7 @@
  *
  * The parent curriculum shell is created elsewhere (admin-modules.ts). This
  * router owns the MISSING children CRUD: create/update/delete/reorder of
- * curriculum_sections and curriculum_items. Without it an admin-created
+ * course_sections and course_subsections. Without it an admin-created
  * curriculum is permanently empty.
  *
  * Authoring is CITY-scoped via the parent curriculum's city_id:
@@ -11,7 +11,7 @@
  *    whose city scope covers that city.
  *  - A CENTRAL / MSV curriculum (city_id IS NULL) is national content, gated to
  *    super_admin / state_admin only — a city_admin must not author national
- *    curricula. (state_admin authoring of central content is intentionally
+ *    courses. (state_admin authoring of central content is intentionally
  *    allowed, matching how national content is curated.)
  *
  * Every mutation is audited. Reorder is transactional so a partial reorder can
@@ -22,9 +22,9 @@ import {
   db,
   centres,
   cities,
-  curricula,
-  curriculum_sections,
-  curriculum_items,
+  courses,
+  course_sections,
+  course_subsections,
   type User,
 } from "@workspace/db";
 import { eq, inArray, sql } from "drizzle-orm";
@@ -68,7 +68,7 @@ function cityInScope(cityIds: string[] | null, cityId: string | null): boolean {
 }
 
 /**
- * Roles allowed to author CENTRAL / MSV (city-agnostic) curricula. A city_admin
+ * Roles allowed to author CENTRAL / MSV (city-agnostic) courses. A city_admin
  * is deliberately excluded so they cannot edit national content.
  */
 const NATIONAL_AUTHOR_ROLES = ["super_admin", "state_admin"];
@@ -88,9 +88,9 @@ async function loadAuthorableCurriculum(
     return null;
   }
   const [curriculum] = await db
-    .select({ id: curricula.id, city_id: curricula.city_id })
-    .from(curricula)
-    .where(eq(curricula.id, curriculumId))
+    .select({ id: courses.id, city_id: courses.city_id })
+    .from(courses)
+    .where(eq(courses.id, curriculumId))
     .limit(1);
   if (!curriculum) {
     fail(res, 404, "ERR_NOT_FOUND", "Curriculum not found.");
@@ -100,7 +100,7 @@ async function loadAuthorableCurriculum(
   // Central / MSV (no city) content: only national authors.
   if (!curriculum.city_id) {
     if (!NATIONAL_AUTHOR_ROLES.includes(req.authUser!.role)) {
-      fail(res, 403, "ERR_FORBIDDEN", "Only state or super admins may author central curricula.");
+      fail(res, 403, "ERR_FORBIDDEN", "Only state or super admins may author central courses.");
       return null;
     }
     return curriculum;
@@ -123,21 +123,21 @@ async function loadAuthorableSection(
   req: Request,
   res: Response,
   sectionId: string,
-): Promise<{ section: { id: string; curriculum_id: string }; curriculum: { id: string; city_id: string | null } } | null> {
+): Promise<{ section: { id: string; course_id: string }; curriculum: { id: string; city_id: string | null } } | null> {
   if (!UUID_RE.test(sectionId)) {
     fail(res, 404, "ERR_NOT_FOUND", "Section not found.");
     return null;
   }
   const [section] = await db
-    .select({ id: curriculum_sections.id, curriculum_id: curriculum_sections.curriculum_id })
-    .from(curriculum_sections)
-    .where(eq(curriculum_sections.id, sectionId))
+    .select({ id: course_sections.id, course_id: course_sections.course_id })
+    .from(course_sections)
+    .where(eq(course_sections.id, sectionId))
     .limit(1);
   if (!section) {
     fail(res, 404, "ERR_NOT_FOUND", "Section not found.");
     return null;
   }
-  const curriculum = await loadAuthorableCurriculum(req, res, section.curriculum_id);
+  const curriculum = await loadAuthorableCurriculum(req, res, section.course_id);
   if (!curriculum) return null;
   return { section, curriculum };
 }
@@ -153,7 +153,7 @@ async function loadAuthorableItem(
 ): Promise<
   | {
       item: { id: string; section_id: string };
-      section: { id: string; curriculum_id: string };
+      section: { id: string; course_id: string };
       curriculum: { id: string; city_id: string | null };
     }
   | null
@@ -164,23 +164,23 @@ async function loadAuthorableItem(
   }
   const [row] = await db
     .select({
-      item_id: curriculum_items.id,
-      section_id: curriculum_items.section_id,
-      curriculum_id: curriculum_sections.curriculum_id,
+      item_id: course_subsections.id,
+      section_id: course_subsections.section_id,
+      course_id: course_sections.course_id,
     })
-    .from(curriculum_items)
-    .innerJoin(curriculum_sections, eq(curriculum_sections.id, curriculum_items.section_id))
-    .where(eq(curriculum_items.id, itemId))
+    .from(course_subsections)
+    .innerJoin(course_sections, eq(course_sections.id, course_subsections.section_id))
+    .where(eq(course_subsections.id, itemId))
     .limit(1);
   if (!row) {
     fail(res, 404, "ERR_NOT_FOUND", "Item not found.");
     return null;
   }
-  const curriculum = await loadAuthorableCurriculum(req, res, row.curriculum_id);
+  const curriculum = await loadAuthorableCurriculum(req, res, row.course_id);
   if (!curriculum) return null;
   return {
     item: { id: row.item_id, section_id: row.section_id },
-    section: { id: row.section_id, curriculum_id: row.curriculum_id },
+    section: { id: row.section_id, course_id: row.course_id },
     curriculum,
   };
 }
@@ -205,26 +205,26 @@ router.post("/:curriculumId/sections", async (req: Request, res: Response) => {
   if (!curriculum) return;
 
   const [{ max }] = await db
-    .select({ max: sql<number>`coalesce(max(${curriculum_sections.order_index}), -1)::int` })
-    .from(curriculum_sections)
-    .where(eq(curriculum_sections.curriculum_id, curriculum.id));
+    .select({ max: sql<number>`coalesce(max(${course_sections.order_index}), -1)::int` })
+    .from(course_sections)
+    .where(eq(course_sections.course_id, curriculum.id));
 
   const [row] = await db
-    .insert(curriculum_sections)
+    .insert(course_sections)
     .values({
-      curriculum_id: curriculum.id,
+      course_id: curriculum.id,
       title_en: body.title_en,
       title_hi: body.title_hi,
       order_index: (max ?? -1) + 1,
     })
-    .returning({ id: curriculum_sections.id });
+    .returning({ id: course_sections.id });
 
   await auditFromReq(req, {
     action: "create",
     entityKind: "curriculum_section",
     entityId: row.id,
     summary: `Added curriculum section "${body.title_en}".`,
-    metadata: { curriculum_id: curriculum.id },
+    metadata: { course_id: curriculum.id },
   });
 
   ok(res, { id: row.id });
@@ -252,20 +252,20 @@ router.patch("/sections/:sectionId", async (req: Request, res: Response) => {
   if (!loaded) return;
 
   await db
-    .update(curriculum_sections)
+    .update(course_sections)
     .set({
       ...(body.title_en !== undefined ? { title_en: body.title_en } : {}),
       ...(body.title_hi !== undefined ? { title_hi: body.title_hi } : {}),
       updated_at: new Date(),
     })
-    .where(eq(curriculum_sections.id, loaded.section.id));
+    .where(eq(course_sections.id, loaded.section.id));
 
   await auditFromReq(req, {
     action: "update",
     entityKind: "curriculum_section",
     entityId: loaded.section.id,
     summary: "Updated curriculum section.",
-    metadata: { curriculum_id: loaded.curriculum.id },
+    metadata: { course_id: loaded.curriculum.id },
   });
 
   ok(res, { id: loaded.section.id });
@@ -276,14 +276,14 @@ router.delete("/sections/:sectionId", async (req: Request, res: Response) => {
   const loaded = await loadAuthorableSection(req, res, String(req.params.sectionId));
   if (!loaded) return;
 
-  await db.delete(curriculum_sections).where(eq(curriculum_sections.id, loaded.section.id));
+  await db.delete(course_sections).where(eq(course_sections.id, loaded.section.id));
 
   await auditFromReq(req, {
     action: "delete",
     entityKind: "curriculum_section",
     entityId: loaded.section.id,
     summary: "Deleted curriculum section.",
-    metadata: { curriculum_id: loaded.curriculum.id },
+    metadata: { course_id: loaded.curriculum.id },
   });
 
   ok(res, { id: loaded.section.id, deleted: true });
@@ -308,9 +308,9 @@ router.post("/:curriculumId/sections/reorder", async (req: Request, res: Respons
   // The submitted ids must be EXACTLY this curriculum's sections (no foreign or
   // missing ids), so a reorder can never re-parent or drop a section.
   const existing = await db
-    .select({ id: curriculum_sections.id })
-    .from(curriculum_sections)
-    .where(eq(curriculum_sections.curriculum_id, curriculum.id));
+    .select({ id: course_sections.id })
+    .from(course_sections)
+    .where(eq(course_sections.course_id, curriculum.id));
   const existingIds = new Set(existing.map((r) => r.id));
   const submitted = new Set(body.section_ids);
   if (
@@ -325,9 +325,9 @@ router.post("/:curriculumId/sections/reorder", async (req: Request, res: Respons
   await db.transaction(async (tx) => {
     for (let i = 0; i < body.section_ids.length; i += 1) {
       await tx
-        .update(curriculum_sections)
+        .update(course_sections)
         .set({ order_index: i, updated_at: new Date() })
-        .where(eq(curriculum_sections.id, body.section_ids[i]));
+        .where(eq(course_sections.id, body.section_ids[i]));
     }
   });
 
@@ -336,7 +336,7 @@ router.post("/:curriculumId/sections/reorder", async (req: Request, res: Respons
     entityKind: "curriculum",
     entityId: curriculum.id,
     summary: "Reordered curriculum sections.",
-    metadata: { curriculum_id: curriculum.id, count: body.section_ids.length },
+    metadata: { course_id: curriculum.id, count: body.section_ids.length },
   });
 
   ok(res, { id: curriculum.id, reordered: body.section_ids.length });
@@ -364,12 +364,12 @@ router.post("/sections/:sectionId/items", async (req: Request, res: Response) =>
   if (!loaded) return;
 
   const [{ max }] = await db
-    .select({ max: sql<number>`coalesce(max(${curriculum_items.order_index}), -1)::int` })
-    .from(curriculum_items)
-    .where(eq(curriculum_items.section_id, loaded.section.id));
+    .select({ max: sql<number>`coalesce(max(${course_subsections.order_index}), -1)::int` })
+    .from(course_subsections)
+    .where(eq(course_subsections.section_id, loaded.section.id));
 
   const [row] = await db
-    .insert(curriculum_items)
+    .insert(course_subsections)
     .values({
       section_id: loaded.section.id,
       title_en: body.title_en,
@@ -378,14 +378,14 @@ router.post("/sections/:sectionId/items", async (req: Request, res: Response) =>
       description_hi: body.description_hi ?? null,
       order_index: (max ?? -1) + 1,
     })
-    .returning({ id: curriculum_items.id });
+    .returning({ id: course_subsections.id });
 
   await auditFromReq(req, {
     action: "create",
     entityKind: "curriculum_item",
     entityId: row.id,
     summary: `Added curriculum item "${body.title_en}".`,
-    metadata: { curriculum_id: loaded.curriculum.id, section_id: loaded.section.id },
+    metadata: { course_id: loaded.curriculum.id, section_id: loaded.section.id },
   });
 
   ok(res, { id: row.id });
@@ -420,7 +420,7 @@ router.patch("/items/:itemId", async (req: Request, res: Response) => {
   if (!loaded) return;
 
   await db
-    .update(curriculum_items)
+    .update(course_subsections)
     .set({
       ...(body.title_en !== undefined ? { title_en: body.title_en } : {}),
       ...(body.title_hi !== undefined ? { title_hi: body.title_hi } : {}),
@@ -428,14 +428,14 @@ router.patch("/items/:itemId", async (req: Request, res: Response) => {
       ...(body.description_hi !== undefined ? { description_hi: body.description_hi } : {}),
       updated_at: new Date(),
     })
-    .where(eq(curriculum_items.id, loaded.item.id));
+    .where(eq(course_subsections.id, loaded.item.id));
 
   await auditFromReq(req, {
     action: "update",
     entityKind: "curriculum_item",
     entityId: loaded.item.id,
     summary: "Updated curriculum item.",
-    metadata: { curriculum_id: loaded.curriculum.id, section_id: loaded.section.id },
+    metadata: { course_id: loaded.curriculum.id, section_id: loaded.section.id },
   });
 
   ok(res, { id: loaded.item.id });
@@ -446,14 +446,14 @@ router.delete("/items/:itemId", async (req: Request, res: Response) => {
   const loaded = await loadAuthorableItem(req, res, String(req.params.itemId));
   if (!loaded) return;
 
-  await db.delete(curriculum_items).where(eq(curriculum_items.id, loaded.item.id));
+  await db.delete(course_subsections).where(eq(course_subsections.id, loaded.item.id));
 
   await auditFromReq(req, {
     action: "delete",
     entityKind: "curriculum_item",
     entityId: loaded.item.id,
     summary: "Deleted curriculum item.",
-    metadata: { curriculum_id: loaded.curriculum.id, section_id: loaded.section.id },
+    metadata: { course_id: loaded.curriculum.id, section_id: loaded.section.id },
   });
 
   ok(res, { id: loaded.item.id, deleted: true });
@@ -478,9 +478,9 @@ router.post("/sections/:sectionId/items/reorder", async (req: Request, res: Resp
   // The submitted ids must be EXACTLY this section's items, so a reorder can
   // never re-parent an item into another section or drop one.
   const existing = await db
-    .select({ id: curriculum_items.id })
-    .from(curriculum_items)
-    .where(eq(curriculum_items.section_id, loaded.section.id));
+    .select({ id: course_subsections.id })
+    .from(course_subsections)
+    .where(eq(course_subsections.section_id, loaded.section.id));
   const existingIds = new Set(existing.map((r) => r.id));
   const submitted = new Set(body.item_ids);
   if (
@@ -495,9 +495,9 @@ router.post("/sections/:sectionId/items/reorder", async (req: Request, res: Resp
   await db.transaction(async (tx) => {
     for (let i = 0; i < body.item_ids.length; i += 1) {
       await tx
-        .update(curriculum_items)
+        .update(course_subsections)
         .set({ order_index: i, updated_at: new Date() })
-        .where(eq(curriculum_items.id, body.item_ids[i]));
+        .where(eq(course_subsections.id, body.item_ids[i]));
     }
   });
 
@@ -507,7 +507,7 @@ router.post("/sections/:sectionId/items/reorder", async (req: Request, res: Resp
     entityId: loaded.section.id,
     summary: "Reordered curriculum items.",
     metadata: {
-      curriculum_id: loaded.curriculum.id,
+      course_id: loaded.curriculum.id,
       section_id: loaded.section.id,
       count: body.item_ids.length,
     },

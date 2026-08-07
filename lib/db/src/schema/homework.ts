@@ -6,7 +6,7 @@ import { batches } from "./centres";
 import { students } from "./students";
 import { users } from "./identity";
 import { punya_transactions } from "./punya";
-import { curriculum_items } from "./curriculum";
+import { course_subsections } from "./curriculum";
 
 export const homework_assignments = pgTable(
   "homework_assignments",
@@ -21,10 +21,10 @@ export const homework_assignments = pgTable(
     attachment_url: text("attachment_url"),
     is_msv: boolean("is_msv").notNull().default(false),
     /**
-     * Advisory topic tag (F12) — does not write student_curriculum_progress.
-     * Cleared if the curriculum item is deleted.
+     * Advisory topic tag (F12) — does not write student_course_progress.
+     * Cleared if the course subsection is deleted (CU29 keeps SET NULL).
      */
-    curriculum_item_id: uuid("curriculum_item_id").references(() => curriculum_items.id, {
+    subsection_id: uuid("subsection_id").references(() => course_subsections.id, {
       onDelete: "set null",
     }),
     created_by: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
@@ -33,7 +33,7 @@ export const homework_assignments = pgTable(
   },
   (t) => ({
     batch_idx: index("idx_homework_assignments_batch").on(t.batch_id),
-    curriculum_item_idx: index("idx_homework_assignments_curriculum_item").on(t.curriculum_item_id),
+    subsection_idx: index("idx_homework_assignments_subsection").on(t.subsection_id),
   }),
 );
 

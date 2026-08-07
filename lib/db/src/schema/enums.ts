@@ -113,6 +113,8 @@ export const HOMEWORK_STATUSES = [
 ] as const;
 export const SERVICE_REQUEST_STATUSES = ["submitted", "in_review", "resolved"] as const;
 export const CURRICULUM_LEVELS = ["not_started", "in_progress", "completed", "mastered"] as const;
+/** CU4 — course lifecycle. Default draft; publish is an audited transition. */
+export const COURSE_STATUSES = ["draft", "active", "archived"] as const;
 export const QUIZ_SCOPES = ["national", "state", "city", "centre", "batch"] as const;
 export const COMPETITION_STATUSES = ["draft", "open", "closed", "results_published"] as const;
 /** Attempt lifecycle — abandoned frees a max_attempts slot. */
@@ -200,6 +202,7 @@ export const libraryAccessTierEnum = pgEnum("library_access_tier_enum", LIBRARY_
 export const homeworkStatusEnum = pgEnum("homework_status_enum", HOMEWORK_STATUSES);
 export const serviceRequestStatusEnum = pgEnum("service_request_status_enum", SERVICE_REQUEST_STATUSES);
 export const curriculumLevelEnum = pgEnum("curriculum_level_enum", CURRICULUM_LEVELS);
+export const courseStatusEnum = pgEnum("course_status_enum", COURSE_STATUSES);
 export const auditActionEnum = pgEnum("audit_action_enum", AUDIT_ACTIONS);
 export const quizScopeEnum = pgEnum("quiz_scope_enum", QUIZ_SCOPES);
 export const competitionStatusEnum = pgEnum("competition_status_enum", COMPETITION_STATUSES);

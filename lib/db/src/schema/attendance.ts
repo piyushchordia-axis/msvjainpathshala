@@ -28,7 +28,7 @@ import { students } from "./students";
 import { users } from "./identity";
 
 /** Crockford Base32 ULID (26 chars). Not uuid — see CLAUDE.md Offline sync / AT19. */
-const ULID_RE = "^[0-9A-HJKMNP-TV-Z]{26}$";
+export const ULID_RE = "^[0-9A-HJKMNP-TV-Z]{26}$";
 
 export const sessions = pgTable(
   "sessions",

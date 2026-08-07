@@ -6,9 +6,9 @@ import {
   db,
   centres,
   cities,
-  curricula,
-  curriculum_sections,
-  curriculum_items,
+  courses,
+  course_sections,
+  course_subsections,
   online_exams,
   exam_attempts,
   exam_questions,
@@ -70,26 +70,26 @@ router.get("/curricula", async (req: Request, res: Response) => {
   const kind = typeof req.query.kind === "string" ? req.query.kind : undefined;
   const rows = await db
     .select({
-      id: curricula.id,
-      name: curricula.name,
-      kind: curricula.kind,
-      academic_year: curricula.academic_year,
-      status: curricula.status,
+      id: courses.id,
+      name: courses.name_en,
+      kind: courses.kind,
+      academic_year: courses.academic_year,
+      status: courses.status,
       city_name: cities.name,
       section_count: sql<number>`(
-        select count(*)::int from ${curriculum_sections}
-        where ${curriculum_sections.curriculum_id} = ${curricula.id}
+        select count(*)::int from ${course_sections}
+        where ${course_sections.course_id} = ${courses.id}
       )`,
     })
-    .from(curricula)
-    .leftJoin(cities, eq(cities.id, curricula.city_id))
+    .from(courses)
+    .leftJoin(cities, eq(cities.id, courses.city_id))
     .where(
       and(
-        kind ? eq(curricula.kind, kind) : undefined,
-        cityFilter(curricula.city_id, cityIds),
+        kind ? eq(courses.kind, kind) : undefined,
+        cityFilter(courses.city_id, cityIds),
       ),
     )
-    .orderBy(desc(curricula.created_at));
+    .orderBy(desc(courses.created_at));
 
   ok(res, { items: rows }, { count: rows.length });
 });
@@ -102,7 +102,7 @@ router.get("/curricula/:id/tree", async (req: Request, res: Response) => {
     fail(res, 404, "ERR_NOT_FOUND", "Curriculum not found.");
     return;
   }
-  const [curriculum] = await db.select().from(curricula).where(eq(curricula.id, id)).limit(1);
+  const [curriculum] = await db.select().from(courses).where(eq(courses.id, id)).limit(1);
   if (!curriculum) {
     fail(res, 404, "ERR_NOT_FOUND", "Curriculum not found.");
     return;
@@ -114,21 +114,21 @@ router.get("/curricula/:id/tree", async (req: Request, res: Response) => {
 
   const sections = await db
     .select()
-    .from(curriculum_sections)
-    .where(eq(curriculum_sections.curriculum_id, id))
-    .orderBy(asc(curriculum_sections.order_index));
+    .from(course_sections)
+    .where(eq(course_sections.course_id, id))
+    .orderBy(asc(course_sections.order_index));
 
   const items = await db
     .select()
-    .from(curriculum_items)
-    .innerJoin(curriculum_sections, eq(curriculum_sections.id, curriculum_items.section_id))
-    .where(eq(curriculum_sections.curriculum_id, id))
-    .orderBy(asc(curriculum_items.order_index));
+    .from(course_subsections)
+    .innerJoin(course_sections, eq(course_sections.id, course_subsections.section_id))
+    .where(eq(course_sections.course_id, id))
+    .orderBy(asc(course_subsections.order_index));
 
   ok(res, {
     curriculum: {
       id: curriculum.id,
-      name: curriculum.name,
+      name: curriculum.name_en,
       kind: curriculum.kind,
       academic_year: curriculum.academic_year,
       status: curriculum.status,
@@ -139,12 +139,12 @@ router.get("/curricula/:id/tree", async (req: Request, res: Response) => {
       title_hi: s.title_hi,
       order_index: s.order_index,
       items: items
-        .filter((row) => row.curriculum_items.section_id === s.id)
+        .filter((row) => row.course_subsections.section_id === s.id)
         .map((row) => ({
-          id: row.curriculum_items.id,
-          title_en: row.curriculum_items.title_en,
-          title_hi: row.curriculum_items.title_hi,
-          order_index: row.curriculum_items.order_index,
+          id: row.course_subsections.id,
+          title_en: row.course_subsections.title_en,
+          title_hi: row.course_subsections.title_hi,
+          order_index: row.course_subsections.order_index,
         })),
     })),
   });
@@ -341,19 +341,20 @@ router.post("/curricula", requireRole("super_admin", "state_admin", "city_admin"
   // Validate the caller may write to the requested city scope. `cityIdsForUser`
   // returns null for super_admin (unrestricted, incl. national/null) or the set
   // of city ids the caller owns. Non-super_admins may NOT create national
-  // (city_id = null) curricula, and may only target cities in their scope.
+  // (city_id = null) courses, and may only target cities in their scope.
   const cityIds = await cityIdsForUser(req.authUser!);
   if (cityIds !== null) {
     if (!body.city_id || !cityIds.includes(body.city_id)) {
       fail(res, 403, "ERR_FORBIDDEN", "City not in your scope."); return;
     }
   }
-  const [row] = await db.insert(curricula).values({
-    name: body.name,
+  const [row] = await db.insert(courses).values({
+    name_en: body.name,
     kind: body.kind,
     academic_year: body.academic_year ?? null,
     city_id: body.city_id ?? null,
-  }).returning({ id: curricula.id, name: curricula.name });
+    status: "draft",
+  }).returning({ id: courses.id, name: courses.name_en });
   await auditFromReq(req, {
     action: "create",
     entityKind: "curriculum",
