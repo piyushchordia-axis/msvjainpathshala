@@ -28,6 +28,8 @@ const PARENT_ACTIONS: QuickAction[] = [
   { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "सूचनाएँ" },
   { href: "/my-attendance", icon: "checkmark-done-outline", en: "Attendance", hi: "उपस्थिति" },
   { href: "/niyam-submit", icon: "sparkles-outline", en: "Submit Niyam", hi: "नियम भेजें" },
+  { href: "/courses", icon: "library-outline", en: "Courses", hi: "पाठ्यक्रम" },
+  { href: "/certificates", icon: "ribbon-outline", en: "Certificates", hi: "प्रमाणपत्र" },
   { href: "/homework", icon: "book-outline", en: "Homework", hi: "गृहकार्य" },
   { href: "/quizzes", icon: "help-circle-outline", en: "Quizzes", hi: "प्रश्नोत्तरी" },
   { href: "/exams", icon: "clipboard-outline", en: "Exams", hi: "परीक्षाएँ" },
@@ -38,6 +40,7 @@ const PARENT_ACTIONS: QuickAction[] = [
 export const SHIKSHAK_ACTIONS: QuickAction[] = [
   { href: "/shikshak/students", icon: "people-outline", en: "Students", hi: "विद्यार्थी" },
   { href: "/shikshak/batches", icon: "grid-outline", en: "Batches", hi: "बैच" },
+  { href: "/shikshak/courses", icon: "library-outline", en: "Courses", hi: "पाठ्यक्रम" },
   { href: "/shikshak/homework", icon: "book-outline", en: "Homework", hi: "गृहकार्य" },
   {
     href: "/shikshak/punya",
@@ -56,6 +59,7 @@ export const SHIKSHAK_ACTIONS: QuickAction[] = [
 export const SANCHALAK_ACTIONS: QuickAction[] = [
   { href: "/admin/centres", icon: "business-outline", en: "Centres", hi: "केंद्र" },
   { href: "/admin/shikshaks", icon: "people-circle-outline", en: "Shikshaks", hi: "शिक्षक" },
+  { href: "/admin/courses", icon: "library-outline", en: "Courses", hi: "पाठ्यक्रम" },
   { href: "/admin/holidays", icon: "calendar-outline", en: "Holidays", hi: "अवकाश" },
   { href: "/admin/notices", icon: "megaphone-outline", en: "Notices", hi: "सूचनाएँ" },
   { href: "/admin/niyam-review", icon: "clipboard-outline", en: "Niyam review", hi: "नियम समीक्षा" },

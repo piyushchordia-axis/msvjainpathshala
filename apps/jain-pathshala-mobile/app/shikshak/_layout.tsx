@@ -6,7 +6,7 @@ export default function Layout() {
   return (
     <PersonaTabs
       allowed={["shikshak"]}
-      hide={["niyams", "niyam-review", "punya"]}
+      hide={["niyams", "niyam-review", "punya", "courses", "course/[id]"]}
       tabs={[
         { name: "today", title: hi ? "आज" : "Today", icon: "today" },
         { name: "students", title: hi ? "विद्यार्थी" : "Students", icon: "people" },

@@ -26,6 +26,8 @@ export type {
   // Persona ("me")
   ChildRow,
   AttendanceRow,
+  AbsenceNotificationRow,
+  StudentAbsencesPayload,
   PunyaTransaction,
   PunyaSummary,
   NiyamSubmissionRow,

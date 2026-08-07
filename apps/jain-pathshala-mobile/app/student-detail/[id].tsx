@@ -8,7 +8,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { router, useLocalSearchParams } from "expo-router";
 import { Image as ExpoImage } from "expo-image";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
@@ -29,7 +29,6 @@ import {
   useAwardPunya,
   usePunyaAwardLimit,
   useStudentHomeworkHistory,
-  useStudentProgress,
 } from "@/lib/queries";
 import { Body, Button, Card, Numeric, Pill, Row, StateView, Title } from "@/components/ui";
 
@@ -66,14 +65,6 @@ function homeworkTone(status: string): "success" | "warning" | "error" | "info" 
   if (s === "submitted" || s === "acknowledged") return "info";
   if (s === "returned" || s === "late") return "warning";
   if (s === "pending") return "neutral";
-  return "neutral";
-}
-
-function progressTone(level: string): "success" | "warning" | "info" | "neutral" | "primary" {
-  const s = level.toLowerCase();
-  if (s === "mastered") return "primary";
-  if (s === "completed") return "success";
-  if (s === "in_progress") return "info";
   return "neutral";
 }
 
@@ -842,63 +833,22 @@ function NiyamPanel({ studentId }: { studentId: string }) {
 
 function ProgressPanel({ studentId }: { studentId: string }) {
   const { hi } = useLocale();
-  const progress = useStudentProgress(studentId, true);
-  const items = progress.data?.items ?? [];
-
-  const grouped = useMemo(() => {
-    const map = new Map<string, typeof items>();
-    for (const item of items) {
-      const key = item.section_title || (hi ? "अन्य" : "Other");
-      const cur = map.get(key) ?? [];
-      cur.push(item);
-      map.set(key, cur);
-    }
-    return Array.from(map.entries());
-  }, [items, hi]);
-
-  if (progress.isLoading) return <StateView status="loading" emptyText="" />;
-  if (progress.isError) {
-    return (
-      <StateView
-        status="error"
-        emptyText=""
-        errorText={hi ? "प्रगति लोड नहीं हुई।" : "Could not load progress."}
-        onRetry={progress.refetch}
-        retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
-      />
-    );
-  }
-  if (items.length === 0) {
-    return (
-      <StateView
-        status="empty"
-        emptyText={hi ? "अभी कोई पाठ्यक्रम प्रगति नहीं।" : "No curriculum progress yet."}
-      />
-    );
-  }
+  const { user } = useAuth();
+  const coursesHref =
+    (user?.role === "shikshak" ? "/shikshak/courses" : "/admin/courses") +
+    `?student_id=${encodeURIComponent(studentId)}`;
 
   return (
-    <View style={{ gap: 14 }}>
-      {grouped.map(([section, rows]) => (
-        <View key={section} style={{ gap: 8 }}>
-          <Title style={{ fontSize: 15 }}>{section}</Title>
-          {rows.map((r) => (
-            <Card key={r.item_id}>
-              <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-                <Body style={{ flex: 1, paddingRight: 8, fontFamily: bodyFamily(hi, "semibold") }}>
-                  {hi ? r.title_hi || r.title_en : r.title_en}
-                </Body>
-                <Pill label={humanize(r.level)} tone={progressTone(r.level)} />
-              </Row>
-              {r.note ? (
-                <Body muted style={{ fontSize: 12, marginTop: 6 }}>
-                  {r.note}
-                </Body>
-              ) : null}
-            </Card>
-          ))}
-        </View>
-      ))}
+    <View style={{ gap: 12 }}>
+      <Body muted style={{ lineHeight: 22 }}>
+        {hi
+          ? "पाठ्यक्रम प्रगति अब पाठ्यक्रम वृक्ष पर है — स्थिति, स्टार और प्रमाणन वहीं से।"
+          : "Course progress lives on the course tree — status, stars, and certification are there."}
+      </Body>
+      <Button
+        label={hi ? "पाठ्यक्रम खोलें" : "Open courses"}
+        onPress={() => router.push(coursesHref as never)}
+      />
     </View>
   );
 }

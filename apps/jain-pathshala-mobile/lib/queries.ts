@@ -1,4 +1,4 @@
-/**
+﻿/**
  * React Query data layer. Every endpoint the personas consume lives here so
  * screens stay declarative and cache keys never drift. All hooks return the
  * unwrapped DTO (lib/api.ts strips the { data } envelope).
@@ -14,6 +14,7 @@ import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiGetEnvelope, ApiError 
 import type {
   AdminBatchRow,
   AdminStudentRow,
+  AbsenceNotificationRow,
   AttendanceRow,
   CentreDetail,
   CentreRow,
@@ -30,6 +31,7 @@ import type {
   ShikshakSessionRow,
   ShivirDetail,
   ShivirRow,
+  StudentAbsencesPayload,
 } from "@/lib/types";
 import type { SessionUser } from "@/lib/auth";
 import { galleryHomeKey, galleryWallKey } from "@/lib/gallery-query-keys";
@@ -49,6 +51,9 @@ export const qk = {
   clientSettings: ["public", "settings"] as const,
   children: ["me", "children"] as const,
   attendance: (id: string) => ["me", "attendance", id] as const,
+  studentAbsences: (id: string, month?: string) =>
+    ["me", "absences", id, month ?? "all"] as const,
+  centreHolidaysPublic: (id: string) => ["public", "centre-holidays", id] as const,
   punya: (id: string) => ["me", "punya", id] as const,
   niyams: (id: string) => ["me", "niyams", id] as const,
   niyamCatalog: (studentId?: string) => ["me", "niyam-catalog", studentId ?? ""] as const,
@@ -64,6 +69,12 @@ export const qk = {
   adminStudentNiyams: (id: string) => ["admin", "student", id, "niyams"] as const,
   adminStudentIdCard: (id: string) => ["admin", "student", id, "id-card"] as const,
   adminStudentProgress: (id: string) => ["admin", "student", id, "progress"] as const,
+  courses: (scope: string) => ["courses", scope] as const,
+  adminCourses: (status?: string) => ["admin", "courses", status ?? "all"] as const,
+  courseTree: (courseId: string, studentId: string) =>
+    ["courses", "tree", courseId, studentId] as const,
+  studentCertificates: (studentId: string) =>
+    ["students", studentId, "certificates"] as const,
   punyaAwardLimit: () => ["admin", "punya-award-limit"] as const,
   pendingNiyam: (batchId: string | null, niyamType: string | null) =>
     ["shikshak", "niyam-pending", batchId ?? "all", niyamType ?? "all"] as const,
@@ -302,18 +313,61 @@ export type StudentAttendancePayload = List<AttendanceRow> & {
   attendance_percent?: number | null;
 };
 
-export function useAttendance(studentId?: string, enabled = true, limit?: number) {
+export function useAttendance(
+  studentId?: string,
+  enabled = true,
+  opts?: number | { month?: string; limit?: number },
+) {
+  const resolved = typeof opts === "number" ? { limit: opts } : (opts ?? {});
   const baseKey = qk.attendance(studentId ?? "");
-  const queryKey =
-    limit != null ? ([...baseKey, { limit }] as const) : baseKey;
-  const path =
-    limit != null
-      ? `/v1/students/${studentId}/attendance?limit=${limit}`
-      : `/v1/students/${studentId}/attendance`;
+  const queryKey = [...baseKey, resolved] as const;
+  const params = new URLSearchParams();
+  if (resolved.month) params.set("month", resolved.month);
+  if (resolved.limit != null) params.set("limit", String(resolved.limit));
+  const qs = params.toString();
+  const path = `/v1/students/${studentId}/attendance${qs ? `?${qs}` : ""}`;
   return useQuery({
     queryKey,
     queryFn: () => apiGet<StudentAttendancePayload>(path),
     enabled: enabled && !!studentId,
+  });
+}
+
+export function useStudentAbsences(studentId?: string, month?: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.studentAbsences(studentId ?? "", month),
+    queryFn: () => {
+      const qs = month ? `?month=${encodeURIComponent(month)}` : "";
+      return apiGet<StudentAbsencesPayload>(`/v1/students/${studentId}/absences${qs}`);
+    },
+    enabled: enabled && !!studentId,
+  });
+}
+
+export type PublicHolidayRow = {
+  id: string;
+  holiday_date: string;
+  reason: string | null;
+};
+
+export function useCentreHolidaysPublic(centreId?: string | null, enabled = true) {
+  return useQuery({
+    queryKey: qk.centreHolidaysPublic(centreId ?? ""),
+    queryFn: () => apiGet<List<PublicHolidayRow>>(`/v1/centres/${centreId}/holidays`),
+    enabled: enabled && !!centreId,
+  });
+}
+
+export function useCreateStudentAbsence(studentId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: { start_date: string; end_date: string; reason?: string }) =>
+      apiPost<AbsenceNotificationRow>(`/v1/students/${studentId}/absences`, body),
+    onSuccess: () => {
+      if (!studentId) return;
+      void qc.invalidateQueries({ queryKey: ["me", "absences", studentId] });
+      void qc.invalidateQueries({ queryKey: qk.attendance(studentId) });
+    },
   });
 }
 
@@ -1927,5 +1981,238 @@ export function useSetUserPhoto() {
   return useMutation({
     mutationFn: (photo_url: string | null) =>
       apiPut<{ user: SessionUser }>("/v1/me/photo", { photo_url }),
+  });
+}
+
+/* ---------------------------------------------------------------- courses (CU3–CU31) --- */
+
+export type CourseListRow = {
+  id: string;
+  name_en: string;
+  name_hi: string | null;
+  kind: string;
+  academic_year: string | null;
+  status?: string;
+  punya_points: number;
+  city_id?: string | null;
+  city_name?: string | null;
+};
+
+export type CourseTreeSubsection = {
+  id: string;
+  title_en: string;
+  title_hi: string;
+  order_index: number;
+  status: "not_started" | "in_progress" | "completed";
+  certified_at: string | null;
+  certified_by: string | null;
+  certified_by_gender: string | null;
+};
+
+export type CourseTreeSection = {
+  id: string;
+  title_en: string;
+  title_hi: string;
+  order_index: number;
+  punya_points: number;
+  status: "not_started" | "in_progress" | "completed";
+  certified_at: string | null;
+  certified_by: string | null;
+  certified_by_gender: string | null;
+  derived_status: "not_started" | "in_progress" | "completed" | null;
+  derived_leaf_total: number;
+  derived_leaf_reached: number;
+  derived_coverage: number | null;
+  status_diverges: boolean;
+  subsections: CourseTreeSubsection[];
+};
+
+export type StudentCourseTree = {
+  course: {
+    id: string;
+    name_en: string;
+    name_hi: string | null;
+    kind: string;
+    academic_year: string | null;
+    punya_points: number;
+  };
+  progress: {
+    coverage: number | null;
+    mastery: number | null;
+    leaf_total?: number;
+    leaf_reached?: number;
+  };
+  sections: CourseTreeSection[];
+};
+
+export type CourseCertificateRow = {
+  id: string;
+  kind: string;
+  title_en: string;
+  title_hi: string | null;
+  issued_at: string;
+  voided_at: string | null;
+  status: "ready" | "issuing" | "void" | string;
+  pdf_url: string | null;
+  verification_code: string;
+  honorific_en: string | null;
+  honorific_hi: string | null;
+};
+
+/** Parent/student catalogue — CU3 active courses for the authenticated viewer. */
+export function useCoursesCatalogue(enabled = true) {
+  return useQuery({
+    queryKey: qk.courses("catalogue"),
+    queryFn: () => apiGet<List<CourseListRow>>("/v1/courses"),
+    enabled,
+  });
+}
+
+/** Admin list — shikshak/sanchalak authoring-side catalogue. */
+export function useAdminCourses(
+  status: "draft" | "active" | "archived" | "all" = "active",
+  enabled = true,
+) {
+  const qs = status === "all" ? "" : `?status=${status}`;
+  return useQuery({
+    queryKey: qk.adminCourses(status),
+    queryFn: () => apiGet<List<CourseListRow>>(`/v1/admin/courses${qs}`),
+    enabled,
+  });
+}
+
+export function useCourseTree(courseId?: string, studentId?: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.courseTree(courseId ?? "", studentId ?? ""),
+    queryFn: () =>
+      apiGet<StudentCourseTree>(
+        `/v1/courses/${courseId}/tree?student_id=${encodeURIComponent(studentId!)}`,
+      ),
+    enabled: !!courseId && !!studentId && enabled,
+  });
+}
+
+export function useStudentCertificates(studentId?: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.studentCertificates(studentId ?? ""),
+    queryFn: () =>
+      apiGet<List<CourseCertificateRow>>(`/v1/students/${studentId}/certificates`),
+    enabled: !!studentId && enabled,
+  });
+}
+
+/**
+ * Single-student progress write. Guruji/Sanchalak enqueue for offline parity;
+ * parent/student hit the online path (CU11 bidirectional).
+ */
+export function useSetCourseNodeProgress(opts?: { offline?: boolean }) {
+  const qc = useQueryClient();
+  const offline = opts?.offline ?? false;
+  return useMutation({
+    mutationFn: async (body: {
+      nodeId: string;
+      nodeKind: "section" | "subsection";
+      student_id: string;
+      status: "not_started" | "in_progress" | "completed";
+      note?: string;
+    }) => {
+      if (offline) {
+        const { enqueueCourseProgress, drainQueues } = await import(
+          "@/lib/offline/sync-engine"
+        );
+        const { ulid } = await import("@/lib/offline/ulid");
+        const submission_op_id = await enqueueCourseProgress({
+          node_kind: body.nodeKind,
+          node_id: body.nodeId,
+          marks: [
+            {
+              student_id: body.student_id,
+              status: body.status,
+              note: body.note,
+              client_op_id: ulid(),
+            },
+          ],
+        });
+        const results = await drainQueues();
+        const mine = results.find((r) => r.submission_op_id === submission_op_id);
+        return { submission_op_id, result: mine ?? null, queued: true as const };
+      }
+      return apiPost(`/v1/courses/nodes/${body.nodeId}/progress`, {
+        student_id: body.student_id,
+        status: body.status,
+        note: body.note,
+      });
+    },
+    onSuccess: (_res, vars) => {
+      void qc.invalidateQueries({ queryKey: ["courses", "tree"] });
+      void qc.invalidateQueries({ queryKey: qk.adminStudentProgress(vars.student_id) });
+    },
+  });
+}
+
+export function useBulkCourseNodeProgress() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: {
+      nodeId: string;
+      batch_id?: string;
+      student_ids?: string[];
+      status: "not_started" | "in_progress" | "completed";
+      note?: string;
+    }) =>
+      apiPost<{ applied: number; skipped: number; student_ids?: string[] }>(
+        `/v1/courses/nodes/${body.nodeId}/progress/bulk`,
+        {
+          batch_id: body.batch_id,
+          student_ids: body.student_ids,
+          status: body.status,
+          note: body.note,
+        },
+      ),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["courses", "tree"] });
+    },
+  });
+}
+
+/**
+ * Certify one student. Always enqueue offline for Guruji/Sanchalak so CU31
+ * parity holds; call only after CU18 confirm on device.
+ */
+export function useCertifyCourseNode() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: {
+      nodeId: string;
+      nodeKind: "section" | "subsection";
+      student_id: string;
+      note?: string;
+      /** When true (default for admin personas), queue + drain. */
+      offline?: boolean;
+    }) => {
+      const useOffline = body.offline !== false;
+      if (useOffline) {
+        const { enqueueCourseCertification, drainQueues } = await import(
+          "@/lib/offline/sync-engine"
+        );
+        const submission_op_id = await enqueueCourseCertification({
+          node_kind: body.nodeKind,
+          node_id: body.nodeId,
+          student_id: body.student_id,
+          certification_note: body.note,
+        });
+        const results = await drainQueues();
+        const mine = results.find((r) => r.submission_op_id === submission_op_id);
+        return { submission_op_id, result: mine ?? null, queued: true as const };
+      }
+      return apiPost(`/v1/courses/nodes/${body.nodeId}/certify`, {
+        student_id: body.student_id,
+        note: body.note,
+      });
+    },
+    onSuccess: (_res, vars) => {
+      void qc.invalidateQueries({ queryKey: ["courses", "tree"] });
+      void qc.invalidateQueries({ queryKey: qk.studentCertificates(vars.student_id) });
+    },
   });
 }

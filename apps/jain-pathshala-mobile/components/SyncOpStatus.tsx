@@ -18,10 +18,10 @@ export function SyncOpStatus(props: {
   const c = useColors();
   const { hi } = useLocale();
 
-  if (props.state === "duplicate" || props.state === "synced") return null;
+  if (props.state === "duplicate") return null;
 
   const styles: Record<
-    Exclude<SyncUiState, "duplicate" | "synced">,
+    Exclude<SyncUiState, "duplicate">,
     { bg: string; fg: string; title: string; detail: string }
   > = {
     queued: {
@@ -39,6 +39,14 @@ export function SyncOpStatus(props: {
       fg: c.warningText,
       title: props.title ?? (hi ? "सिंक हो रहा है…" : "Syncing…"),
       detail: props.detail ?? (hi ? "कृपया प्रतीक्षा करें।" : "Please wait."),
+    },
+    synced: {
+      bg: c.successSoft,
+      fg: c.successText,
+      title: props.title ?? (hi ? "सिंक हो गया" : "Synced"),
+      detail:
+        props.detail ??
+        (hi ? "सर्वर पर सुरक्षित। यह संदेश जल्द हट जाएगा।" : "Saved on the server. This will clear shortly."),
     },
     conflict: {
       bg: c.errorSoft,
@@ -64,7 +72,7 @@ export function SyncOpStatus(props: {
     },
   };
 
-  const s = styles[props.state as keyof typeof styles];
+  const s = styles[props.state];
   if (!s) return null;
 
   return (

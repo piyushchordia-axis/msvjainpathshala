@@ -88,6 +88,9 @@ function RootLayoutNav() {
       <Stack.Screen name="niyam-submissions" options={{ title: "All submissions" }} />
       <Stack.Screen name="homework" options={{ title: "Homework" }} />
       <Stack.Screen name="homework-assignment/[id]" options={{ title: "Review homework" }} />
+      <Stack.Screen name="courses" options={{ title: "Courses" }} />
+      <Stack.Screen name="course/[id]" options={{ title: "Course" }} />
+      <Stack.Screen name="certificates" options={{ title: "Certificates" }} />
       <Stack.Screen name="student-detail/[id]" options={{ title: "Student" }} />
       <Stack.Screen name="my-attendance" options={{ title: "Attendance" }} />
       <Stack.Screen name="quizzes" options={{ title: "Quizzes" }} />
