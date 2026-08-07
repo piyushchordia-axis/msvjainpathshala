@@ -8,11 +8,13 @@ import {
   centres,
   course_sections,
   course_subsections,
+  course_template_sections,
+  course_template_subsections,
   course_templates,
   courses,
   type User,
 } from "@workspace/db";
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Role } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
@@ -478,6 +480,12 @@ router.get("/courses", requireMinRole("shikshak"), async (req: Request, res: Res
       punya_points: courses.punya_points,
       city_id: courses.city_id,
       city_name: cities.name,
+      template_id: courses.template_id,
+      section_count: sql<number>`(
+        select count(*)::int from ${course_sections}
+        where ${course_sections.course_id} = ${courses.id}
+          and ${course_sections.deleted_at} is null
+      )`,
     })
     .from(courses)
     .leftJoin(cities, eq(cities.id, courses.city_id))
@@ -490,12 +498,70 @@ router.get("/courses", requireMinRole("shikshak"), async (req: Request, res: Res
           ? undefined
           : cityIds.length === 0
             ? sql`false`
-            : inArray(courses.city_id, cityIds),
+            : or(isNull(courses.city_id), inArray(courses.city_id, cityIds)),
       ),
     )
     .orderBy(desc(courses.created_at));
   ok(res, { items: rows }, { count: rows.length });
 });
+
+/**
+ * CU4 / CU33 — archive confirm needs the count of students with in-progress,
+ * uncertified work on this course (mid-course archive is the failure mode).
+ */
+router.get(
+  "/courses/:id/archive-impact",
+  requireMinRole("city_admin"),
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Course not found.");
+      return;
+    }
+    const cityIds = await cityIdsForUser(req.authUser!);
+    const [course] = await db
+      .select({ id: courses.id, city_id: courses.city_id, status: courses.status })
+      .from(courses)
+      .where(and(eq(courses.id, id), isNull(courses.deleted_at)))
+      .limit(1);
+    if (!course) {
+      fail(res, 404, "ERR_NOT_FOUND", "Course not found.");
+      return;
+    }
+    if (cityIds !== null && course.city_id && !cityIds.includes(course.city_id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Course not found in your scope.");
+      return;
+    }
+
+    const result = await db.execute(sql`
+      select count(distinct p.student_id)::int as count
+        from student_course_progress p
+       where p.status = 'in_progress'
+         and p.certified_at is null
+         and (
+           (p.section_id in (
+              select id from course_sections
+               where course_id = ${id}::uuid and deleted_at is null
+            ) and p.subsection_id is null)
+           or p.subsection_id in (
+              select ss.id
+                from course_subsections ss
+                join course_sections s on s.id = ss.section_id
+               where s.course_id = ${id}::uuid
+                 and ss.deleted_at is null
+                 and s.deleted_at is null
+            )
+         )
+    `);
+    const rows = (result as unknown as { rows?: Array<{ count: number | string }> }).rows ?? [];
+    const count = Number(rows[0]?.count ?? 0);
+    ok(res, {
+      course_id: id,
+      status: course.status,
+      in_progress_uncertified_students: Number.isFinite(count) ? count : 0,
+    });
+  },
+);
 
 router.get("/courses/:id/tree", requireMinRole("shikshak"), async (req: Request, res: Response) => {
   const id = String(req.params.id);
@@ -538,6 +604,8 @@ router.get("/courses/:id/tree", requireMinRole("shikshak"), async (req: Request,
       academic_year: course.academic_year,
       status: course.status,
       punya_points: course.punya_points,
+      city_id: course.city_id,
+      template_id: course.template_id,
     },
     sections: sections.map((s) => ({
       id: s.id,
@@ -556,5 +624,332 @@ router.get("/courses/:id/tree", requireMinRole("shikshak"), async (req: Request,
     })),
   });
 });
+
+/* ═══════════════ Template tree authoring (super_admin, CU7) ═══════════════ */
+
+router.get(
+  "/course-templates/:id/tree",
+  requireRole("super_admin"),
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template not found.");
+      return;
+    }
+    const [tpl] = await db
+      .select()
+      .from(course_templates)
+      .where(and(eq(course_templates.id, id), isNull(course_templates.deleted_at)))
+      .limit(1);
+    if (!tpl) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template not found.");
+      return;
+    }
+    const sections = await db
+      .select()
+      .from(course_template_sections)
+      .where(
+        and(eq(course_template_sections.template_id, id), isNull(course_template_sections.deleted_at)),
+      )
+      .orderBy(asc(course_template_sections.order_index));
+    const subs = await db
+      .select()
+      .from(course_template_subsections)
+      .innerJoin(
+        course_template_sections,
+        eq(course_template_sections.id, course_template_subsections.section_id),
+      )
+      .where(
+        and(
+          eq(course_template_sections.template_id, id),
+          isNull(course_template_subsections.deleted_at),
+        ),
+      )
+      .orderBy(asc(course_template_subsections.order_index));
+
+    ok(res, {
+      template: {
+        id: tpl.id,
+        name_en: tpl.name_en,
+        name_hi: tpl.name_hi,
+        kind: tpl.kind,
+        age_group: tpl.age_group,
+      },
+      sections: sections.map((s) => ({
+        id: s.id,
+        title_en: s.title_en,
+        title_hi: s.title_hi,
+        order_index: s.order_index,
+        punya_points: s.punya_points,
+        subsections: subs
+          .filter((row) => row.course_template_subsections.section_id === s.id)
+          .map((row) => ({
+            id: row.course_template_subsections.id,
+            title_en: row.course_template_subsections.title_en,
+            title_hi: row.course_template_subsections.title_hi,
+            order_index: row.course_template_subsections.order_index,
+          })),
+      })),
+    });
+  },
+);
+
+const templateSectionBody = z.object({
+  title_en: z.string().min(1).max(300),
+  title_hi: z.string().min(1).max(300),
+  punya_points: z.number().int().min(0).max(1000),
+});
+
+router.post(
+  "/course-templates/:id/sections",
+  requireRole("super_admin"),
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    let body: z.infer<typeof templateSectionBody>;
+    try {
+      body = templateSectionBody.parse(req.body);
+    } catch {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid section data.");
+      return;
+    }
+    const [tpl] = await db
+      .select({ id: course_templates.id })
+      .from(course_templates)
+      .where(and(eq(course_templates.id, id), isNull(course_templates.deleted_at)))
+      .limit(1);
+    if (!tpl) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template not found.");
+      return;
+    }
+    const [{ max }] = await db
+      .select({
+        max: sql<number>`coalesce(max(${course_template_sections.order_index}), -1)::int`,
+      })
+      .from(course_template_sections)
+      .where(
+        and(
+          eq(course_template_sections.template_id, id),
+          isNull(course_template_sections.deleted_at),
+        ),
+      );
+    const [row] = await db
+      .insert(course_template_sections)
+      .values({
+        template_id: id,
+        title_en: body.title_en,
+        title_hi: body.title_hi,
+        punya_points: body.punya_points,
+        order_index: max + 1,
+      })
+      .returning({ id: course_template_sections.id });
+    await auditFromReq(req, {
+      action: "create",
+      entityKind: "course_template_section",
+      entityId: row.id,
+      summary: "Added section to course template.",
+      metadata: { template_id: id },
+    });
+    ok(res, row);
+  },
+);
+
+router.patch(
+  "/course-template-sections/:id",
+  requireRole("super_admin"),
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    let body: Partial<z.infer<typeof templateSectionBody>>;
+    try {
+      body = templateSectionBody.partial().parse(req.body);
+    } catch {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid section data.");
+      return;
+    }
+    const [row] = await db
+      .update(course_template_sections)
+      .set({
+        ...(body.title_en !== undefined ? { title_en: body.title_en } : {}),
+        ...(body.title_hi !== undefined ? { title_hi: body.title_hi } : {}),
+        ...(body.punya_points !== undefined ? { punya_points: body.punya_points } : {}),
+        updated_at: new Date(),
+      })
+      .where(and(eq(course_template_sections.id, id), isNull(course_template_sections.deleted_at)))
+      .returning({ id: course_template_sections.id });
+    if (!row) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template section not found.");
+      return;
+    }
+    await auditFromReq(req, {
+      action: "update",
+      entityKind: "course_template_section",
+      entityId: row.id,
+      summary: "Updated course template section.",
+    });
+    ok(res, row);
+  },
+);
+
+router.delete(
+  "/course-template-sections/:id",
+  requireRole("super_admin"),
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const [sec] = await db
+      .select({ id: course_template_sections.id })
+      .from(course_template_sections)
+      .where(and(eq(course_template_sections.id, id), isNull(course_template_sections.deleted_at)))
+      .limit(1);
+    if (!sec) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template section not found.");
+      return;
+    }
+    const now = new Date();
+    await db.transaction(async (tx) => {
+      await tx
+        .update(course_template_subsections)
+        .set({ deleted_at: now, updated_at: now })
+        .where(
+          and(
+            eq(course_template_subsections.section_id, id),
+            isNull(course_template_subsections.deleted_at),
+          ),
+        );
+      await tx
+        .update(course_template_sections)
+        .set({ deleted_at: now, updated_at: now })
+        .where(eq(course_template_sections.id, id));
+    });
+    await auditFromReq(req, {
+      action: "delete",
+      entityKind: "course_template_section",
+      entityId: id,
+      summary: "Soft-deleted course template section.",
+    });
+    ok(res, { id, deleted: true });
+  },
+);
+
+const templateSubsectionBody = z.object({
+  title_en: z.string().min(1).max(300),
+  title_hi: z.string().min(1).max(300),
+});
+
+router.post(
+  "/course-template-sections/:id/subsections",
+  requireRole("super_admin"),
+  async (req: Request, res: Response) => {
+    const sectionId = String(req.params.id);
+    let body: z.infer<typeof templateSubsectionBody>;
+    try {
+      body = templateSubsectionBody.parse(req.body);
+    } catch {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid subsection data.");
+      return;
+    }
+    const [sec] = await db
+      .select({ id: course_template_sections.id })
+      .from(course_template_sections)
+      .where(
+        and(eq(course_template_sections.id, sectionId), isNull(course_template_sections.deleted_at)),
+      )
+      .limit(1);
+    if (!sec) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template section not found.");
+      return;
+    }
+    const [{ max }] = await db
+      .select({
+        max: sql<number>`coalesce(max(${course_template_subsections.order_index}), -1)::int`,
+      })
+      .from(course_template_subsections)
+      .where(
+        and(
+          eq(course_template_subsections.section_id, sectionId),
+          isNull(course_template_subsections.deleted_at),
+        ),
+      );
+    const [row] = await db
+      .insert(course_template_subsections)
+      .values({
+        section_id: sectionId,
+        title_en: body.title_en,
+        title_hi: body.title_hi,
+        order_index: max + 1,
+      })
+      .returning({ id: course_template_subsections.id });
+    await auditFromReq(req, {
+      action: "create",
+      entityKind: "course_template_subsection",
+      entityId: row.id,
+      summary: "Added subsection to course template.",
+      metadata: { section_id: sectionId },
+    });
+    ok(res, row);
+  },
+);
+
+router.patch(
+  "/course-template-subsections/:id",
+  requireRole("super_admin"),
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    let body: Partial<z.infer<typeof templateSubsectionBody>>;
+    try {
+      body = templateSubsectionBody.partial().parse(req.body);
+    } catch {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid subsection data.");
+      return;
+    }
+    const [row] = await db
+      .update(course_template_subsections)
+      .set({
+        ...(body.title_en !== undefined ? { title_en: body.title_en } : {}),
+        ...(body.title_hi !== undefined ? { title_hi: body.title_hi } : {}),
+        updated_at: new Date(),
+      })
+      .where(
+        and(eq(course_template_subsections.id, id), isNull(course_template_subsections.deleted_at)),
+      )
+      .returning({ id: course_template_subsections.id });
+    if (!row) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template subsection not found.");
+      return;
+    }
+    await auditFromReq(req, {
+      action: "update",
+      entityKind: "course_template_subsection",
+      entityId: row.id,
+      summary: "Updated course template subsection.",
+    });
+    ok(res, row);
+  },
+);
+
+router.delete(
+  "/course-template-subsections/:id",
+  requireRole("super_admin"),
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const now = new Date();
+    const [row] = await db
+      .update(course_template_subsections)
+      .set({ deleted_at: now, updated_at: now })
+      .where(
+        and(eq(course_template_subsections.id, id), isNull(course_template_subsections.deleted_at)),
+      )
+      .returning({ id: course_template_subsections.id });
+    if (!row) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template subsection not found.");
+      return;
+    }
+    await auditFromReq(req, {
+      action: "delete",
+      entityKind: "course_template_subsection",
+      entityId: row.id,
+      summary: "Soft-deleted course template subsection.",
+    });
+    ok(res, { id: row.id, deleted: true });
+  },
+);
 
 export default router;

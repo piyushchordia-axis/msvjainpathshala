@@ -12,6 +12,7 @@ import {
   courses,
   student_course_progress,
   students,
+  users,
   type User,
 } from "@workspace/db";
 import { ageYearsFromDob } from "@workspace/db/enums";
@@ -390,7 +391,43 @@ router.get("/:id/tree", async (req: Request, res: Response) => {
     progress.filter((p) => p.subsection_id).map((p) => [p.subsection_id!, p]),
   );
 
+  const certifierIds = Array.from(
+    new Set(
+      progress
+        .map((p) => p.certified_by)
+        .filter((g): g is string => typeof g === "string" && g.length > 0),
+    ),
+  );
+  const certifiers =
+    certifierIds.length === 0
+      ? []
+      : await db
+          .select({ id: users.id, gender: users.gender })
+          .from(users)
+          .where(inArray(users.id, certifierIds));
+  const genderByUser = new Map(certifiers.map((u) => [u.id, u.gender]));
+
   const stats = await getCourseProgress(studentId, id);
+
+  // CU16 — section-scoped roll-ups from the same fn_course_progress (never a second formula).
+  const sectionRollups = await Promise.all(
+    sections.map(async (s) => {
+      const roll = await getCourseProgress(studentId, id, s.id);
+      const subCount = subs.filter((row) => row.course_subsections.section_id === s.id).length;
+      let derived_status: "not_started" | "in_progress" | "completed" | null = null;
+      if (subCount === 0 || roll.leaf_total === 0) {
+        derived_status = null;
+      } else if (roll.leaf_reached <= 0) {
+        derived_status = "not_started";
+      } else if (roll.leaf_reached < roll.leaf_total) {
+        derived_status = "in_progress";
+      } else {
+        derived_status = "completed";
+      }
+      return { sectionId: s.id, roll, derived_status };
+    }),
+  );
+  const rollupBySection = new Map(sectionRollups.map((r) => [r.sectionId, r]));
 
   ok(res, {
     course: {
@@ -404,15 +441,27 @@ router.get("/:id/tree", async (req: Request, res: Response) => {
     progress: stats,
     sections: sections.map((s) => {
       const sp = progBySection.get(s.id);
+      const ru = rollupBySection.get(s.id);
+      const declared = sp?.status ?? "not_started";
+      const derived = ru?.derived_status ?? null;
       return {
         id: s.id,
         title_en: s.title_en,
         title_hi: s.title_hi,
         order_index: s.order_index,
         punya_points: s.punya_points,
-        status: sp?.status ?? "not_started",
+        status: declared,
         certified_at: sp?.certified_at?.toISOString() ?? null,
         certified_by: sp?.certified_by ?? null,
+        certified_by_gender: sp?.certified_by
+          ? (genderByUser.get(sp.certified_by) ?? null)
+          : null,
+        // CU16 — both surfaces; divergence is information, not validation.
+        derived_status: derived,
+        derived_leaf_total: ru?.roll.leaf_total ?? 0,
+        derived_leaf_reached: ru?.roll.leaf_reached ?? 0,
+        derived_coverage: ru?.roll.coverage ?? null,
+        status_diverges: derived != null && derived !== declared,
         subsections: subs
           .filter((row) => row.course_subsections.section_id === s.id)
           .map((row) => {
@@ -425,6 +474,9 @@ router.get("/:id/tree", async (req: Request, res: Response) => {
               status: ip?.status ?? "not_started",
               certified_at: ip?.certified_at?.toISOString() ?? null,
               certified_by: ip?.certified_by ?? null,
+              certified_by_gender: ip?.certified_by
+                ? (genderByUser.get(ip.certified_by) ?? null)
+                : null,
             };
           }),
       };

@@ -84,11 +84,19 @@ export async function publishCourse(input: PublishCourseInput): Promise<{ id: st
   }
 
   if (reasons.length > 0) {
+    const fixes: Record<string, string> = {
+      "name_hi is required": "Add a Hindi name in Devanagari, then try again.",
+      "academic_year is required": "Set the academic year (for example 2025-26), then try again.",
+      "at least one section is required": "Add at least one section, then try again.",
+      "every section must have punya_points set (> 0)":
+        "Set Punya points greater than 0 on every section, then try again.",
+    };
+    const detailLines = reasons.map((r) => `${r} — ${fixes[r] ?? "Fix this field, then try again."}`);
     throw new CourseAdminError(
       422,
       Err.COURSE_NOT_PUBLISHABLE,
-      `This course cannot be published yet — ${reasons.join("; ")}.`,
-      { reasons },
+      `This course cannot be published yet. ${detailLines.join(" ")}`,
+      { reasons, fixes: detailLines },
     );
   }
 

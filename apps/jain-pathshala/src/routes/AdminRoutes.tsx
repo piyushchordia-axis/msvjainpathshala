@@ -63,9 +63,7 @@ const SettingsPage = lazy(() =>
   import("@/pages/admin/AdminListPages").then((m) => ({ default: m.SettingsPage })),
 );
 
-const CurriculumPage = lazy(() =>
-  import("@/pages/admin/AdminExtendedPages").then((m) => ({ default: m.CurriculumPage })),
-);
+const CoursesAdminPage = lazy(() => import("@/pages/admin/CoursesAdminPage"));
 const ExamsPage = lazy(() =>
   import("@/pages/admin/AdminExtendedPages").then((m) => ({ default: m.ExamsPage })),
 );
@@ -97,7 +95,8 @@ export default function AdminRoutes() {
           <Route path="/admin/msv-enrolments" component={MsvAdminPage} />
           <Route path="/admin/shikshaks" component={ShikshaksPage} />
           <Route path="/admin/batches" component={BatchesPage} />
-          <Route path="/admin/curriculum" component={CurriculumPage} />
+          <Route path="/admin/courses" component={CoursesAdminPage} />
+          <Route path="/admin/curriculum" component={CoursesAdminPage} />
           <Route path="/admin/exams" component={ExamsPage} />
           <Route path="/admin/exam-builder" component={ExamBuilderPage} />
           <Route path="/admin/exam-grading" component={ExamGradingPage} />

@@ -67,7 +67,7 @@ export const ADMIN_NAV: NavGroup[] = [
     heading: 'Programme',
     items: [
       { href: '/admin/batches', label: 'Batches', icon: CalendarDays, min: 'sanchalak' },
-      { href: '/admin/curriculum', label: 'Curriculum', icon: ScrollText, min: 'city_admin' },
+      { href: '/admin/courses', label: 'Courses', icon: ScrollText, min: 'city_admin' },
       { href: '/admin/exams', label: 'Exams', icon: ListChecks, min: 'city_admin', gate: 'administerExams' },
       { href: '/admin/exam-builder', label: 'Exam builder', icon: ClipboardList, min: 'city_admin', gate: 'administerExams' },
       { href: '/admin/exam-grading', label: 'Exam grading', icon: ClipboardCheck, min: 'city_admin', gate: 'administerExams' },

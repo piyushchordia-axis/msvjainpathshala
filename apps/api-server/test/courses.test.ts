@@ -641,3 +641,233 @@ describe("courses step 3 — Punya awards", () => {
     expect(await txCount(studentId, "course_completed")).toBe(courseTxBefore + 1);
   });
 });
+
+describe("courses step 6 — admin panel exit criteria", () => {
+  it("publish gate lists each missing precondition in turn", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(superAdmin.token);
+
+    const bare = await request(app)
+      .post("/v1/admin/courses")
+      .set(auth(superAdmin.token))
+      .send({ name_en: `Gate ${stamp()}`, kind: "standard", city_id: cityId });
+    expect(bare.status).toBe(200);
+    const courseId = bare.body.data.id as string;
+
+    const r1 = await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token));
+    expect(r1.status).toBe(422);
+    expect(r1.body.error.code).toBe("ERR_COURSE_NOT_PUBLISHABLE");
+    const reasons1 = r1.body.error.details?.reasons as string[];
+    expect(reasons1).toEqual(
+      expect.arrayContaining([
+        "name_hi is required",
+        "academic_year is required",
+        "at least one section is required",
+      ]),
+    );
+    expect(r1.body.error.message).toMatch(/Devanagari|Hindi/i);
+    expect(r1.body.error.message).toMatch(/academic year/i);
+    expect(r1.body.error.message).toMatch(/section/i);
+
+    await request(app)
+      .patch(`/v1/admin/courses/${courseId}`)
+      .set(auth(superAdmin.token))
+      .send({ name_hi: "द्वार परीक्षा", academic_year: "2025-26" })
+      .expect(200);
+
+    const r2 = await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token));
+    expect(r2.status).toBe(422);
+    expect(r2.body.error.details?.reasons).toEqual(
+      expect.arrayContaining(["at least one section is required"]),
+    );
+    expect(r2.body.error.details?.reasons).not.toEqual(
+      expect.arrayContaining(["name_hi is required"]),
+    );
+
+    await request(app)
+      .post(`/v1/courses/${courseId}/sections`)
+      .set(auth(superAdmin.token))
+      .send({ title_en: "S", title_hi: "स", punya_points: 0 })
+      .expect(200);
+
+    const r3 = await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token));
+    expect(r3.status).toBe(422);
+    expect(r3.body.error.details?.reasons).toEqual(
+      expect.arrayContaining(["every section must have punya_points set (> 0)"]),
+    );
+    expect(r3.body.error.message).toMatch(/Punya points/i);
+
+    const tree = await request(app)
+      .get(`/v1/admin/courses/${courseId}/tree`)
+      .set(auth(superAdmin.token));
+    const sectionId = tree.body.data.sections[0].id as string;
+    await request(app)
+      .patch(`/v1/courses/sections/${sectionId}`)
+      .set(auth(superAdmin.token))
+      .send({ punya_points: 40 })
+      .expect(200);
+
+    const okPublish = await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token));
+    expect(okPublish.status).toBe(200);
+    expect(okPublish.body.data.status).toBe("active");
+  });
+
+  it("derive from template then edit template — derived course unchanged (CU7)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(superAdmin.token);
+
+    const tpl = await request(app)
+      .post("/v1/admin/course-templates")
+      .set(auth(superAdmin.token))
+      .send({ name_en: `Tpl ${stamp()}`, name_hi: "टेम्पलेट", kind: "standard" });
+    expect(tpl.status).toBe(200);
+    const templateId = tpl.body.data.id as string;
+
+    const sec = await request(app)
+      .post(`/v1/admin/course-templates/${templateId}/sections`)
+      .set(auth(superAdmin.token))
+      .send({ title_en: "Original section", title_hi: "मूल अनुभाग", punya_points: 30 });
+    expect(sec.status).toBe(200);
+    const tplSectionId = sec.body.data.id as string;
+
+    await request(app)
+      .post(`/v1/admin/course-template-sections/${tplSectionId}/subsections`)
+      .set(auth(superAdmin.token))
+      .send({ title_en: "Original sub", title_hi: "मूल उप" })
+      .expect(200);
+
+    const derived = await request(app)
+      .post(`/v1/admin/course-templates/${templateId}/derive`)
+      .set(auth(superAdmin.token))
+      .send({ city_id: cityId, academic_year: "2025-26" });
+    expect(derived.status).toBe(200);
+    const courseId = derived.body.data.id as string;
+
+    const before = await request(app)
+      .get(`/v1/admin/courses/${courseId}/tree`)
+      .set(auth(superAdmin.token));
+    expect(before.status).toBe(200);
+    expect(before.body.data.sections).toHaveLength(1);
+    expect(before.body.data.sections[0].title_en).toBe("Original section");
+    expect(before.body.data.sections[0].subsections).toHaveLength(1);
+    expect(before.body.data.sections[0].subsections[0].title_en).toBe("Original sub");
+
+    await request(app)
+      .patch(`/v1/admin/course-template-sections/${tplSectionId}`)
+      .set(auth(superAdmin.token))
+      .send({ title_en: "Edited template section", title_hi: "संपादित", punya_points: 99 })
+      .expect(200);
+    await request(app)
+      .post(`/v1/admin/course-template-sections/${tplSectionId}/subsections`)
+      .set(auth(superAdmin.token))
+      .send({ title_en: "New template sub", title_hi: "नया" })
+      .expect(200);
+
+    const after = await request(app)
+      .get(`/v1/admin/courses/${courseId}/tree`)
+      .set(auth(superAdmin.token));
+    expect(after.body.data.sections).toHaveLength(1);
+    expect(after.body.data.sections[0].title_en).toBe("Original section");
+    expect(after.body.data.sections[0].punya_points).toBe(30);
+    expect(after.body.data.sections[0].subsections).toHaveLength(1);
+    expect(after.body.data.sections[0].subsections[0].title_en).toBe("Original sub");
+  });
+
+  it("archive-impact counts in-progress uncertified students (CU4)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const inScope = await pool.query<{ id: string }>(
+      `select s.id from students s
+        join shikshak_batch_assignments a on a.batch_id = s.batch_id and a.is_active = true
+        join users u on u.id = a.user_id
+       where u.phone = '+919800000005' and s.status = 'active' and s.deleted_at is null
+       limit 1`,
+    );
+    expect(inScope.rows[0]?.id).toBeTruthy();
+    const studentId = inScope.rows[0]!.id;
+    await request(app)
+      .post(`/v1/courses/nodes/${sectionIds[0]!}/progress`)
+      .set(auth(shikshak.token))
+      .send({ student_id: studentId, status: "in_progress" })
+      .expect(200);
+
+    const impact = await request(app)
+      .get(`/v1/admin/courses/${courseId}/archive-impact`)
+      .set(auth(superAdmin.token));
+    expect(impact.status).toBe(200);
+    expect(impact.body.data.in_progress_uncertified_students).toBeGreaterThanOrEqual(1);
+
+    await request(app)
+      .patch(`/v1/admin/courses/${courseId}`)
+      .set(auth(superAdmin.token))
+      .send({ status: "archived" })
+      .expect(200);
+  });
+
+  it("CU16 divergence: declared completed + derived not_started is information", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId);
+    const sectionId = sectionIds[0]!;
+
+    await request(app)
+      .post(`/v1/courses/sections/${sectionId}/subsections`)
+      .set(auth(superAdmin.token))
+      .send({ title_en: "Leaf A", title_hi: "पत्ती अ" })
+      .expect(200);
+    await request(app)
+      .post(`/v1/courses/sections/${sectionId}/subsections`)
+      .set(auth(superAdmin.token))
+      .send({ title_en: "Leaf B", title_hi: "पत्ती ब" })
+      .expect(200);
+
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const inScope = await pool.query<{ id: string }>(
+      `select s.id from students s
+        join shikshak_batch_assignments a on a.batch_id = s.batch_id and a.is_active = true
+        join users u on u.id = a.user_id
+       where u.phone = '+919800000005' and s.status = 'active' and s.deleted_at is null
+       limit 1`,
+    );
+    expect(inScope.rows[0]?.id).toBeTruthy();
+    const studentId = inScope.rows[0]!.id;
+    // Deliberate divergence: declare section completed without touching subsections.
+    await request(app)
+      .post(`/v1/courses/nodes/${sectionId}/progress`)
+      .set(auth(shikshak.token))
+      .send({ student_id: studentId, status: "completed" })
+      .expect(200);
+
+    const tree = await request(app)
+      .get(`/v1/courses/${courseId}/tree`)
+      .query({ student_id: studentId })
+      .set(auth(shikshak.token));
+    expect(tree.status).toBe(200);
+    const sec = tree.body.data.sections[0];
+    expect(sec.status).toBe("completed");
+    expect(sec.derived_status).toBe("not_started");
+    expect(sec.status_diverges).toBe(true);
+    // Declaration is not blocked — row stays completed.
+    expect(sec.certified_at).toBeNull();
+  });
+});
