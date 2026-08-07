@@ -1,111 +1,143 @@
 /**
- * Parent / student course catalogue (CU3 — long list by design).
+ * Parent / student course catalogue — numbered status strips + ChildSwitcher.
  */
-import { Pressable, Text, View } from "react-native";
+import { View } from "react-native";
 import { router } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
-import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
-import { Body, Button, Card, Pill, Screen, StateView } from "@/components/ui";
+import { ChildSwitcher } from "@/components/ChildSwitcher";
+import { CourseLearnerRow } from "@/components/CourseLearnerRow";
+import { Button, Row, Screen, StateView } from "@/components/ui";
 import { useCoursesCatalogue } from "@/lib/queries";
+import type { CourseProgressStatus } from "@/lib/course-labels";
 
 export default function CoursesCatalogueScreen() {
   const c = useColors();
   const { hi } = useLocale();
-  const { activeStudentId, activeChild } = useSessionView();
-  const coursesQ = useCoursesCatalogue(!!activeStudentId);
+  const { children, loading, isError, activeStudentId, refetch } = useSessionView();
+  const coursesQ = useCoursesCatalogue(activeStudentId ?? undefined, !!activeStudentId);
   const courses = coursesQ.data?.items ?? [];
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <AppHeader
         title={hi ? "पाठ्यक्रम" : "Courses"}
-        subtitle={
-          activeChild
-            ? hi
-              ? `${activeChild.full_name ?? "बच्चा"} के सक्रिय पाठ्यक्रम`
-              : `Active courses for ${activeChild.full_name ?? "your child"}`
-            : undefined
-        }
+        subtitle={hi ? "सक्रिय पाठ्यक्रम और प्रगति" : "Active courses and progress"}
       />
       <Screen
         refreshing={coursesQ.isFetching}
-        onRefresh={() => void coursesQ.refetch()}
+        onRefresh={() => {
+          refetch();
+          void coursesQ.refetch();
+        }}
       >
-        <Button
-          variant="outline"
-          label={hi ? "प्रमाणपत्र देखें" : "View certificates"}
-          onPress={() => router.push("/certificates" as never)}
-          disabled={!activeStudentId}
-        />
-
-        {!activeStudentId ? (
-          <StateView
-            status="empty"
-            emptyText={
-              hi
-                ? "पहले बच्चा चुनें।"
-                : "Pick a child first."
-            }
-          />
-        ) : coursesQ.isLoading ? (
+        {loading ? (
           <StateView status="loading" emptyText="" />
-        ) : coursesQ.isError ? (
+        ) : isError ? (
           <StateView
             status="error"
             emptyText=""
-            errorText={
-              hi
-                ? "पाठ्यक्रम सूची नहीं मिली — फिर कोशिश करें।"
-                : "Could not load courses — try again."
-            }
-            onRetry={() => void coursesQ.refetch()}
+            errorText={hi ? "जानकारी लोड नहीं हुई।" : "Could not load your children."}
+            onRetry={refetch}
+            retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
           />
-        ) : courses.length === 0 ? (
+        ) : children.length === 0 ? (
           <StateView
             status="empty"
             emptyText={
               hi
-                ? "अभी कोई सक्रिय पाठ्यक्रम नहीं। नगर प्रशासक से प्रकाशित करवाएँ।"
-                : "No active courses yet. Ask a city admin to publish one."
+                ? "आपके खाते से कोई बच्चा जुड़ा नहीं है।"
+                : "No children linked to your account yet."
+            }
+          />
+        ) : !activeStudentId ? (
+          <StateView
+            status="empty"
+            emptyText={
+              hi
+                ? "आपकी विद्यार्थी प्रोफ़ाइल अभी तैयार नहीं है।"
+                : "Your student profile isn't ready yet."
             }
           />
         ) : (
-          courses.map((course) => {
-            const title = hi ? course.name_hi || course.name_en : course.name_en;
-            return (
-              <Pressable
-                key={course.id}
-                onPress={() =>
-                  router.push(`/course/${course.id}` as never)
+          <>
+            <ChildSwitcher />
+
+            <Row
+              style={{
+                justifyContent: "flex-end",
+                alignItems: "center",
+                marginBottom: 6,
+                marginTop: 2,
+              }}
+            >
+              <Button
+                variant="outline"
+                label={hi ? "प्रमाणपत्र" : "Certificates"}
+                icon="ribbon-outline"
+                onPress={() => router.push("/certificates" as never)}
+              />
+            </Row>
+
+            {coursesQ.isLoading ? (
+              <StateView status="loading" emptyText="" />
+            ) : coursesQ.isError ? (
+              <StateView
+                status="error"
+                emptyText=""
+                errorText={
+                  hi
+                    ? "पाठ्यक्रम सूची नहीं मिली — फिर कोशिश करें।"
+                    : "Could not load courses — try again."
                 }
+                onRetry={() => void coursesQ.refetch()}
+                retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
+              />
+            ) : courses.length === 0 ? (
+              <StateView
+                status="empty"
+                emptyText={
+                  hi
+                    ? "अभी कोई सक्रिय पाठ्यक्रम नहीं। नगर प्रशासक से प्रकाशित करवाएँ।"
+                    : "No active courses yet. Ask a city admin to publish one."
+                }
+              />
+            ) : (
+              <View
+                style={{
+                  backgroundColor: c.card,
+                  borderRadius: c.radius,
+                  borderWidth: 1,
+                  borderColor: c.border,
+                  overflow: "hidden",
+                }}
               >
-                <Card style={{ gap: 6 }}>
-                  <Text
-                    style={{
-                      fontSize: 16,
-                      lineHeight: 24,
-                      fontFamily: bodyFamily(hi, "semibold"),
-                      color: c.foreground,
-                    }}
-                  >
-                    {title}
-                  </Text>
-                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-                    <Pill label={course.kind} />
-                    {course.academic_year ? <Pill label={course.academic_year} /> : null}
-                  </View>
-                  <Body muted style={{ lineHeight: 22, fontSize: 12 }}>
-                    {hi
-                      ? "खोलकर शुरू करें, बंद करें या फिर खोलें।"
-                      : "Open to start, close, or reopen nodes."}
-                  </Body>
-                </Card>
-              </Pressable>
-            );
-          })
+                {courses.map((course, i) => {
+                  const title = hi ? course.name_hi || course.name_en : course.name_en;
+                  // Catalogue has no per-course progress aggregate — neutral strip until opened.
+                  const status: CourseProgressStatus = "not_started";
+                  return (
+                    <CourseLearnerRow
+                      key={course.id}
+                      index={i + 1}
+                      title={title}
+                      status={status}
+                      certifiedAt={null}
+                      showChevron
+                      subtitle={
+                        course.academic_year
+                          ? course.academic_year
+                          : course.kind
+                      }
+                      onPress={() => router.push(`/course/${course.id}` as never)}
+                    />
+                  );
+                })}
+              </View>
+            )}
+          </>
         )}
       </Screen>
     </View>

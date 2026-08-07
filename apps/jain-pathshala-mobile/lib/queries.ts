@@ -2002,6 +2002,8 @@ export type CourseTreeSubsection = {
   id: string;
   title_en: string;
   title_hi: string;
+  description_en?: string | null;
+  description_hi?: string | null;
   order_index: number;
   status: "not_started" | "in_progress" | "completed";
   certified_at: string | null;
@@ -2059,12 +2061,16 @@ export type CourseCertificateRow = {
   honorific_hi: string | null;
 };
 
-/** Parent/student catalogue — CU3 active courses for the authenticated viewer. */
-export function useCoursesCatalogue(enabled = true) {
+/**
+ * Parent/student catalogue — CU3 active courses for the active child.
+ * Parents pass studentId so city/MSV visibility matches ChildSwitcher scope.
+ */
+export function useCoursesCatalogue(studentId?: string, enabled = true) {
+  const qs = studentId ? `?student_id=${encodeURIComponent(studentId)}` : "";
   return useQuery({
-    queryKey: qk.courses("catalogue"),
-    queryFn: () => apiGet<List<CourseListRow>>("/v1/courses"),
-    enabled,
+    queryKey: qk.courses(studentId ? `catalogue:${studentId}` : "catalogue"),
+    queryFn: () => apiGet<List<CourseListRow>>(`/v1/courses${qs}`),
+    enabled: enabled && (studentId ? !!studentId : true),
   });
 }
 

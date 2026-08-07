@@ -3,6 +3,7 @@ import {
   certifiedFrozenExplanation,
   certifiedLabel,
   courseStatusLabel,
+  courseStripTone,
 } from "../course-labels";
 
 describe("course-labels (CU11 / CU12 / CU17)", () => {
@@ -22,5 +23,13 @@ describe("course-labels (CU11 / CU12 / CU17)", () => {
   it("explains certified freeze (CU12)", () => {
     expect(certifiedFrozenExplanation(false)).toMatch(/certified/i);
     expect(certifiedFrozenExplanation(true).length).toBeGreaterThan(10);
+  });
+
+  it("maps strip tones (certified overrides status)", () => {
+    expect(courseStripTone("not_started", false)).toBe("muted");
+    expect(courseStripTone("in_progress", false)).toBe("warningSoft");
+    expect(courseStripTone("completed", false)).toBe("successSoft");
+    expect(courseStripTone("completed", true)).toBe("accent");
+    expect(courseStripTone("not_started", true)).toBe("accent");
   });
 });

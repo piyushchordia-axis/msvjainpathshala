@@ -18,6 +18,7 @@ import { toast } from '@/components/ui/toast-jp';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/lib/auth-context';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
@@ -56,6 +57,8 @@ interface TreeSubsection {
   id: string;
   title_en: string;
   title_hi: string;
+  description_en: string | null;
+  description_hi: string | null;
   order_index: number;
 }
 
@@ -533,11 +536,15 @@ function SubsectionDialog({
   const [busy, setBusy] = useState(false);
   const [en, setEn] = useState(item?.title_en ?? '');
   const [hi, setHi] = useState(item?.title_hi ?? '');
+  const [descEn, setDescEn] = useState(item?.description_en ?? '');
+  const [descHi, setDescHi] = useState(item?.description_hi ?? '');
 
   useEffect(() => {
     if (open) {
       setEn(item?.title_en ?? '');
       setHi(item?.title_hi ?? '');
+      setDescEn(item?.description_en ?? '');
+      setDescHi(item?.description_hi ?? '');
     }
   }, [open, item]);
 
@@ -545,18 +552,18 @@ function SubsectionDialog({
     e.preventDefault();
     if (!en.trim() || !hi.trim()) return;
     setBusy(true);
+    const payload = {
+      title_en: en.trim(),
+      title_hi: hi.trim(),
+      description_en: descEn.trim(),
+      description_hi: descHi.trim(),
+    };
     try {
       if (item) {
-        await apiPatch(`/v1/courses/subsections/${item.id}`, {
-          title_en: en.trim(),
-          title_hi: hi.trim(),
-        });
+        await apiPatch(`/v1/courses/subsections/${item.id}`, payload);
         toast.success('Subsection updated.');
       } else {
-        await apiPost(`/v1/courses/sections/${sectionId}/subsections`, {
-          title_en: en.trim(),
-          title_hi: hi.trim(),
-        });
+        await apiPost(`/v1/courses/sections/${sectionId}/subsections`, payload);
         toast.success('Subsection added.');
       }
       setOpen(false);
@@ -574,7 +581,7 @@ function SubsectionDialog({
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>{item ? 'Edit subsection' : 'Add subsection'}</DialogTitle>
         </DialogHeader>
@@ -584,6 +591,24 @@ function SubsectionDialog({
           </FormRow>
           <FormRow label="Title (Hindi) *">
             <Input value={hi} onChange={(e) => setHi(e.target.value)} required />
+          </FormRow>
+          <FormRow label="Content (English)">
+            <Textarea
+              value={descEn}
+              onChange={(e) => setDescEn(e.target.value)}
+              rows={4}
+              maxLength={4000}
+              placeholder="Learner-facing content for this subsection"
+            />
+          </FormRow>
+          <FormRow label="Content (Hindi)">
+            <Textarea
+              value={descHi}
+              onChange={(e) => setDescHi(e.target.value)}
+              rows={4}
+              maxLength={4000}
+              placeholder="इस उप-अनुभाग की सामग्री"
+            />
           </FormRow>
           <div className="flex justify-end gap-2 pt-2">
             <DialogClose asChild>

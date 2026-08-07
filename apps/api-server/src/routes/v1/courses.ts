@@ -220,9 +220,17 @@ async function assertProgressWriteAccess(
 
 router.get("/", async (req: Request, res: Response) => {
   const user = req.authUser!;
-  let studentIds: string[] = [];
 
   if (user.role === "parent") {
+    // Prefer one child (mobile ChildSwitcher) — same shape as attendance / Niyam.
+    // Optional student_id scopes CU3 visibility (city + MSV) to that child only.
+    const requestedId =
+      typeof req.query.student_id === "string" ? req.query.student_id : null;
+    if (requestedId && !UUID_RE.test(requestedId)) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "student_id must be a valid UUID.");
+      return;
+    }
+
     const kids = await db
       .select({
         id: students.id,
@@ -235,10 +243,16 @@ router.get("/", async (req: Request, res: Response) => {
           eq(students.parent_id, user.id),
           eq(students.status, "active"),
           isNull(students.deleted_at),
+          requestedId ? eq(students.id, requestedId) : undefined,
         ),
       );
-    studentIds = kids.map((k) => k.id);
-    // Union of courses visible to any child.
+
+    if (requestedId && kids.length === 0) {
+      fail(res, 403, "ERR_COURSE_STUDENT_OUT_OF_SCOPE", "That student is outside your scope.");
+      return;
+    }
+
+    // Without student_id, keep a union so older clients still get a catalogue.
     const seen = new Map<string, unknown>();
     for (const kid of kids) {
       const cityId = await studentCityId(kid.centre_id);
@@ -255,7 +269,10 @@ router.get("/", async (req: Request, res: Response) => {
         .where(courseVisibleToStudentSql(kid, cityId));
       for (const r of rows) seen.set(r.id, r);
     }
-    ok(res, { items: [...seen.values()], student_ids: studentIds });
+    ok(res, {
+      items: [...seen.values()],
+      student_ids: kids.map((k) => k.id),
+    });
     return;
   }
 
@@ -470,6 +487,8 @@ router.get("/:id/tree", async (req: Request, res: Response) => {
               id: row.course_subsections.id,
               title_en: row.course_subsections.title_en,
               title_hi: row.course_subsections.title_hi,
+              description_en: row.course_subsections.description_en,
+              description_hi: row.course_subsections.description_hi,
               order_index: row.course_subsections.order_index,
               status: ip?.status ?? "not_started",
               certified_at: ip?.certified_at?.toISOString() ?? null,
