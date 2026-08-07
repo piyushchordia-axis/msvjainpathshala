@@ -46,6 +46,7 @@ import {
   certifyCourseNode,
   correctCourseCertification,
 } from "../../services/course-certify";
+import { enqueueCertificatePdf } from "../../services/course-certificates";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -976,6 +977,10 @@ router.post(
         softTransition: false,
         ip: req.ip ?? null,
       });
+      // PDF after commit — enqueue is best-effort (CU26).
+      for (const certId of result.certificate_ids) {
+        await enqueueCertificatePdf(certId);
+      }
       ok(res, result);
     } catch (err) {
       if (!handleErr(res, err)) throw err;

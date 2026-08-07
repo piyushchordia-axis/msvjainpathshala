@@ -35,10 +35,12 @@ import syncRouter from "./v1/sync";
 import studentsRouter from "./v1/students";
 import centresRouter from "./v1/centres";
 import translateRouter from "./v1/translate";
+import certificatesRouter from "./v1/certificates";
 
 const router: IRouter = Router();
 
 router.use("/public", publicRouter);
+router.use("/certificates", certificatesRouter);
 router.use("/sync", syncRouter);
 router.use("/admin", adminRouter);
 router.use("/settings/public", clientSettingsRouter);

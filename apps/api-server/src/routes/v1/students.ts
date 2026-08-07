@@ -9,18 +9,21 @@ import {
   sessions,
   batches,
   absence_notifications,
+  course_certificates,
 } from "@workspace/db";
 import { and, desc, eq, gte, isNull, lte } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
-import { clampLimit } from "../../lib/route-helpers";
+import { clampLimit, firstName } from "../../lib/route-helpers";
 import {
   getStudentAttendanceRate,
   rateToPercent0,
 } from "../../lib/attendance-rate";
 import { canAccessAdminPanel } from "@workspace/api-zod";
 import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
+import { storage } from "../../lib/storage";
+import { signUploadUrl } from "../../lib/file-tokens";
 
 /** Parse YYYY-MM into inclusive session_date bounds, or null if invalid. */
 function monthBounds(monthRaw: string | null): { from: string; to: string } | null {
@@ -259,6 +262,83 @@ router.get("/:id/course-progress", async (req: Request, res: Response) => {
   const { getCourseProgress } = await import("../../lib/course-progress");
   const stats = await getCourseProgress(id, courseId);
   ok(res, stats);
+});
+
+/* GET /v1/students/:id/certificates — owner or in-scope admin (CU24) */
+router.get("/:id/certificates", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  if (!UUID_RE.test(id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
+    return;
+  }
+  const access = await studentAccess(req, id);
+  if (access === "missing") {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
+    return;
+  }
+  if (access === "forbidden") {
+    fail(res, 403, "ERR_COURSE_STUDENT_OUT_OF_SCOPE", "That student is outside your scope.");
+    return;
+  }
+
+  const rows = await db
+    .select({
+      id: course_certificates.id,
+      kind: course_certificates.kind,
+      course_id: course_certificates.course_id,
+      section_id: course_certificates.section_id,
+      verification_code: course_certificates.verification_code,
+      scope_snapshot: course_certificates.scope_snapshot,
+      issued_at: course_certificates.issued_at,
+      voided_at: course_certificates.voided_at,
+      storage_key: course_certificates.storage_key,
+    })
+    .from(course_certificates)
+    .where(eq(course_certificates.student_id, id))
+    .orderBy(desc(course_certificates.issued_at));
+
+  const items = rows.map((r) => {
+    const snap = r.scope_snapshot as {
+      kind?: string;
+      section_title_en?: string;
+      section_title_hi?: string;
+      course_name_en?: string;
+      course_name_hi?: string | null;
+      honorific_en?: string;
+      honorific_hi?: string;
+      student_full_name?: string;
+    } | null;
+    const title_en =
+      r.kind === "section"
+        ? (snap?.section_title_en ?? "")
+        : (snap?.course_name_en ?? "");
+    const title_hi =
+      r.kind === "section"
+        ? (snap?.section_title_hi ?? null)
+        : (snap?.course_name_hi ?? null);
+    // storage_key NULL means "issuing", not broken (CU24).
+    const status = r.voided_at ? "void" : r.storage_key ? "ready" : "issuing";
+    const pdf_url =
+      r.storage_key != null
+        ? signUploadUrl(storage.url(r.storage_key), 7 * 24 * 3600)
+        : null;
+    return {
+      id: r.id,
+      kind: r.kind,
+      title_en,
+      title_hi,
+      issued_at: r.issued_at.toISOString(),
+      voided_at: r.voided_at ? r.voided_at.toISOString() : null,
+      status,
+      pdf_url,
+      verification_code: r.verification_code,
+      honorific_en: snap?.honorific_en ?? null,
+      honorific_hi: snap?.honorific_hi ?? null,
+      student_first_name: firstName(snap?.student_full_name ?? null),
+    };
+  });
+
+  ok(res, { items }, { count: items.length });
 });
 
 export default router;

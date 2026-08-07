@@ -1,5 +1,6 @@
 /**
- * report.generation — centre monthly aggregate PDF (trustee-safe, no student names).
+ * report.generation — centre monthly aggregate PDF + course certificate PDFs (CU26).
+ * Discriminator on payload.kind / report_id — do not add a new QUEUE_NAMES entry.
  */
 import { db, centre_monthly_reports } from "@workspace/db";
 import { eq } from "drizzle-orm";
@@ -8,6 +9,7 @@ import { registerQueueHandler } from "../lib/queues";
 import { generateCentreMonthlyReport } from "../lib/centre-monthly-report";
 import { storage, makeKey } from "../lib/storage";
 import { logger } from "../lib/logger";
+import { processCourseCertificatePdf } from "./course-certificate-pdf";
 
 let registered = false;
 
@@ -72,8 +74,17 @@ export function registerReportJobs(): void {
   if (registered) return;
   registered = true;
   registerQueueHandler(QUEUE_NAMES.REPORT_GENERATION, async (data) => {
+    const payload = data as {
+      kind?: string;
+      certificate_id?: string;
+      report_id?: string;
+    };
+    if (payload.kind === "course_certificate" || payload.certificate_id) {
+      await processCourseCertificatePdf(String(payload.certificate_id ?? ""));
+      return;
+    }
     await processCentreMonthlyReport({
-      report_id: String((data as { report_id?: string }).report_id ?? ""),
+      report_id: String(payload.report_id ?? ""),
     });
   });
 }

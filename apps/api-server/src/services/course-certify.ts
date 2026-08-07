@@ -26,6 +26,10 @@ import {
   sectionReverseKey,
 } from "../lib/course-points";
 import { writeAudit } from "../lib/audit";
+import {
+  issueCourseCertificate,
+  issueSectionCertificate,
+} from "./course-certificates";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -214,6 +218,8 @@ export type CertifyResult = {
   section_transaction_id: string | null;
   course_transaction_id: string | null;
   course_award_key: string | null;
+  /** New certificate rows — caller enqueues PDF after commit (CU26). */
+  certificate_ids: string[];
 };
 
 export async function certifyCourseNode(input: CertifyInput): Promise<CertifyResult> {
@@ -295,6 +301,7 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
         section_transaction_id: null,
         course_transaction_id: null,
         course_award_key: null,
+        certificate_ids: [],
       };
     }
 
@@ -386,8 +393,9 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
     let coursePointsAwarded = 0;
     let courseTxId: string | null = null;
     let courseKey: string | null = null;
+    const certificateIds: string[] = [];
 
-    // Sub-section stars never carry Punya (CU21).
+    // Sub-section stars never carry Punya (CU21). Certificates only on section rows (CU25).
     if (input.nodeKind === "section" && sectionId) {
       const [stu] = await tx
         .select({ centre_id: students.centre_id })
@@ -428,6 +436,18 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
         }
       }
 
+      // CU25 — section certificate when this section's own row is certified.
+      const sectionCert = await issueSectionCertificate(
+        {
+          studentId: input.studentId,
+          courseId,
+          sectionId,
+          actorId: input.actorId,
+        },
+        tx,
+      );
+      if (sectionCert?.created) certificateIds.push(sectionCert.certificateId);
+
       // Course milestone when every section is certified (CU25 / CU21).
       if (await allSectionsCertified(tx, courseId, input.studentId)) {
         const [courseRow] = await tx
@@ -464,6 +484,16 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
             courseTxId = award.transaction_id;
           }
         }
+
+        const courseCert = await issueCourseCertificate(
+          {
+            studentId: input.studentId,
+            courseId,
+            actorId: input.actorId,
+          },
+          tx,
+        );
+        if (courseCert?.created) certificateIds.push(courseCert.certificateId);
       }
     }
 
@@ -485,6 +515,7 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
           section_points_awarded: sectionPointsAwarded,
           course_points_awarded: coursePointsAwarded,
           course_award_key: courseKey,
+          certificate_ids: certificateIds,
         },
         ip: input.ip ?? null,
       },
@@ -503,6 +534,7 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
       section_transaction_id: sectionTxId,
       course_transaction_id: courseTxId,
       course_award_key: courseKey,
+      certificate_ids: certificateIds,
     };
   });
 }
@@ -632,7 +664,7 @@ export async function correctCourseCertification(input: CorrectCertifyInput): Pr
         if (rev.reversed) sectionReversed = rev.points;
       }
 
-      // Void section certificate if present (CU19 / CU24) — PDF issuance is Step 4.
+      // Void section certificate if present (CU19 / CU24) — PDF is retained.
       await tx
         .update(course_certificates)
         .set({ voided_at: new Date(), voided_by: input.actorId, updated_at: new Date() })
