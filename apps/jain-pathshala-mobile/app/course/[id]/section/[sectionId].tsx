@@ -16,6 +16,7 @@ import {
   certifiedFrozenExplanation,
   type CourseProgressStatus,
 } from "@/lib/course-labels";
+import { applySubsectionStatusCascade } from "@/lib/course-progress-cascade";
 import {
   useCourseTree,
   useSetCourseNodeProgress,
@@ -50,6 +51,7 @@ export default function LearnerSectionScreen() {
       : "Section";
 
   async function changeStatus(sub: CourseTreeSubsection, status: CourseProgressStatus) {
+    if (!section || !activeStudentId) return;
     if (sub.certified_at) {
       Alert.alert(
         hi ? "प्रमाणित नोड" : "Certified node",
@@ -59,11 +61,12 @@ export default function LearnerSectionScreen() {
     }
     setBusyNode(sub.id);
     try {
-      await setProgress.mutateAsync({
-        nodeId: sub.id,
-        nodeKind: "subsection",
-        student_id: activeStudentId!,
+      await applySubsectionStatusCascade({
+        section,
+        subsection: sub,
         status,
+        studentId: activeStudentId,
+        mutate: (input) => setProgress.mutateAsync(input),
       });
       await treeQ.refetch();
     } catch (err) {
@@ -84,13 +87,14 @@ export default function LearnerSectionScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
-      <AppHeader title={sectionTitle} subtitle={hi ? "उप-अनुभाग" : "Subsections"} />
+      <AppHeader compact title={sectionTitle} />
       <Screen
         refreshing={treeQ.isFetching}
         onRefresh={() => {
           refetch();
           void treeQ.refetch();
         }}
+        contentStyle={{ paddingTop: 0, gap: 8 }}
       >
         {loading ? (
           <StateView status="loading" emptyText="" />
@@ -127,8 +131,8 @@ export default function LearnerSectionScreen() {
                 borderRadius: c.radius,
                 borderWidth: StyleSheet.hairlineWidth,
                 borderColor: c.border,
-                overflow: "hidden",
-                marginTop: 4,
+                marginTop: 2,
+                overflow: "visible",
               }}
             >
               {section.subsections.length === 0 ? (
@@ -154,14 +158,7 @@ export default function LearnerSectionScreen() {
                       busy={busyNode === sub.id}
                       showChevron
                       onPress={() => setContentSub(sub)}
-                      onStart={() => void changeStatus(sub, "in_progress")}
-                      onComplete={() => void changeStatus(sub, "completed")}
-                      onReopen={() =>
-                        void changeStatus(
-                          sub,
-                          sub.status === "completed" ? "in_progress" : "not_started",
-                        )
-                      }
+                      onChangeStatus={(status) => void changeStatus(sub, status)}
                     />
                   );
                 })

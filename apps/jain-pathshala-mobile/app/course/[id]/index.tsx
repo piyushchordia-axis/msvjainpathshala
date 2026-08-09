@@ -26,16 +26,14 @@ export default function LearnerCourseDetailScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
-      <AppHeader
-        title={courseTitle}
-        subtitle={hi ? "अनुभाग सूची" : "Sections"}
-      />
+      <AppHeader compact title={courseTitle} />
       <Screen
         refreshing={treeQ.isFetching}
         onRefresh={() => {
           refetch();
           void treeQ.refetch();
         }}
+        contentStyle={{ paddingTop: 0, gap: 8 }}
       >
         {loading ? (
           <StateView status="loading" emptyText="" />
@@ -59,7 +57,7 @@ export default function LearnerCourseDetailScreen() {
         ) : !activeStudentId ? (
           <StateView
             status="empty"
-            emptyText={hi ? "पहले बच्चा चुनें।" : "Pick a child first."}
+            emptyText={hi ? "पहले बच्चा चुनें。" : "Pick a child first."}
           />
         ) : (
           <>

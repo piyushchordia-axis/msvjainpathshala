@@ -10,6 +10,7 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { Body, StateView } from "@/components/ui";
 import { CourseLearnerRow } from "@/components/CourseLearnerRow";
 import { certifiedFrozenExplanation, type CourseProgressStatus } from "@/lib/course-labels";
+import { applySectionStatusCascade } from "@/lib/course-progress-cascade";
 import {
   useCourseTree,
   useSetCourseNodeProgress,
@@ -42,11 +43,11 @@ export function CourseLearnerOutline(props: {
     }
     setBusyNode(section.id);
     try {
-      await setProgress.mutateAsync({
-        nodeId: section.id,
-        nodeKind: "section",
-        student_id: props.studentId,
+      await applySectionStatusCascade({
+        section,
         status,
+        studentId: props.studentId,
+        mutate: (input) => setProgress.mutateAsync(input),
       });
       await treeQ.refetch();
     } catch (err) {
@@ -99,8 +100,8 @@ export function CourseLearnerOutline(props: {
   ].filter(Boolean);
 
   return (
-    <View style={{ gap: 6 }}>
-      <Body muted style={{ fontSize: 12, lineHeight: 18 }} numberOfLines={1}>
+    <View style={{ gap: 4 }}>
+      <Body muted style={{ fontSize: 12, lineHeight: 16 }} numberOfLines={1}>
         {metricsParts.join(" · ")}
       </Body>
 
@@ -110,7 +111,7 @@ export function CourseLearnerOutline(props: {
           borderRadius: c.radius,
           borderWidth: StyleSheet.hairlineWidth,
           borderColor: c.border,
-          overflow: "hidden",
+          overflow: "visible",
         }}
       >
         {tree.sections.length === 0 ? (
@@ -127,7 +128,6 @@ export function CourseLearnerOutline(props: {
               <CourseLearnerRow
                 key={section.id}
                 index={i + 1}
-                indexStyle="sec"
                 title={title}
                 status={section.status}
                 certifiedAt={section.certified_at}
@@ -136,9 +136,7 @@ export function CourseLearnerOutline(props: {
                 showChevron
                 subtitle={
                   section.subsections.length > 0
-                    ? hi
-                      ? `${section.subsections.length} उप-अनुभाग`
-                      : `${section.subsections.length} subsections`
+                    ? `(${section.subsections.length})`
                     : null
                 }
                 onPress={() =>
@@ -146,14 +144,7 @@ export function CourseLearnerOutline(props: {
                     `/course/${props.courseId}/section/${section.id}` as never,
                   )
                 }
-                onStart={() => void changeStatus(section, "in_progress")}
-                onComplete={() => void changeStatus(section, "completed")}
-                onReopen={() =>
-                  void changeStatus(
-                    section,
-                    section.status === "completed" ? "in_progress" : "not_started",
-                  )
-                }
+                onChangeStatus={(status) => void changeStatus(section, status)}
               />
             );
           })

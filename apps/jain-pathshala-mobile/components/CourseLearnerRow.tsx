@@ -1,6 +1,8 @@
 /**
- * One-line numbered learner row — status strip + inline Ionicons actions.
+ * One-line numbered learner row — status strip + inline status dropdown.
+ * Row body navigates / opens content; status changes only via the pill menu.
  */
+import { useEffect, useState } from "react";
 import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
@@ -14,6 +16,12 @@ import {
   type CourseProgressStatus,
 } from "@/lib/course-labels";
 
+const STATUSES: CourseProgressStatus[] = [
+  "not_started",
+  "in_progress",
+  "completed",
+];
+
 export function CourseLearnerRow(props: {
   index: number;
   title: string;
@@ -23,29 +31,47 @@ export function CourseLearnerRow(props: {
   busy?: boolean;
   /** Tap row body (drill-down or open content). */
   onPress?: () => void;
-  onStart?: () => void;
-  onComplete?: () => void;
-  onReopen?: () => void;
+  /** When set, status pill opens an inline dropdown (CU11). */
+  onChangeStatus?: (status: CourseProgressStatus) => void;
   /** Show chevron for drill-down. */
   showChevron?: boolean;
   subtitle?: string | null;
-  /** Section rows use "Sec N"; catalogue / subsections use "N.". */
-  indexStyle?: "sec" | "number";
 }) {
   const c = useColors();
   const { hi } = useLocale();
+  const [menuOpen, setMenuOpen] = useState(false);
   const certified = !!props.certifiedAt;
   const toneKey = courseStripTone(props.status, certified);
   const bg = c[toneKey];
   const fg = c.foreground;
-  const iconColor = certified ? c.gold : c.primary;
-  const disabled = props.busy || certified;
-  const indexLabel =
-    props.indexStyle === "sec" ? `Sec ${props.index}` : `${props.index}.`;
   const statusText = certified
     ? certifiedLabel(props.certifiedByGender, hi)
     : courseStatusLabel(props.status, hi);
-  const meta = props.subtitle ? `${statusText} · ${props.subtitle}` : statusText;
+  const canChangeStatus = !!props.onChangeStatus && !certified;
+
+  useEffect(() => {
+    if (props.busy || certified) setMenuOpen(false);
+  }, [props.busy, certified]);
+
+  function onPillPress() {
+    if (certified) {
+      Alert.alert(
+        hi ? "प्रमाणित नोड" : "Certified node",
+        certifiedFrozenExplanation(hi),
+      );
+      return;
+    }
+    if (!canChangeStatus || props.busy) return;
+    setMenuOpen((open) => !open);
+  }
+
+  function onMainPress() {
+    if (menuOpen) {
+      setMenuOpen(false);
+      return;
+    }
+    props.onPress?.();
+  }
 
   return (
     <View
@@ -54,21 +80,13 @@ export function CourseLearnerRow(props: {
         {
           backgroundColor: bg,
           borderBottomColor: c.border,
+          zIndex: menuOpen ? 20 : 1,
         },
       ]}
     >
       <Pressable
-        onPress={props.onPress}
-        onLongPress={
-          certified
-            ? () =>
-                Alert.alert(
-                  hi ? "प्रमाणित नोड" : "Certified node",
-                  certifiedFrozenExplanation(hi),
-                )
-            : undefined
-        }
-        disabled={!props.onPress && !certified}
+        onPress={onMainPress}
+        disabled={!props.onPress && !menuOpen}
         style={styles.main}
         accessibilityRole={props.onPress ? "button" : undefined}
       >
@@ -78,11 +96,11 @@ export function CourseLearnerRow(props: {
             lineHeight: 20,
             fontFamily: bodyFamily(hi, "semibold"),
             color: fg,
-            minWidth: props.indexStyle === "sec" ? 44 : 22,
+            minWidth: 22,
           }}
           numberOfLines={1}
         >
-          {indexLabel}
+          {props.index}.
         </Text>
         {certified ? (
           <Ionicons
@@ -94,97 +112,139 @@ export function CourseLearnerRow(props: {
         ) : null}
         <Text
           style={{
-            flexShrink: 1,
+            flex: 1,
             fontSize: 14,
             lineHeight: 20,
             fontFamily: bodyFamily(hi),
             color: fg,
-            maxWidth: "55%",
+            minWidth: 0,
           }}
           numberOfLines={1}
         >
           {props.title}
         </Text>
-        <Text
-          style={{
-            flex: 1,
-            fontSize: 12,
-            lineHeight: 18,
-            fontFamily: bodyFamily(hi),
-            color: c.mutedForeground,
-            minWidth: 0,
-          }}
-          numberOfLines={1}
-        >
-          · {meta}
-        </Text>
+        {props.subtitle ? (
+          <Text
+            style={{
+              fontSize: 12,
+              lineHeight: 18,
+              fontFamily: bodyFamily(hi),
+              color: c.mutedForeground,
+            }}
+            numberOfLines={1}
+          >
+            {props.subtitle}
+          </Text>
+        ) : null}
         {props.showChevron ? (
           <Ionicons name="chevron-forward" size={16} color={c.mutedForeground} />
         ) : null}
       </Pressable>
 
-      {!certified ? (
-        <View style={styles.actions}>
-          {props.status === "not_started" && props.onStart ? (
-            <IconBtn
-              name="play"
-              label={hi ? "शुरू" : "Start"}
-              color={iconColor}
-              disabled={disabled}
-              onPress={props.onStart}
-            />
-          ) : null}
-          {(props.status === "not_started" || props.status === "in_progress") &&
-          props.onComplete ? (
-            <IconBtn
-              name="checkmark-circle"
-              label={hi ? "पूर्ण" : "Complete"}
-              color={c.successText}
-              disabled={disabled}
-              onPress={props.onComplete}
-            />
-          ) : null}
-          {(props.status === "in_progress" || props.status === "completed") &&
-          props.onReopen ? (
-            <IconBtn
-              name="arrow-undo"
-              label={hi ? "फिर खोलें" : "Reopen"}
-              color={c.mutedForeground}
-              disabled={disabled}
-              onPress={props.onReopen}
-            />
+      {props.onChangeStatus || certified ? (
+        <View style={styles.pillWrap}>
+          <Pressable
+            onPress={onPillPress}
+            onLongPress={
+              certified
+                ? () =>
+                    Alert.alert(
+                      hi ? "प्रमाणित नोड" : "Certified node",
+                      certifiedFrozenExplanation(hi),
+                    )
+                : undefined
+            }
+            disabled={props.busy || (!canChangeStatus && !certified)}
+            accessibilityRole="button"
+            accessibilityLabel={
+              canChangeStatus
+                ? hi
+                  ? `स्थिति: ${statusText}. बदलने के लिए टैप करें।`
+                  : `Status: ${statusText}. Tap to change.`
+                : statusText
+            }
+            style={[
+              styles.pill,
+              {
+                backgroundColor: c.card,
+                borderColor: certified ? c.gold : c.border,
+                opacity: props.busy ? 0.5 : 1,
+              },
+            ]}
+          >
+            <Text
+              style={{
+                fontSize: 11,
+                lineHeight: 16,
+                fontFamily: bodyFamily(hi, "semibold"),
+                color: certified ? c.gold : c.foreground,
+                maxWidth: 110,
+              }}
+              numberOfLines={1}
+            >
+              {statusText}
+            </Text>
+            {canChangeStatus ? (
+              <Ionicons
+                name={menuOpen ? "chevron-up" : "chevron-down"}
+                size={12}
+                color={c.mutedForeground}
+              />
+            ) : null}
+          </Pressable>
+
+          {menuOpen && canChangeStatus ? (
+            <View
+              style={[
+                styles.menu,
+                {
+                  backgroundColor: c.card,
+                  borderColor: c.border,
+                },
+              ]}
+            >
+              {STATUSES.map((status) => {
+                const selected = status === props.status;
+                const label = courseStatusLabel(status, hi);
+                return (
+                  <Pressable
+                    key={status}
+                    onPress={() => {
+                      setMenuOpen(false);
+                      if (status === props.status) return;
+                      props.onChangeStatus?.(status);
+                    }}
+                    style={[
+                      styles.menuItem,
+                      {
+                        backgroundColor: selected ? c.muted : "transparent",
+                      },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected }}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        lineHeight: 20,
+                        fontFamily: bodyFamily(
+                          hi,
+                          selected ? "semibold" : "regular",
+                        ),
+                        color: c.foreground,
+                      }}
+                      numberOfLines={1}
+                    >
+                      {selected ? `✓ ${label}` : label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           ) : null}
         </View>
       ) : null}
     </View>
-  );
-}
-
-function IconBtn(props: {
-  name: keyof typeof Ionicons.glyphMap;
-  label: string;
-  color: string;
-  disabled?: boolean;
-  onPress: () => void;
-}) {
-  const c = useColors();
-  return (
-    <Pressable
-      onPress={props.onPress}
-      disabled={props.disabled}
-      accessibilityLabel={props.label}
-      hitSlop={6}
-      style={{
-        padding: 5,
-        borderRadius: 999,
-        backgroundColor: c.card,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: c.border,
-        opacity: props.disabled ? 0.4 : 1,
-      }}
-    >
-      <Ionicons name={props.name} size={16} color={props.color} />
-    </Pressable>
   );
 }
 
@@ -195,7 +255,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     paddingVertical: 6,
     paddingHorizontal: 10,
-    gap: 6,
+    gap: 8,
+    overflow: "visible",
   },
   main: {
     flex: 1,
@@ -204,10 +265,34 @@ const styles = StyleSheet.create({
     gap: 6,
     minWidth: 0,
   },
-  actions: {
+  pillWrap: {
+    position: "relative",
+    flexShrink: 0,
+    zIndex: 30,
+  },
+  pill: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
-    flexShrink: 0,
+    gap: 2,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  menu: {
+    position: "absolute",
+    top: "100%",
+    right: 0,
+    marginTop: 4,
+    minWidth: 160,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    overflow: "hidden",
+    zIndex: 40,
+    elevation: 6,
+  },
+  menuItem: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
   },
 });
