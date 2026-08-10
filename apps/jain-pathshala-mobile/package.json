@@ -75,8 +75,8 @@
     "expo-device": "~8.0.10",
     "expo-file-system": "~19.0.23",
     "expo-notifications": "~0.32.17",
-    "expo-secure-store": "^56.0.4",
-    "expo-sharing": "^57.0.8",
+    "expo-secure-store": "~15.0.8",
+    "expo-sharing": "~14.0.8",
     "expo-updates": "~29.0.18",
     "react-native-confetti-cannon": "^1.5.2"
   }
