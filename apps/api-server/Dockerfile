@@ -50,6 +50,7 @@ RUN npm init -y >/dev/null 2>&1 \
       argon2@0.45.1 \
       @aws-sdk/client-s3@3.1068.0 \
       @aws-sdk/s3-request-presigner@3.1068.0 \
+      @opentelemetry/api@1.9.1 \
  && npm cache clean --force
 
 # The bundle (includes the generated pino worker files).
