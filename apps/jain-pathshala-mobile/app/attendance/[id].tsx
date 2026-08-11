@@ -2,15 +2,16 @@
  * Shikshak attendance-marking screen.
  *
  * Flow: load today's session roster (GET /v1/sessions/today?session_id=),
- * toggle each student present / absent / late / excused, then enqueue via
- * POST /v1/sync/batch. Geofencing belongs on check-in / check-out only (AT32) —
- * this screen never captures GPS.
+ * toggle each student present / absent (UI), then enqueue via POST /v1/sync/batch.
+ * Excused is seeded from advance absence notices (AT4) and kept until overwritten.
+ * Geofencing belongs on check-in / check-out only (AT32) — this screen never captures GPS.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { FlatList, Platform, Pressable, RefreshControl, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import * as Haptics from "expo-haptics";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import {
@@ -27,7 +28,7 @@ import {
   ROSTER_ROW_HEIGHT,
 } from "@/components/AttendanceRosterRow";
 import { SessionCheckIn } from "@/components/SessionCheckIn";
-import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { Body, Button, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 type Feedback =
   | { tone: "success"; title: string; detail: string }
@@ -37,6 +38,7 @@ type Feedback =
 export default function AttendanceMarkScreen() {
   const c = useColors();
   const { hi } = useLocale();
+  const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id: string }>();
 
   const detail = useAttendanceSession(id);
@@ -173,40 +175,40 @@ export default function AttendanceMarkScreen() {
   const cancelled = session.status === "cancelled";
   const fbColor =
     feedback?.tone === "success" ? c.successText : feedback?.tone === "error" ? c.errorText : c.mutedForeground;
+  const showFooter = !cancelled && roster.length > 0;
 
   const listHeader = (
-    <>
-      <Card>
-        <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+    <View style={{ gap: 10, marginBottom: 4 }}>
+      <View style={{ gap: 4 }}>
+        <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
           <View style={{ flex: 1, paddingRight: 10 }}>
-            <Title style={{ fontSize: 18 }}>{session.batch_name ?? (hi ? "बैच" : "Batch")}</Title>
-            {session.centre_name ? (
-              <Body muted style={{ fontSize: 12, marginTop: 2 }}>{session.centre_name}</Body>
-            ) : null}
+            <Title style={{ fontSize: 17 }}>{session.batch_name ?? (hi ? "बैच" : "Batch")}</Title>
+            <Body muted style={{ fontSize: 12, marginTop: 2 }}>
+              {[session.centre_name, formatDate(session.session_date)].filter(Boolean).join(" · ")}
+            </Body>
           </View>
           <Pill label={session.status} tone={cancelled ? "error" : "neutral"} />
         </Row>
-        <Body muted style={{ fontSize: 13, marginTop: 8 }}>{formatDate(session.session_date)}</Body>
-        {session.topic ? <Body style={{ marginTop: 6 }}>{session.topic}</Body> : null}
-        <Row style={{ marginTop: 12, gap: 8, flexWrap: "wrap" }}>
-          <Pill
-            label={`${markedCount} / ${roster.length} ${hi ? "चिह्नित" : "marked"}`}
-            tone={allMarked ? "success" : "neutral"}
-          />
+        {session.topic ? (
+          <Body muted numberOfLines={1} style={{ fontSize: 13 }}>
+            {session.topic}
+          </Body>
+        ) : null}
+        <Row style={{ marginTop: 4, gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+          <Body muted style={{ fontSize: 12 }}>
+            {`${markedCount} / ${roster.length} ${hi ? "चिह्नित" : "marked"}`}
+            {allMarked ? (hi ? " ✓" : " ✓") : ""}
+          </Body>
           {session.gps_required ? (
             <Pressable onPress={() => setCheckInOpen(true)} disabled={cancelled}>
               <Pill
-                label={
-                  hi
-                    ? "केंद्र पर चेक-इन आवश्यक"
-                    : "Check-in at the centre required"
-                }
+                label={hi ? "चेक-इन" : "Check-in"}
                 tone="info"
               />
             </Pressable>
           ) : null}
         </Row>
-      </Card>
+      </View>
 
       {cancelled ? (
         <StateView
@@ -219,100 +221,117 @@ export default function AttendanceMarkScreen() {
           emptyText={hi ? "इस बैच में कोई सक्रिय विद्यार्थी नहीं है।" : "This batch has no active students."}
         />
       ) : (
-        <Row style={{ gap: 10, flexWrap: "wrap" }}>
+        <Row style={{ gap: 8 }}>
           <Button
-            label={hi ? "सभी उपस्थित" : "Mark all present"}
+            label={hi ? "सभी उपस्थित" : "All present"}
             icon="checkmark-done"
             variant="outline"
             onPress={() => setAll("present")}
-            style={{ flex: 1, minWidth: 150 }}
+            style={{ flex: 1, minWidth: 0 }}
           />
           <Button
-            label={hi ? "सभी अनुपस्थित" : "Mark all absent"}
+            label={hi ? "सभी अनुपस्थित" : "All absent"}
             icon="close"
             variant="ghost"
             onPress={() => setAll("absent")}
-            style={{ flex: 1, minWidth: 150 }}
+            style={{ flex: 1, minWidth: 0 }}
           />
         </Row>
       )}
-    </>
+
+      {needsCheckIn && !cancelled ? (
+        <Body muted style={{ fontSize: 12 }}>
+          {hi
+            ? "केंद्र पर चेक-इन अनुशंसित है — उपस्थिति बिना चेक-इन के भी दर्ज हो सकती है।"
+            : "Centre check-in is recommended — you can still mark without it."}
+        </Body>
+      ) : null}
+    </View>
   );
 
-  const listFooter =
-    cancelled || roster.length === 0 ? null : (
-      <>
-        {feedback ? (
-          <Card style={{ borderColor: fbColor }}>
-            <Row style={{ gap: 10, alignItems: "flex-start" }}>
-              <Ionicons
-                name={feedback.tone === "success" ? "checkmark-circle" : "close-circle"}
-                size={22}
-                color={fbColor}
-              />
-              <View style={{ flex: 1 }}>
-                <Body style={{ color: fbColor, fontFamily: bodyFamily(hi, "semibold") }}>{feedback.title}</Body>
-                <Body muted style={{ marginTop: 2 }}>{feedback.detail}</Body>
-              </View>
-            </Row>
-          </Card>
-        ) : null}
-
-        {needsCheckIn ? (
-          <Body muted style={{ fontSize: 12, textAlign: "center" }}>
-            {hi
-              ? "इस सत्र के लिए केंद्र पर चेक-इन अनुशंसित है — उपस्थिति बिना चेक-इन के भी दर्ज हो सकती है।"
-              : "This session asks for centre check-in — you can still mark attendance without it."}
-          </Body>
-        ) : null}
-
-        <Button
-          label={
-            feedback?.tone === "success"
-              ? hi ? "पुनः जमा करें" : "Save again"
-              : hi ? "उपस्थिति जमा करें" : "Save attendance"
-          }
-          icon="save"
-          loading={mark.isPending}
-          disabled={markedCount === 0}
-          onPress={() => void submit()}
-        />
-        {feedback?.tone === "success" ? (
-          <Button
-            label={hi ? "आज के सत्र पर वापस जाएँ" : "Back to today's sessions"}
-            icon="arrow-back"
-            variant="ghost"
-            onPress={() => router.back()}
-          />
-        ) : null}
-      </>
-    );
-
   return (
-    <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0 }}>
-      <FlatList
-        data={cancelled || roster.length === 0 ? [] : roster}
-        keyExtractor={rosterKeyExtractor}
-        renderItem={renderRosterItem}
-        getItemLayout={rosterGetItemLayout}
-        ListHeaderComponent={listHeader}
-        ListFooterComponent={listFooter}
-        contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 8, paddingBottom: 40, gap: 14 }}
-        refreshControl={
-          <RefreshControl
-            refreshing={!!detail.isRefetching}
-            onRefresh={detail.refetch}
-            tintColor={c.primary}
-            colors={[c.primary]}
-          />
-        }
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
-        initialNumToRender={12}
-        maxToRenderPerBatch={8}
-        windowSize={7}
-        removeClippedSubviews={Platform.OS !== "web"}
-      />
+    <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0, paddingBottom: 0 }}>
+      <View style={{ flex: 1 }}>
+        <FlatList
+          data={cancelled || roster.length === 0 ? [] : roster}
+          keyExtractor={rosterKeyExtractor}
+          renderItem={renderRosterItem}
+          getItemLayout={rosterGetItemLayout}
+          ListHeaderComponent={listHeader}
+          contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 8, paddingBottom: 16 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={!!detail.isRefetching}
+              onRefresh={detail.refetch}
+              tintColor={c.primary}
+              colors={[c.primary]}
+            />
+          }
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          initialNumToRender={16}
+          maxToRenderPerBatch={12}
+          windowSize={9}
+          removeClippedSubviews={Platform.OS !== "web"}
+        />
+
+        {showFooter ? (
+          <View
+            style={{
+              borderTopWidth: 1,
+              borderTopColor: c.border,
+              backgroundColor: c.background,
+              paddingHorizontal: 18,
+              paddingTop: 12,
+              paddingBottom: Math.max(insets.bottom, 12),
+              gap: 8,
+            }}
+          >
+            {feedback ? (
+              <Row style={{ gap: 8, alignItems: "flex-start" }}>
+                <Ionicons
+                  name={feedback.tone === "success" ? "checkmark-circle" : "close-circle"}
+                  size={20}
+                  color={fbColor}
+                />
+                <View style={{ flex: 1 }}>
+                  <Body style={{ color: fbColor, fontFamily: bodyFamily(hi, "semibold"), fontSize: 13 }}>
+                    {feedback.title}
+                  </Body>
+                  <Body muted style={{ marginTop: 2, fontSize: 12, lineHeight: 18 }}>
+                    {feedback.detail}
+                  </Body>
+                </View>
+              </Row>
+            ) : null}
+
+            <Button
+              label={
+                feedback?.tone === "success"
+                  ? hi
+                    ? "पुनः जमा करें"
+                    : "Save again"
+                  : hi
+                    ? "उपस्थिति जमा करें"
+                    : "Save attendance"
+              }
+              icon="save"
+              loading={mark.isPending}
+              disabled={markedCount === 0}
+              onPress={() => void submit()}
+            />
+            {feedback?.tone === "success" ? (
+              <Button
+                label={hi ? "डैशबोर्ड पर वापस जाएँ" : "Back to dashboard"}
+                icon="arrow-back"
+                variant="ghost"
+                onPress={() => router.back()}
+              />
+            ) : null}
+          </View>
+        ) : null}
+      </View>
+
       <SessionCheckIn
         visible={checkInOpen}
         mode="checkin"

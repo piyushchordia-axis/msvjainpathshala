@@ -8,7 +8,7 @@ export default function Layout() {
       allowed={["shikshak"]}
       hide={["niyams", "niyam-review", "punya", "courses", "course/[id]", "join-approvals"]}
       tabs={[
-        { name: "today", title: hi ? "आज" : "Today", icon: "today" },
+        { name: "today", title: hi ? "डैशबोर्ड" : "Dashboard", icon: "home" },
         { name: "students", title: hi ? "विद्यार्थी" : "Students", icon: "people" },
         { name: "batches", title: hi ? "बैच" : "Batches", icon: "grid" },
         { name: "homework", title: hi ? "गृहकार्य" : "Homework", icon: "book" },

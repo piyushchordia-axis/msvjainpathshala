@@ -1,25 +1,21 @@
 import { memo } from "react";
-import { Platform, Pressable, View } from "react-native";
+import { Platform, Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useColors } from "@/hooks/useColors";
 import { bodyFamily } from "@/constants/typography";
-import { Body, Card, Row, Title } from "@/components/ui";
+import { Body, Row } from "@/components/ui";
 import type { AttendanceMark } from "@/lib/queries";
 
-/** Fixed roster row stride for FlatList getItemLayout (Card ~118px + screen gap 14px). */
-export const ROSTER_ROW_HEIGHT = 132;
+/** Fixed roster row stride for FlatList getItemLayout (single-line ~56px). */
+export const ROSTER_ROW_HEIGHT = 56;
 
 const MARKS: {
-  value: AttendanceMark;
-  en: string;
-  hi: string;
-  tone: "success" | "error" | "warning" | "info";
+  value: "present" | "absent";
+  tone: "success" | "error";
 }[] = [
-  { value: "present", en: "Present", hi: "उपस्थित", tone: "success" },
-  { value: "absent", en: "Absent", hi: "अनुपस्थित", tone: "error" },
-  { value: "late", en: "Late", hi: "विलंब", tone: "warning" },
-  { value: "excused", en: "Excused", hi: "अनुमति", tone: "info" },
+  { value: "present", tone: "success" },
+  { value: "absent", tone: "error" },
 ];
 
 /** Test hook — total AttendanceRosterRow render invocations since last reset. */
@@ -49,63 +45,93 @@ function RosterRowInner({
   __rosterRowRenderCount += 1;
   const c = useColors();
 
+  const mark = (value: "present" | "absent") => {
+    if (Platform.OS !== "web") void Haptics.selectionAsync();
+    onMark(studentId, value);
+  };
+
+  const specialHint =
+    status === "excused"
+      ? hi
+        ? "अनुमति (पूर्व सूचना)"
+        : "Pre-notified"
+      : status === "late"
+        ? hi
+          ? "विलंब"
+          : "Late"
+        : null;
+
   return (
-    <Card>
-      <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-        <View style={{ flex: 1, paddingRight: 8 }}>
-          <Title style={{ fontSize: 16 }}>{name}</Title>
-          <Body muted style={{ fontSize: 12, marginTop: 2 }}>{code}</Body>
+    <View
+      style={{
+        minHeight: ROSTER_ROW_HEIGHT,
+        paddingVertical: 8,
+        borderBottomWidth: 1,
+        borderBottomColor: c.border,
+        justifyContent: "center",
+      }}
+    >
+      <Row style={{ alignItems: "center", gap: 8 }}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text
+            numberOfLines={1}
+            style={{
+              fontFamily: bodyFamily(hi, "semibold"),
+              fontSize: 14,
+              lineHeight: 18,
+              color: c.foreground,
+            }}
+          >
+            {name}
+          </Text>
+          <Body muted style={{ fontSize: 11, lineHeight: 14, marginTop: 1 }} numberOfLines={1}>
+            {specialHint ? `${code} · ${specialHint}` : code}
+          </Body>
         </View>
-      </Row>
-      <Row style={{ gap: 8, marginTop: 12, flexWrap: "wrap" }}>
-        {MARKS.map((m) => {
-          const on = status === m.value;
-          const onColor =
-            m.tone === "success"
-              ? c.successText
-              : m.tone === "error"
-                ? c.errorText
-                : m.tone === "warning"
-                  ? c.warningText
-                  : c.infoText;
-          return (
-            <Pressable
-              key={m.value}
-              onPress={() => {
-                if (Platform.OS !== "web") void Haptics.selectionAsync();
-                onMark(studentId, m.value);
-              }}
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                gap: 6,
-                borderWidth: 1,
-                borderColor: on ? onColor : c.border,
-                backgroundColor: on ? c.accent : c.card,
-                borderRadius: 999,
-                paddingVertical: 8,
-                paddingHorizontal: 12,
-              }}
-            >
-              <Ionicons
-                name={on ? "radio-button-on" : "radio-button-off"}
-                size={16}
-                color={on ? onColor : c.inkDim}
-              />
-              <Body
+        <Row style={{ gap: 6, flexShrink: 0 }}>
+          {MARKS.map((m) => {
+            const on = status === m.value;
+            const onColor = m.tone === "success" ? c.successText : c.errorText;
+            const label = hi ? (m.value === "present" ? "उपस्थित" : "अनुपस्थित") : m.value === "present" ? "Present" : "Absent";
+            return (
+              <Pressable
+                key={m.value}
+                accessibilityLabel={label}
+                onPress={() => mark(m.value)}
                 style={{
-                  fontSize: 13,
-                  color: on ? onColor : c.foreground,
-                  fontFamily: bodyFamily(hi, "semibold"),
+                  minWidth: 72,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 4,
+                  borderWidth: 1,
+                  borderColor: on ? onColor : c.border,
+                  backgroundColor: on ? c.accent : c.card,
+                  borderRadius: c.radius,
+                  paddingVertical: 6,
+                  paddingHorizontal: 8,
                 }}
               >
-                {hi ? m.hi : m.en}
-              </Body>
-            </Pressable>
-          );
-        })}
+                <Ionicons
+                  name={on ? "checkmark-circle" : "ellipse-outline"}
+                  size={14}
+                  color={on ? onColor : c.inkDim}
+                />
+                <Text
+                  style={{
+                    fontSize: 12,
+                    color: on ? onColor : c.foreground,
+                    fontFamily: bodyFamily(hi, "semibold"),
+                  }}
+                >
+                  {label}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </Row>
       </Row>
-    </Card>
+    </View>
   );
 }
 

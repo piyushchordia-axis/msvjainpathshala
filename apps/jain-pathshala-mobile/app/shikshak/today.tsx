@@ -86,52 +86,42 @@ function SessionCard({
           ? { kind: "edit" as const }
           : null;
 
+  const metaParts = [
+    s.centre_name,
+    formatDate(sessionDate),
+    hi
+      ? `${s.present_count}/${s.total_count} उपस्थित`
+      : `${s.present_count}/${s.total_count} present`,
+    checkInTime ? (hi ? `शुरू ${checkInTime}` : `Started ${checkInTime}`) : null,
+    s.topic,
+  ].filter(Boolean);
+
   return (
-    <Card style={cancelled ? { opacity: 0.7 } : undefined}>
-      <Row style={{ justifyContent: "space-between" }}>
+    <Card style={[{ padding: 10 }, cancelled ? { opacity: 0.7 } : undefined]}>
+      <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
         <View style={{ flex: 1, paddingRight: 8 }}>
-          <Title style={{ fontSize: 17 }}>{s.batch_name ?? (hi ? "बैच" : "Batch")}</Title>
-          {s.centre_name ? (
-            <Body muted style={{ fontSize: 12, marginTop: 2 }}>
-              {s.centre_name}
-            </Body>
-          ) : null}
+          <Title style={{ fontSize: 15, lineHeight: 20 }}>{s.batch_name ?? (hi ? "बैच" : "Batch")}</Title>
         </View>
         <Pill label={statusLabel(s.status, hi)} tone={statusTone(s.status)} />
       </Row>
-      <Body muted style={{ fontSize: 13, marginTop: 8 }}>
-        {formatDate(sessionDate)}
-      </Body>
-      {s.topic ? <Body style={{ marginTop: 6 }}>{s.topic}</Body> : null}
 
-      <Row style={{ marginTop: 10, gap: 8, flexWrap: "wrap" }}>
-        <Pill
-          tone="info"
-          label={
-            hi
-              ? `${s.present_count}/${s.total_count} उपस्थित`
-              : `${s.present_count}/${s.total_count} present`
-          }
-        />
-        {s.unscheduled ? (
-          <Pill label={hi ? "अनिर्धारित कक्षा" : "Unscheduled class"} tone="warning" />
-        ) : null}
-        {checkInTime ? (
-          <Pill
-            label={hi ? `शुरू ${checkInTime}` : `Started ${checkInTime}`}
-            tone="neutral"
-          />
-        ) : null}
-        {s.gps_flagged ? (
-          <Pill
-            label={hi ? "स्थान सत्यापित नहीं हुआ" : "Location could not be verified"}
-            tone="warning"
-          />
-        ) : null}
-      </Row>
+      <Body muted style={{ fontSize: 11, marginTop: 4, lineHeight: 16 }} numberOfLines={2}>
+        {metaParts.join(" · ")}
+      </Body>
+
+      {(s.unscheduled || s.gps_flagged) ? (
+        <Row style={{ marginTop: 4, gap: 6, flexWrap: "wrap" }}>
+          {s.unscheduled ? (
+            <Pill label={hi ? "अनिर्धारित" : "Unscheduled"} tone="warning" />
+          ) : null}
+          {s.gps_flagged ? (
+            <Pill label={hi ? "GPS" : "GPS"} tone="warning" />
+          ) : null}
+        </Row>
+      ) : null}
 
       {syncOp && syncOp.state !== "synced" && syncOp.state !== "duplicate" ? (
-        <View style={{ marginTop: 10 }}>
+        <View style={{ marginTop: 6 }}>
           <SyncOpStatus
             state={syncOp.state as SyncUiState}
             error={syncOp.last_error}
@@ -159,47 +149,46 @@ function SessionCard({
       ) : null}
 
       {cancelled || !primary ? null : (
-        <Row style={{ marginTop: 14, gap: 10, flexWrap: "wrap" }}>
+        <Row style={{ marginTop: 6, gap: 6 }}>
           {primary.kind === "start" ? (
             <Button
-              label={hi ? "कक्षा शुरू करें" : "Start class"}
+              label={hi ? "शुरू" : "Start"}
               icon="play"
               onPress={onOpenCheckIn}
-              style={{ flex: 1, minWidth: 140 }}
+              style={{ flex: 1, minWidth: 0 }}
             />
           ) : null}
           {primary.kind === "mark" || primary.kind === "edit" ? (
             <Button
-              label={hi ? "उपस्थिति दर्ज करें" : "Mark attendance"}
+              label={hi ? "उपस्थिति" : "Mark"}
               icon="checkmark-done"
               variant={primary.kind === "edit" ? "outline" : "primary"}
               onPress={() => router.push(`/attendance/${s.id}` as never)}
-              style={{ flex: 1, minWidth: 140 }}
+              style={{ flex: 1, minWidth: 0 }}
             />
           ) : null}
           {s.status === "in_progress" ? (
             <Button
-              label={hi ? "कक्षा समाप्त करें" : "End class"}
+              label={hi ? "समाप्त" : "End"}
               icon="stop"
               variant="outline"
               onPress={onOpenCheckOut}
-              style={{ flex: 1, minWidth: 140 }}
+              style={{ flexShrink: 0, minWidth: 0, paddingHorizontal: 12 }}
             />
           ) : null}
         </Row>
       )}
 
-      {/* Keep a subtle affordance to open the roster from the card chrome. */}
       {!cancelled && primary?.kind === "start" && batchId ? (
         <Pressable
           onPress={() => router.push(`/attendance/${s.id}` as never)}
-          style={{ marginTop: 10 }}
+          style={{ marginTop: 6 }}
         >
-          <Row style={{ gap: 6 }}>
-            <Body style={{ fontSize: 13, color: c.primary }}>
-              {hi ? "बिना चेक-इन उपस्थिति दर्ज करें" : "Mark attendance without check-in"}
+          <Row style={{ gap: 4, alignItems: "center" }}>
+            <Body style={{ fontSize: 11, color: c.primary }}>
+              {hi ? "बिना चेक-इन मार्क करें" : "Mark without check-in"}
             </Body>
-            <Ionicons name="chevron-forward" size={16} color={c.primary} />
+            <Ionicons name="chevron-forward" size={12} color={c.primary} />
           </Row>
         </Pressable>
       ) : null}
@@ -238,7 +227,7 @@ export default function TodayScreen() {
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <AppHeader
         title={hi ? `जय जिनेन्द्र, ${firstName}` : `Jai Jinendra, ${firstName}`}
-        subtitle={hi ? "आज के सत्र और गुरुजी मेनू" : "Today's sessions and Guruji menu"}
+        subtitle={hi ? "डैशबोर्ड — आज के सत्र और गुरुजी मेनू" : "Dashboard — today's sessions and Guruji menu"}
         right={
           <ProfileAvatarButton
             name={user?.full_name}
