@@ -23,4 +23,5 @@ if ! command -v pnpm >/dev/null 2>&1; then
   exit 127
 fi
 
-pnpm run typecheck
+# Husky has no TTY — avoid pnpm's interactive modules-purge confirm (pnpm 11+).
+CI=true pnpm run typecheck

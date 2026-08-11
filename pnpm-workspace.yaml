@@ -4,6 +4,9 @@ packages:
   - lib/integrations/*
   - scripts
 
+# pnpm 11 prompts before wiping stale node_modules; husky/CI have no TTY and abort.
+confirmModulesPurge: false
+
 allowBuilds:
   argon2: true
   cpu-features: true
