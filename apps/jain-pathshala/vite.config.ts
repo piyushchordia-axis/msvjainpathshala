@@ -67,16 +67,33 @@ export default defineConfig({
     chunkSizeWarningLimit: 300,
     rollupOptions: {
       output: {
+        // Match on the RESOLVED package name, never on a raw substring of `id`.
+        // pnpm's virtual store encodes peer deps in the directory name, e.g.
+        //   .pnpm/@radix-ui+react-dialog@1.1.15_..._react-dom@19.1.0_react@19.1.0/
+        // so `id.includes("react-dom")` matches most of the React ecosystem. That
+        // sent 23 @radix-ui packages into react-vendor while the low-level ones
+        // with no react-dom peer stayed in radix-ui; the two halves import each
+        // other, and a circular chunk dependency boots as
+        //   "Cannot read properties of undefined (reading 'useLayoutEffect')".
+        //
+        // react/react-dom/scheduler are kept together deliberately: that closure
+        // imports nothing else, so react-vendor stays a LEAF chunk and cannot be
+        // one end of a cycle no matter how the rest is grouped.
         manualChunks(id) {
           if (!id.includes("node_modules")) return;
-          if (id.includes("react-dom") || id.includes("/react/") || id.endsWith("/react")) {
+          const after = id.split("node_modules/").pop() ?? "";
+          const pkg = after.startsWith("@")
+            ? after.split("/").slice(0, 2).join("/")
+            : (after.split("/")[0] ?? "");
+
+          if (pkg === "react" || pkg === "react-dom" || pkg === "scheduler") {
             return "react-vendor";
           }
-          if (id.includes("@radix-ui")) return "radix-ui";
-          if (id.includes("recharts") || id.includes("d3-")) return "recharts";
-          if (id.includes("@tanstack")) return "tanstack";
-          if (id.includes("framer-motion")) return "framer";
-          if (id.includes("lucide-react") || id.includes("react-icons")) return "icons";
+          if (pkg.startsWith("@radix-ui/")) return "radix-ui";
+          if (pkg === "recharts" || pkg.startsWith("d3-")) return "recharts";
+          if (pkg.startsWith("@tanstack/")) return "tanstack";
+          if (pkg === "framer-motion") return "framer";
+          if (pkg === "lucide-react" || pkg === "react-icons") return "icons";
         },
       },
     },

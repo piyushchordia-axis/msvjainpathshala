@@ -8,9 +8,11 @@
 ########################## Builder ##########################
 FROM node:22-alpine AS builder
 ENV CI=1
-# Pin the pnpm that produced pnpm-lock.yaml (9.x reads pnpm.overrides from
-# package.json; pnpm 11 moved it, which breaks the frozen-lockfile check).
-RUN corepack enable && corepack prepare pnpm@9.12.3 --activate
+# Pin the pnpm that produced pnpm-lock.yaml — must match the root package.json
+# `packageManager` field. The lockfile records the `overrides` block that lives in
+# pnpm-workspace.yaml, and only pnpm 10+ reads it from there; pnpm 9 looks in
+# package.json, computes no overrides, and fails the frozen-lockfile check.
+RUN corepack enable && corepack prepare pnpm@11.15.1 --activate
 WORKDIR /repo
 
 # Copy the workspace (node_modules/dist excluded via .dockerignore) and install
@@ -50,6 +52,7 @@ RUN npm init -y >/dev/null 2>&1 \
       argon2@0.45.1 \
       @aws-sdk/client-s3@3.1068.0 \
       @aws-sdk/s3-request-presigner@3.1068.0 \
+      @opentelemetry/api@1.9.1 \
  && npm cache clean --force
 
 # The bundle (includes the generated pino worker files).

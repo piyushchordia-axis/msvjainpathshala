@@ -169,6 +169,14 @@ app.get(/^\/admin(?:\/.*)?$/, (_req: Request, res) => {
   res.sendFile(path.join(ADMIN_WEB_DIR, "index.html"));
 });
 
+// Bare domain → the admin SPA. The API serves no page of its own at "/", and an
+// Express "Cannot GET /" is a poor landing for anyone typing the hostname.
+// Deliberately 302, not 301: the public marketing site is expected to take over
+// "/" later, and a cached permanent redirect would be very hard to undo.
+app.get("/", (_req: Request, res) => {
+  res.redirect(302, "/admin/");
+});
+
 // PERF #18 — short public-route cache (marketing first paint).
 app.use("/v1/public", (_req, res, next) => {
   res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");

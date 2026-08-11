@@ -17,6 +17,8 @@
     "test:integration": "pnpm --filter @jp/api run test:integration"
   },
   "private": true,
+  "//packageManager": "Pins the pnpm that produced pnpm-lock.yaml. The lockfile records the `overrides` block from pnpm-workspace.yaml, which only pnpm 10+ reads — pnpm 9 looks for it in package.json instead, computes none, and fails the frozen-lockfile check. EAS Build picks its pnpm from this field, so without it a store build dies in `Install dependencies`.",
+  "packageManager": "pnpm@11.15.1",
   "devDependencies": {
     "prettier": "^3.8.3",
     "typescript": "~5.9.3"
