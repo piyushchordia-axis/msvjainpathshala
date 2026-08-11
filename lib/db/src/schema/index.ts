@@ -18,6 +18,7 @@ export * from "./donations";
 export * from "./queues";
 export * from "./homework";
 export * from "./registration";
+export * from "./join";
 export * from "./services";
 export * from "./audit";
 export * from "./competitions";

@@ -372,6 +372,27 @@
       "when": 1790246400000,
       "tag": "0052_fn_course_progress",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1790332800000,
+      "tag": "0053_join_onboarding",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1790419200000,
+      "tag": "0054_join_approval",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1790505600000,
+      "tag": "0055_join_parent_mobile",
+      "breakpoints": true
     }
   ]
 }

@@ -16,7 +16,7 @@ export interface PersonaTab {
 
 /**
  * Role-guarded bottom-tab shell shared by every authenticated persona group.
- * Redirects to sign-in when logged out, or to the user's own home when they
+ * Redirects to guest home when logged out, or to the user's own home when they
  * stray into a group they aren't allowed into.
  */
 export function PersonaTabs({
@@ -39,7 +39,7 @@ export function PersonaTabs({
       </Screen>
     );
   }
-  if (!user) return <Redirect href="/auth/phone" />;
+  if (!user) return <Redirect href="/guest/home" />;
   if (!roleAllowed(user.role, allowed)) return <Redirect href={routeForRole(user.role)} />;
 
   const isIOS = Platform.OS === "ios";

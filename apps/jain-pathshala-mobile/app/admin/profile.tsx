@@ -72,7 +72,7 @@ export default function ProfileScreen() {
           icon="log-out-outline"
           onPress={async () => {
             await logout();
-            router.replace("/");
+            router.replace("/guest/home");
           }}
         />
         <DeleteAccountButton />

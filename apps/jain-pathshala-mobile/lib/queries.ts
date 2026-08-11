@@ -1177,6 +1177,8 @@ export type AdminNoticeRow = {
   pinned: boolean;
   is_critical: boolean;
   published_at: string | null;
+  expires_at: string | null;
+  is_expired: boolean;
   created_at: string;
 };
 
@@ -1239,11 +1241,62 @@ export function useStudentStatusAction() {
   });
 }
 
+export type CreateAdminStudentBody = {
+  full_name: string;
+  centre_id: string;
+  dob: string;
+  batch_id?: string;
+  gender?: "male" | "female" | "other";
+  blood_group?: string;
+  parent_full_name: string;
+  parent_phone: string;
+  guardian_relation: "father" | "mother" | "guardian";
+};
+
+export type CreateAdminStudentResult = {
+  id: string;
+  student_code: string;
+  full_name: string;
+  age_group: string;
+  parent_id: string;
+  blood_group: string | null;
+  parent_created: boolean;
+};
+
+export function useCreateAdminStudent() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateAdminStudentBody) =>
+      apiPost<CreateAdminStudentResult>("/v1/admin/students", body),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "students"] }),
+  });
+}
+
 export function useBatchAction() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, action }: { id: string; action: "activate" | "deactivate" }) =>
       apiPost(`/v1/admin/batches/${id}/${action}`, {}),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.adminBatches }),
+  });
+}
+
+export type CreateAdminBatchBody = {
+  centre_id: string;
+  name: string;
+  age_groups: Array<"bal" | "kishor" | "tarun" | "yuva">;
+  start_time: string;
+  end_time: string;
+  day_of_week: number[];
+  capacity: number;
+  primary_shikshak_id?: string;
+};
+
+export function useCreateAdminBatch() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateAdminBatchBody) =>
+      apiPost<{ id: string; name: string }>("/v1/admin/batches", body),
     onSuccess: () => qc.invalidateQueries({ queryKey: qk.adminBatches }),
   });
 }
@@ -1431,8 +1484,10 @@ export type NoticeWriteBody = {
   audience: "centre" | "batch";
   centre_id?: string;
   batch_id?: string;
+  is_public?: boolean;
   pinned?: boolean;
   is_critical?: boolean;
+  expires_at?: string | null;
 };
 
 export function useCreateNotice() {

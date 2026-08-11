@@ -145,6 +145,46 @@ export default function GuestHomeScreen() {
         }
       />
       <Screen contentStyle={{ paddingBottom: 110 }}>
+        <Title style={{ fontSize: 18, marginLeft: 2 }}>
+          {hi ? "अपना मार्ग चुनें" : "Choose your path"}
+        </Title>
+        <Body muted style={{ marginLeft: 2, marginBottom: 10, fontSize: 13 }}>
+          {hi
+            ? "विद्यार्थी, शिक्षक या संचालक के रूप में जुड़ें — साइन इन की जरूरत नहीं।"
+            : "Join as Student, Shikshak, or Sanchalak — no sign-in required."}
+        </Body>
+        <Pressable onPress={() => router.push("/join")}>
+          {({ pressed }) => (
+            <Card style={{ opacity: pressed ? 0.85 : 1, marginBottom: 16 }}>
+              <Row style={{ gap: 12, alignItems: "center" }}>
+                <View
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 10,
+                    backgroundColor: c.accent,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Ionicons name="git-branch-outline" size={20} color={c.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Title style={{ fontSize: 16 }}>
+                    {hi ? "पंजीकरण यात्रा" : "Registration journey"}
+                  </Title>
+                  <Body muted style={{ fontSize: 13, marginTop: 2 }}>
+                    {hi
+                      ? "विद्यार्थी · शिक्षक गण · संचालक गण"
+                      : "Student · Shikshak Gan · Sanchalak Gan"}
+                  </Body>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={c.mutedForeground} />
+              </Row>
+            </Card>
+          )}
+        </Pressable>
+
         <Card>
           <Title style={{ fontSize: 20 }}>
             {awaitingOtp

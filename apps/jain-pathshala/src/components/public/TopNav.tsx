@@ -4,6 +4,7 @@ import { Globe } from 'lucide-react';
 import { useState } from 'react';
 
 const NAV_ITEMS = [
+  { href: '/join', label: 'Join', label_hi: 'जुड़ें' },
   { href: '/centres', label: 'Centres', label_hi: 'केंद्र' },
   { href: '/shivirs', label: 'Shivirs', label_hi: 'शिविर' },
   { href: '/notices', label: 'Notices', label_hi: 'सूचनाएँ' },

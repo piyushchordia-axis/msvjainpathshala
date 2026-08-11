@@ -15,6 +15,14 @@ import DonatePage from "@/pages/public/DonatePage";
 import PublicExamsPage from "@/pages/public/ExamsPage";
 import MyServiceRequestsPage from "@/pages/public/MyServiceRequestsPage";
 import RegisterPage from "@/pages/public/RegisterPage";
+import JoinLandingPage from "@/pages/public/join/JoinLandingPage";
+import JoinStudentPage from "@/pages/public/join/JoinStudentPage";
+import { JoinShikshakPage, JoinSanchalakPage } from "@/pages/public/join/JoinStaffRoutes";
+import {
+  StudentCompletePaymentPage,
+  ShikshakCompletePaymentPage,
+  SanchalakCompletePaymentPage,
+} from "@/pages/public/join/CompletePaymentRoutes";
 import NotFound from "@/pages/not-found";
 
 /** Public marketing shell — lazy-loaded separately from admin (PERF #20). */
@@ -23,6 +31,13 @@ export default function PublicRoutes() {
     <PublicLayout>
       <Switch>
         <Route path="/" component={HomePage} />
+        <Route path="/join" component={JoinLandingPage} />
+        <Route path="/join/student" component={JoinStudentPage} />
+        <Route path="/join/student/complete-payment" component={StudentCompletePaymentPage} />
+        <Route path="/join/shikshak" component={JoinShikshakPage} />
+        <Route path="/join/shikshak/complete-payment" component={ShikshakCompletePaymentPage} />
+        <Route path="/join/sanchalak" component={JoinSanchalakPage} />
+        <Route path="/join/sanchalak/complete-payment" component={SanchalakCompletePaymentPage} />
         <Route path="/centres" component={CentresPage} />
         <Route path="/centres/:id" component={CentreDetailPage} />
         <Route path="/shivirs" component={ShivirsPage} />

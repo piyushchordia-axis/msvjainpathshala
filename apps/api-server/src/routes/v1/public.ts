@@ -17,13 +17,30 @@ const router: IRouter = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/* GET /v1/public/cities — catalogue for join / registration pickers */
+router.get("/cities", async (_req: Request, res: Response) => {
+  const rows = await db
+    .select({
+      id: cities.id,
+      name: cities.name,
+      code: cities.code,
+      state_name: states.name,
+    })
+    .from(cities)
+    .innerJoin(states, eq(states.id, cities.state_id))
+    .orderBy(asc(states.name), asc(cities.name));
+  ok(res, { items: rows }, { count: rows.length });
+});
+
 /* GET /v1/public/centres */
 router.get("/centres", async (_req: Request, res: Response) => {
   const rows = await db
     .select({
       id: centres.id,
       name: centres.name,
+      code: centres.code,
       locality: centres.locality,
+      city_id: centres.city_id,
       city_name: cities.name,
       state_name: states.name,
       batch_count: sql<number>`count(${batches.id})::int`,

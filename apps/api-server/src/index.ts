@@ -4,6 +4,7 @@ import { logger } from "./lib/logger";
 import { startScheduler } from "./lib/scheduler";
 import { getSmsProvider } from "./lib/sms";
 import { warmTestOtpNumbers } from "./lib/otp-test-numbers";
+import { warmFixedOtp } from "./lib/otp-fixed";
 import { assertProductionRedisConfigured } from "./lib/assert-production-redis";
 import { registerAllJobs } from "./jobs/register-all";
 import { attachAdminDashboardFeed } from "./lib/admin-dashboard-feed";
@@ -96,6 +97,7 @@ const server = app.listen(port, host, () => {
   // login, i.e. exactly when nobody is reading — and an allow-list left behind
   // after review is precisely the thing that should be impossible to miss.
   warmTestOtpNumbers();
+  warmFixedOtp();
 });
 
 // PERF #18 — nginx upstream keepalive defaults to 60s; Node's keepAliveTimeout

@@ -49,6 +49,7 @@ export const SHIKSHAK_ACTIONS: QuickAction[] = [
     hi: "पुण्य स्थिति",
   },
   { href: "/shikshak/niyam-review", icon: "clipboard-outline", en: "Niyam review", hi: "नियम समीक्षा" },
+  { href: "/shikshak/join-approvals", icon: "person-add-outline", en: "Join approvals", hi: "Join स्वीकृति" },
   { href: "/shikshak/niyams", icon: "sparkles-outline", en: "Niyam catalog", hi: "नियम सूची" },
   { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "सूचनाएँ" },
   { href: "/gallery", icon: "images-outline", en: "Punya Wall", hi: "पुण्य दीवार" },
@@ -63,6 +64,7 @@ export const SANCHALAK_ACTIONS: QuickAction[] = [
   { href: "/admin/holidays", icon: "calendar-outline", en: "Holidays", hi: "अवकाश" },
   { href: "/admin/notices", icon: "megaphone-outline", en: "Notices", hi: "सूचनाएँ" },
   { href: "/admin/niyam-review", icon: "clipboard-outline", en: "Niyam review", hi: "नियम समीक्षा" },
+  { href: "/admin/join", icon: "person-add-outline", en: "Join approvals", hi: "Join स्वीकृति" },
   { href: "/admin/attendance", icon: "checkmark-done-outline", en: "Attendance", hi: "उपस्थिति" },
   {
     href: "/admin/service-requests",

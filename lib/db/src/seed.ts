@@ -53,6 +53,8 @@ import {
   homework_submissions,
   registration_form_configs,
   registration_form_responses,
+  join_form_fields,
+  join_settings,
   service_requests,
   service_request_messages,
   student_course_progress,
@@ -129,6 +131,8 @@ async function main(): Promise<void> {
       quiz_attempts, quiz_event_questions, quiz_events, questions,
       homework_submissions, homework_assignments,
       registration_form_responses, registration_form_configs,
+      join_student_registrations, join_shikshak_registrations, join_sanchalak_registrations,
+      join_form_fields, join_settings,
       service_request_messages, service_requests,
       progress_reports, student_course_progress, course_certificates,
       course_template_subsections, course_template_sections, course_templates,
@@ -1303,6 +1307,97 @@ async function main(): Promise<void> {
       status: "submitted",
       responses: { full_name: "Riya Mehta", age_group: "bal", parent_phone: "+919812345678" },
     },
+  ]);
+
+  /* ---------------- Join / gan onboarding (pre-login) ---------------- */
+  const joinKinds = ["student", "shikshak", "sanchalak"] as const;
+  await db.insert(join_settings).values(
+    joinKinds.flatMap((kind) => [
+      {
+        kind,
+        key: "registration_open",
+        value: "yes",
+        label: "Registration open",
+      },
+      { kind, key: "payment_amount", value: "501", label: "Payment amount (INR)" },
+      { kind, key: "payment_upi_id", value: "msv@upi", label: "UPI ID" },
+      { kind, key: "payment_name", value: "Megh Sanskar Vatika", label: "Payee name" },
+      { kind, key: "payment_qr_image", value: "", label: "Payment QR image URL" },
+    ]),
+  );
+
+  type JoinFieldSeed = {
+    kind: (typeof joinKinds)[number];
+    field_key: string;
+    label_hi: string;
+    label_en: string;
+    field_type: string;
+    options?: string[] | null;
+    is_required: boolean;
+    display_order: number;
+    placeholder_hi?: string;
+    placeholder_en?: string;
+  };
+
+  const studentFields: JoinFieldSeed[] = [
+    { kind: "student", field_key: "name", label_hi: "नाम", label_en: "Name", field_type: "text", is_required: true, display_order: 1 },
+    { kind: "student", field_key: "father_name", label_hi: "पिता का नाम", label_en: "Father's name", field_type: "text", is_required: true, display_order: 2 },
+    {
+      kind: "student",
+      field_key: "parent_mobile",
+      label_hi: "अभिभावक मोबाइल",
+      label_en: "Parent mobile",
+      field_type: "text",
+      is_required: true,
+      display_order: 3,
+      placeholder_hi: "10 अंक",
+      placeholder_en: "10 digits",
+    },
+    {
+      kind: "student",
+      field_key: "mobile",
+      label_hi: "विद्यार्थी मोबाइल (वैकल्पिक)",
+      label_en: "Student mobile (optional)",
+      field_type: "text",
+      is_required: false,
+      display_order: 4,
+      placeholder_hi: "10 अंक",
+      placeholder_en: "10 digits",
+    },
+    { kind: "student", field_key: "sex", label_hi: "लिंग", label_en: "Gender", field_type: "dropdown", options: ["Male", "Female"], is_required: true, display_order: 5 },
+    { kind: "student", field_key: "age", label_hi: "आयु", label_en: "Age", field_type: "number", is_required: true, display_order: 6 },
+    { kind: "student", field_key: "education", label_hi: "शिक्षा", label_en: "Education", field_type: "text", is_required: false, display_order: 7 },
+    { kind: "student", field_key: "email", label_hi: "ईमेल", label_en: "Email", field_type: "text", is_required: false, display_order: 8 },
+    { kind: "student", field_key: "address", label_hi: "पता", label_en: "Address", field_type: "textarea", is_required: true, display_order: 9 },
+    { kind: "student", field_key: "sang_name", label_hi: "संग नाम", label_en: "Sang name", field_type: "text", is_required: false, display_order: 10 },
+    { kind: "student", field_key: "pathshala_nearby", label_hi: "नज़दीकी पाठशाला", label_en: "Nearby Pathshala", field_type: "text", is_required: false, display_order: 11 },
+    { kind: "student", field_key: "attended_last_season", label_hi: "पिछले सीज़न में भाग लिया?", label_en: "Attended last season?", field_type: "yesno", is_required: false, display_order: 12 },
+    { kind: "student", field_key: "family_members", label_hi: "परिवार के सदस्य", label_en: "Family members", field_type: "number", is_required: false, display_order: 13 },
+    { kind: "student", field_key: "will_attend", label_hi: "उपस्थित रहेंगे?", label_en: "Will attend?", field_type: "yesno", is_required: false, display_order: 14 },
+    { kind: "student", field_key: "special_note", label_hi: "विशेष नोट", label_en: "Special note", field_type: "textarea", is_required: false, display_order: 15 },
+    { kind: "student", field_key: "photo", label_hi: "फ़ोटो", label_en: "Photo", field_type: "photo", is_required: true, display_order: 16 },
+  ];
+
+  const staffFieldDefs: Omit<JoinFieldSeed, "kind">[] = [
+    { field_key: "name", label_hi: "नाम", label_en: "Name", field_type: "text", is_required: true, display_order: 1 },
+    { field_key: "s_o", label_hi: "पुत्र / पुत्री", label_en: "S/O or D/O", field_type: "text", is_required: false, display_order: 2 },
+    { field_key: "age", label_hi: "आयु", label_en: "Age", field_type: "number", is_required: true, display_order: 3 },
+    { field_key: "whatsapp_contact", label_hi: "WhatsApp नंबर", label_en: "WhatsApp number", field_type: "text", is_required: true, display_order: 4, placeholder_hi: "10 अंक", placeholder_en: "10 digits" },
+    { field_key: "school_qualification", label_hi: "शैक्षणिक योग्यता", label_en: "School qualification", field_type: "text", is_required: false, display_order: 5 },
+    { field_key: "religious_education", label_hi: "धार्मिक शिक्षा", label_en: "Religious education", field_type: "text", is_required: false, display_order: 6 },
+    { field_key: "years_at_pathshala", label_hi: "पाठशाला में वर्ष", label_en: "Years at Pathshala", field_type: "number", is_required: false, display_order: 7 },
+    { field_key: "current_pathshala", label_hi: "वर्तमान पाठशाला", label_en: "Current Pathshala", field_type: "text", is_required: false, display_order: 8 },
+    { field_key: "pathshala_name", label_hi: "पाठशाला का नाम", label_en: "Pathshala name", field_type: "text", is_required: false, display_order: 9 },
+    { field_key: "pathshala_timing", label_hi: "पाठशाला समय", label_en: "Pathshala timing", field_type: "text", is_required: false, display_order: 10 },
+    { field_key: "address", label_hi: "पता", label_en: "Address", field_type: "textarea", is_required: false, display_order: 11 },
+    { field_key: "vision", label_hi: "दृष्टि / संकल्प", label_en: "Vision", field_type: "textarea", is_required: false, display_order: 12 },
+    { field_key: "photo", label_hi: "फ़ोटो", label_en: "Photo", field_type: "photo", is_required: true, display_order: 13 },
+  ];
+
+  await db.insert(join_form_fields).values([
+    ...studentFields,
+    ...staffFieldDefs.map((f) => ({ ...f, kind: "shikshak" as const })),
+    ...staffFieldDefs.map((f) => ({ ...f, kind: "sanchalak" as const })),
   ]);
 
   /* ---------------- Service requests (Wave 2) ---------------- */

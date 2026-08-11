@@ -125,7 +125,7 @@ export default function StudentProfile() {
               icon="log-out-outline"
               onPress={async () => {
                 await logout();
-                router.replace("/");
+                router.replace("/guest/home");
               }}
             />
             <DeleteAccountButton />

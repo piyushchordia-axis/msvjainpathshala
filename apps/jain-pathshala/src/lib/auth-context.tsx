@@ -31,7 +31,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {}
     clearSessionCookies();
     setUser(null);
-    window.location.href = '/admin/login';
+    window.location.href = '/';
   }, []);
 
   const value = useMemo(

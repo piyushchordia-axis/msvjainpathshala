@@ -23,6 +23,7 @@ export default function GuestMoreScreen() {
   ];
 
   const about: LinkRow[] = [
+    { label: hi ? "मार्ग चुनें" : "Choose your path", sub: hi ? "विद्यार्थी / शिक्षक / संचालक" : "Student / Shikshak / Sanchalak", icon: "git-branch-outline", href: "/join" },
     { label: hi ? "मेघ संस्कार वाटिका" : "Megh Sanskar Vatika", sub: hi ? "हमारी कहानी" : "Our story", icon: "leaf-outline", href: "/info/msv" },
     { label: hi ? "हमारे बारे में" : "About", sub: hi ? "पाठशाला के बारे में" : "About the Pathshala", icon: "information-circle-outline", href: "/info/about" },
     { label: hi ? "संपर्क करें" : "Contact", sub: hi ? "टीम से बात करें" : "Talk to the team", icon: "call-outline", href: "/info/contact" },

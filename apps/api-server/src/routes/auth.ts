@@ -20,6 +20,7 @@ import {
 import { setAuthCookies, clearAuthCookies } from "../lib/cookies";
 import { getSmsProvider } from "../lib/sms";
 import { testOtpCodeFor } from "../lib/otp-test-numbers";
+import { fixedOtpCode, isFixedOtpEnabled } from "../lib/otp-fixed";
 import { logger } from "../lib/logger";
 import { rateLimit } from "../lib/ratelimit";
 import { auditFromReq } from "../lib/audit";
@@ -86,11 +87,20 @@ router.post("/login", async (req: Request, res: Response) => {
     const testCode = testOtpCodeFor(parsed.phone);
     if (testCode) code = testCode;
 
+    // UAT global fixed OTP (OTP_FIXED_ENABLED): all phones use one known code
+    // and skip SMS. Honoured in any NODE_ENV so staging can enable it without
+    // flipping NODE_ENV. Per-phone OTP_TEST_NUMBERS still wins when present.
+    const fixedEnabled = !testCode && isFixedOtpEnabled();
+    if (fixedEnabled) {
+      code = fixedOtpCode();
+    }
+
     // Dev-only fixed OTP: in non-production, a `default_otp_code` settings row
     // (e.g. "000000") overrides the random code so every login uses one known
     // code without live SMS. NEVER honoured in production — there, real SMS (or
-    // a nominated test number) is the only path.
-    if (!isProd && !testCode) {
+    // a nominated test number / OTP_FIXED_ENABLED) is the path. Skipped when
+    // OTP_FIXED_ENABLED already set the code.
+    if (!isProd && !testCode && !fixedEnabled) {
       const [otpSetting] = await db
         .select()
         .from(settings)
@@ -106,9 +116,9 @@ router.post("/login", async (req: Request, res: Response) => {
     // With a provider that mints its own code (2Factor AUTOGEN) the send has to
     // happen first, because the session id it returns *is* the challenge — we
     // never learn the code. Registered phones only, mirroring the dev_code and
-    // SMS gating below; test numbers skip the provider entirely.
+    // SMS gating below; test numbers and OTP_FIXED_ENABLED skip the provider.
     const provider = getSmsProvider();
-    const deliverBySms = !!user && !testCode;
+    const deliverBySms = !!user && !testCode && !fixedEnabled;
     let sessionId: string | null = null;
     let deliveryFailed = false;
     if (deliverBySms && provider.ownsCode) {
@@ -164,7 +174,9 @@ router.post("/login", async (req: Request, res: Response) => {
     // when the provider owns the code: `code` was never sent to anyone, so
     // echoing it would just hand back a value that cannot verify. Also skipped
     // for test numbers: the reviewer already has that code out of band, and
-    // echoing it would turn the allow-list into a public oracle.
+    // echoing it would turn the allow-list into a public oracle. OTP_FIXED_ENABLED
+    // in non-prod may still echo (operators already know the code); in prod it
+    // never echoes — unset the flag before real SMS traffic.
     if (user && !isProd && !sessionId && !testCode) payload.dev_code = code;
     res.status(200).json({ data: payload });
     return;

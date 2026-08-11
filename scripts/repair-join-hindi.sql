@@ -1,0 +1,32 @@
+-- Repair join Hindi labels (UTF-8). Generated for one-shot apply.
+BEGIN;
+UPDATE join_form_fields SET label_hi = 'नाम', updated_at = now() WHERE kind = 'student' AND field_key = 'name';
+UPDATE join_form_fields SET label_hi = 'पिता का नाम', updated_at = now() WHERE kind = 'student' AND field_key = 'father_name';
+UPDATE join_form_fields SET label_hi = 'मोबाइल', placeholder_hi = '10 अंक', updated_at = now() WHERE kind = 'student' AND field_key = 'mobile';
+UPDATE join_form_fields SET label_hi = 'लिंग', updated_at = now() WHERE kind = 'student' AND field_key = 'sex';
+UPDATE join_form_fields SET label_hi = 'आयु', updated_at = now() WHERE kind = 'student' AND field_key = 'age';
+UPDATE join_form_fields SET label_hi = 'शिक्षा', updated_at = now() WHERE kind = 'student' AND field_key = 'education';
+UPDATE join_form_fields SET label_hi = 'ईमेल', updated_at = now() WHERE kind = 'student' AND field_key = 'email';
+UPDATE join_form_fields SET label_hi = 'पता', updated_at = now() WHERE kind = 'student' AND field_key = 'address';
+UPDATE join_form_fields SET label_hi = 'संग नाम', updated_at = now() WHERE kind = 'student' AND field_key = 'sang_name';
+UPDATE join_form_fields SET label_hi = 'नज़दीकी पाठशाला', updated_at = now() WHERE kind = 'student' AND field_key = 'pathshala_nearby';
+UPDATE join_form_fields SET label_hi = 'पिछले सीज़न में भाग लिया?', updated_at = now() WHERE kind = 'student' AND field_key = 'attended_last_season';
+UPDATE join_form_fields SET label_hi = 'परिवार के सदस्य', updated_at = now() WHERE kind = 'student' AND field_key = 'family_members';
+UPDATE join_form_fields SET label_hi = 'उपस्थित रहेंगे?', updated_at = now() WHERE kind = 'student' AND field_key = 'will_attend';
+UPDATE join_form_fields SET label_hi = 'विशेष नोट', updated_at = now() WHERE kind = 'student' AND field_key = 'special_note';
+UPDATE join_form_fields SET label_hi = 'फ़ोटो', updated_at = now() WHERE kind = 'student' AND field_key = 'photo';
+
+UPDATE join_form_fields SET label_hi = 'नाम', updated_at = now() WHERE kind IN ('shikshak','sanchalak') AND field_key = 'name';
+UPDATE join_form_fields SET label_hi = 'पुत्र / पुत्री', updated_at = now() WHERE kind IN ('shikshak','sanchalak') AND field_key = 's_o';
+UPDATE join_form_fields SET label_hi = 'आयु', updated_at = now() WHERE kind IN ('shikshak','sanchalak') AND field_key = 'age';
+UPDATE join_form_fields SET label_hi = 'WhatsApp नंबर', placeholder_hi = '10 अंक', updated_at = now() WHERE kind IN ('shikshak','sanchalak') AND field_key = 'whatsapp_contact';
+UPDATE join_form_fields SET label_hi = 'शैक्षणिक योग्यता', updated_at = now() WHERE kind IN ('shikshak','sanchalak') AND field_key = 'school_qualification';
+UPDATE join_form_fields SET label_hi = 'धार्मिक शिक्षा', updated_at = now() WHERE kind IN ('shikshak','sanchalak') AND field_key = 'religious_education';
+UPDATE join_form_fields SET label_hi = 'पाठशाला में वर्ष', updated_at = now() WHERE kind IN ('shikshak','sanchalak') AND field_key = 'years_at_pathshala';
+UPDATE join_form_fields SET label_hi = 'वर्तमान पाठशाला', updated_at = now() WHERE kind IN ('shikshak','sanchalak') AND field_key = 'current_pathshala';
+UPDATE join_form_fields SET label_hi = 'पाठशाला का नाम', updated_at = now() WHERE kind IN ('shikshak','sanchalak') AND field_key = 'pathshala_name';
+UPDATE join_form_fields SET label_hi = 'पाठशाला समय', updated_at = now() WHERE kind IN ('shikshak','sanchalak') AND field_key = 'pathshala_timing';
+UPDATE join_form_fields SET label_hi = 'पता', updated_at = now() WHERE kind IN ('shikshak','sanchalak') AND field_key = 'address';
+UPDATE join_form_fields SET label_hi = 'दृष्टि / संकल्प', updated_at = now() WHERE kind IN ('shikshak','sanchalak') AND field_key = 'vision';
+UPDATE join_form_fields SET label_hi = 'फ़ोटो', updated_at = now() WHERE kind IN ('shikshak','sanchalak') AND field_key = 'photo';
+COMMIT;

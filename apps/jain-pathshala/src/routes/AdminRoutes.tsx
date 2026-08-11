@@ -19,6 +19,7 @@ const NoticesAdminPage = lazy(() => import("@/pages/admin/NoticesAdminPage"));
 const AdminLibraryPage = lazy(() => import("@/pages/admin/LibraryAdminPage"));
 const HomeworkAdminPage = lazy(() => import("@/pages/admin/HomeworkPage"));
 const RegistrationFormsPage = lazy(() => import("@/pages/admin/RegistrationFormsPage"));
+const JoinAdminPage = lazy(() => import("@/pages/admin/JoinAdminPage"));
 const ServiceRequestsAdminPage = lazy(() => import("@/pages/admin/ServiceRequestsAdminPage"));
 const IdCardsAdminPage = lazy(() => import("@/pages/admin/IdCardsPage"));
 const ProgressAdminPage = lazy(() => import("@/pages/admin/ProgressPage"));
@@ -122,6 +123,7 @@ export default function AdminRoutes() {
           <Route path="/admin/donations" component={DonationsPage} />
           <Route path="/admin/service-requests" component={ServiceRequestsAdminPage} />
           <Route path="/admin/registration-forms" component={RegistrationFormsPage} />
+          <Route path="/admin/join" component={JoinAdminPage} />
           <Route path="/admin/shivir-dashboard" component={ShivirDashboardPage} />
           <Route path="/admin/enquiries" component={EnquiriesAdminPage} />
           <Route path="/admin/reports" component={ReportsPage} />

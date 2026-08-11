@@ -166,7 +166,7 @@ export default function ParentProfile() {
           variant="outline"
           onPress={async () => {
             await logout();
-            router.replace("/");
+            router.replace("/guest/home");
           }}
         />
         <DeleteAccountButton />

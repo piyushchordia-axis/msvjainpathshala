@@ -38,7 +38,7 @@ export function DeleteAccountButton() {
     }
     // Account is gone server-side; clear the local session (best-effort) and exit.
     await logout();
-    router.replace("/");
+    router.replace("/guest/home");
   }
 
   function confirm() {

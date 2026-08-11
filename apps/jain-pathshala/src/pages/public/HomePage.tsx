@@ -13,6 +13,7 @@ export default function HomePage() {
         heading: 'जहाँ जैन शिक्षा एक आधुनिक पाठशाला से मिलती है।',
         lede: 'अपने पास का केंद्र खोजें, अपने बच्चे का पुण्य देखें, शिविरों के लिए नाम लिखाएँ, और अपने गुरुजी से जुड़े रहें — सब एक ही जगह।',
         ctaCentres: 'केंद्र खोजें',
+        ctaJoin: 'मार्ग चुनें',
         ctaSignin: 'मेरी पाठशाला में लॉगिन करें',
         missionTitle: 'हमारा उद्देश्य',
         missionBody: 'हम जैन परिवारों की अगली पीढ़ी को हमारे पूर्वजों की कोमल, अनुशासित परंपरा में पालने में मदद करते हैं — पाठशाला की पारंपरिक शिक्षा को आज के परिवारों की आवश्यक गर्मजोशी और संरचना के साथ जोड़ते हुए।',
@@ -27,6 +28,7 @@ export default function HomePage() {
         heading: 'Where Jain education meets a modern Pathshala.',
         lede: "Find a centre near you, track your child's Punya, sign up for shivirs, and stay in touch with your Guruji — all in one place.",
         ctaCentres: 'Find a centre',
+        ctaJoin: 'Choose your path',
         ctaSignin: 'Sign in to my Pathshala',
         missionTitle: 'Our mission',
         missionBody: 'We help Jain families raise the next generation in the gentle, disciplined tradition of our ancestors — combining classical Pathshala learning with the warmth and structure modern families need.',
@@ -70,6 +72,14 @@ export default function HomePage() {
                 size="lg"
                 variant="secondary"
                 className="bg-white text-secondary hover:bg-white/90"
+              >
+                <Link href="/join">{copy.ctaJoin}</Link>
+              </Button>
+              <Button
+                asChild
+                size="lg"
+                variant="ghost"
+                className="text-primary-foreground hover:bg-white/10"
               >
                 <Link href="/centres">{copy.ctaCentres}</Link>
               </Button>

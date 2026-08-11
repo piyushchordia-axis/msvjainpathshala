@@ -70,6 +70,7 @@ function RootLayoutNav() {
       <Stack.Screen name="index" options={{ headerShown: false }} />
       <Stack.Screen name="auth" options={{ headerShown: false }} />
       <Stack.Screen name="guest" options={{ headerShown: false }} />
+      <Stack.Screen name="join" options={{ headerShown: false }} />
       <Stack.Screen name="parent" options={{ headerShown: false }} />
       <Stack.Screen name="student" options={{ headerShown: false }} />
       <Stack.Screen name="shikshak" options={{ headerShown: false }} />
