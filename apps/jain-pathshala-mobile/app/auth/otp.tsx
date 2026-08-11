@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import { bodyFamily, fonts } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
@@ -74,7 +74,7 @@ export default function OtpScreen() {
   };
 
   return (
-    <KeyboardAwareScrollView
+    <KeyboardAwareScrollViewCompat
       style={{ flex: 1, backgroundColor: c.background }}
       contentContainerStyle={{ padding: 18, gap: 16, paddingTop: 24 }}
       bottomOffset={20}
@@ -158,6 +158,6 @@ export default function OtpScreen() {
           </Pressable>
         </View>
       </Card>
-    </KeyboardAwareScrollView>
+    </KeyboardAwareScrollViewCompat>
   );
 }

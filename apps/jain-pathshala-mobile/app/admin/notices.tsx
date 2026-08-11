@@ -4,7 +4,6 @@ import {
   Alert,
   Modal,
   Pressable,
-  ScrollView,
   Switch,
   Text,
   TextInput,
@@ -26,6 +25,7 @@ import {
 } from "@/lib/queries";
 import { AppHeader } from "@/components/AppHeader";
 import { CentreSwitcher, usePersistedCentreId } from "@/components/CentreSwitcher";
+import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 const CENTRE_KEY = "jp.sanchalak.selectedCentreId";
@@ -248,7 +248,11 @@ function NoticeEditor({
             </Text>
           </Pressable>
         </View>
-        <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
+        <KeyboardAwareScrollViewCompat
+          contentContainerStyle={{ padding: 18, paddingBottom: 40 }}
+          bottomOffset={20}
+          keyboardShouldPersistTaps="handled"
+        >
           <Field
             label={hi ? "शीर्षक (अंग्रेज़ी)" : "Title (English)"}
             value={form.title_en}
@@ -472,7 +476,7 @@ function NoticeEditor({
             onPress={submit}
             loading={busy}
           />
-        </ScrollView>
+        </KeyboardAwareScrollViewCompat>
       </View>
     </Modal>
   );

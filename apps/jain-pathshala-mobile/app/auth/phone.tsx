@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { Text, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
-import { KeyboardAwareScrollView } from "react-native-keyboard-controller";
+import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import { bodyFamily, fonts } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
@@ -58,7 +58,7 @@ export default function PhoneScreen() {
   };
 
   return (
-    <KeyboardAwareScrollView
+    <KeyboardAwareScrollViewCompat
       style={{ flex: 1, backgroundColor: c.background }}
       contentContainerStyle={{ padding: 18, gap: 16, paddingTop: 24 }}
       bottomOffset={20}
@@ -139,6 +139,6 @@ export default function PhoneScreen() {
           />
         </View>
       </Card>
-    </KeyboardAwareScrollView>
+    </KeyboardAwareScrollViewCompat>
   );
 }

@@ -37,6 +37,7 @@ import {
   type AdminGalleryItem,
 } from "@/lib/queries";
 import { AppHeader } from "@/components/AppHeader";
+import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import { Body, Button, Card, Pill, Row, StateView, Title } from "@/components/ui";
 
 const FILTERS: { id: AdminGalleryFilter; en: string; hi: string }[] = [
@@ -76,53 +77,59 @@ function TakedownModal({
 
   return (
     <Modal visible={open} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: c.background, padding: 18, gap: 14 }}>
-        <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
-          <Title style={{ fontSize: 20 }}>{hi ? "फोटो हटाएँ" : "Take down"}</Title>
-          <Pressable onPress={onClose} hitSlop={12} disabled={busy}>
-            <Ionicons name="close" size={24} color={c.foreground} />
-          </Pressable>
-        </Row>
-        <Body muted style={{ lineHeight: 22 }}>
-          {hi
-            ? "यह फोटो गैलरी से हट जाएगा। ऑडिट लॉग के लिए संक्षिप्त कारण लिखें (कम से कम 5 अक्षर)।"
-            : "This photo will be removed from the gallery. Write a short reason for the audit log (at least 5 characters)."}
-        </Body>
-        {item?.first_name ? (
-          <Body style={{ lineHeight: 22 }}>
-            {hi ? "विद्यार्थी" : "Student"}: {item.first_name}
+      <View style={{ flex: 1, backgroundColor: c.background }}>
+        <KeyboardAwareScrollViewCompat
+          contentContainerStyle={{ padding: 18, gap: 14, paddingBottom: 40 }}
+          bottomOffset={20}
+          keyboardShouldPersistTaps="handled"
+        >
+          <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
+            <Title style={{ fontSize: 20 }}>{hi ? "फोटो हटाएँ" : "Take down"}</Title>
+            <Pressable onPress={onClose} hitSlop={12} disabled={busy}>
+              <Ionicons name="close" size={24} color={c.foreground} />
+            </Pressable>
+          </Row>
+          <Body muted style={{ lineHeight: 22 }}>
+            {hi
+              ? "यह फोटो गैलरी से हट जाएगा। ऑडिट लॉग के लिए संक्षिप्त कारण लिखें (कम से कम 5 अक्षर)।"
+              : "This photo will be removed from the gallery. Write a short reason for the audit log (at least 5 characters)."}
           </Body>
-        ) : null}
-        <TextInput
-          value={reason}
-          onChangeText={setReason}
-          placeholder={hi ? "कारण लिखें…" : "Reason…"}
-          placeholderTextColor={c.mutedForeground}
-          multiline
-          maxLength={500}
-          editable={!busy}
-          style={{
-            fontFamily: bodyFamily(hi),
-            fontSize: 15,
-            lineHeight: 22,
-            color: c.foreground,
-            borderWidth: 1,
-            borderColor: c.border,
-            borderRadius: c.radius,
-            padding: 12,
-            minHeight: 96,
-            textAlignVertical: "top",
-            backgroundColor: c.card,
-          }}
-        />
-        <Button
-          label={hi ? "हटाएँ" : "Take down"}
-          icon="trash-outline"
-          loading={busy}
-          disabled={trimmed.length < 5 || busy}
-          onPress={() => onConfirm(trimmed)}
-        />
-        <Button label={hi ? "रद्द करें" : "Cancel"} variant="ghost" onPress={onClose} disabled={busy} />
+          {item?.first_name ? (
+            <Body style={{ lineHeight: 22 }}>
+              {hi ? "विद्यार्थी" : "Student"}: {item.first_name}
+            </Body>
+          ) : null}
+          <TextInput
+            value={reason}
+            onChangeText={setReason}
+            placeholder={hi ? "कारण लिखें…" : "Reason…"}
+            placeholderTextColor={c.mutedForeground}
+            multiline
+            maxLength={500}
+            editable={!busy}
+            style={{
+              fontFamily: bodyFamily(hi),
+              fontSize: 15,
+              lineHeight: 22,
+              color: c.foreground,
+              borderWidth: 1,
+              borderColor: c.border,
+              borderRadius: c.radius,
+              padding: 12,
+              minHeight: 96,
+              textAlignVertical: "top",
+              backgroundColor: c.card,
+            }}
+          />
+          <Button
+            label={hi ? "हटाएँ" : "Take down"}
+            icon="trash-outline"
+            loading={busy}
+            disabled={trimmed.length < 5 || busy}
+            onPress={() => onConfirm(trimmed)}
+          />
+          <Button label={hi ? "रद्द करें" : "Cancel"} variant="ghost" onPress={onClose} disabled={busy} />
+        </KeyboardAwareScrollViewCompat>
       </View>
     </Modal>
   );

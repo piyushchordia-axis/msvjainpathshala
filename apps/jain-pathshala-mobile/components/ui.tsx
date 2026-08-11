@@ -7,7 +7,6 @@ import {
   Platform,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -24,6 +23,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
+import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import { bodyFamily, displayFamily, fonts } from "@/constants/typography";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useColors } from "@/hooks/useColors";
@@ -60,7 +60,7 @@ export function Screen({
     );
   }
   return (
-    <ScrollView
+    <KeyboardAwareScrollViewCompat
       style={[styles.flex, { backgroundColor: c.background }]}
       contentContainerStyle={[
         styles.screenContent,
@@ -79,11 +79,12 @@ export function Screen({
           )
           : undefined
       }
+      bottomOffset={20}
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
       {children}
-    </ScrollView>
+    </KeyboardAwareScrollViewCompat>
   );
 }
 

@@ -15,6 +15,7 @@ import {
 import { fonts, bodyFamily } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import {
   useAdminBatches,
   useAdminCentres,
@@ -275,8 +276,9 @@ function AddStudentModal({ open, onClose }: { open: boolean; onClose: () => void
             </Text>
           </Pressable>
         </View>
-        <ScrollView
+        <KeyboardAwareScrollViewCompat
           contentContainerStyle={{ padding: 18, paddingBottom: 40 }}
+          bottomOffset={20}
           keyboardShouldPersistTaps="handled"
         >
           <FieldLabel>{hi ? "पूरा नाम *" : "Full name *"}</FieldLabel>
@@ -400,7 +402,7 @@ function AddStudentModal({ open, onClose }: { open: boolean; onClose: () => void
             onPress={submit}
             loading={createMut.isPending}
           />
-        </ScrollView>
+        </KeyboardAwareScrollViewCompat>
       </View>
     </Modal>
   );

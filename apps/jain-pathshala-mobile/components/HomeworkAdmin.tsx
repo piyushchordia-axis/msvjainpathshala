@@ -13,6 +13,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import {
   useAdminBatches,
   useAdminCentres,
@@ -466,7 +467,11 @@ function CreateAssignmentModal({
             <Ionicons name="close" size={24} color={c.foreground} />
           </Pressable>
         </View>
-        <ScrollView contentContainerStyle={{ padding: 18, gap: 14, paddingBottom: 40 }}>
+        <KeyboardAwareScrollViewCompat
+          contentContainerStyle={{ padding: 18, gap: 14, paddingBottom: 40 }}
+          bottomOffset={20}
+          keyboardShouldPersistTaps="handled"
+        >
           <View style={{ gap: 6 }}>
             <Body muted style={{ fontSize: 12 }}>
               {hi ? "बैच *" : "Batch *"}
@@ -650,7 +655,7 @@ function CreateAssignmentModal({
             loading={create.isPending}
             disabled={!batchId || !title.trim() || !dueDate.trim() || uploading}
           />
-        </ScrollView>
+        </KeyboardAwareScrollViewCompat>
       </View>
     </Modal>
   );

@@ -21,6 +21,7 @@ import { ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
+import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import {
   firstProofPreview,
   ImageViewerModal,
@@ -119,7 +120,11 @@ function RejectSheet({
             </Text>
           </Pressable>
         </View>
-        <ScrollView contentContainerStyle={{ padding: 18, gap: 14, paddingBottom: 40 }}>
+        <KeyboardAwareScrollViewCompat
+          contentContainerStyle={{ padding: 18, gap: 14, paddingBottom: 40 }}
+          bottomOffset={20}
+          keyboardShouldPersistTaps="handled"
+        >
           {windowExpired ? (
             <Body style={{ color: c.destructive, lineHeight: 22 }}>
               {hi
@@ -183,7 +188,7 @@ function RejectSheet({
               />
             </>
           )}
-        </ScrollView>
+        </KeyboardAwareScrollViewCompat>
       </View>
     </Modal>
   );

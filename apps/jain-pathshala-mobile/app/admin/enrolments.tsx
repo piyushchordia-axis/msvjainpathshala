@@ -14,6 +14,7 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { useAdminEnrolments, useEnrolmentAction } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
+import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 const FILTERS = [
@@ -96,7 +97,11 @@ function RejectSheet({
             </Text>
           </Pressable>
         </View>
-        <ScrollView contentContainerStyle={{ padding: 18, gap: 14, paddingBottom: 40 }}>
+        <KeyboardAwareScrollViewCompat
+          contentContainerStyle={{ padding: 18, gap: 14, paddingBottom: 40 }}
+          bottomOffset={20}
+          keyboardShouldPersistTaps="handled"
+        >
           <Body muted style={{ fontSize: 12, lineHeight: 22 }}>
             {hi
               ? `कारण * (कम से कम ${REJECT_REASON_MIN} अक्षर) — अभिभावक को दिखेगा`
@@ -163,7 +168,7 @@ function RejectSheet({
             disabled={!valid || busy}
             loading={busy}
           />
-        </ScrollView>
+        </KeyboardAwareScrollViewCompat>
       </View>
     </Modal>
   );

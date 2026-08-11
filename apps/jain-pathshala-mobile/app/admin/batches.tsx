@@ -3,7 +3,6 @@ import {
   Alert,
   Modal,
   Pressable,
-  ScrollView,
   Text,
   TextInput,
   View,
@@ -22,6 +21,7 @@ import { formatTimeRange } from "@/lib/format";
 import { AGE_GROUPS, formatAgeGroup, formatAgeGroups } from "@workspace/api-zod";
 import { AppHeader } from "@/components/AppHeader";
 import { CentreSwitcher, usePersistedCentreId } from "@/components/CentreSwitcher";
+import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 import { ApiError } from "@/lib/api";
 
@@ -232,8 +232,9 @@ function CreateBatchModal({
             </Text>
           </Pressable>
         </View>
-        <ScrollView
+        <KeyboardAwareScrollViewCompat
           contentContainerStyle={{ padding: 18, paddingBottom: 40 }}
+          bottomOffset={20}
           keyboardShouldPersistTaps="handled"
         >
           <FieldLabel>{hi ? "केंद्र *" : "Centre *"}</FieldLabel>
@@ -326,7 +327,7 @@ function CreateBatchModal({
             loading={createMut.isPending}
             style={{ marginTop: 8 }}
           />
-        </ScrollView>
+        </KeyboardAwareScrollViewCompat>
       </View>
     </Modal>
   );

@@ -6,7 +6,6 @@ import {
   Platform,
   Pressable,
   RefreshControl,
-  ScrollView,
   Text,
   TextInput,
   View,
@@ -21,6 +20,7 @@ import {
   useCreateStudentAbsence,
   useStudentAbsences,
 } from "@/lib/queries";
+import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import {
   buildMonthDayCells,
   buildMonthListEntries,
@@ -146,7 +146,11 @@ function NotifyLeaveModal({
           </Pressable>
         </View>
 
-        <ScrollView contentContainerStyle={{ padding: 18, paddingBottom: 40 }}>
+        <KeyboardAwareScrollViewCompat
+          contentContainerStyle={{ padding: 18, paddingBottom: 40 }}
+          bottomOffset={20}
+          keyboardShouldPersistTaps="handled"
+        >
           <Body muted style={{ marginBottom: 14, lineHeight: 22 }}>
             {hi
               ? "गुरुजी को पहले से बता दें — उस दिन उपस्थिति में क्षमा के रूप में दिख सकता है।"
@@ -189,7 +193,7 @@ function NotifyLeaveModal({
             onPress={submit}
             loading={create.isPending}
           />
-        </ScrollView>
+        </KeyboardAwareScrollViewCompat>
       </View>
     </Modal>
   );
