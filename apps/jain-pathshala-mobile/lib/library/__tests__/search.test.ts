@@ -129,6 +129,7 @@ describe("collectFtsRows", () => {
               name_hi: null,
               name_gu: null,
               order_index: 0,
+              content_version: 1,
               is_published: true,
               items: [
                 {
