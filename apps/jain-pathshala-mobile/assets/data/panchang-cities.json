@@ -1,0 +1,98 @@
+[
+  {
+    "key": "AMD",
+    "name_en": "Ahmedabad",
+    "name_hi": "अहमदाबाद",
+    "lat": 23.0225,
+    "lng": 72.5714,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "key": "MUM",
+    "name_en": "Mumbai",
+    "name_hi": "मुंबई",
+    "lat": 19.076,
+    "lng": 72.8777,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "key": "IDR",
+    "name_en": "Indore",
+    "name_hi": "इंदौर",
+    "lat": 22.7196,
+    "lng": 75.8577,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "key": "PNQ",
+    "name_en": "Pune",
+    "name_hi": "पुणे",
+    "lat": 18.5204,
+    "lng": 73.8567,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "key": "STV",
+    "name_en": "Surat",
+    "name_hi": "सूरत",
+    "lat": 21.1702,
+    "lng": 72.8311,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "key": "JAI",
+    "name_en": "Jaipur",
+    "name_hi": "जयपुर",
+    "lat": 26.9124,
+    "lng": 75.7873,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "key": "DEL",
+    "name_en": "Delhi",
+    "name_hi": "दिल्ली",
+    "lat": 28.6139,
+    "lng": 77.209,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "key": "BLR",
+    "name_en": "Bengaluru",
+    "name_hi": "बेंगलुरु",
+    "lat": 12.9716,
+    "lng": 77.5946,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "key": "NAG",
+    "name_en": "Nagpur",
+    "name_hi": "नागपुर",
+    "lat": 21.1458,
+    "lng": 79.0882,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "key": "RAJ",
+    "name_en": "Rajkot",
+    "name_hi": "राजकोट",
+    "lat": 22.3039,
+    "lng": 70.8022,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "key": "UDR",
+    "name_en": "Udaipur",
+    "name_hi": "उदयपुर",
+    "lat": 24.5854,
+    "lng": 73.7125,
+    "timezone": "Asia/Kolkata"
+  },
+  {
+    "key": "HYD",
+    "name_en": "Hyderabad",
+    "name_hi": "हैदराबाद",
+    "lat": 17.385,
+    "lng": 78.4867,
+    "timezone": "Asia/Kolkata"
+  }
+]

@@ -98,8 +98,10 @@ export const EXAM_QUESTION_TYPES = ["single_choice", "multi_choice", "text"] as 
 export const NOTICE_AUDIENCES = ["batch", "centre", "city", "state", "national", "msv"] as const;
 export const SHIVIR_ATTENDANCE_MODES = ["in_out", "present_only"] as const;
 export const SHIVIR_SCAN_KINDS = ["check_in", "check_out", "present"] as const;
-export const LIBRARY_CONTENT_TYPES = ["pdf", "video", "audio", "image"] as const;
-export const LIBRARY_ACCESS_TIERS = ["public", "student", "msv", "shikshak"] as const;
+/** Section.type drives client rendering — never key UI off section name_*. */
+export const LIBRARY_SECTION_TYPES = ["item_list", "deeplink", "panchang"] as const;
+/** Local-only DownloadedAudio status (not a Postgres enum). */
+export const LIBRARY_DOWNLOAD_STATUSES = ["queued", "downloading", "complete", "failed"] as const;
 // acknowledged = parent mark-done without upload (F1); returned = Guruji sent
 // work back for rework (F9). Both added in migration 0023.
 export const HOMEWORK_STATUSES = [
@@ -197,8 +199,7 @@ export const examAttemptStatusEnum = pgEnum("exam_attempt_status_enum", EXAM_ATT
 export const noticeAudienceEnum = pgEnum("notice_audience_enum", NOTICE_AUDIENCES);
 export const shivirAttendanceModeEnum = pgEnum("shivir_attendance_mode_enum", SHIVIR_ATTENDANCE_MODES);
 export const shivirScanKindEnum = pgEnum("shivir_scan_kind_enum", SHIVIR_SCAN_KINDS);
-export const libraryContentTypeEnum = pgEnum("library_content_type_enum", LIBRARY_CONTENT_TYPES);
-export const libraryAccessTierEnum = pgEnum("library_access_tier_enum", LIBRARY_ACCESS_TIERS);
+export const librarySectionTypeEnum = pgEnum("library_section_type_enum", LIBRARY_SECTION_TYPES);
 export const homeworkStatusEnum = pgEnum("homework_status_enum", HOMEWORK_STATUSES);
 export const serviceRequestStatusEnum = pgEnum("service_request_status_enum", SERVICE_REQUEST_STATUSES);
 export const curriculumLevelEnum = pgEnum("curriculum_level_enum", CURRICULUM_LEVELS);

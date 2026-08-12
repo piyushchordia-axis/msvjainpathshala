@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Text, TextInput, View } from "react-native";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import { bodyFamily, fonts } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
@@ -12,11 +12,14 @@ import { Body, Button, Card, Kicker, Title } from "@/components/ui";
 /**
  * Step 1 of sign-in — collect the +91 number and request a one-time code.
  * Works for every role; the OTP screen routes to the right persona afterwards.
+ * Optional `returnTo` is forwarded so gated flows can resume after verify.
  */
 export default function PhoneScreen() {
   const c = useColors();
   const router = useRouter();
   const { hi } = useLocale();
+  const params = useLocalSearchParams<{ returnTo?: string | string[] }>();
+  const returnTo = Array.isArray(params.returnTo) ? params.returnTo[0] : params.returnTo;
 
   const [digits, setDigits] = useState("");
   const [busy, setBusy] = useState(false);
@@ -40,6 +43,7 @@ export default function PhoneScreen() {
           phone: e164,
           otp_token: res.otp_token,
           dev_code: res.dev_code ?? "",
+          ...(returnTo ? { returnTo } : {}),
         },
       });
     } catch (err) {

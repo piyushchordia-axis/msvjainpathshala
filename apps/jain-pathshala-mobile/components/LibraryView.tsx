@@ -1,194 +1,317 @@
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
-import { Linking, View } from "react-native";
-import { useQuery } from "@tanstack/react-query";
+import { Linking, Pressable, TextInput, View } from "react-native";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { router, type Href } from "expo-router";
+import type { LibrarySectionDto } from "@workspace/api-zod";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { apiGet, apiPost } from "@/lib/api";
+import { apiGet } from "@/lib/api";
 import { safeHref } from "@/lib/safe-url";
+import { pickLocalized, type LibraryTreePayload } from "@/lib/library/helpers";
+import {
+  ensureLibrarySearchIndex,
+  preferredLibraryTree,
+  searchLibrary,
+} from "@/lib/library/search-index";
+import type { SearchHit } from "@/lib/library/search-query";
 import { AppHeader } from "@/components/AppHeader";
-import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
-
-const ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
-  pdf: "document-text-outline",
-  video: "play-circle-outline",
-  audio: "musical-notes-outline",
-  image: "image-outline",
-};
-
-export interface LibraryFeedItem {
-  id: string;
-  content_type: "pdf" | "video" | "audio" | "image";
-  title_en: string;
-  title_hi?: string | null;
-  description_en?: string | null;
-  description_hi?: string | null;
-  embed_url?: string | null;
-  file_url?: string | null;
-  /** Member feed resolves a single delivery URL; the public feed does not. */
-  url?: string | null;
-  access_tier?: "public" | "student" | "msv" | "shikshak";
-}
-
-const TIER_LABEL: Record<string, { en: string; hi: string }> = {
-  student: { en: "Members", hi: "सदस्य" },
-  msv: { en: "MSV", hi: "MSV" },
-  shikshak: { en: "Teachers", hi: "शिक्षक" },
-};
-
-function actionLabel(type: string, hi: boolean): string {
-  if (type === "video") return hi ? "देखें" : "Watch";
-  if (type === "audio") return hi ? "सुनें" : "Listen";
-  if (type === "pdf") return hi ? "पढ़ें" : "Read";
-  return hi ? "खोलें" : "Open";
-}
-
-function deliveryUrl(it: LibraryFeedItem): string | null {
-  return it.url ?? it.file_url ?? it.embed_url ?? null;
-}
+import { LibrarySearchResults } from "@/components/LibrarySearchResults";
+import { Body, Card, Row, Screen, StateView, Title } from "@/components/ui";
 
 export type LibraryViewProps = {
-  /** Persona-specific header chrome (e.g. student profile avatar). */
   headerRight?: ReactNode;
 };
 
+/** In-app destination for a section after (optional) login. */
+export function sectionDestination(section: LibrarySectionDto): string | null {
+  if (section.type === "item_list") return `/library/${section.id}`;
+  if (section.type === "panchang") return "/panchang";
+  if (section.type === "deeplink") {
+    const target = section.deeplink_target?.trim();
+    if (target?.startsWith("/") && !target.startsWith("//")) return target;
+  }
+  return null;
+}
+
+function openSection(section: LibrarySectionDto, guest: boolean) {
+  // Panchang is never login-gated (product rule).
+  const needsLogin = section.requires_login && guest && section.type !== "panchang";
+
+  if (needsLogin) {
+    const returnTo = sectionDestination(section);
+    router.push({
+      pathname: "/auth/phone",
+      params: returnTo ? { returnTo } : {},
+    } as never);
+    return;
+  }
+
+  // Behaviour is driven only by type — never by name or key.
+  if (section.type === "item_list") {
+    router.push(`/library/${section.id}` as Href);
+    return;
+  }
+  if (section.type === "panchang") {
+    router.push("/panchang" as Href);
+    return;
+  }
+  if (section.type === "deeplink") {
+    const target = section.deeplink_target?.trim();
+    if (!target) return;
+    if (target.startsWith("/")) {
+      router.push(target as Href);
+      return;
+    }
+    const safe = safeHref(target);
+    if (safe) void Linking.openURL(safe);
+  }
+}
+
+function navigateSearchHit(hit: SearchHit) {
+  if (hit.resultKind === "panchang") {
+    router.push("/panchang" as Href);
+    return;
+  }
+  if (!hit.sectionId) return;
+  if (hit.isTextMatch && hit.itemId) {
+    router.push(`/library/${hit.sectionId}?itemId=${hit.itemId}` as Href);
+    return;
+  }
+  router.push(`/library/${hit.sectionId}` as Href);
+}
+
 /**
- * Shared digital-library screen for guest / parent / student.
- * Authed callers hit the tiered member feed (and log opens via POST /:id/access);
- * guests fall back to the public feed. Tier pills are signposting — the feed
- * already filters what each caller can see.
+ * Shared digital-library home for guest / parent / student.
+ * Tree is persisted offline via query-persist allow-list on ["library", …].
  */
 export function LibraryView({ headerRight }: LibraryViewProps = {}) {
   const c = useColors();
   const { hi } = useLocale();
   const { user } = useAuth();
   const authed = !!user;
-  const [openError, setOpenError] = useState(false);
+  const qc = useQueryClient();
+
+  const [searchText, setSearchText] = useState("");
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
 
   const { data, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ["library", authed ? "member" : "public"],
     queryFn: () =>
       authed
-        ? apiGet<{ items: LibraryFeedItem[] }>("/v1/library?limit=80")
-        : apiGet<{ items: LibraryFeedItem[] }>("/v1/public/library?limit=60"),
+        ? apiGet<LibraryTreePayload>("/v1/library")
+        : apiGet<LibraryTreePayload>("/v1/public/library"),
   });
-  const items = data?.items ?? [];
+  const sections = data?.sections ?? [];
 
-  async function open(item: LibraryFeedItem) {
-    const fallback = deliveryUrl(item);
-    if (authed) {
-      try {
-        const res = await apiPost<{ url?: string }>(`/v1/library/${item.id}/access`, {});
-        const safe = safeHref(res?.url ?? fallback);
-        if (!safe) {
-          setOpenError(true);
-          return;
-        }
-        await Linking.openURL(safe);
-        return;
-      } catch {
-        /* fall through to the fallback URL below */
-      }
-    }
-    const safeFallback = safeHref(fallback);
-    if (!safeFallback) {
-      setOpenError(true);
+  // Bootstrap FTS if empty but tree cache is already populated (race before sync).
+  useEffect(() => {
+    const tree = preferredLibraryTree(qc) ?? data;
+    if (!tree?.sections?.length) return;
+    void ensureLibrarySearchIndex(tree).catch(() => {
+      /* best-effort */
+    });
+  }, [qc, data]);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQuery(searchText.trim()), 200);
+    return () => clearTimeout(t);
+  }, [searchText]);
+
+  useEffect(() => {
+    if (!debouncedQuery) {
+      setHits([]);
+      setSearchLoading(false);
       return;
     }
-    await Linking.openURL(safeFallback);
-  }
+    let cancelled = false;
+    setSearchLoading(true);
+    void searchLibrary(debouncedQuery, hi)
+      .then((rows) => {
+        if (!cancelled) setHits(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setHits([]);
+      })
+      .finally(() => {
+        if (!cancelled) setSearchLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [debouncedQuery, hi]);
+
+  const onPressHit = useCallback((hit: SearchHit) => {
+    navigateSearchHit(hit);
+  }, []);
+
+  const searching = debouncedQuery.length > 0;
+
+  const downloadsBtn = (
+    <Pressable
+      onPress={() => router.push("/library/downloads" as Href)}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={hi ? "डाउनलोड" : "Downloads"}
+      style={{
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: c.muted,
+      }}
+    >
+      <Ionicons name="download-outline" size={22} color={c.secondary} />
+    </Pressable>
+  );
+
+  const right = (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+      {downloadsBtn}
+      {headerRight ?? null}
+    </View>
+  );
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <AppHeader
         title={hi ? "पुस्तकालय" : "Digital library"}
-        subtitle={hi ? "ग्रंथ, वीडियो और श्रव्य सामग्री" : "Scriptures, videos and audio resources"}
-        right={headerRight}
+        subtitle={hi ? "ग्रंथ, स्तवन और संसाधन" : "Scriptures, stavans and resources"}
+        right={right}
       />
+      <View
+        style={{
+          paddingHorizontal: 16,
+          paddingTop: 8,
+          paddingBottom: 8,
+          backgroundColor: c.background,
+          borderBottomWidth: 1,
+          borderBottomColor: c.border,
+        }}
+      >
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 8,
+            backgroundColor: c.muted,
+            borderRadius: c.radius,
+            paddingHorizontal: 12,
+            minHeight: 44,
+          }}
+        >
+          <Ionicons name="search-outline" size={20} color={c.mutedForeground} />
+          <TextInput
+            value={searchText}
+            onChangeText={setSearchText}
+            placeholder={hi ? "खोजें…" : "Search…"}
+            placeholderTextColor={c.mutedForeground}
+            autoCorrect={false}
+            autoCapitalize="none"
+            returnKeyType="search"
+            accessibilityLabel={hi ? "पुस्तकालय खोज" : "Library search"}
+            style={{
+              flex: 1,
+              fontSize: 16,
+              lineHeight: 22,
+              color: c.foreground,
+              paddingVertical: 10,
+            }}
+          />
+          {searchText.length > 0 ? (
+            <Pressable
+              onPress={() => setSearchText("")}
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={hi ? "साफ़ करें" : "Clear"}
+            >
+              <Ionicons name="close-circle" size={20} color={c.mutedForeground} />
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
       <Screen refreshing={isRefetching} onRefresh={refetch} contentStyle={{ paddingBottom: 110 }}>
-        {isLoading ? (
+        {searching ? (
+          <LibrarySearchResults
+            hits={hits}
+            loading={searchLoading}
+            onPressHit={onPressHit}
+          />
+        ) : isLoading ? (
           <StateView status="loading" emptyText="" />
-        ) : isError || openError ? (
+        ) : isError ? (
           <StateView
             status="error"
             emptyText=""
-            errorText={
-              openError
-                ? hi
-                  ? "यह लिंक खोला नहीं जा सकता।"
-                  : "That link could not be opened."
-                : hi
-                  ? "पुस्तकालय लोड नहीं हुआ।"
-                  : "Could not load the library."
-            }
-            onRetry={() => {
-              setOpenError(false);
-              void refetch();
-            }}
+            errorText={hi ? "पुस्तकालय लोड नहीं हुआ।" : "Could not load the library."}
+            onRetry={() => void refetch()}
             retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
           />
-        ) : items.length === 0 ? (
+        ) : sections.length === 0 ? (
           <StateView
             status="empty"
-            emptyText={hi ? "अभी कोई संसाधन नहीं है।" : "No resources available yet."}
+            emptyText={hi ? "अभी कोई खंड नहीं है।" : "No sections available yet."}
           />
         ) : (
-          items.map((item) => {
-            const title = hi ? (item.title_hi ?? item.title_en) : item.title_en;
-            const desc = hi
-              ? (item.description_hi ?? item.description_en)
-              : item.description_en;
-            const icon = ICONS[item.content_type] ?? "document-outline";
-            const url = deliveryUrl(item);
-            const tier =
-              item.access_tier && item.access_tier !== "public"
-                ? TIER_LABEL[item.access_tier]
-                : null;
+          sections.map((section) => {
+            const title = pickLocalized(hi, section.name_en, section.name_hi, section.name_gu);
+            const showLoginHint =
+              section.requires_login && !authed && section.type !== "panchang";
+            const chevron = showLoginHint
+              ? "lock-closed-outline"
+              : section.type === "deeplink"
+                ? "open-outline"
+                : section.type === "panchang"
+                  ? "calendar-outline"
+                  : "chevron-forward";
             return (
-              <Card key={item.id}>
-                <Row style={{ gap: 12 }}>
-                  <View
-                    style={{
-                      width: 44,
-                      height: 44,
-                      borderRadius: 10,
-                      backgroundColor: c.accent,
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <Ionicons name={icon} size={22} color={c.primary} />
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Title style={{ fontSize: 16, lineHeight: 22 }}>{title}</Title>
-                    <Row style={{ marginTop: 4, gap: 6, flexWrap: "wrap" }}>
-                      <Pill label={item.content_type.toUpperCase()} />
-                      {tier ? (
-                        <Pill label={hi ? tier.hi : tier.en} tone="warning" />
+              <Pressable
+                key={section.id}
+                onPress={() => openSection(section, !authed)}
+                accessibilityRole="button"
+                accessibilityLabel={title}
+              >
+                <Card>
+                  <Row style={{ gap: 12, alignItems: "center" }}>
+                    <View
+                      style={{
+                        width: 44,
+                        height: 44,
+                        borderRadius: 10,
+                        backgroundColor: c.accent,
+                        alignItems: "center",
+                        justifyContent: "center",
+                      }}
+                    >
+                      <Ionicons
+                        name={
+                          section.type === "panchang"
+                            ? "calendar-outline"
+                            : section.type === "deeplink"
+                              ? "link-outline"
+                              : "library-outline"
+                        }
+                        size={22}
+                        color={c.primary}
+                      />
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Title style={{ fontSize: 16, lineHeight: 22 }}>{title}</Title>
+                      {showLoginHint ? (
+                        <Body muted style={{ marginTop: 4, fontSize: 13, lineHeight: 22 }}>
+                          {hi ? "लॉगिन आवश्यक" : "Sign in required"}
+                        </Body>
                       ) : null}
-                    </Row>
-                  </View>
-                </Row>
-                {desc ? (
-                  <Body muted style={{ marginTop: 10, lineHeight: 22 }}>
-                    {desc}
-                  </Body>
-                ) : null}
-                {url ? (
-                  <Button
-                    label={actionLabel(item.content_type, hi)}
-                    icon="open-outline"
-                    variant="outline"
-                    onPress={() => void open(item)}
-                    style={{ marginTop: 12 }}
-                  />
-                ) : (
-                  <Body muted style={{ marginTop: 12, fontSize: 13, lineHeight: 22 }}>
-                    {hi ? "सामग्री शीघ्र उपलब्ध होगी।" : "Content coming soon."}
-                  </Body>
-                )}
-              </Card>
+                    </View>
+                    <Ionicons name={chevron} size={20} color={c.mutedForeground} />
+                  </Row>
+                </Card>
+              </Pressable>
             );
           })
         )}

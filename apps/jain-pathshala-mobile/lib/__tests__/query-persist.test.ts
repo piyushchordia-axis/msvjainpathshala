@@ -14,6 +14,11 @@ describe("query persist allow-list", () => {
     ).toBe(true);
   });
 
+  it("persists library tree keys (public + member)", () => {
+    expect(shouldPersistQueryKey(["library", "public"])).toBe(true);
+    expect(shouldPersistQueryKey(["library", "member"])).toBe(true);
+  });
+
   it("does not persist unrelated queries", () => {
     expect(shouldPersistQueryKey(["public", "centres"])).toBe(false);
     expect(shouldPersistQueryKey(["me", "punya", "student-1"])).toBe(false);

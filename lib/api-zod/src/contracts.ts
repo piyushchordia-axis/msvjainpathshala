@@ -143,7 +143,13 @@ export function formatAgeGroups(codes: string[] | null | undefined, lang: "en" |
 
 export const enrolmentStatusSchema = z.enum(["pending", "approved", "rejected", "waitlisted"]);
 export const studentStatusSchema = z.enum(["active", "inactive"]);
-export const libraryContentTypeSchema = z.enum(["pdf", "video", "audio", "image"]);
+export const librarySectionTypeSchema = z.enum(["item_list", "deeplink", "panchang"]);
+export const libraryDownloadStatusSchema = z.enum([
+  "queued",
+  "downloading",
+  "complete",
+  "failed",
+]);
 
 export const ADMIN_PANEL_ROLES: Role[] = [
   "super_admin",
@@ -519,15 +525,96 @@ export const noticeWriteSchema = z
 export type NoticeWrite = z.infer<typeof noticeWriteSchema>;
 
 export const libraryItemSchema = z.object({
-  id: z.string(),
-  content_type: libraryContentTypeSchema,
+  id: z.string().uuid(),
+  section_id: z.string().uuid(),
+  subsection_id: z.string().uuid().nullable(),
+  item_code: z.string(),
   title_en: z.string(),
   title_hi: z.string().nullable(),
-  description_en: z.string().nullable(),
-  description_hi: z.string().nullable(),
-  embed_url: z.string().nullable(),
+  title_gu: z.string().nullable(),
+  order_index: z.number().int(),
+  audio_url: z.string().nullable(),
+  audio_size_bytes: z.number().int().nullable(),
+  audio_duration_sec: z.number().int().nullable(),
+  youtube_url: z.string().nullable(),
+  text_content_en: z.string().nullable(),
+  text_content_hi: z.string().nullable(),
+  text_content_gu: z.string().nullable(),
+  content_version: z.number().int(),
+  is_published: z.boolean(),
 });
-export type PublicLibraryItem = z.infer<typeof libraryItemSchema>;
+export type LibraryItemDto = z.infer<typeof libraryItemSchema>;
+
+export const librarySubsectionSchema = z.object({
+  id: z.string().uuid(),
+  section_id: z.string().uuid(),
+  name_en: z.string(),
+  name_hi: z.string().nullable(),
+  name_gu: z.string().nullable(),
+  order_index: z.number().int(),
+  is_published: z.boolean(),
+  content_version: z.number().int(),
+  items: z.array(libraryItemSchema).optional(),
+});
+export type LibrarySubsectionDto = z.infer<typeof librarySubsectionSchema>;
+
+export const libraryReorderSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1),
+});
+export type LibraryReorder = z.infer<typeof libraryReorderSchema>;
+
+export const librarySectionWriteSchema = z.object({
+  key: z.string().min(1).max(80),
+  name_en: z.string().min(1),
+  name_hi: z.string().nullable().optional(),
+  name_gu: z.string().nullable().optional(),
+  icon_url: z.string().nullable().optional(),
+  type: librarySectionTypeSchema,
+  deeplink_target: z.string().nullable().optional(),
+  requires_login: z.boolean().optional(),
+});
+export type LibrarySectionWrite = z.infer<typeof librarySectionWriteSchema>;
+
+export const libraryItemWriteSchema = z.object({
+  section_id: z.string().uuid(),
+  subsection_id: z.string().uuid().nullable().optional(),
+  item_code: z.string().min(1).max(80),
+  title_en: z.string().min(1),
+  title_hi: z.string().nullable().optional(),
+  title_gu: z.string().nullable().optional(),
+  youtube_url: z.string().nullable().optional(),
+  text_content_en: z.string().nullable().optional(),
+  text_content_hi: z.string().nullable().optional(),
+  text_content_gu: z.string().nullable().optional(),
+});
+export type LibraryItemWrite = z.infer<typeof libraryItemWriteSchema>;
+
+export const librarySectionSchema = z.object({
+  id: z.string().uuid(),
+  key: z.string(),
+  name_en: z.string(),
+  name_hi: z.string().nullable(),
+  name_gu: z.string().nullable(),
+  icon_url: z.string().nullable(),
+  order_index: z.number().int(),
+  type: librarySectionTypeSchema,
+  deeplink_target: z.string().nullable(),
+  requires_login: z.boolean(),
+  is_published: z.boolean(),
+  content_version: z.number().int(),
+  subsections: z.array(librarySubsectionSchema).optional(),
+  items: z.array(libraryItemSchema).optional(),
+});
+export type LibrarySectionDto = z.infer<typeof librarySectionSchema>;
+
+export const libraryVersionManifestSchema = z.object({
+  sections: z.record(z.string().uuid(), z.number().int()),
+  items: z.record(z.string().uuid(), z.number().int()),
+});
+export type LibraryVersionManifest = z.infer<typeof libraryVersionManifestSchema>;
+
+/** @deprecated Use LibrarySectionDto / library tree — kept as alias during rebuild. */
+export type PublicLibraryItem = LibraryItemDto;
 
 export const galleryItemSchema = z.object({
   id: z.string(),

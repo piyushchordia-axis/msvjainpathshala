@@ -136,6 +136,10 @@ app.get(/^\/uploads\/.+/, async (req: Request, res) => {
   res.setHeader("Content-Type", MIME_BY_EXT[ext] ?? "application/octet-stream");
   res.setHeader("X-Content-Type-Options", "nosniff");
   res.setHeader("Cache-Control", "private, max-age=3600");
+  // Library audio should stream/play inline, not force a Save As download.
+  if (key.startsWith("library/") && (ext === "mp3" || ext === "mpeg")) {
+    res.setHeader("Content-Disposition", `inline; filename="${key.split("/").pop() ?? "audio.mp3"}"`);
+  }
   let stream;
   try {
     stream = storage.getStream(key);

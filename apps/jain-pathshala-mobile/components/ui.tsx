@@ -282,6 +282,7 @@ export function Button({
   disabled,
   loading,
   icon,
+  compact,
   style,
 }: {
   label: string;
@@ -290,6 +291,8 @@ export function Button({
   disabled?: boolean;
   loading?: boolean;
   icon?: keyof typeof Ionicons.glyphMap;
+  /** Tighter padding for dense rows (e.g. library Audio|Text|Video). */
+  compact?: boolean;
   style?: StyleProp<ViewStyle>;
 }) {
   const c = useColors();
@@ -325,16 +328,17 @@ export function Button({
       <Animated.View
         style={[
           {
+            width: "100%",
             flexDirection: "row",
             alignItems: "center",
             justifyContent: "center",
-            gap: 8,
+            gap: compact ? 6 : 8,
             backgroundColor: p.bg,
             borderColor: p.border ?? "transparent",
             borderWidth: p.border ? 1 : 0,
             borderRadius: c.radius,
-            paddingVertical: 13,
-            paddingHorizontal: 18,
+            paddingVertical: compact ? 8 : 13,
+            paddingHorizontal: compact ? 8 : 18,
             opacity: isDisabled ? 0.5 : 1,
           },
           animStyle,
@@ -344,8 +348,18 @@ export function Button({
           <ActivityIndicator color={p.fg} size="small" />
         ) : (
           <>
-            {icon ? <Ionicons name={icon} size={18} color={p.fg} /> : null}
-            <Text style={{ fontFamily: bodyFamily(hi, "semibold"), fontSize: 15, color: p.fg }}>{label}</Text>
+            {icon ? <Ionicons name={icon} size={compact ? 16 : 18} color={p.fg} /> : null}
+            <Text
+              numberOfLines={1}
+              style={{
+                fontFamily: bodyFamily(hi, "semibold"),
+                fontSize: compact ? 13 : 15,
+                color: p.fg,
+                flexShrink: 1,
+              }}
+            >
+              {label}
+            </Text>
           </>
         )}
       </Animated.View>

@@ -18,6 +18,7 @@
       "bundleIdentifier": "org.jainpathshala.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
+        "UIBackgroundModes": ["audio"],
         "NSMicrophoneUsageDescription": "Jain Pathshala uses the microphone to record audio proof for niyam submissions.",
         "NSCameraUsageDescription": "Jain Pathshala uses the camera to capture photo or video proof for niyam submissions and to scan ID-card QR codes.",
         "NSPhotoLibraryUsageDescription": "Jain Pathshala needs photo library access to attach proof media for niyam submissions.",
@@ -38,7 +39,10 @@
         "android.permission.CAMERA",
         "android.permission.RECORD_AUDIO",
         "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.POST_NOTIFICATIONS"
       ]
     },
     "web": {
@@ -55,6 +59,12 @@
       "expo-web-browser",
       "expo-notifications",
       "expo-audio",
+      [
+        "expo-sqlite",
+        {
+          "enableFTS": true
+        }
+      ],
       [
         "expo-image-picker",
         {

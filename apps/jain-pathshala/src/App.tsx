@@ -9,6 +9,7 @@ import { LocaleProvider } from "@/lib/locale-context";
 const PublicRoutes = lazy(() => import("@/routes/PublicRoutes"));
 const AdminRoutes = lazy(() => import("@/routes/AdminRoutes"));
 const LoginPage = lazy(() => import("@/pages/admin/LoginPage"));
+const PublicLoginPage = lazy(() => import("@/pages/public/PublicLoginPage"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -33,6 +34,7 @@ function Router() {
     <Suspense fallback={<RouteFallback />}>
       <Switch>
         <Route path="/admin/login" component={LoginPage} />
+        <Route path="/login" component={PublicLoginPage} />
         <Route path="/admin" component={AdminRoutes} />
         <Route path="/admin/*?" component={AdminRoutes} />
         <Route component={PublicRoutes} />

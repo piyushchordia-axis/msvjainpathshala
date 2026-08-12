@@ -6,14 +6,13 @@ import {
   states,
   batches,
   shivir_events,
-  library_items,
 } from "@workspace/db";
-import { and, asc, count, desc, eq, gte, isNull, sql } from "drizzle-orm";
+import { and, asc, count, eq, gte, sql } from "drizzle-orm";
 import { ok, fail } from "../../lib/envelope";
-import { clampLimit } from "../../lib/route-helpers";
+import { buildLibraryTree, buildLibrarySection } from "../../lib/library-tree";
+import { buildLibraryManifest } from "../../lib/library-manifest";
 
 const router: IRouter = Router();
-
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -157,31 +156,27 @@ router.get("/shivirs/:id", async (req: Request, res: Response) => {
   ok(res, shivir);
 });
 
-/* GET /v1/public/library?limit= */
-router.get("/library", async (req: Request, res: Response) => {
-  const limit = clampLimit(req.query.limit, 60, 200);
-  const rows = await db
-    .select({
-      id: library_items.id,
-      content_type: library_items.content_type,
-      title_en: library_items.title_en,
-      title_hi: library_items.title_hi,
-      description_en: library_items.description_en,
-      description_hi: library_items.description_hi,
-      embed_url: library_items.embed_url,
-    })
-    .from(library_items)
-    .where(
-      and(
-        isNull(library_items.deleted_at),
-        eq(library_items.is_published, true),
-        eq(library_items.access_tier, "public"),
-      ),
-    )
-    .orderBy(desc(library_items.created_at))
-    .limit(limit);
+/* GET /v1/public/library/manifest — published version maps for guests. */
+router.get("/library/manifest", async (_req: Request, res: Response) => {
+  const manifest = await buildLibraryManifest({ guestOnly: true });
+  ok(res, manifest);
+});
 
-  ok(res, { items: rows }, { count: rows.length });
+/* GET /v1/public/library/sections/:id — one published section (gated = shell). */
+router.get("/library/sections/:id", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  const section = await buildLibrarySection(id, { guestOnly: true });
+  if (!section) {
+    fail(res, 404, "ERR_NOT_FOUND", "That library section could not be found.");
+    return;
+  }
+  ok(res, { section });
+});
+
+/* GET /v1/public/library — published tree for guests (gated sections as shells). */
+router.get("/library", async (_req: Request, res: Response) => {
+  const sections = await buildLibraryTree({ guestOnly: true });
+  ok(res, { sections }, { count: sections.length });
 });
 
 void count;

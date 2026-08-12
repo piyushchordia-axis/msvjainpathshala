@@ -18,7 +18,6 @@ import {
   msv_enrolments,
   notices,
   gallery_items,
-  library_items,
   shivir_events,
   niyams,
   niyam_submissions,
@@ -253,26 +252,8 @@ router.post("/gallery/:id/unfeature", async (req: Request, res: Response) => {
   ok(res, { id: item.id, featured_gallery: false, is_featured: false });
 });
 
-/* GET /v1/admin/library */
-router.get("/library", async (req: Request, res: Response) => {
-  const limit = clampLimit(req.query.limit, 100, 300);
-  const rows = await db
-    .select({
-      id: library_items.id,
-      content_type: library_items.content_type,
-      title_en: library_items.title_en,
-      title_hi: library_items.title_hi,
-      access_tier: library_items.access_tier,
-      is_published: library_items.is_published,
-      created_at: library_items.created_at,
-    })
-    .from(library_items)
-    .where(isNull(library_items.deleted_at))
-    .orderBy(desc(library_items.created_at))
-    .limit(limit);
-  const items = rows.map((r) => ({ ...r, created_at: r.created_at.toISOString() }));
-  ok(res, { items }, { count: items.length });
-});
+/* GET /v1/admin/library — moved to admin-library router (draft/publish CRUD). */
+/* (stub removed) */
 
 /* GET /v1/admin/shivirs */
 router.get("/shivirs", async (req: Request, res: Response) => {

@@ -119,6 +119,11 @@ export default function AdminRoutes() {
           <Route path="/admin/notices" component={NoticesAdminPage} />
           <Route path="/admin/gallery" component={GalleryAdminPage} />
           <Route path="/admin/media-curation" component={MediaCurationPage} />
+          <Route path="/admin/library/items/:id" component={AdminLibraryPage} />
+          <Route path="/admin/library/items" component={AdminLibraryPage} />
+          <Route path="/admin/library/audio" component={AdminLibraryPage} />
+          <Route path="/admin/library/panchang" component={AdminLibraryPage} />
+          <Route path="/admin/library/media" component={AdminLibraryPage} />
           <Route path="/admin/library" component={AdminLibraryPage} />
           <Route path="/admin/donations" component={DonationsPage} />
           <Route path="/admin/service-requests" component={ServiceRequestsAdminPage} />

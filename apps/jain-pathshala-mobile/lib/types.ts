@@ -17,6 +17,9 @@ export type {
   ShivirDetail,
   NoticeItem,
   PublicLibraryItem,
+  LibrarySectionDto,
+  LibrarySubsectionDto,
+  LibraryItemDto,
   PublicGalleryItem,
   // Admin
   OverviewPayload,

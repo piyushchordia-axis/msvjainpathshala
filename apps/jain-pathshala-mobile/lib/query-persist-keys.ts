@@ -16,5 +16,8 @@ export function shouldPersistQueryKey(queryKey: readonly unknown[]): boolean {
   if (root === "me" && segment === "attendance") {
     return true;
   }
+  if (root === "library") {
+    return true;
+  }
   return false;
 }

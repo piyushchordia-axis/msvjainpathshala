@@ -7,6 +7,9 @@ import ShivirsPage from "@/pages/public/ShivirsPage";
 import ShivirDetailPage from "@/pages/public/ShivirDetailPage";
 import NoticesPage from "@/pages/public/NoticesPage";
 import LibraryPage from "@/pages/public/LibraryPage";
+import LibrarySectionPage from "@/pages/public/LibrarySectionPage";
+import LibraryItemPage from "@/pages/public/LibraryItemPage";
+import PanchangPage from "@/pages/public/PanchangPage";
 import GalleryPage from "@/pages/public/GalleryPage";
 import { AboutPage, MsvPage } from "@/pages/public/PublicStubs";
 import ContactPage from "@/pages/public/ContactPage";
@@ -44,6 +47,9 @@ export default function PublicRoutes() {
         <Route path="/shivirs/:id" component={ShivirDetailPage} />
         <Route path="/notices" component={NoticesPage} />
         <Route path="/library" component={LibraryPage} />
+        <Route path="/library/item/:id" component={LibraryItemPage} />
+        <Route path="/library/:id" component={LibrarySectionPage} />
+        <Route path="/panchang" component={PanchangPage} />
         <Route path="/gallery" component={GalleryPage} />
         <Route path="/about" component={AboutPage} />
         <Route path="/contact" component={ContactPage} />

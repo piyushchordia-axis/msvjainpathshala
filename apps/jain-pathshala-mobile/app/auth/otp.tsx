@@ -8,6 +8,7 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiPost } from "@/lib/api";
 import type { OtpVerifyResponse } from "@/lib/auth";
+import { safeReturnTo } from "@/lib/auth-return";
 import { routeForRole } from "@/lib/roles";
 import { Body, Button, Card, Kicker, Title } from "@/components/ui";
 
@@ -17,7 +18,8 @@ function deviceId(): string {
 
 /**
  * Step 2 of sign-in — verify the 6-digit code, then route to the persona home
- * that matches the authenticated user's role.
+ * that matches the authenticated user's role — or resume `returnTo` when set
+ * (e.g. gated library section).
  */
 export default function OtpScreen() {
   const c = useColors();
@@ -28,12 +30,14 @@ export default function OtpScreen() {
     phone?: string | string[];
     otp_token?: string | string[];
     dev_code?: string | string[];
+    returnTo?: string | string[];
   }>();
   const first = (v: string | string[] | undefined): string | undefined =>
     Array.isArray(v) ? v[0] : v;
   const phone = first(params.phone);
   const otp_token = first(params.otp_token);
   const dev_code = first(params.dev_code);
+  const returnTo = safeReturnTo(first(params.returnTo));
 
   const [otp, setOtp] = useState("");
   const [busy, setBusy] = useState(false);
@@ -42,8 +46,13 @@ export default function OtpScreen() {
   // No valid token means this screen was reached out of order — send the user
   // back to step 1 instead of leaving them on a dead-end Verify button.
   useEffect(() => {
-    if (!otp_token) router.replace("/auth/phone");
-  }, [otp_token, router]);
+    if (!otp_token) {
+      router.replace({
+        pathname: "/auth/phone",
+        params: returnTo ? { returnTo: String(returnTo) } : {},
+      } as never);
+    }
+  }, [otp_token, router, returnTo]);
 
   const otpValid = otp.length === 6;
 
@@ -59,7 +68,7 @@ export default function OtpScreen() {
         device_id: deviceId(),
       });
       await signIn(res.user, res.tokens);
-      router.replace(routeForRole(res.user.role));
+      router.replace(returnTo ?? routeForRole(res.user.role));
     } catch (err) {
       setError(
         err instanceof Error

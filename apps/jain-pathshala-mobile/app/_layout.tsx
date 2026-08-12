@@ -22,11 +22,17 @@ import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client
 import { router, Stack } from "expo-router";
 import type { Href } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { Platform } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { LibraryDownloadProvider } from "@/contexts/LibraryDownloadContext";
+import { LibraryAudioProvider } from "@/contexts/LibraryAudioContext";
+import { LibraryFullPlayer, LibraryMiniPlayer } from "@/components/LibraryMiniPlayer";
+import { LibraryDownloadItemLookup } from "@/components/LibraryDownloadItemLookup";
+import { LibraryVersionSyncLoop } from "@/components/LibraryVersionSyncLoop";
 
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { OfflineSyncLoop } from "@/components/OfflineSyncLoop";
@@ -105,6 +111,11 @@ function RootLayoutNav() {
       <Stack.Screen name="exams" options={{ title: "Exams" }} />
       <Stack.Screen name="service-requests" options={{ title: "My requests" }} />
       <Stack.Screen name="service-request/[id]" options={{ title: "Request" }} />
+      <Stack.Screen name="library/[sectionId]" options={{ title: "Library" }} />
+      <Stack.Screen name="library/item/[itemId]" options={{ title: "Text" }} />
+      <Stack.Screen name="library/downloads" options={{ title: "Downloads" }} />
+      <Stack.Screen name="panchang/index" options={{ title: "Panchang" }} />
+      <Stack.Screen name="panchang/[date]" options={{ title: "Day" }} />
     </Stack>
   );
 }
@@ -116,6 +127,7 @@ export default function RootLayout() {
     Outfit_700Bold,
     Mukta_400Regular,
   });
+  const [queryHydrated, setQueryHydrated] = useState(false);
 
   const [extraFontsLoaded] = useFonts({
     Outfit_500Medium,
@@ -198,14 +210,28 @@ export default function RootLayout() {
   return (
     <SafeAreaProvider>
       <ErrorBoundary>
-        <PersistQueryClientProvider client={queryClient} persistOptions={persistOptions}>
+        <PersistQueryClientProvider
+          client={queryClient}
+          persistOptions={persistOptions}
+          onSuccess={() => setQueryHydrated(true)}
+        >
           <GestureHandlerRootView style={{ flex: 1 }}>
             <KeyboardProvider>
               <LocaleProvider>
                 <AuthProvider>
                   <SessionViewProvider>
-                    <OfflineSyncLoop />
-                    <RootLayoutNav />
+                    <BottomSheetModalProvider>
+                      <LibraryDownloadProvider>
+                        <LibraryAudioProvider>
+                          <OfflineSyncLoop />
+                          <LibraryDownloadItemLookup />
+                          <LibraryVersionSyncLoop hydrated={queryHydrated} />
+                          <RootLayoutNav />
+                          <LibraryMiniPlayer bottomOffset={64} />
+                          <LibraryFullPlayer />
+                        </LibraryAudioProvider>
+                      </LibraryDownloadProvider>
+                    </BottomSheetModalProvider>
                   </SessionViewProvider>
                 </AuthProvider>
               </LocaleProvider>

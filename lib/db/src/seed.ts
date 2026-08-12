@@ -35,6 +35,8 @@ import {
   niyam_submission_media,
   notices,
   shivir_events,
+  library_sections,
+  library_subsections,
   library_items,
   gallery_items,
   settings,
@@ -76,6 +78,7 @@ import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { seedIndoreNetwork } from "./seed-indore";
+import { seedLibraryContent } from "./seed-library-content";
 
 function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
@@ -139,14 +142,14 @@ async function main(): Promise<void> {
       queue_dlq_jobs, queue_stats, donations, donation_campaigns,
       exam_answers, exam_attempts, exam_question_options, exam_questions, online_exams,
       course_subsections, course_sections, courses,
-      gallery_items, library_items, shivir_events, notices,
+      gallery_items, library_items, library_subsections, library_sections, shivir_events, notices,
       niyam_streaks, niyam_submission_media, niyam_submissions, niyams,
       punya_balances, punya_transactions, punya_configs, punya_features, punya_award_limits,
       attendance, sessions, absence_notifications, sync_operations,
       digital_id_cards, msv_enrolments, enrolments, students,
       shikshak_batch_assignments, shikshak_centre_assignments, sanchalak_centre_assignments,
       centre_holidays, batches, centres, entity_code_counters,
-      notice_reads, library_access_logs, settings,
+      notice_reads, settings,
       otp_codes, device_sessions, users,
       cities, states
     restart identity cascade
@@ -983,37 +986,8 @@ async function main(): Promise<void> {
     },
   ]);
 
-  /* ---------------- Library ---------------- */
-  await db.insert(library_items).values([
-    {
-      content_type: "video",
-      title_en: "Introduction to Navkar Mantra",
-      title_hi: "नवकार मंत्र का परिचय",
-      description_en: "A short video explaining the meaning of the Navkar Mantra.",
-      description_hi: "नवकार मंत्र का अर्थ समझाने वाला एक लघु वीडियो।",
-      embed_url: "https://www.youtube.com/embed/dQw4w9WgXcQ",
-      access_tier: "public",
-      is_published: true,
-    },
-    {
-      content_type: "audio",
-      title_en: "Stavan Collection Vol. 1",
-      title_hi: "स्तवन संग्रह भाग 1",
-      description_en: "Devotional stavans for daily listening.",
-      embed_url: "https://example.org/audio/stavan-1.mp3",
-      access_tier: "public",
-      is_published: true,
-    },
-    {
-      content_type: "pdf",
-      title_en: "Jain Values Study Guide",
-      title_hi: "जैन मूल्य अध्ययन गाइड",
-      description_en: "Study guide for kishor and tarun students.",
-      embed_url: "https://example.org/pdf/values-guide.pdf",
-      access_tier: "student",
-      is_published: true,
-    },
-  ]);
+  /* ---------------- Library (Section → SubSection → Item) ---------------- */
+  await seedLibraryContent(db);
 
   /* ---------------- Courses (CU1) ---------------- */
   const [curriculumStd] = await db

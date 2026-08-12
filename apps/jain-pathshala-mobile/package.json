@@ -70,13 +70,16 @@
     "@expo-google-fonts/mukta": "^0.4.1",
     "@expo-google-fonts/outfit": "^0.4.3",
     "@expo-google-fonts/tiro-devanagari-sanskrit": "^0.4.0",
+    "@gorhom/bottom-sheet": "^5.2.14",
     "expo-audio": "~1.1.1",
+    "expo-clipboard": "^57.0.1",
     "expo-dev-client": "~6.0.21",
     "expo-device": "~8.0.10",
     "expo-file-system": "~19.0.23",
     "expo-notifications": "~0.32.17",
     "expo-secure-store": "~15.0.8",
     "expo-sharing": "~14.0.8",
+    "expo-sqlite": "^57.0.1",
     "expo-updates": "~29.0.18",
     "react-native-confetti-cannon": "^1.5.2"
   }

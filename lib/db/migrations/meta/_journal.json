@@ -393,6 +393,20 @@
       "when": 1790505600000,
       "tag": "0055_join_parent_mobile",
       "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1790592000000,
+      "tag": "0056_library_rebuild",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1790678400000,
+      "tag": "0057_library_draft_published",
+      "breakpoints": true
     }
   ]
 }
