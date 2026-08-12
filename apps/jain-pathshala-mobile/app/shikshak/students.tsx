@@ -54,7 +54,17 @@ export default function StudentsScreen() {
     ({ item: s }) => {
       const place = [s.batch_name, s.centre_name].filter(Boolean).join(" · ");
       return (
-        <Pressable onPress={() => router.push(`/student-detail/${s.id}` as never)}>
+        <Pressable
+          onPress={() =>
+            router.push({
+              pathname: "/student-detail/[id]",
+              params: {
+                id: s.id,
+                name: (s.full_name ?? s.student_code ?? "").trim(),
+              },
+            } as never)
+          }
+        >
           <Card>
             <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
               <View style={{ flex: 1, paddingRight: 8 }}>

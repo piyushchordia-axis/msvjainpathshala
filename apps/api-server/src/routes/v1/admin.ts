@@ -12,8 +12,10 @@ import {
   device_sessions,
   shikshak_batch_assignments,
   service_requests,
+  punya_balances,
 } from "@workspace/db";
 import { and, asc, count, desc, eq, gte, gt, ilike, inArray, isNull, or, sql } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 import {
   enrolmentActionSchema,
   studentStatusActionSchema,
@@ -31,6 +33,7 @@ import { materialiseHomeworkForStudentBatch } from "../../lib/homework-materiali
 import { signAccessToken, generateRefreshToken, verifyAccessToken, hashSecret } from "../../lib/tokens";
 import { setAuthCookies, setImpersonationCookies, clearAuthCookies } from "../../lib/cookies";
 import { toSessionUser } from "../../lib/session-user";
+import { signUploadUrl } from "../../lib/file-tokens";
 import adminResourcesRouter from "./admin-resources";
 import adminModulesRouter from "./admin-modules";
 import adminCoursesRouter from "./admin-courses";
@@ -477,6 +480,126 @@ router.get("/students", async (req: Request, res: Response) => {
     hasMore && last ? encodeStudentCursor(last.full_name, last.id) : null;
 
   ok(res, { items: page, next_cursor: nextCursor }, { count: page.length });
+});
+
+/* GET /v1/admin/students/:id — dossier (contact + identity) for shikshak/admin. */
+router.get("/students/:id", async (req: Request, res: Response) => {
+  const studentId = String(req.params.id);
+  if (!UUID_RE.test(studentId)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found in your scope.");
+    return;
+  }
+  const scope = await resolveAdminScope(req.authUser!);
+  const parentUser = alias(users, "parent_user");
+  const studentUser = alias(users, "student_user");
+
+  const [row] = await db
+    .select({
+      id: students.id,
+      full_name: students.full_name,
+      student_code: students.student_code,
+      age_group: students.age_group,
+      dob: students.dob,
+      msv_status: students.msv_status,
+      status: students.status,
+      blood_group: students.blood_group,
+      photo_url: students.photo_url,
+      centre_id: students.centre_id,
+      batch_id: students.batch_id,
+      guardian_relation: students.guardian_relation,
+      parent_id: students.parent_id,
+      batch_name: batches.name,
+      centre_name: centres.name,
+      parent_full_name: parentUser.full_name,
+      parent_phone: parentUser.phone,
+      parent_email: parentUser.email,
+      student_phone: studentUser.phone,
+    })
+    .from(students)
+    .leftJoin(batches, eq(batches.id, students.batch_id))
+    .leftJoin(centres, eq(centres.id, students.centre_id))
+    .leftJoin(parentUser, eq(parentUser.id, students.parent_id))
+    .leftJoin(studentUser, eq(studentUser.id, students.user_id))
+    .where(and(eq(students.id, studentId), isNull(students.deleted_at)))
+    .limit(1);
+
+  if (!row || !inBatchWriteScope(scope, row.batch_id, row.centre_id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found in your scope.");
+    return;
+  }
+
+  ok(res, {
+    id: row.id,
+    full_name: row.full_name.trim(),
+    student_code: row.student_code,
+    age_group: row.age_group,
+    dob: row.dob,
+    msv_status: row.msv_status,
+    status: row.status,
+    blood_group: row.blood_group,
+    photo_url: row.photo_url ? signUploadUrl(row.photo_url) : null,
+    centre_id: row.centre_id,
+    batch_id: row.batch_id,
+    batch_name: row.batch_name,
+    centre_name: row.centre_name,
+    student_phone: row.student_phone ?? null,
+    parent: row.parent_id
+      ? {
+          full_name: row.parent_full_name,
+          phone: row.parent_phone,
+          email: row.parent_email,
+          relation: row.guardian_relation,
+        }
+      : null,
+  });
+});
+
+/* GET /v1/admin/students/:id/punya — balance + recent ledger for in-scope student. */
+router.get("/students/:id/punya", async (req: Request, res: Response) => {
+  const studentId = String(req.params.id);
+  if (!UUID_RE.test(studentId)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found in your scope.");
+    return;
+  }
+  const scope = await resolveAdminScope(req.authUser!);
+  const [student] = await db
+    .select({
+      id: students.id,
+      batch_id: students.batch_id,
+      centre_id: students.centre_id,
+    })
+    .from(students)
+    .where(and(eq(students.id, studentId), isNull(students.deleted_at)))
+    .limit(1);
+  if (!student || !inBatchWriteScope(scope, student.batch_id, student.centre_id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found in your scope.");
+    return;
+  }
+
+  const [balance] = await db
+    .select({ total_points: punya_balances.total_points, tier: punya_balances.tier })
+    .from(punya_balances)
+    .where(eq(punya_balances.student_id, studentId))
+    .limit(1);
+
+  const txns = await db
+    .select({
+      id: punya_transactions.id,
+      feature_key: punya_transactions.feature_key,
+      points: punya_transactions.points,
+      note: punya_transactions.note,
+      created_at: punya_transactions.created_at,
+    })
+    .from(punya_transactions)
+    .where(eq(punya_transactions.student_id, studentId))
+    .orderBy(desc(punya_transactions.created_at))
+    .limit(50);
+
+  ok(res, {
+    total_points: balance?.total_points ?? 0,
+    tier: balance?.tier ?? "jigyasu",
+    transactions: txns.map((t) => ({ ...t, created_at: t.created_at.toISOString() })),
+  });
 });
 
 /* POST /v1/admin/students/:id/status */

@@ -15,6 +15,7 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Image as ExpoImage } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
+import { useLocalSearchParams } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { ApiError } from "@/lib/api";
@@ -368,6 +369,13 @@ function ReviewRow({
 export default function NiyamReviewScreen() {
   const c = useColors();
   const { hi } = useLocale();
+  const params = useLocalSearchParams<{ student_id?: string }>();
+  const filterStudentId =
+    typeof params.student_id === "string"
+      ? params.student_id
+      : Array.isArray(params.student_id)
+        ? params.student_id[0]
+        : undefined;
   const batches = useAdminBatches(true);
   const [batchId, setBatchId] = useState<string | null>(null);
   const [niyamType, setNiyamType] = useState<string | null>(null);
@@ -411,10 +419,11 @@ export default function NiyamReviewScreen() {
   const reject = useRejectNiyam();
   const bulk = useBulkApproveNiyams();
 
-  const items = useMemo(
-    () => list.data?.pages.flatMap((p) => p.items) ?? [],
-    [list.data?.pages],
-  );
+  const items = useMemo(() => {
+    const all = list.data?.pages.flatMap((p) => p.items) ?? [];
+    if (!filterStudentId) return all;
+    return all.filter((r) => r.student_id === filterStudentId);
+  }, [list.data?.pages, filterStudentId]);
   const batchItems = batches.data?.items ?? [];
 
   const rejectRow = rejectId ? items.find((r) => r.id === rejectId) : null;
@@ -551,7 +560,15 @@ export default function NiyamReviewScreen() {
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <AppHeader
         title={hi ? "नियम समीक्षा" : "Niyam review"}
-        subtitle={hi ? "लंबित प्रस्तुतियों की जाँच करें" : "Review pending submissions"}
+        subtitle={
+          filterStudentId
+            ? hi
+              ? "इस विद्यार्थी की लंबित प्रस्तुतियाँ"
+              : "Pending for this student"
+            : hi
+              ? "लंबित प्रस्तुतियों की जाँच करें"
+              : "Review pending submissions"
+        }
       />
 
       <View

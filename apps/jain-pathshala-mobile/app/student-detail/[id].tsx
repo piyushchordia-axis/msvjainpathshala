@@ -157,7 +157,7 @@ function ContactPanel({ studentId }: { studentId: string }) {
   return (
     <View style={{ gap: 12 }}>
       <Card>
-        <Title style={{ fontSize: 18 }}>{row.full_name}</Title>
+        <Title style={{ fontSize: 18 }}>{row.full_name.trim()}</Title>
         <Body muted style={{ marginTop: 4, fontSize: 13 }}>
           {[row.student_code, formatAgeGroup(row.age_group, hi ? "hi" : "en")]
             .filter(Boolean)
@@ -217,6 +217,14 @@ function IdCardPanel({ studentId }: { studentId: string }) {
   const card = useAdminIdCard(studentId, true);
   const row = card.data;
   const pngUri = resolveUploadUrl(row?.png_url);
+  const [imageFailed, setImageFailed] = useState(false);
+  const cardArtKey = row?.png_url
+    ? `${row.png_url}:${row.last_regenerated_at ?? row.version_no ?? ""}`
+    : "";
+
+  useEffect(() => {
+    setImageFailed(false);
+  }, [cardArtKey]);
 
   if (card.isLoading) return <StateView status="loading" emptyText="" />;
   if (card.isError) {
@@ -244,8 +252,8 @@ function IdCardPanel({ studentId }: { studentId: string }) {
   }
 
   return (
-    <Card>
-      <Row style={{ justifyContent: "space-between", marginBottom: 10 }}>
+    <Card style={{ padding: 0, overflow: "hidden" }}>
+      <Row style={{ justifyContent: "space-between", padding: 12 }}>
         <Body muted style={{ fontSize: 12 }}>
           {row.card_number}
         </Body>
@@ -254,16 +262,37 @@ function IdCardPanel({ studentId }: { studentId: string }) {
           label={row.is_active ? (hi ? "सक्रिय" : "Active") : hi ? "निष्क्रिय" : "Inactive"}
         />
       </Row>
-      <ExpoImage
-        source={{ uri: pngUri }}
-        style={{
-          width: "100%",
-          aspectRatio: 1.6,
-          borderRadius: c.radius,
-          backgroundColor: c.muted,
-        }}
-        contentFit="contain"
-      />
+      {pngUri && !imageFailed ? (
+        <ExpoImage
+          key={cardArtKey || pngUri}
+          source={{ uri: pngUri }}
+          style={{
+            width: "100%",
+            aspectRatio: 480 / 640,
+            backgroundColor: c.muted,
+          }}
+          contentFit="contain"
+          accessibilityLabel={hi ? "पहचान पत्र छवि" : "ID card image"}
+          onError={() => setImageFailed(true)}
+        />
+      ) : (
+        <View
+          style={{
+            width: "100%",
+            aspectRatio: 480 / 640,
+            backgroundColor: c.muted,
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <Body muted style={{ textAlign: "center", fontSize: 13 }}>
+            {hi
+              ? "पहचान पत्र छवि लोड नहीं हुई। पुनः प्रयास करें।"
+              : "Could not load the ID card image. Try again."}
+          </Body>
+        </View>
+      )}
     </Card>
   );
 }
@@ -732,6 +761,7 @@ function AwardPunyaSheet({
 }
 
 function HomeworkPanel({ studentId }: { studentId: string }) {
+  const c = useColors();
   const { hi } = useLocale();
   const list = useStudentHomeworkHistory(studentId, true);
   const rows = list.data?.items ?? [];
@@ -748,44 +778,57 @@ function HomeworkPanel({ studentId }: { studentId: string }) {
       />
     );
   }
-  if (rows.length === 0) {
-    return (
-      <StateView
-        status="empty"
-        emptyText={hi ? "अभी कोई गृहकार्य नहीं।" : "No homework history yet."}
-      />
-    );
-  }
 
   return (
     <View style={{ gap: 10 }}>
-      {rows.map((r) => (
-        <Card key={r.id}>
-          <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-            <Title style={{ fontSize: 16, flex: 1, paddingRight: 8 }}>{r.title}</Title>
-            <Pill label={r.status} tone={homeworkTone(r.status)} />
-          </Row>
-          <Body muted style={{ fontSize: 12, marginTop: 6 }}>
-            {hi ? "नियत" : "Due"}: {formatDate(r.due_date)}
-            {r.batch_name ? ` · ${r.batch_name}` : ""}
-          </Body>
-          {r.overdue ? (
-            <Pill tone="error" label={hi ? "अतिदेय" : "Overdue"} />
-          ) : r.late ? (
-            <Pill tone="warning" label={hi ? "विलंबित" : "Late"} />
-          ) : null}
-          {r.feedback_note ? (
-            <Body muted style={{ fontSize: 12, marginTop: 6 }}>
-              {r.feedback_note}
-            </Body>
-          ) : null}
-        </Card>
-      ))}
+      <Button
+        label={hi ? "सभी गृहकार्य" : "All homework"}
+        variant="outline"
+        onPress={() => router.push("/shikshak/homework" as never)}
+      />
+      {rows.length === 0 ? (
+        <StateView
+          status="empty"
+          emptyText={hi ? "अभी कोई गृहकार्य नहीं।" : "No homework history yet."}
+        />
+      ) : (
+        rows.map((r) => (
+          <Pressable
+            key={r.id}
+            onPress={() => router.push(`/homework-assignment/${r.assignment_id}` as never)}
+          >
+            <Card>
+              <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                <Title style={{ fontSize: 16, flex: 1, paddingRight: 8 }}>{r.title}</Title>
+                <Pill label={r.status} tone={homeworkTone(r.status)} />
+              </Row>
+              <Body muted style={{ fontSize: 12, marginTop: 6 }}>
+                {hi ? "नियत" : "Due"}: {formatDate(r.due_date)}
+                {r.batch_name ? ` · ${r.batch_name}` : ""}
+              </Body>
+              {r.overdue ? (
+                <Pill tone="error" label={hi ? "अतिदेय" : "Overdue"} />
+              ) : r.late ? (
+                <Pill tone="warning" label={hi ? "विलंबित" : "Late"} />
+              ) : null}
+              {r.feedback_note ? (
+                <Body muted style={{ fontSize: 12, marginTop: 6 }}>
+                  {r.feedback_note}
+                </Body>
+              ) : null}
+              <Body style={{ fontSize: 12, marginTop: 8, color: c.primary }}>
+                {hi ? "समीक्षा खोलें" : "Open review"}
+              </Body>
+            </Card>
+          </Pressable>
+        ))
+      )}
     </View>
   );
 }
 
 function NiyamPanel({ studentId }: { studentId: string }) {
+  const c = useColors();
   const { hi } = useLocale();
   const list = useAdminNiyamByStudent(studentId, true);
   const rows = list.data?.items ?? [];
@@ -802,48 +845,70 @@ function NiyamPanel({ studentId }: { studentId: string }) {
       />
     );
   }
-  if (rows.length === 0) {
-    return (
-      <StateView
-        status="empty"
-        emptyText={hi ? "अभी कोई नियम प्रस्तुति नहीं।" : "No Niyam submissions yet."}
-      />
-    );
-  }
 
   return (
     <View style={{ gap: 10 }}>
-      {rows.map((r) => (
-        <Card key={r.id}>
-          <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-            <Title style={{ fontSize: 16, flex: 1, paddingRight: 8 }}>
-              {hi ? r.niyam_title_hi || r.niyam_title_en : r.niyam_title_en}
-            </Title>
-            <Pill label={r.status} tone={r.status === "approved" ? "success" : "neutral"} />
-          </Row>
-          <Body muted style={{ fontSize: 12, marginTop: 6 }}>
-            {formatDate(r.submission_date)}
-            {r.points_awarded != null ? ` · +${r.points_awarded}` : ""}
-          </Body>
-        </Card>
-      ))}
+      <Button
+        label={hi ? "नियम समीक्षा खोलें" : "Open Niyam review"}
+        onPress={() =>
+          router.push({
+            pathname: "/shikshak/niyam-review",
+            params: { student_id: studentId },
+          } as never)
+        }
+      />
+      {rows.length === 0 ? (
+        <StateView
+          status="empty"
+          emptyText={hi ? "अभी कोई नियम प्रस्तुति नहीं।" : "No Niyam submissions yet."}
+        />
+      ) : (
+        rows.map((r) => (
+          <Pressable
+            key={r.id}
+            onPress={() =>
+              router.push({
+                pathname: "/shikshak/niyam-review",
+                params: { student_id: studentId },
+              } as never)
+            }
+          >
+            <Card>
+              <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                <Title style={{ fontSize: 16, flex: 1, paddingRight: 8 }}>
+                  {hi ? r.niyam_title_hi || r.niyam_title_en : r.niyam_title_en}
+                </Title>
+                <Pill label={r.status} tone={r.status === "approved" ? "success" : "neutral"} />
+              </Row>
+              <Body muted style={{ fontSize: 12, marginTop: 6 }}>
+                {formatDate(r.submission_date)}
+                {r.points_awarded != null ? ` · +${r.points_awarded}` : ""}
+              </Body>
+              <Body style={{ fontSize: 12, marginTop: 8, color: c.primary }}>
+                {hi ? "समीक्षा खोलें" : "Open review"}
+              </Body>
+            </Card>
+          </Pressable>
+        ))
+      )}
     </View>
   );
 }
 
-function ProgressPanel({ studentId }: { studentId: string }) {
+function ProgressPanel({ studentId, studentName }: { studentId: string; studentName?: string }) {
   const { hi } = useLocale();
   const { user } = useAuth();
+  const qs = new URLSearchParams({ student_id: studentId });
+  if (studentName?.trim()) qs.set("student_name", studentName.trim());
   const coursesHref =
-    (user?.role === "shikshak" ? "/shikshak/courses" : "/admin/courses") +
-    `?student_id=${encodeURIComponent(studentId)}`;
+    (user?.role === "shikshak" ? "/shikshak/courses" : "/admin/courses") + `?${qs.toString()}`;
 
   return (
     <View style={{ gap: 12 }}>
       <Body muted style={{ lineHeight: 22 }}>
         {hi
-          ? "पाठ्यक्रम प्रगति अब पाठ्यक्रम वृक्ष पर है — स्थिति, स्टार और प्रमाणन वहीं से।"
-          : "Course progress lives on the course tree — status, stars, and certification are there."}
+          ? "पाठ्यक्रम सूची इस विद्यार्थी को चुने हुए रखेगी — प्रगति एक टैप में।"
+          : "Courses will keep this student selected — Progress opens in one tap."}
       </Body>
       <Button
         label={hi ? "पाठ्यक्रम खोलें" : "Open courses"}
@@ -857,9 +922,11 @@ export default function StudentDetailScreen() {
   const c = useColors();
   const { hi } = useLocale();
   const { user } = useAuth();
-  const params = useLocalSearchParams<{ id?: string; section?: string }>();
+  const params = useLocalSearchParams<{ id?: string; section?: string; name?: string }>();
   const studentId = typeof params.id === "string" ? params.id : "";
   const sectionParam = typeof params.section === "string" ? params.section : "";
+  const nameParam =
+    typeof params.name === "string" ? params.name.trim() : Array.isArray(params.name) ? String(params.name[0] ?? "").trim() : "";
   const [section, setSection] = useState<SectionKey>(() =>
     SECTIONS.some((s) => s.key === sectionParam) ? (sectionParam as SectionKey) : "contact",
   );
@@ -871,7 +938,12 @@ export default function StudentDetailScreen() {
   }, [sectionParam]);
 
   const detail = useAdminStudentDetail(studentId || undefined, !!studentId && canAccessAdminPanel(user?.role));
-  const titleName = detail.data?.full_name;
+  const titleName = (detail.data?.full_name ?? nameParam).trim() || null;
+
+  const onSectionChange = (key: SectionKey) => {
+    setSection(key);
+    router.setParams({ section: key });
+  };
 
   if (!canAccessAdminPanel(user?.role)) {
     return (
@@ -902,17 +974,11 @@ export default function StudentDetailScreen() {
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <AppHeader
-        title={titleName ?? (hi ? "विद्यार्थी" : "Student")}
-        subtitle={
-          detail.data?.student_code
-            ? detail.data.student_code
-            : hi
-              ? "विवरण देखें"
-              : "View details"
-        }
+        title={titleName ?? (detail.isLoading ? (hi ? "लोड हो रहा है…" : "Loading…") : hi ? "विद्यार्थी" : "Student")}
+        subtitle={detail.data?.student_code ?? undefined}
         compact
       />
-      <SectionChips active={section} onChange={setSection} />
+      <SectionChips active={section} onChange={onSectionChange} />
       <ScrollView
         contentContainerStyle={{ padding: 16, paddingBottom: 40, gap: 12 }}
         showsVerticalScrollIndicator={false}
@@ -923,7 +989,9 @@ export default function StudentDetailScreen() {
         {section === "punya" ? <PunyaPanel studentId={studentId} /> : null}
         {section === "homework" ? <HomeworkPanel studentId={studentId} /> : null}
         {section === "niyam" ? <NiyamPanel studentId={studentId} /> : null}
-        {section === "progress" ? <ProgressPanel studentId={studentId} /> : null}
+        {section === "progress" ? (
+          <ProgressPanel studentId={studentId} studentName={titleName ?? undefined} />
+        ) : null}
       </ScrollView>
     </View>
   );

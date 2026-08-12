@@ -71,6 +71,7 @@ export const qk = {
   adminStudentProgress: (id: string) => ["admin", "student", id, "progress"] as const,
   courses: (scope: string) => ["courses", scope] as const,
   adminCourses: (status?: string) => ["admin", "courses", status ?? "all"] as const,
+  adminCourseTree: (courseId: string) => ["admin", "courses", "tree", courseId] as const,
   courseTree: (courseId: string, studentId: string) =>
     ["courses", "tree", courseId, studentId] as const,
   studentCertificates: (studentId: string) =>
@@ -2139,6 +2140,42 @@ export function useAdminCourses(
     queryKey: qk.adminCourses(status),
     queryFn: () => apiGet<List<CourseListRow>>(`/v1/admin/courses${qs}`),
     enabled,
+  });
+}
+
+/** Structure-only tree (no student progress) for Guruji browse. */
+export type AdminCourseBrowseTree = {
+  course: {
+    id: string;
+    name_en: string;
+    name_hi: string | null;
+    kind: string;
+    academic_year: string | null;
+    status: string;
+    punya_points: number;
+  };
+  sections: Array<{
+    id: string;
+    title_en: string;
+    title_hi: string | null;
+    order_index: number;
+    punya_points: number;
+    subsections: Array<{
+      id: string;
+      title_en: string;
+      title_hi: string | null;
+      description_en: string | null;
+      description_hi: string | null;
+      order_index: number;
+    }>;
+  }>;
+};
+
+export function useAdminCourseTree(courseId?: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.adminCourseTree(courseId ?? ""),
+    queryFn: () => apiGet<AdminCourseBrowseTree>(`/v1/admin/courses/${courseId}/tree`),
+    enabled: !!courseId && enabled,
   });
 }
 
