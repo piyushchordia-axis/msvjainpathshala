@@ -13,6 +13,7 @@ import { certifiedFrozenExplanation, type CourseProgressStatus } from "@/lib/cou
 import { applySectionStatusCascade } from "@/lib/course-progress-cascade";
 import {
   useCourseTree,
+  usePublicCourseTree,
   useSetCourseNodeProgress,
   type CourseTreeSection,
 } from "@/lib/queries";
@@ -20,11 +21,18 @@ import { ApiError } from "@/lib/api";
 
 export function CourseLearnerOutline(props: {
   courseId: string;
-  studentId: string;
+  studentId?: string;
+  readOnly?: boolean;
 }) {
   const c = useColors();
   const { hi } = useLocale();
-  const treeQ = useCourseTree(props.courseId, props.studentId);
+  const memberQ = useCourseTree(
+    props.courseId,
+    props.studentId,
+    !props.readOnly && !!props.studentId,
+  );
+  const publicQ = usePublicCourseTree(props.courseId, !!props.readOnly);
+  const treeQ = props.readOnly ? publicQ : memberQ;
   const setProgress = useSetCourseNodeProgress({ offline: false });
   const [busyNode, setBusyNode] = useState<string | null>(null);
 
@@ -34,6 +42,7 @@ export function CourseLearnerOutline(props: {
     section: CourseTreeSection,
     status: CourseProgressStatus,
   ) {
+    if (props.readOnly || !props.studentId) return;
     if (section.certified_at) {
       Alert.alert(
         hi ? "प्रमाणित नोड" : "Certified node",
@@ -93,11 +102,13 @@ export function CourseLearnerOutline(props: {
     tree.progress.mastery == null
       ? "—"
       : `${Math.round(tree.progress.mastery * 100)}%`;
-  const metricsParts = [
-    tree.course.academic_year,
-    `${hi ? "कवरेज" : "Coverage"} ${coverage}`,
-    `${hi ? "निपुणता" : "Mastery"} ${mastery}`,
-  ].filter(Boolean);
+  const metricsParts = props.readOnly
+    ? [tree.course.academic_year].filter(Boolean)
+    : [
+        tree.course.academic_year,
+        `${hi ? "कवरेज" : "Coverage"} ${coverage}`,
+        `${hi ? "निपुणता" : "Mastery"} ${mastery}`,
+      ].filter(Boolean);
 
   return (
     <View style={{ gap: 4 }}>
@@ -144,7 +155,11 @@ export function CourseLearnerOutline(props: {
                     `/course/${props.courseId}/section/${section.id}` as never,
                   )
                 }
-                onChangeStatus={(status) => void changeStatus(section, status)}
+                onChangeStatus={
+                  props.readOnly
+                    ? undefined
+                    : (status) => void changeStatus(section, status)
+                }
               />
             );
           })

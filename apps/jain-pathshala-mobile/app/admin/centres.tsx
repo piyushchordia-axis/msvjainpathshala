@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Pressable, Text, View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { bodyFamily } from "@/constants/typography";
 import {
   useAdminCentres,
@@ -131,16 +132,16 @@ export default function CentresScreen() {
 
   if (selected) {
     return (
-      <View style={{ flex: 1, backgroundColor: c.background }}>
+      <ActivityThemed accent="centres">
         <CentreDetail centre={selected} onBack={() => setSelected(null)} />
-      </View>
+      </ActivityThemed>
     );
   }
 
   const items = data?.items ?? [];
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="centres">
       <AppHeader
         title={hi ? "केंद्र" : "Centres"}
         subtitle={hi ? "आपके दायरे के केंद्र" : "Centres in your scope"}
@@ -187,6 +188,6 @@ export default function CentresScreen() {
           ))
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

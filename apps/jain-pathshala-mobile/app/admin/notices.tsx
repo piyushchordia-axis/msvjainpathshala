@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { bodyFamily } from "@/constants/typography";
 import { apiGet, apiPost } from "@/lib/api";
 import {
@@ -226,7 +227,7 @@ function NoticeEditor({
 
   return (
     <Modal visible={open} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: c.background }}>
+      <ActivityThemed accent="notices">
         <View
           style={{
             paddingHorizontal: 18,
@@ -477,7 +478,7 @@ function NoticeEditor({
             loading={busy}
           />
         </KeyboardAwareScrollViewCompat>
-      </View>
+      </ActivityThemed>
     </Modal>
   );
 }
@@ -544,7 +545,7 @@ export default function NoticesScreen() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="notices">
       <AppHeader
         title={hi ? "सूचनाएँ" : "Notices"}
         subtitle={hi ? "माता-पिता के लिए सूचनाएँ" : "Notices for parents"}
@@ -683,6 +684,6 @@ export default function NoticesScreen() {
           }}
         />
       ) : null}
-    </View>
+    </ActivityThemed>
   );
 }

@@ -28,9 +28,12 @@ function isPlayableLocalPath(path: string | null | undefined): path is string {
 export function LibraryAudioButton({
   item,
   style,
+  compact = false,
 }: {
   item: LibraryItemDto;
   style?: StyleProp<ViewStyle>;
+  /** Icon-only (section item row). */
+  compact?: boolean;
 }) {
   const c = useColors();
   const { hi } = useLocale();
@@ -110,13 +113,15 @@ export function LibraryAudioButton({
       ]}
     >
       <Ionicons
-        name={isCurrent ? (playing ? "pause" : "play") : "play"}
-        size={16}
+        name={isCurrent ? (playing ? "pause" : "play") : "musical-notes-outline"}
+        size={compact ? 22 : 16}
         color={c.secondary}
       />
-      <Body numberOfLines={1} style={{ fontSize: 13, lineHeight: 18, color: c.secondary, flexShrink: 1 }}>
-        {label}
-      </Body>
+      {compact ? null : (
+        <Body numberOfLines={1} style={{ fontSize: 13, lineHeight: 18, color: c.secondary, flexShrink: 1 }}>
+          {label}
+        </Body>
+      )}
     </Pressable>
   );
 }

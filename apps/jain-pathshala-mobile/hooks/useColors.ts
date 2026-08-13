@@ -2,14 +2,23 @@ import { useColorScheme } from "react-native";
 
 import colors from "@/constants/colors";
 
-type MergedPalette = typeof colors.light & { radius: typeof colors.radius };
+type MergedPalette = typeof colors.light & {
+  radius: typeof colors.radius;
+  activityTileRadius: typeof colors.activityTileRadius;
+};
 
 /** Module-scoped caches — avoids a fresh merged object on every useColors call. */
 let lightCache: MergedPalette | null = null;
 let darkCache: MergedPalette | null = null;
 
 function getLightPalette(): MergedPalette {
-  if (!lightCache) lightCache = { ...colors.light, radius: colors.radius };
+  if (!lightCache) {
+    lightCache = {
+      ...colors.light,
+      radius: colors.radius,
+      activityTileRadius: colors.activityTileRadius,
+    };
+  }
   return lightCache;
 }
 
@@ -18,6 +27,7 @@ function getDarkPalette(): MergedPalette {
     darkCache = {
       ...(colors as unknown as Record<string, typeof colors.light>).dark,
       radius: colors.radius,
+      activityTileRadius: colors.activityTileRadius,
     };
   }
   return darkCache;

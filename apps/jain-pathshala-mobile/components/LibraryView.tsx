@@ -19,10 +19,13 @@ import {
 import type { SearchHit } from "@/lib/library/search-query";
 import { AppHeader } from "@/components/AppHeader";
 import { LibrarySearchResults } from "@/components/LibrarySearchResults";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { Body, Card, Row, Screen, StateView, Title } from "@/components/ui";
 
 export type LibraryViewProps = {
   headerRight?: ReactNode;
+  /** False on the shared stack route so Expo's back header is the chrome. */
+  showAppHeader?: boolean;
 };
 
 /** In-app destination for a section after (optional) login. */
@@ -87,7 +90,7 @@ function navigateSearchHit(hit: SearchHit) {
  * Shared digital-library home for guest / parent / student.
  * Tree is persisted offline via query-persist allow-list on ["library", …].
  */
-export function LibraryView({ headerRight }: LibraryViewProps = {}) {
+export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewProps = {}) {
   const c = useColors();
   const { hi } = useLocale();
   const { user } = useAuth();
@@ -106,7 +109,9 @@ export function LibraryView({ headerRight }: LibraryViewProps = {}) {
         ? apiGet<LibraryTreePayload>("/v1/library")
         : apiGet<LibraryTreePayload>("/v1/public/library"),
   });
-  const sections = data?.sections ?? [];
+  const sections = (data?.sections ?? []).filter(
+    (s) => !(authed && s.key === "pathshala_join"),
+  );
 
   // Bootstrap FTS if empty but tree cache is already populated (race before sync).
   useEffect(() => {
@@ -170,26 +175,47 @@ export function LibraryView({ headerRight }: LibraryViewProps = {}) {
     </Pressable>
   );
 
+  const bookmarksBtn = (
+    <Pressable
+      onPress={() => router.push("/library/bookmarks" as Href)}
+      hitSlop={8}
+      accessibilityRole="button"
+      accessibilityLabel={hi ? "बुकमार्क" : "Bookmarks"}
+      style={{
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: c.muted,
+      }}
+    >
+      <Ionicons name="bookmark-outline" size={22} color={c.secondary} />
+    </Pressable>
+  );
+
   const right = (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+      {bookmarksBtn}
       {downloadsBtn}
       {headerRight ?? null}
     </View>
   );
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
-      <AppHeader
-        title={hi ? "पुस्तकालय" : "Digital library"}
-        subtitle={hi ? "ग्रंथ, स्तवन और संसाधन" : "Scriptures, stavans and resources"}
-        right={right}
-      />
+    <ActivityThemed accent="library">
+      {showAppHeader ? (
+        <AppHeader
+          title={hi ? "पुस्तकालय" : "Digital library"}
+          subtitle={hi ? "ग्रंथ, स्तवन और संसाधन" : "Scriptures, stavans and resources"}
+          right={right}
+        />
+      ) : null}
       <View
         style={{
           paddingHorizontal: 16,
           paddingTop: 8,
           paddingBottom: 8,
-          backgroundColor: c.background,
           borderBottomWidth: 1,
           borderBottomColor: c.border,
         }}
@@ -234,6 +260,12 @@ export function LibraryView({ headerRight }: LibraryViewProps = {}) {
             </Pressable>
           ) : null}
         </View>
+        {showAppHeader ? null : (
+          <View style={{ marginTop: 8, flexDirection: "row", justifyContent: "flex-end", gap: 8 }}>
+            {bookmarksBtn}
+            {downloadsBtn}
+          </View>
+        )}
       </View>
       <Screen refreshing={isRefetching} onRefresh={refetch} contentStyle={{ paddingBottom: 110 }}>
         {searching ? (
@@ -316,6 +348,6 @@ export function LibraryView({ headerRight }: LibraryViewProps = {}) {
           })
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

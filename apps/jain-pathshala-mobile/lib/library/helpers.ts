@@ -62,6 +62,32 @@ export function findItemInTrees(
   return null;
 }
 
+/** Flatten published items with their parent section (bookmarks list). */
+export function listItemsInTrees(
+  trees: Array<LibraryTreePayload | undefined>,
+): Array<{ section: LibrarySectionDto; item: LibraryItemDto }> {
+  const seen = new Set<string>();
+  const out: Array<{ section: LibrarySectionDto; item: LibraryItemDto }> = [];
+  for (const tree of trees) {
+    if (!tree) continue;
+    for (const section of tree.sections) {
+      for (const sub of section.subsections ?? []) {
+        for (const item of sub.items ?? []) {
+          if (seen.has(item.id)) continue;
+          seen.add(item.id);
+          out.push({ section, item });
+        }
+      }
+      for (const item of section.items ?? []) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        out.push({ section, item });
+      }
+    }
+  }
+  return out;
+}
+
 /** Prefer member cache when present, else public. */
 export function libraryTreesFromCache(
   qc: QueryClient,

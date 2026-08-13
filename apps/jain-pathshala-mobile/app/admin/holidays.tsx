@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { Alert, Pressable, Text, TextInput, View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { bodyFamily } from "@/constants/typography";
 import { currentMonthIst } from "@/lib/attendance-calendar";
 import { ApiError } from "@/lib/api";
@@ -172,7 +173,7 @@ export default function HolidaysScreen() {
           : "Tap a start date on the calendar";
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="holidays">
       <AppHeader
         title={hi ? "अवकाश" : "Holidays"}
         subtitle={hi ? "केंद्र के अवकाश दिन" : "Centre holiday calendar"}
@@ -445,6 +446,6 @@ export default function HolidaysScreen() {
           ))
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

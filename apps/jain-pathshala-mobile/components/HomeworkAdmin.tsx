@@ -13,6 +13,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import {
   useAdminBatches,
@@ -699,7 +700,7 @@ export default function HomeworkAdmin({ persona }: { persona: HomeworkAdminPerso
       : "No homework yet. Create an assignment for your batch.";
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="homework">
       <AppHeader
         title={hi ? "गृहकार्य" : "Homework"}
         subtitle={
@@ -855,6 +856,6 @@ export default function HomeworkAdmin({ persona }: { persona: HomeworkAdminPerso
         onCreated={() => void list.refetch()}
         centreId={isSanchalak ? selectedCentreId : null}
       />
-    </View>
+    </ActivityThemed>
   );
 }

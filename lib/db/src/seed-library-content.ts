@@ -97,13 +97,13 @@ export async function seedLibraryContent(
         order_index: 3,
         type: "deeplink",
         deeplink_target: "/courses",
-        requires_login: true,
+        requires_login: false,
         draft_name_en: "Courses",
         draft_name_hi: "पाठ्यक्रम",
         draft_name_gu: "અભ્યાસક્રમ",
         draft_type: "deeplink",
         draft_deeplink_target: "/courses",
-        draft_requires_login: true,
+        draft_requires_login: false,
         draft_order_index: 3,
         is_published: true,
         content_version: 1,
@@ -116,25 +116,54 @@ export async function seedLibraryContent(
     throw new Error("seedLibraryContent: stavan_bhakti section missing after insert");
   }
 
-  const [libSub] = await db
+  const stavanSubs = await db
     .insert(library_subsections)
-    .values({
-      section_id: libStavan.id,
-      name_en: "Daily stavans",
-      name_hi: "दैनिक स्तवन",
-      name_gu: "દૈનિક સ્તવન",
-      order_index: 0,
-      draft_name_en: "Daily stavans",
-      draft_name_hi: "दैनिक स्तवन",
-      draft_name_gu: "દૈનિક સ્તવન",
-      draft_order_index: 0,
-      is_published: true,
-      content_version: 1,
-    })
+    .values([
+      {
+        section_id: libStavan.id,
+        name_en: "Bhaktamar Stotra",
+        name_hi: "भक्तामर स्तोत्र",
+        name_gu: "ભક્તામર સ્તોત્ર",
+        order_index: 0,
+        draft_name_en: "Bhaktamar Stotra",
+        draft_name_hi: "भक्तामर स्तोत्र",
+        draft_name_gu: "ભક્તામર સ્તોત્ર",
+        draft_order_index: 0,
+        is_published: true,
+        content_version: 1,
+      },
+      {
+        section_id: libStavan.id,
+        name_en: "Istavan",
+        name_hi: "इस्तवन",
+        name_gu: "ઇસ્તવન",
+        order_index: 1,
+        draft_name_en: "Istavan",
+        draft_name_hi: "इस्तवन",
+        draft_name_gu: "ઇસ્તવન",
+        draft_order_index: 1,
+        is_published: true,
+        content_version: 1,
+      },
+      {
+        section_id: libStavan.id,
+        name_en: "Daily stavans",
+        name_hi: "दैनिक स्तवन",
+        name_gu: "દૈનિક સ્તવન",
+        order_index: 2,
+        draft_name_en: "Daily stavans",
+        draft_name_hi: "दैनिक स्तवन",
+        draft_name_gu: "દૈનિક સ્તવન",
+        draft_order_index: 2,
+        is_published: true,
+        content_version: 1,
+      },
+    ])
     .returning();
 
+  const libSub = stavanSubs.find((s) => s.name_en === "Daily stavans");
   if (!libSub) {
-    throw new Error("seedLibraryContent: subsection insert returned no row");
+    throw new Error("seedLibraryContent: Daily stavans subsection missing after insert");
   }
 
   await db.insert(library_items).values([

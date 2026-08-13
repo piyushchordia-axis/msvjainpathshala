@@ -68,10 +68,42 @@ const colors = {
     errorSoft: "#FAE5E5",
     infoText: "#0A66C2",
     infoSoft: "#E2EFFB",
+
+    // Activity grid — high-contrast tile ink
+    activityInk: "#2D3748",
+    activityInkStrong: "#1A202C",
+
+    // Activity grid pastels (parent/student 9 + Guruji/admin extras)
+    activityNotifications: "#FCE4D6",
+    activityAttendance: "#D9EAD3",
+    activityNiyam: "#E1D5E7",
+    activityCourses: "#D0E0E3",
+    activityCertificates: "#FFF2CC",
+    activityHomework: "#F4CCCC",
+    activityQuizzes: "#D5E8D4",
+    activityExams: "#DAE8FC",
+    activityCompetitions: "#FFE599",
+    activityStudents: "#C9DAF8",
+    activityBatches: "#B4A7D6",
+    activityPunya: "#FFE599",
+    activityJoin: "#EAD1DC",
+    activityProfile: "#D9D2E9",
+    activityCentres: "#A2C4C9",
+    activityShikshaks: "#D5A6BD",
+    activityHolidays: "#B6D7A8",
+    activityNotices: "#F9CB9C",
+    activityServiceRequests: "#EA9999",
+    activityGallery: "#E6B8AF",
+    activityReports: "#CFE2F3",
+    activityEnrolments: "#FCE5CD",
+    activityLibrary: "#FFE6CC",
+    activityShivirs: "#F8CBAD",
   },
 
   // Border radius (px). Synced from web --radius: 0.75rem.
   radius: 12,
+  // Activity tiles only — do not use for cards.
+  activityTileRadius: 16,
 };
 
 export default colors;

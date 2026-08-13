@@ -6,8 +6,11 @@ import {
   states,
   batches,
   shivir_events,
+  courses,
+  course_sections,
+  course_subsections,
 } from "@workspace/db";
-import { and, asc, count, eq, gte, sql } from "drizzle-orm";
+import { and, asc, eq, gte, isNull, sql } from "drizzle-orm";
 import { ok, fail } from "../../lib/envelope";
 import { buildLibraryTree, buildLibrarySection } from "../../lib/library-tree";
 import { buildLibraryManifest } from "../../lib/library-manifest";
@@ -179,6 +182,93 @@ router.get("/library", async (_req: Request, res: Response) => {
   ok(res, { sections }, { count: sections.length });
 });
 
-void count;
+/* GET /v1/public/courses — active catalogue (read-only, no progress). */
+router.get("/courses", async (_req: Request, res: Response) => {
+  const rows = await db
+    .select({
+      id: courses.id,
+      name_en: courses.name_en,
+      name_hi: courses.name_hi,
+      kind: courses.kind,
+      academic_year: courses.academic_year,
+      punya_points: courses.punya_points,
+    })
+    .from(courses)
+    .where(and(eq(courses.status, "active"), isNull(courses.deleted_at)))
+    .orderBy(asc(courses.name_en));
+  ok(res, { items: rows }, { count: rows.length });
+});
+
+/* GET /v1/public/courses/:id/tree — outline with all nodes not_started. */
+router.get("/courses/:id/tree", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  if (!UUID_RE.test(id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Course not found.");
+    return;
+  }
+  const [course] = await db
+    .select()
+    .from(courses)
+    .where(and(eq(courses.id, id), eq(courses.status, "active"), isNull(courses.deleted_at)))
+    .limit(1);
+  if (!course) {
+    fail(res, 404, "ERR_NOT_FOUND", "Course not found.");
+    return;
+  }
+
+  const sections = await db
+    .select()
+    .from(course_sections)
+    .where(and(eq(course_sections.course_id, id), isNull(course_sections.deleted_at)))
+    .orderBy(asc(course_sections.order_index));
+  const subs = await db
+    .select()
+    .from(course_subsections)
+    .innerJoin(course_sections, eq(course_sections.id, course_subsections.section_id))
+    .where(and(eq(course_sections.course_id, id), isNull(course_subsections.deleted_at)))
+    .orderBy(asc(course_subsections.order_index));
+
+  ok(res, {
+    course: {
+      id: course.id,
+      name_en: course.name_en,
+      name_hi: course.name_hi,
+      kind: course.kind,
+      academic_year: course.academic_year,
+      punya_points: course.punya_points,
+    },
+    progress: { coverage: null, mastery: null, leaf_total: 0, leaf_reached: 0 },
+    sections: sections.map((s) => ({
+      id: s.id,
+      title_en: s.title_en,
+      title_hi: s.title_hi,
+      order_index: s.order_index,
+      punya_points: s.punya_points,
+      status: "not_started" as const,
+      certified_at: null,
+      certified_by: null,
+      certified_by_gender: null,
+      derived_status: null,
+      derived_leaf_total: 0,
+      derived_leaf_reached: 0,
+      derived_coverage: null,
+      status_diverges: false,
+      subsections: subs
+        .filter((row) => row.course_subsections.section_id === s.id)
+        .map((row) => ({
+          id: row.course_subsections.id,
+          title_en: row.course_subsections.title_en,
+          title_hi: row.course_subsections.title_hi,
+          description_en: row.course_subsections.description_en,
+          description_hi: row.course_subsections.description_hi,
+          order_index: row.course_subsections.order_index,
+          status: "not_started" as const,
+          certified_at: null,
+          certified_by: null,
+          certified_by_gender: null,
+        })),
+    })),
+  });
+});
 
 export default router;

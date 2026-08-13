@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import {
   useAttendance,
@@ -388,6 +389,7 @@ export default function MyAttendanceScreen() {
   );
 
   return (
+    <ActivityThemed accent="attendance">
     <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0 }}>
       {Celebration}
       <FlatList
@@ -410,5 +412,6 @@ export default function MyAttendanceScreen() {
         removeClippedSubviews={Platform.OS !== "web"}
       />
     </Screen>
+    </ActivityThemed>
   );
 }

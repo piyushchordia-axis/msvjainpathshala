@@ -4,6 +4,7 @@
 import { Linking, Pressable, Text, View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
@@ -19,7 +20,7 @@ export default function CertificatesScreen() {
   const items = certsQ.data?.items ?? [];
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="certificates">
       <AppHeader
         title={hi ? "प्रमाणपत्र" : "Certificates"}
         subtitle={hi ? "प्रमाणित अनुभाग और पाठ्यक्रम" : "Certified sections and courses"}
@@ -136,6 +137,6 @@ export default function CertificatesScreen() {
           </>
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

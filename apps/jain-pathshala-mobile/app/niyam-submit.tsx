@@ -3,6 +3,7 @@ import { Alert, TextInput, View } from "react-native";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useNiyamCatalog, useSubmitNiyam } from "@/lib/queries";
@@ -197,7 +198,7 @@ export default function NiyamSubmit() {
   const alreadySubmitted = !!selected?.submitted_this_period;
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="niyam">
       {Celebration}
       <Screen
         refreshing={catalog.isRefetching}
@@ -424,6 +425,6 @@ export default function NiyamSubmit() {
           </>
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

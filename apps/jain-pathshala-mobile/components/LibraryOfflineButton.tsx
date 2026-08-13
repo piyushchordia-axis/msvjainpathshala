@@ -36,8 +36,8 @@ export function LibraryOfflineButton({
   const label =
     state === "ready"
       ? hi
-        ? "सहेजा"
-        : "Saved"
+        ? "डाउनलोड हुआ"
+        : "Downloaded"
       : state === "queued" || state === "downloading"
         ? hi
           ? "रद्द"
@@ -47,8 +47,8 @@ export function LibraryOfflineButton({
             ? "पुनः"
             : "Retry"
           : hi
-            ? "सेव"
-            : "Save";
+            ? "डाउनलोड"
+            : "Download";
 
   const a11y =
     state === "ready"
@@ -64,8 +64,8 @@ export function LibraryOfflineButton({
             ? "फिर से डाउनलोड करें"
             : "Retry download"
           : hi
-            ? "ऑफ़लाइन सेव करें"
-            : "Save offline";
+            ? "डाउनलोड"
+            : "Download";
 
   function startDownload() {
     const size = item.audio_size_bytes;
@@ -116,10 +116,10 @@ export function LibraryOfflineButton({
 
   const iconName =
     state === "ready"
-      ? "cloud-done"
+      ? "checkmark-circle"
       : state === "failed"
         ? "refresh-outline"
-        : "cloud-download-outline";
+        : "download-outline";
 
   return (
     <Pressable
@@ -170,7 +170,7 @@ export function LibraryOfflineButton({
           ) : null}
         </View>
       ) : (
-        <Ionicons name={iconName} size={16} color={c.secondary} />
+          <Ionicons name={iconName} size={compact ? 22 : 16} color={c.secondary} />
       )}
       {!compact ? (
         <Body

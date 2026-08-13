@@ -3,6 +3,7 @@ import { Alert, Linking, Pressable, Text, TextInput, View } from "react-native";
 import { Image } from "expo-image";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import {
   useHomework,
@@ -485,6 +486,7 @@ export default function HomeworkScreen() {
   const visible = tab === "todo" ? todoRows : submittedRows;
 
   return (
+    <ActivityThemed accent="homework">
     <Screen
       refreshing={homework.isRefetching}
       onRefresh={() => {
@@ -607,5 +609,6 @@ export default function HomeworkScreen() {
         </>
       )}
     </Screen>
+    </ActivityThemed>
   );
 }

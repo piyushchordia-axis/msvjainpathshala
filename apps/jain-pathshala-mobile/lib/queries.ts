@@ -2130,6 +2130,15 @@ export function useCoursesCatalogue(studentId?: string, enabled = true) {
   });
 }
 
+/** Guest catalogue — published active courses, no student scope. */
+export function usePublicCoursesCatalogue(enabled = true) {
+  return useQuery({
+    queryKey: qk.courses("public"),
+    queryFn: () => apiGet<List<CourseListRow>>("/v1/public/courses"),
+    enabled,
+  });
+}
+
 /** Admin list — shikshak/sanchalak authoring-side catalogue. */
 export function useAdminCourses(
   status: "draft" | "active" | "archived" | "all" = "active",
@@ -2187,6 +2196,14 @@ export function useCourseTree(courseId?: string, studentId?: string, enabled = t
         `/v1/courses/${courseId}/tree?student_id=${encodeURIComponent(studentId!)}`,
       ),
     enabled: !!courseId && !!studentId && enabled,
+  });
+}
+
+export function usePublicCourseTree(courseId?: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.courseTree(courseId ?? "", "public"),
+    queryFn: () => apiGet<StudentCourseTree>(`/v1/public/courses/${courseId}/tree`),
+    enabled: !!courseId && enabled,
   });
 }
 

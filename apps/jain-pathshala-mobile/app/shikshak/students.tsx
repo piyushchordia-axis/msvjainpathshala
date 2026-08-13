@@ -15,6 +15,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { fonts, bodyFamily } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAdminStudents } from "@/lib/queries";
 import type { AdminStudentRow } from "@/lib/types";
 import { formatDate } from "@/lib/format";
@@ -112,7 +113,7 @@ export default function StudentsScreen() {
   const keyExtractor = useCallback((item: AdminStudentRow) => item.id, []);
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="students">
       <AppHeader title={hi ? "मेरे विद्यार्थी" : "My students"} />
       <View
         style={{
@@ -122,7 +123,6 @@ export default function StudentsScreen() {
           gap: 10,
           borderBottomWidth: 1,
           borderBottomColor: c.border,
-          backgroundColor: c.background,
         }}
       >
         <TextInput
@@ -234,6 +234,6 @@ export default function StudentsScreen() {
           />
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

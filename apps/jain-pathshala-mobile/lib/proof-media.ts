@@ -1,6 +1,7 @@
 /**
  * Shared proof-media helpers used by NiyamProofPicker and HomeworkProofPicker.
  */
+import { Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 
@@ -40,6 +41,7 @@ export async function resolveLocalByteSize(
   blob?: Blob,
 ): Promise<number | null> {
   if (blob && typeof blob.size === "number") return blob.size;
+  if (Platform.OS === "web") return null;
   try {
     const info = await FileSystem.getInfoAsync(uri);
     if (!info.exists || info.isDirectory) return null;

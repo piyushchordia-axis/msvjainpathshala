@@ -6,7 +6,9 @@ import { Alert, Modal, Pressable, StyleSheet, Text, View } from "react-native";
 import { useLocalSearchParams } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
@@ -19,6 +21,7 @@ import {
 import { applySubsectionStatusCascade } from "@/lib/course-progress-cascade";
 import {
   useCourseTree,
+  usePublicCourseTree,
   useSetCourseNodeProgress,
   type CourseTreeSubsection,
 } from "@/lib/queries";
@@ -27,12 +30,16 @@ import { ApiError } from "@/lib/api";
 export default function LearnerSectionScreen() {
   const c = useColors();
   const { hi } = useLocale();
+  const { user } = useAuth();
+  const guest = !user;
   const { children, loading, isError, activeStudentId, refetch } = useSessionView();
   const params = useLocalSearchParams<{ id: string; sectionId: string }>();
   const courseId = String(params.id ?? "");
   const sectionId = String(params.sectionId ?? "");
 
-  const treeQ = useCourseTree(courseId, activeStudentId ?? undefined, !!activeStudentId);
+  const memberQ = useCourseTree(courseId, activeStudentId ?? undefined, !guest && !!activeStudentId);
+  const publicQ = usePublicCourseTree(courseId, guest);
+  const treeQ = guest ? publicQ : memberQ;
   const setProgress = useSetCourseNodeProgress({ offline: false });
   const [busyNode, setBusyNode] = useState<string | null>(null);
   const [contentSub, setContentSub] = useState<CourseTreeSubsection | null>(null);
@@ -51,7 +58,7 @@ export default function LearnerSectionScreen() {
       : "Section";
 
   async function changeStatus(sub: CourseTreeSubsection, status: CourseProgressStatus) {
-    if (!section || !activeStudentId) return;
+    if (guest || !section || !activeStudentId) return;
     if (sub.certified_at) {
       Alert.alert(
         hi ? "प्रमाणित नोड" : "Certified node",
@@ -86,17 +93,67 @@ export default function LearnerSectionScreen() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="courses">
       <AppHeader compact title={sectionTitle} />
       <Screen
         refreshing={treeQ.isFetching}
         onRefresh={() => {
-          refetch();
+          if (!guest) refetch();
           void treeQ.refetch();
         }}
         contentStyle={{ paddingTop: 0, gap: 8 }}
       >
-        {loading ? (
+        {guest ? (
+          treeQ.isLoading ? (
+            <StateView status="loading" emptyText="" />
+          ) : treeQ.isError || !section ? (
+            <StateView
+              status="error"
+              emptyText=""
+              errorText={
+                hi ? "अनुभाग नहीं मिला — वापस जाएँ।" : "Section not found — go back."
+              }
+              onRetry={() => void treeQ.refetch()}
+            />
+          ) : (
+            <View
+              style={{
+                backgroundColor: c.card,
+                borderRadius: c.radius,
+                borderWidth: StyleSheet.hairlineWidth,
+                borderColor: c.border,
+                marginTop: 2,
+                overflow: "visible",
+              }}
+            >
+              {section.subsections.length === 0 ? (
+                <StateView
+                  status="empty"
+                  emptyText={
+                    hi
+                      ? "इस अनुभाग में अभी कोई उप-अनुभाग नहीं।"
+                      : "No subsections in this section yet."
+                  }
+                />
+              ) : (
+                section.subsections.map((sub, i) => {
+                  const title = hi ? sub.title_hi || sub.title_en : sub.title_en;
+                  return (
+                    <CourseLearnerRow
+                      key={sub.id}
+                      index={i + 1}
+                      title={title}
+                      status={sub.status}
+                      certifiedAt={null}
+                      showChevron
+                      onPress={() => setContentSub(sub)}
+                    />
+                  );
+                })
+              )}
+            </View>
+          )
+        ) : loading ? (
           <StateView status="loading" emptyText="" />
         ) : isError ? (
           <StateView
@@ -218,7 +275,7 @@ export default function LearnerSectionScreen() {
                 );
               })()}
             </Text>
-            {contentSub && !contentSub.certified_at ? (
+            {contentSub && !guest && !contentSub.certified_at ? (
               <View style={{ flexDirection: "row", gap: 10, marginTop: 18 }}>
                 {contentSub.status !== "completed" ? (
                   <View style={{ flex: 1 }}>
@@ -269,7 +326,7 @@ export default function LearnerSectionScreen() {
           </Pressable>
         </Pressable>
       </Modal>
-    </View>
+    </ActivityThemed>
   );
 }
 

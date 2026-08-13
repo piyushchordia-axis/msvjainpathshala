@@ -1,7 +1,7 @@
 import { useRouter } from "expo-router";
 import { View } from "react-native";
-import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { AppHeader, LanguageToggle } from "@/components/AppHeader";
 import { DeleteAccountButton } from "@/components/DeleteAccountButton";
@@ -9,13 +9,12 @@ import { UserPhotoEditor } from "@/components/UserPhotoEditor";
 import { Body, Button, Card, Kicker, Pill, Row, Screen, Title } from "@/components/ui";
 
 export default function ProfileScreen() {
-  const c = useColors();
   const { hi } = useLocale();
   const { user, logout } = useAuth();
   const router = useRouter();
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="profile">
       <AppHeader title={hi ? "प्रोफ़ाइल" : "Profile"} />
       <Screen>
         <UserPhotoEditor
@@ -61,6 +60,6 @@ export default function ProfileScreen() {
         />
         <DeleteAccountButton />
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

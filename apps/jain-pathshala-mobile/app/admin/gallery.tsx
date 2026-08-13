@@ -26,6 +26,7 @@ import { Image } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { resolveUploadUrl, ApiError } from "@/lib/api";
 import { bodyFamily } from "@/constants/typography";
 import { formatDate } from "@/lib/format";
@@ -77,7 +78,7 @@ function TakedownModal({
 
   return (
     <Modal visible={open} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: c.background }}>
+      <ActivityThemed accent="gallery">
         <KeyboardAwareScrollViewCompat
           contentContainerStyle={{ padding: 18, gap: 14, paddingBottom: 40 }}
           bottomOffset={20}
@@ -130,7 +131,7 @@ function TakedownModal({
           />
           <Button label={hi ? "रद्द करें" : "Cancel"} variant="ghost" onPress={onClose} disabled={busy} />
         </KeyboardAwareScrollViewCompat>
-      </View>
+      </ActivityThemed>
     </Modal>
   );
 }
@@ -332,7 +333,7 @@ export default function AdminGalleryScreen() {
   );
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="gallery">
       <AppHeader
         title={hi ? "गैलरी" : "Gallery"}
         subtitle={
@@ -456,6 +457,6 @@ export default function AdminGalleryScreen() {
           );
         }}
       />
-    </View>
+    </ActivityThemed>
   );
 }

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Alert, View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useOpenCompetitions, useRegisterCompetition } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
@@ -68,7 +69,7 @@ export default function CompetitionsScreen() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="competitions">
       <Screen
         refreshing={competitions.isRefetching}
         onRefresh={() => {
@@ -182,6 +183,6 @@ export default function CompetitionsScreen() {
           </>
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

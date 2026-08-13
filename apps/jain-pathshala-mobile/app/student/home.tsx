@@ -11,7 +11,7 @@ import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
-import { QuickActions } from "@/components/QuickActions";
+import { BrowseQuickActions, QuickActions } from "@/components/QuickActions";
 
 export default function StudentHome() {
   const c = useColors();
@@ -89,20 +89,27 @@ export default function StudentHome() {
               <QuickActions />
             </AnimatedMount>
 
+            <AnimatedMount delay={80}>
+              <BrowseQuickActions />
+            </AnimatedMount>
+
             <AnimatedMount delay={120}>
               <Card>
-                <Row style={{ justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-                  <View style={{ flex: 1 }}>
+                <Row style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
                     <Body muted style={{ fontSize: 12 }}>
                       {hi ? "विद्यार्थी आईडी" : "Student ID"}
                     </Body>
-                    <Title style={{ fontSize: 20, marginTop: 2 }}>{activeChild.student_code}</Title>
+                    <Title style={{ fontSize: 20, marginTop: 2 }} numberOfLines={1}>
+                      {activeChild.student_code}
+                    </Title>
                   </View>
                   <Button
                     label={hi ? "पहचान पत्र" : "ID Card"}
                     icon="card-outline"
-                    variant="outline"
+                    compact
                     onPress={() => router.push("/idcard")}
+                    style={{ flexShrink: 0 }}
                   />
                 </Row>
                 {activeChild.centre_name ? (

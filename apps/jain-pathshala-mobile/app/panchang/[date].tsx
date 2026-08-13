@@ -32,6 +32,7 @@ import {
 import type { SunOverrideFile } from "@/lib/panchang/sun-override-schema";
 import { PanchangCityPicker } from "@/components/PanchangCityPicker";
 import { PanchangPachchakkhanCard } from "@/components/PanchangPachchakkhanCard";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { Body, Card, Row, Screen, StateView, Title } from "@/components/ui";
 
 function EventRow({
@@ -167,22 +168,26 @@ export default function PanchangDayScreen() {
 
   if (loading) {
     return (
-      <Screen>
-        <StateView status="loading" emptyText="" />
-      </Screen>
+      <ActivityThemed accent="library">
+        <Screen>
+          <StateView status="loading" emptyText="" />
+        </Screen>
+      </ActivityThemed>
     );
   }
 
   if (!day || !yearData) {
     return (
-      <Screen>
-        <StateView
-          status="empty"
-          emptyText={
-            hi ? "इस दिन का पंचांग नहीं मिला।" : "No Panchang entry for this day."
-          }
-        />
-      </Screen>
+      <ActivityThemed accent="library">
+        <Screen>
+          <StateView
+            status="empty"
+            emptyText={
+              hi ? "इस दिन का पंचांग नहीं मिला।" : "No Panchang entry for this day."
+            }
+          />
+        </Screen>
+      </ActivityThemed>
     );
   }
 
@@ -192,6 +197,7 @@ export default function PanchangDayScreen() {
   );
 
   return (
+    <ActivityThemed accent="library">
     <Screen contentStyle={{ paddingBottom: 40 }}>
       <Title style={{ fontSize: 22, lineHeight: 30 }}>{gregLabel}</Title>
       <Body muted style={{ marginTop: 4, fontSize: 13, lineHeight: 20 }}>
@@ -262,5 +268,6 @@ export default function PanchangDayScreen() {
         }}
       />
     </Screen>
+    </ActivityThemed>
   );
 }

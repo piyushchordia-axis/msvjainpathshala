@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { bodyFamily } from "@/constants/typography";
 import {
   useAdminBatches,
@@ -58,7 +59,7 @@ function PickSheet({
 
   return (
     <Modal visible={open} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: c.background }}>
+      <ActivityThemed accent="shikshaks">
         <View
           style={{
             paddingHorizontal: 18,
@@ -125,7 +126,7 @@ function PickSheet({
             ))
           )}
         </ScrollView>
-      </View>
+      </ActivityThemed>
     </Modal>
   );
 }
@@ -301,7 +302,7 @@ export default function ShikshaksScreen() {
     centresQ.isRefetching || shikshaksQ.isRefetching || batchesQ.isRefetching;
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="shikshaks">
       <AppHeader
         title={hi ? "शिक्षक" : "Shikshaks"}
         subtitle={hi ? "केंद्र और बैच नियुक्तियाँ" : "Centre and batch assignments"}
@@ -462,6 +463,6 @@ export default function ShikshaksScreen() {
           );
         }}
       />
-    </View>
+    </ActivityThemed>
   );
 }

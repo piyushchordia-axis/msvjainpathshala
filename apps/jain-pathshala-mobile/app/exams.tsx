@@ -17,6 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { apiGet, apiPost, apiPut, ApiError } from "@/lib/api";
 import { bodyFamily } from "@/constants/typography";
@@ -566,7 +567,7 @@ export default function Exams() {
     : 0;
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="exams">
       <AppHeader
         title={hi ? "परीक्षाएँ" : "Exams"}
         subtitle={hi ? "उपलब्ध ऑनलाइन परीक्षा दें" : "Take an available online exam"}
@@ -857,6 +858,6 @@ export default function Exams() {
           </>
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

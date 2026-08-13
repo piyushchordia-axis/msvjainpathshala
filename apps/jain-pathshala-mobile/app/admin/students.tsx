@@ -15,6 +15,7 @@ import {
 import { fonts, bodyFamily } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import {
   useAdminBatches,
@@ -254,7 +255,7 @@ function AddStudentModal({ open, onClose }: { open: boolean; onClose: () => void
 
   return (
     <Modal visible={open} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: c.background }}>
+      <ActivityThemed accent="students">
         <View
           style={{
             paddingHorizontal: 18,
@@ -403,7 +404,7 @@ function AddStudentModal({ open, onClose }: { open: boolean; onClose: () => void
             loading={createMut.isPending}
           />
         </KeyboardAwareScrollViewCompat>
-      </View>
+      </ActivityThemed>
     </Modal>
   );
 }
@@ -510,7 +511,7 @@ export default function StudentsScreen() {
   const keyExtractor = useCallback((item: AdminStudentRow) => item.id, []);
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="students">
       <AppHeader
         title={hi ? "विद्यार्थी" : "Students"}
         subtitle={hi ? "आपके केंद्रों की सूची" : "Roster across your centres"}
@@ -530,7 +531,6 @@ export default function StudentsScreen() {
           gap: 10,
           borderBottomWidth: 1,
           borderBottomColor: c.border,
-          backgroundColor: c.background,
         }}
       >
         <TextInput
@@ -643,6 +643,6 @@ export default function StudentsScreen() {
         )}
       </Screen>
       <AddStudentModal open={addOpen} onClose={() => setAddOpen(false)} />
-    </View>
+    </ActivityThemed>
   );
 }

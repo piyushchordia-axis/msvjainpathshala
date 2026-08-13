@@ -9,6 +9,7 @@ import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAdminBatches, useBatchPunyaStandings } from "@/lib/queries";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
@@ -141,7 +142,7 @@ export default function ShikshakPunyaStandingsScreen() {
   const canGoForward = month < maxMonth;
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="punya">
       <AppHeader
         title={hi ? "पुण्य स्थिति" : "Punya standings"}
         subtitle={
@@ -467,6 +468,6 @@ export default function ShikshakPunyaStandingsScreen() {
           </>
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

@@ -14,6 +14,7 @@ import * as Haptics from "expo-haptics";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import {
   useAttendanceSession,
   useMarkAttendance,
@@ -148,14 +149,17 @@ export default function AttendanceMarkScreen() {
 
   if (detail.isLoading) {
     return (
+      <ActivityThemed accent="attendance">
       <Screen scroll={false}>
         <StateView status="loading" emptyText="" />
       </Screen>
+      </ActivityThemed>
     );
   }
   if (detail.isError || !session) {
     const notAllowed = detail.error instanceof ApiError && detail.error.statusCode === 404;
     return (
+      <ActivityThemed accent="attendance">
       <Screen scroll={false}>
         <StateView
           status={notAllowed ? "empty" : "error"}
@@ -169,6 +173,7 @@ export default function AttendanceMarkScreen() {
           retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
         />
       </Screen>
+      </ActivityThemed>
     );
   }
 
@@ -250,6 +255,7 @@ export default function AttendanceMarkScreen() {
   );
 
   return (
+    <ActivityThemed accent="attendance">
     <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0, paddingBottom: 0 }}>
       <View style={{ flex: 1 }}>
         <FlatList
@@ -280,7 +286,6 @@ export default function AttendanceMarkScreen() {
             style={{
               borderTopWidth: 1,
               borderTopColor: c.border,
-              backgroundColor: c.background,
               paddingHorizontal: 18,
               paddingTop: 12,
               paddingBottom: Math.max(insets.bottom, 12),
@@ -342,5 +347,6 @@ export default function AttendanceMarkScreen() {
         onSettled={() => void detail.refetch()}
       />
     </Screen>
+    </ActivityThemed>
   );
 }

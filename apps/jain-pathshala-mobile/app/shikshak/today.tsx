@@ -11,7 +11,7 @@ import { formatDate } from "@/lib/format";
 import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
-import { ShikshakQuickActions } from "@/components/QuickActions";
+import { BrowseQuickActions, ShikshakQuickActions } from "@/components/QuickActions";
 import { SessionCheckIn, type SessionCheckInMode } from "@/components/SessionCheckIn";
 import { SyncOpStatus } from "@/components/SyncOpStatus";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
@@ -250,6 +250,10 @@ export default function TodayScreen() {
 
         <AnimatedMount delay={40}>
           <ShikshakQuickActions />
+        </AnimatedMount>
+
+        <AnimatedMount delay={50}>
+          <BrowseQuickActions />
         </AnimatedMount>
 
         <Title style={{ fontSize: 17, marginTop: 8, marginBottom: 4 }}>

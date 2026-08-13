@@ -1,0 +1,4 @@
+{"sessionId":"0083e4","runId":"pre-fix","hypothesisId":"D","location":"QuickActions.tsx:ActionTile","message":"tile render","data":{"href":"/guest/centres","accent":"centres","token":"activityCentres"},"timestamp":1786624834248}
+{"sessionId":"0083e4","runId":"pre-fix","hypothesisId":"D","location":"QuickActions.tsx:ActionTile","message":"tile render","data":{"href":"/guest/shivirs","accent":"shivirs","token":"activityShivirs"},"timestamp":1786624834251}
+{"sessionId":"0083e4","runId":"pre-fix","hypothesisId":"D","location":"QuickActions.tsx:ActionTile","message":"tile render","data":{"href":"/guest/library","accent":"library","token":"activityLibrary"},"timestamp":1786624834255}
+{"sessionId":"0083e4","runId":"pre-fix","hypothesisId":"D","location":"QuickActions.tsx:ActionTile","message":"tile render","data":{"href":"/guest/notices","accent":"notices","token":"activityNotices"},"timestamp":1786624834257}

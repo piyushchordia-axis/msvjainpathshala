@@ -7,6 +7,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { ApiError, apiGet, apiPost } from "@/lib/api";
 import { fonts } from "@/constants/typography";
@@ -111,12 +112,12 @@ export function JoinApprovalsScreen({ initialKind }: { initialKind?: JoinKind })
 
   if (!allowed.length) {
     return (
-      <View style={{ flex: 1, backgroundColor: c.background }}>
+      <ActivityThemed accent="join">
         <AppHeader title={hi ? "Join स्वीकृति" : "Join approvals"} right={backControl} />
         <Body muted style={{ paddingHorizontal: 18 }}>
           {hi ? "पहुँच नहीं" : "No access"}
         </Body>
-      </View>
+      </ActivityThemed>
     );
   }
 
@@ -132,7 +133,7 @@ export function JoinApprovalsScreen({ initialKind }: { initialKind?: JoinKind })
   });
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="join">
       <AppHeader
         title={hi ? "Join स्वीकृति" : "Join approvals"}
         subtitle={
@@ -256,6 +257,6 @@ export function JoinApprovalsScreen({ initialKind }: { initialKind?: JoinKind })
           </Card>
         ) : null}
       </ScrollView>
-    </View>
+    </ActivityThemed>
   );
 }

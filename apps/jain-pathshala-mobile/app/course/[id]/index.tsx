@@ -1,21 +1,24 @@
 import { useLocalSearchParams } from "expo-router";
-import { View } from "react-native";
-import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { AppHeader } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { CourseLearnerOutline } from "@/components/CourseLearnerOutline";
 import { Screen, StateView } from "@/components/ui";
-import { useCourseTree } from "@/lib/queries";
+import { useCourseTree, usePublicCourseTree } from "@/lib/queries";
 
 export default function LearnerCourseDetailScreen() {
-  const c = useColors();
   const { hi } = useLocale();
+  const { user } = useAuth();
+  const guest = !user;
   const { children, loading, isError, activeStudentId, refetch } = useSessionView();
   const params = useLocalSearchParams<{ id: string }>();
   const courseId = String(params.id ?? "");
-  const treeQ = useCourseTree(courseId, activeStudentId ?? undefined, !!activeStudentId);
+  const memberQ = useCourseTree(courseId, activeStudentId ?? undefined, !guest && !!activeStudentId);
+  const publicQ = usePublicCourseTree(courseId, guest);
+  const treeQ = guest ? publicQ : memberQ;
   const courseTitle = treeQ.data
     ? hi
       ? treeQ.data.course.name_hi || treeQ.data.course.name_en
@@ -25,17 +28,19 @@ export default function LearnerCourseDetailScreen() {
       : "Course";
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="courses">
       <AppHeader compact title={courseTitle} />
       <Screen
         refreshing={treeQ.isFetching}
         onRefresh={() => {
-          refetch();
+          if (!guest) refetch();
           void treeQ.refetch();
         }}
         contentStyle={{ paddingTop: 0, gap: 8 }}
       >
-        {loading ? (
+        {guest ? (
+          <CourseLearnerOutline courseId={courseId} readOnly />
+        ) : loading ? (
           <StateView status="loading" emptyText="" />
         ) : isError ? (
           <StateView
@@ -66,6 +71,6 @@ export default function LearnerCourseDetailScreen() {
           </>
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

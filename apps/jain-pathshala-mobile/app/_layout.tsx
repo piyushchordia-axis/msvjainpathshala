@@ -83,6 +83,9 @@ function RootLayoutNav() {
       <Stack.Screen name="admin" options={{ headerShown: false }} />
 
       {/* Shared detail screens (pushed from any persona) */}
+      <Stack.Screen name="centres" options={{ title: "Centres" }} />
+      <Stack.Screen name="shivirs" options={{ title: "Shivirs" }} />
+      <Stack.Screen name="notices" options={{ title: "Notices" }} />
       <Stack.Screen name="centre/[id]" options={{ title: "Centre" }} />
       <Stack.Screen name="shivir/[id]" options={{ title: "Shivir" }} />
       <Stack.Screen name="shivir-scan/[id]" options={{ title: "Scan attendance" }} />
@@ -111,9 +114,11 @@ function RootLayoutNav() {
       <Stack.Screen name="exams" options={{ title: "Exams" }} />
       <Stack.Screen name="service-requests" options={{ title: "My requests" }} />
       <Stack.Screen name="service-request/[id]" options={{ title: "Request" }} />
+      <Stack.Screen name="library/index" options={{ title: "Library" }} />
       <Stack.Screen name="library/[sectionId]" options={{ title: "Library" }} />
       <Stack.Screen name="library/item/[itemId]" options={{ title: "Text" }} />
       <Stack.Screen name="library/downloads" options={{ title: "Downloads" }} />
+      <Stack.Screen name="library/bookmarks" options={{ title: "Bookmarks" }} />
       <Stack.Screen name="panchang/index" options={{ title: "Panchang" }} />
       <Stack.Screen name="panchang/[date]" options={{ title: "Day" }} />
     </Stack>

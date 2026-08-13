@@ -1,7 +1,7 @@
 import { View } from "react-native";
 import { useRouter } from "expo-router";
-import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useNiyamCatalog, useStudentNiyams } from "@/lib/queries";
 import { dateRangeLabel, endsInDaysLabel } from "@/lib/niyam-badges";
@@ -13,7 +13,6 @@ import { NiyamSubmissionsList } from "@/components/NiyamSubmissionsList";
 import { Body, Button, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 export default function ParentNiyams() {
-  const c = useColors();
   const { hi } = useLocale();
   const router = useRouter();
   const { children, loading, isError, activeStudentId, refetch } = useSessionView();
@@ -23,7 +22,7 @@ export default function ParentNiyams() {
   const catalogRows = catalog.data?.items ?? [];
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="niyam">
       <AppHeader
         title={hi ? "नियम" : "Niyams"}
         subtitle={hi ? "आपके बच्चे के संकल्प" : "Your child's submissions"}
@@ -159,6 +158,6 @@ export default function ParentNiyams() {
           </>
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

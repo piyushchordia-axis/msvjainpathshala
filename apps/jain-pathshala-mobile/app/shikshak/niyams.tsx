@@ -1,18 +1,17 @@
 import { View } from "react-native";
-import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useNiyamCatalog } from "@/lib/queries";
 import { AppHeader } from "@/components/AppHeader";
 import { Body, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 export default function NiyamsScreen() {
-  const c = useColors();
   const { hi } = useLocale();
   const { data, isLoading, isError, refetch, isRefetching } = useNiyamCatalog();
   const items = data?.items ?? [];
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="niyam">
       <AppHeader title={hi ? "नियम सूची" : "Niyam catalog"} />
       <Screen refreshing={isRefetching} onRefresh={refetch}>
         {isLoading ? (
@@ -48,6 +47,6 @@ export default function NiyamsScreen() {
           })
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

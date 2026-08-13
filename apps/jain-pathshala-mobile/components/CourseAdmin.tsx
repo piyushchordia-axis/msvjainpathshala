@@ -14,6 +14,7 @@ import {
 import { router, useLocalSearchParams } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
 import { CentreSwitcher, usePersistedCentreId } from "@/components/CentreSwitcher";
@@ -147,7 +148,7 @@ export default function CourseAdmin({ persona }: { persona: CourseAdminPersona }
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="courses">
       <AppHeader
         title={hi ? "पाठ्यक्रम" : "Courses"}
         subtitle={
@@ -454,6 +455,6 @@ export default function CourseAdmin({ persona }: { persona: CourseAdminPersona }
           </Pressable>
         </Pressable>
       </Modal>
-    </View>
+    </ActivityThemed>
   );
 }

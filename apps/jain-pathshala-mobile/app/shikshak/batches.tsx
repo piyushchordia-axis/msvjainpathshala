@@ -3,6 +3,7 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAdminBatches, useMyStaffing } from "@/lib/queries";
 import { formatTimeRange } from "@/lib/format";
 import { formatAgeGroups } from "@workspace/api-zod";
@@ -60,7 +61,7 @@ export default function BatchesScreen() {
   const showSwitcher = centres.length > 1;
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="batches">
       <AppHeader title={hi ? "मेरे बैच" : "My batches"} />
       <Screen refreshing={isRefetching} onRefresh={refetch}>
         {showSwitcher ? (
@@ -148,6 +149,6 @@ export default function BatchesScreen() {
           ))
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

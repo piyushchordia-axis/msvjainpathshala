@@ -8,6 +8,7 @@ import { apiGet } from "@/lib/api";
 import type { ShivirDetail } from "@/lib/types";
 import { formatDateRange } from "@/lib/format";
 import { Body, Button, Card, Screen, StateView, Title, Row as URow } from "@/components/ui";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 
 export default function ShivirDetailScreen() {
   const c = useColors();
@@ -22,17 +23,24 @@ export default function ShivirDetailScreen() {
   });
 
   if (isLoading) {
-    return <Screen scroll={false}><StateView status="loading" emptyText="" /></Screen>;
+    return (
+      <ActivityThemed accent="shivirs">
+        <Screen scroll={false}><StateView status="loading" emptyText="" /></Screen>
+      </ActivityThemed>
+    );
   }
   if (isError || !data) {
     return (
-      <Screen scroll={false}>
-        <StateView status="error" emptyText="" errorText={hi ? "शिविर लोड नहीं हो सका।" : "Could not load this shivir."} onRetry={refetch} retryLabel={hi ? "पुनः प्रयास करें" : "Try again"} />
-      </Screen>
+      <ActivityThemed accent="shivirs">
+        <Screen scroll={false}>
+          <StateView status="error" emptyText="" errorText={hi ? "शिविर लोड नहीं हो सका।" : "Could not load this shivir."} onRetry={refetch} retryLabel={hi ? "पुनः प्रयास करें" : "Try again"} />
+        </Screen>
+      </ActivityThemed>
     );
   }
 
   return (
+    <ActivityThemed accent="shivirs">
     <Screen refreshing={isRefetching} onRefresh={refetch}>
       <Card>
         <Title>{data.name}</Title>
@@ -87,5 +95,6 @@ export default function ShivirDetailScreen() {
         </Card>
       ) : null}
     </Screen>
+    </ActivityThemed>
   );
 }

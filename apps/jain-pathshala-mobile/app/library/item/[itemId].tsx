@@ -12,6 +12,7 @@ import {
 } from "@/lib/library/helpers";
 import { LibraryTextSheet } from "@/components/LibraryTextSheet";
 import { Screen, StateView } from "@/components/ui";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 
 /**
  * Deep-link / returnTo host: loads the item then presents LibraryTextSheet.
@@ -46,27 +47,32 @@ export default function LibraryItemTextHost() {
 
   if (isLoading && !found) {
     return (
-      <Screen>
-        <StateView status="loading" emptyText="" />
-      </Screen>
+      <ActivityThemed accent="library">
+        <Screen>
+          <StateView status="loading" emptyText="" />
+        </Screen>
+      </ActivityThemed>
     );
   }
 
   if ((isError && !found) || !found) {
     return (
-      <Screen refreshing={isRefetching} onRefresh={refetch}>
-        <StateView
-          status="error"
-          emptyText=""
-          errorText={hi ? "पाठ नहीं मिला।" : "That text could not be found."}
-          onRetry={() => void refetch()}
-          retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
-        />
-      </Screen>
+      <ActivityThemed accent="library">
+        <Screen refreshing={isRefetching} onRefresh={refetch}>
+          <StateView
+            status="error"
+            emptyText=""
+            errorText={hi ? "पाठ नहीं मिला।" : "That text could not be found."}
+            onRetry={() => void refetch()}
+            retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
+          />
+        </Screen>
+      </ActivityThemed>
     );
   }
 
   return (
+    <ActivityThemed accent="library">
     <Screen>
       <StateView status="loading" emptyText="" />
       <LibraryTextSheet
@@ -78,5 +84,6 @@ export default function LibraryItemTextHost() {
         }}
       />
     </Screen>
+    </ActivityThemed>
   );
 }

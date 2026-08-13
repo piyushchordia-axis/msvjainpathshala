@@ -3,6 +3,7 @@ import { Pressable, Text, View } from "react-native";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
 import { bodyFamily } from "@/constants/typography";
+import { useActivityPageBg } from "@/contexts/ActivityThemeContext";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { resolveUploadUrl } from "@/lib/api";
@@ -121,7 +122,7 @@ export function AppHeader({
   /** Tighter vertical padding (e.g. ID card). */
   compact?: boolean;
 }) {
-  const c = useColors();
+  const pageBg = useActivityPageBg();
   const top = useWebTopInset();
   return (
     <View
@@ -129,7 +130,7 @@ export function AppHeader({
         paddingTop: top + (compact ? 4 : 10),
         paddingHorizontal: 18,
         paddingBottom: compact ? 8 : 12,
-        backgroundColor: c.background,
+        backgroundColor: pageBg,
       }}
     >
       <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>

@@ -53,7 +53,13 @@ export default function LibraryPage() {
 
     Promise.resolve(load)
       .then((res) => {
-        if (!cancelled) setSections(res?.sections ?? []);
+        if (!cancelled) {
+          setSections(
+            (res?.sections ?? []).filter(
+              (s) => !(authed && s.key === "pathshala_join"),
+            ),
+          );
+        }
       })
       .catch((err) => {
         if (!cancelled) {

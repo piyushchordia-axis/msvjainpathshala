@@ -9,6 +9,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { t, type Locale } from "@workspace/i18n";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiGet, apiPost, ApiError } from "@/lib/api";
 import { bodyFamily } from "@/constants/typography";
@@ -218,16 +219,16 @@ function ThreadView({
 
   if (detail.isLoading) {
     return (
-      <View style={{ flex: 1, backgroundColor: c.background }}>
+      <ActivityThemed accent="serviceRequests">
         <AppHeader title={tr(locale, "itemTitle")} right={backControl} />
         <StateView status="loading" emptyText="" />
-      </View>
+      </ActivityThemed>
     );
   }
 
   if (detail.isError || !detail.data) {
     return (
-      <View style={{ flex: 1, backgroundColor: c.background }}>
+      <ActivityThemed accent="serviceRequests">
         <AppHeader title={tr(locale, "itemTitle")} right={backControl} />
         <StateView
           status="error"
@@ -236,7 +237,7 @@ function ThreadView({
           onRetry={detail.refetch}
           retryLabel={tr(locale, "tryAgain")}
         />
-      </View>
+      </ActivityThemed>
     );
   }
 
@@ -249,7 +250,7 @@ function ThreadView({
   const busy = send.isPending || claim.isPending || resolve.isPending;
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="serviceRequests">
       <AppHeader
         title={data.subject}
         subtitle={
@@ -385,7 +386,7 @@ function ThreadView({
           </Row>
         </Card>
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }
 
@@ -437,7 +438,7 @@ export default function AdminServiceRequestsScreen() {
   ];
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="serviceRequests">
       <AppHeader
         title={tr(locale, "title")}
         subtitle={tr(locale, "adminSubtitle")}
@@ -536,6 +537,6 @@ export default function AdminServiceRequestsScreen() {
           })
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

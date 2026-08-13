@@ -871,3 +871,32 @@ describe("courses step 6 — admin panel exit criteria", () => {
     expect(sec.certified_at).toBeNull();
   });
 });
+
+describe("public courses catalogue (guest)", () => {
+  it("lists active courses and returns a not_started outline without auth", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const list = await request(app).get("/v1/public/courses");
+    expect(list.status).toBe(200);
+    const items = list.body.data.items as Array<{ id: string }>;
+    expect(items.some((c) => c.id === courseId)).toBe(true);
+
+    const tree = await request(app).get(`/v1/public/courses/${courseId}/tree`);
+    expect(tree.status).toBe(200);
+    expect(tree.body.data.course.id).toBe(courseId);
+    expect(tree.body.data.sections[0].id).toBe(sectionIds[0]);
+    expect(tree.body.data.sections[0].status).toBe("not_started");
+    expect(tree.body.data.sections[0].certified_at).toBeNull();
+
+    const missing = await request(app).get(
+      "/v1/public/courses/00000000-0000-4000-8000-000000000000/tree",
+    );
+    expect(missing.status).toBe(404);
+  });
+});

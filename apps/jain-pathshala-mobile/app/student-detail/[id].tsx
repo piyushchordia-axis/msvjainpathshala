@@ -12,6 +12,7 @@ import { router, useLocalSearchParams } from "expo-router";
 import { Image as ExpoImage } from "expo-image";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { canAccessAdminPanel } from "@/lib/auth";
 import { resolveUploadUrl, ApiError } from "@/lib/api";
@@ -581,7 +582,7 @@ function AwardPunyaSheet({
       presentationStyle="pageSheet"
       onRequestClose={onClose}
     >
-      <View style={{ flex: 1, backgroundColor: c.background }}>
+      <ActivityThemed accent="students">
         <View
           style={{
             paddingHorizontal: 18,
@@ -755,7 +756,7 @@ function AwardPunyaSheet({
             disabled={confirmDisabled}
           />
         </ScrollView>
-      </View>
+      </ActivityThemed>
     </Modal>
   );
 }
@@ -947,7 +948,7 @@ export default function StudentDetailScreen() {
 
   if (!canAccessAdminPanel(user?.role)) {
     return (
-      <View style={{ flex: 1, backgroundColor: c.background }}>
+      <ActivityThemed accent="students">
         <AppHeader title={hi ? "विद्यार्थी" : "Student"} />
         <StateView
           status="error"
@@ -958,21 +959,21 @@ export default function StudentDetailScreen() {
               : "This screen is for Guruji and admin roles."
           }
         />
-      </View>
+      </ActivityThemed>
     );
   }
 
   if (!studentId) {
     return (
-      <View style={{ flex: 1, backgroundColor: c.background }}>
+      <ActivityThemed accent="students">
         <AppHeader title={hi ? "विद्यार्थी" : "Student"} />
         <StateView status="empty" emptyText={hi ? "विद्यार्थी नहीं मिला।" : "Student not found."} />
-      </View>
+      </ActivityThemed>
     );
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="students">
       <AppHeader
         title={titleName ?? (detail.isLoading ? (hi ? "लोड हो रहा है…" : "Loading…") : hi ? "विद्यार्थी" : "Student")}
         subtitle={detail.data?.student_code ?? undefined}
@@ -993,6 +994,6 @@ export default function StudentDetailScreen() {
           <ProgressPanel studentId={studentId} studentName={titleName ?? undefined} />
         ) : null}
       </ScrollView>
-    </View>
+    </ActivityThemed>
   );
 }

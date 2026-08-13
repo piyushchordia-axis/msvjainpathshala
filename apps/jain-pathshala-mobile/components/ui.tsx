@@ -25,6 +25,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import * as Haptics from "expo-haptics";
 import { KeyboardAwareScrollViewCompat } from "@/components/KeyboardAwareScrollViewCompat";
 import { bodyFamily, displayFamily, fonts } from "@/constants/typography";
+import { useActivityPageBg, useActivityTheme } from "@/contexts/ActivityThemeContext";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useColors } from "@/hooks/useColors";
 
@@ -49,10 +50,11 @@ export function Screen({
   scroll?: boolean;
 }) {
   const c = useColors();
+  const pageBg = useActivityPageBg();
   const bottomInset = Platform.OS === "web" ? 34 : 0;
   if (!scroll) {
     return (
-      <View style={[styles.flex, { backgroundColor: c.background }]}>
+      <View style={[styles.flex, { backgroundColor: pageBg }]}>
         <View style={[styles.screenContent, { paddingBottom: 24 + bottomInset }, contentStyle]}>
           {children}
         </View>
@@ -61,7 +63,7 @@ export function Screen({
   }
   return (
     <KeyboardAwareScrollViewCompat
-      style={[styles.flex, { backgroundColor: c.background }]}
+      style={[styles.flex, { backgroundColor: pageBg }]}
       contentContainerStyle={[
         styles.screenContent,
         { paddingBottom: 40 + bottomInset },
@@ -110,17 +112,26 @@ export function Title({
   children,
   style,
   light,
+  numberOfLines,
 }: {
   children: ReactNode;
   style?: StyleProp<TextStyle>;
   light?: boolean;
+  numberOfLines?: number;
 }) {
   const c = useColors();
   const { hi } = useLocale();
+  const theme = useActivityTheme();
   return (
     <Text
+      numberOfLines={numberOfLines}
       style={[
-        { fontFamily: displayFamily(hi), fontSize: 26, lineHeight: 32, color: light ? "#FFFFFF" : c.secondary },
+        {
+          fontFamily: displayFamily(hi),
+          fontSize: 26,
+          lineHeight: 32,
+          color: light ? "#FFFFFF" : (theme?.inkStrong ?? c.secondary),
+        },
         style,
       ]}
     >
@@ -328,7 +339,8 @@ export function Button({
       <Animated.View
         style={[
           {
-            width: "100%",
+            width: compact ? undefined : "100%",
+            alignSelf: compact ? "flex-start" : undefined,
             flexDirection: "row",
             alignItems: "center",
             justifyContent: "center",

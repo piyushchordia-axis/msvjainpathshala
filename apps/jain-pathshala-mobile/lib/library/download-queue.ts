@@ -1,7 +1,7 @@
 /**
  * Library audio download queue — max 3 concurrent FileSystem DownloadResumable jobs.
  */
-import { AppState, type AppStateStatus } from "react-native";
+import { AppState, Platform, type AppStateStatus } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
 import type { LibraryItemDto } from "@workspace/api-zod";
 import { safeHref } from "@/lib/safe-url";
@@ -60,6 +60,11 @@ class LibraryDownloadQueue {
   }
 
   async init() {
+    if (Platform.OS === "web") {
+      this.rows = await readDownloadedAudio();
+      this.emit();
+      return;
+    }
     await ensureLibraryAudioDir();
     this.rows = await readDownloadedAudio();
     // Incomplete jobs from a prior session become queued for resume.
@@ -94,6 +99,7 @@ class LibraryDownloadQueue {
   }
 
   async enqueue(item: LibraryItemDto): Promise<void> {
+    if (Platform.OS === "web") return;
     if (!item.audio_url) return;
     const dest = libraryAudioPath(item.id);
     const existing = this.getRow(item.id);
@@ -183,6 +189,7 @@ class LibraryDownloadQueue {
   }
 
   private async drain() {
+    if (Platform.OS === "web") return;
     if (this.draining) return;
     this.draining = true;
     try {
@@ -247,9 +254,11 @@ class LibraryDownloadQueue {
       }
       let sizeBytes = row.sizeBytes;
       try {
-        const info = await FileSystem.getInfoAsync(result.uri);
-        if (info.exists && "size" in info && typeof info.size === "number") {
-          sizeBytes = info.size;
+        if (Platform.OS !== "web") {
+          const info = await FileSystem.getInfoAsync(result.uri);
+          if (info.exists && "size" in info && typeof info.size === "number") {
+            sizeBytes = info.size;
+          }
         }
       } catch {
         /* keep prior */

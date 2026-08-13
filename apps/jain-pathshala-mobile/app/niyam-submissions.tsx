@@ -1,21 +1,19 @@
-import { View } from "react-native";
 import { Stack } from "expo-router";
-import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useStudentNiyams } from "@/lib/queries";
 import { NiyamSubmissionsList } from "@/components/NiyamSubmissionsList";
 import { Screen, StateView } from "@/components/ui";
 
 export default function NiyamSubmissionsScreen() {
-  const c = useColors();
   const { hi } = useLocale();
   const { activeStudentId, activeChild, loading, refetch } = useSessionView();
   const niyams = useStudentNiyams(activeStudentId ?? undefined);
   const items = niyams.data?.items ?? [];
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="niyam">
       <Stack.Screen
         options={{ title: hi ? "सभी प्रस्तुतियाँ" : "All submissions" }}
       />
@@ -56,6 +54,6 @@ export default function NiyamSubmissionsScreen() {
           <NiyamSubmissionsList items={items} hi={hi} />
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

@@ -9,6 +9,7 @@ import type { BatchItem, CentreDetail } from "@/lib/types";
 import { formatTimeRange } from "@/lib/format";
 import { formatAgeGroups } from "@workspace/api-zod";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 
 interface CentreDetailResponse {
   centre: CentreDetail;
@@ -35,19 +36,26 @@ export default function CentreDetailScreen() {
   });
 
   if (isLoading) {
-    return <Screen scroll={false}><StateView status="loading" emptyText="" /></Screen>;
+    return (
+      <ActivityThemed accent="centres">
+        <Screen scroll={false}><StateView status="loading" emptyText="" /></Screen>
+      </ActivityThemed>
+    );
   }
   if (isError || !data) {
     return (
-      <Screen scroll={false}>
-        <StateView status="error" emptyText="" errorText={hi ? "केंद्र लोड नहीं हो सका।" : "Could not load this centre."} onRetry={refetch} retryLabel={hi ? "पुनः प्रयास करें" : "Try again"} />
-      </Screen>
+      <ActivityThemed accent="centres">
+        <Screen scroll={false}>
+          <StateView status="error" emptyText="" errorText={hi ? "केंद्र लोड नहीं हो सका।" : "Could not load this centre."} onRetry={refetch} retryLabel={hi ? "पुनः प्रयास करें" : "Try again"} />
+        </Screen>
+      </ActivityThemed>
     );
   }
 
   const { centre, batches } = data;
 
   return (
+    <ActivityThemed accent="centres">
     <Screen refreshing={isRefetching} onRefresh={refetch}>
       <Card>
         <Title>{centre.name}</Title>
@@ -106,5 +114,6 @@ export default function CentreDetailScreen() {
         style={{ marginTop: 6 }}
       />
     </Screen>
+    </ActivityThemed>
   );
 }

@@ -12,7 +12,7 @@ import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
 import { Body, Button, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
-import { QuickActions } from "@/components/QuickActions";
+import { BrowseQuickActions, QuickActions } from "@/components/QuickActions";
 
 export default function ParentHome() {
   const c = useColors();
@@ -104,20 +104,23 @@ export default function ParentHome() {
             {activeChild ? (
               <AnimatedMount delay={60}>
                 <Card>
-                  <Row style={{ justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-                    <View style={{ flex: 1 }}>
-                      <Body muted style={{ fontSize: 12 }}>
-                        {hi ? "विद्यार्थी आईडी" : "Student ID"}
-                      </Body>
-                      <Title style={{ fontSize: 20, marginTop: 2 }}>{activeChild.student_code}</Title>
-                    </View>
-                    <Button
-                      label={hi ? "पहचान पत्र" : "ID Card"}
-                      icon="card-outline"
-                      variant="outline"
-                      onPress={() => router.push("/idcard")}
-                    />
-                  </Row>
+                <Row style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Body muted style={{ fontSize: 12 }}>
+                      {hi ? "विद्यार्थी आईडी" : "Student ID"}
+                    </Body>
+                    <Title style={{ fontSize: 20, marginTop: 2 }} numberOfLines={1}>
+                      {activeChild.student_code}
+                    </Title>
+                  </View>
+                  <Button
+                    label={hi ? "पहचान पत्र" : "ID Card"}
+                    icon="card-outline"
+                    compact
+                    onPress={() => router.push("/idcard")}
+                    style={{ flexShrink: 0 }}
+                  />
+                </Row>
                   {activeChild.centre_name ? (
                     <Body style={{ marginTop: 12 }}>{activeChild.centre_name}</Body>
                   ) : null}
@@ -143,6 +146,10 @@ export default function ParentHome() {
 
             <AnimatedMount delay={120}>
               <QuickActions />
+            </AnimatedMount>
+
+            <AnimatedMount delay={140}>
+              <BrowseQuickActions />
             </AnimatedMount>
 
             <AnimatedMount delay={180}>

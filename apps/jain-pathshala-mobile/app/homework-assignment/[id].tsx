@@ -10,6 +10,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { resolveUploadUrl, ApiError } from "@/lib/api";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import {
   useGradeAllHomework,
   useGradeHomeworkSubmission,
@@ -378,9 +379,11 @@ export default function HomeworkAssignmentScreen() {
 
   if (!assignmentId) {
     return (
+      <ActivityThemed accent="homework">
       <Screen scroll={false}>
         <StateView status="error" emptyText="" errorText={hi ? "अमान्य असाइनमेंट।" : "Invalid assignment."} />
       </Screen>
+      </ActivityThemed>
     );
   }
 
@@ -392,6 +395,7 @@ export default function HomeworkAssignmentScreen() {
   ];
 
   return (
+    <ActivityThemed accent="homework">
     <Screen
       refreshing={submissions.isRefetching}
       onRefresh={() => {
@@ -517,5 +521,6 @@ export default function HomeworkAssignmentScreen() {
         ))
       )}
     </Screen>
+    </ActivityThemed>
   );
 }

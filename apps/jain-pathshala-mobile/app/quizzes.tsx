@@ -16,6 +16,7 @@ import { View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import {
   useAvailableQuizzes,
@@ -205,7 +206,7 @@ export default function Quizzes() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="quizzes">
       <AppHeader
         title={hi ? "प्रश्नोत्तरी" : "Quizzes"}
         subtitle={hi ? "उपलब्ध प्रश्नोत्तरी में भाग लें" : "Take an available quiz"}
@@ -381,6 +382,6 @@ export default function Quizzes() {
           </>
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
-import { useRouter, type Href } from "expo-router";
+import { useRouter } from "expo-router";
 import { Pressable, Text, TextInput, View } from "react-native";
 import { bodyFamily, fonts } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
@@ -10,14 +10,8 @@ import { ApiError, apiPost } from "@/lib/api";
 import type { OtpSendResponse, OtpVerifyResponse } from "@/lib/auth";
 import { routeForRole } from "@/lib/roles";
 import { AppHeader } from "@/components/AppHeader";
+import { GuestQuickActions } from "@/components/QuickActions";
 import { Body, Button, Card, Row, Screen, Title } from "@/components/ui";
-
-interface BrowseLink {
-  label: string;
-  sub: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  href: Href;
-}
 
 function deviceId(): string {
   return `mobile-${Date.now().toString()}-${Math.random().toString(36).slice(2, 11)}`;
@@ -44,33 +38,6 @@ export default function GuestHomeScreen() {
   const phoneValid = digits.length === 10;
   const otpValid = otp.length === 6;
   const awaitingOtp = !!otpToken;
-
-  const browse: BrowseLink[] = [
-    {
-      label: hi ? "केंद्र" : "Centres",
-      sub: hi ? "अपने पास की पाठशाला खोजें" : "Find a Pathshala near you",
-      icon: "location-outline",
-      href: "/guest/centres",
-    },
-    {
-      label: hi ? "शिविर" : "Shivirs",
-      sub: hi ? "आगामी शिविर देखें" : "Upcoming camps and events",
-      icon: "bonfire-outline",
-      href: "/guest/shivirs",
-    },
-    {
-      label: hi ? "पुस्तकालय" : "Library",
-      sub: hi ? "सीखने के संसाधन" : "Learning resources",
-      icon: "library-outline",
-      href: "/guest/library",
-    },
-    {
-      label: hi ? "सूचनाएँ" : "Notices",
-      sub: hi ? "सार्वजनिक घोषणाएँ" : "Public announcements",
-      icon: "notifications-outline",
-      href: "/guest/notices",
-    },
-  ];
 
   const sendOtp = async () => {
     if (!phoneValid || busy) return;
@@ -145,14 +112,6 @@ export default function GuestHomeScreen() {
         }
       />
       <Screen contentStyle={{ paddingBottom: 110 }}>
-        <Title style={{ fontSize: 18, marginLeft: 2 }}>
-          {hi ? "अपना मार्ग चुनें" : "Choose your path"}
-        </Title>
-        <Body muted style={{ marginLeft: 2, marginBottom: 10, fontSize: 13 }}>
-          {hi
-            ? "विद्यार्थी, शिक्षक या संचालक के रूप में जुड़ें — साइन इन की जरूरत नहीं।"
-            : "Join as Student, Shikshak, or Sanchalak — no sign-in required."}
-        </Body>
         <Pressable onPress={() => router.push("/join")}>
           {({ pressed }) => (
             <Card style={{ opacity: pressed ? 0.85 : 1, marginBottom: 16 }}>
@@ -195,15 +154,13 @@ export default function GuestHomeScreen() {
                 ? "अपने खाते में साइन इन करें"
                 : "Sign in to your account"}
           </Title>
-          <Body muted style={{ marginTop: 6 }}>
-            {awaitingOtp
-              ? hi
+          {awaitingOtp ? (
+            <Body muted style={{ marginTop: 6 }}>
+              {hi
                 ? `हमने ${e164} पर 6-अंकीय कोड भेजा।`
-                : `We sent a 6-digit code to ${e164}.`
-              : hi
-                ? "कोड पाने के लिए अपना +91 मोबाइल नंबर दर्ज करें।"
-                : "Enter your +91 mobile number to receive a one-time code."}
-          </Body>
+                : `We sent a 6-digit code to ${e164}.`}
+            </Body>
+          ) : null}
 
           {devCode && __DEV__ && awaitingOtp ? (
             <View
@@ -370,43 +327,7 @@ export default function GuestHomeScreen() {
             ? "केंद्र, शिविर और अन्य जानकारी खुली रहती है।"
             : "Centres, shivirs and other public info stay open."}
         </Body>
-        <Card style={{ padding: 0, overflow: "hidden" }}>
-          {browse.map((row) => (
-            <Pressable key={row.label} onPress={() => router.push(row.href)}>
-              {({ pressed }) => (
-                <Row
-                  style={{
-                    paddingVertical: 14,
-                    paddingHorizontal: 14,
-                    opacity: pressed ? 0.7 : 1,
-                    borderBottomWidth: 1,
-                    borderBottomColor: c.border,
-                  }}
-                >
-                  <View
-                    style={{
-                      width: 38,
-                      height: 38,
-                      borderRadius: 10,
-                      backgroundColor: c.accent,
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <Ionicons name={row.icon} size={19} color={c.primary} />
-                  </View>
-                  <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Body style={{ fontSize: 15 }}>{row.label}</Body>
-                    <Body muted style={{ fontSize: 12, marginTop: 1 }}>
-                      {row.sub}
-                    </Body>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color={c.inkDim} />
-                </Row>
-              )}
-            </Pressable>
-          ))}
-        </Card>
+        <GuestQuickActions />
       </Screen>
     </View>
   );

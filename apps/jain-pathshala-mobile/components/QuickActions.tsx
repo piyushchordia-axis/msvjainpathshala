@@ -9,6 +9,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useEffect, useMemo, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { ACTIVITY_ACCENT_TOKEN, type ActivityAccentKey } from "@/constants/activity-accents";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { bodyFamily } from "@/constants/typography";
@@ -20,65 +21,86 @@ export type QuickAction = {
   icon: keyof typeof Ionicons.glyphMap;
   en: string;
   hi: string;
+  accent: ActivityAccentKey;
   /** Optional count badge (e.g. attendance alerts). */
   badge?: number;
 };
 
 const PARENT_ACTIONS: QuickAction[] = [
-  { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "सूचनाएँ" },
-  { href: "/my-attendance", icon: "checkmark-done-outline", en: "Attendance", hi: "उपस्थिति" },
-  { href: "/niyam-submit", icon: "sparkles-outline", en: "Submit Niyam", hi: "नियम भेजें" },
-  { href: "/courses", icon: "library-outline", en: "Courses", hi: "पाठ्यक्रम" },
-  { href: "/certificates", icon: "ribbon-outline", en: "Certificates", hi: "प्रमाणपत्र" },
-  { href: "/homework", icon: "book-outline", en: "Homework", hi: "गृहकार्य" },
-  { href: "/quizzes", icon: "help-circle-outline", en: "Quizzes", hi: "प्रश्नोत्तरी" },
-  { href: "/exams", icon: "clipboard-outline", en: "Exams", hi: "परीक्षाएँ" },
-  { href: "/competitions", icon: "trophy-outline", en: "Competitions", hi: "प्रतियोगिताएँ" },
+  { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "सूचनाएँ", accent: "notifications" },
+  { href: "/my-attendance", icon: "checkmark-done-outline", en: "Attendance", hi: "उपस्थिति", accent: "attendance" },
+  { href: "/niyam-submit", icon: "sparkles-outline", en: "Submit Niyam", hi: "नियम भेजें", accent: "niyam" },
+  { href: "/courses", icon: "library-outline", en: "Courses", hi: "पाठ्यक्रम", accent: "courses" },
+  { href: "/certificates", icon: "ribbon-outline", en: "Certificates", hi: "प्रमाणपत्र", accent: "certificates" },
+  { href: "/homework", icon: "book-outline", en: "Homework", hi: "गृहकार्य", accent: "homework" },
+  { href: "/quizzes", icon: "help-circle-outline", en: "Quizzes", hi: "प्रश्नोत्तरी", accent: "quizzes" },
+  { href: "/exams", icon: "clipboard-outline", en: "Exams", hi: "परीक्षाएँ", accent: "exams" },
+  { href: "/competitions", icon: "trophy-outline", en: "Competitions", hi: "प्रतियोगिताएँ", accent: "competitions" },
 ];
 
 /** Guruji shortcuts — mirrors web admin items that exist on mobile. */
 export const SHIKSHAK_ACTIONS: QuickAction[] = [
-  { href: "/shikshak/students", icon: "people-outline", en: "Students", hi: "विद्यार्थी" },
-  { href: "/shikshak/batches", icon: "grid-outline", en: "Batches", hi: "बैच" },
-  { href: "/shikshak/courses", icon: "library-outline", en: "Courses", hi: "पाठ्यक्रम" },
-  { href: "/shikshak/homework", icon: "book-outline", en: "Homework", hi: "गृहकार्य" },
+  { href: "/shikshak/students", icon: "people-outline", en: "Students", hi: "विद्यार्थी", accent: "students" },
+  { href: "/shikshak/batches", icon: "grid-outline", en: "Batches", hi: "बैच", accent: "batches" },
+  { href: "/shikshak/courses", icon: "library-outline", en: "Courses", hi: "पाठ्यक्रम", accent: "courses" },
+  { href: "/shikshak/homework", icon: "book-outline", en: "Homework", hi: "गृहकार्य", accent: "homework" },
   {
     href: "/shikshak/punya",
     icon: "trophy-outline",
     en: "Punya standings",
     hi: "पुण्य स्थिति",
+    accent: "punya",
   },
-  { href: "/shikshak/niyam-review", icon: "clipboard-outline", en: "Niyam review", hi: "नियम समीक्षा" },
-  { href: "/shikshak/join-approvals", icon: "person-add-outline", en: "Join approvals", hi: "Join स्वीकृति" },
-  { href: "/shikshak/niyams", icon: "sparkles-outline", en: "Niyam catalog", hi: "नियम सूची" },
-  { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "सूचनाएँ" },
-  { href: "/gallery", icon: "images-outline", en: "Punya Wall", hi: "पुण्य दीवार" },
-  { href: "/shikshak/profile", icon: "person-circle-outline", en: "Profile", hi: "प्रोफ़ाइल" },
+  { href: "/shikshak/niyam-review", icon: "clipboard-outline", en: "Niyam review", hi: "नियम समीक्षा", accent: "niyam" },
+  { href: "/shikshak/join-approvals", icon: "person-add-outline", en: "Join approvals", hi: "Join स्वीकृति", accent: "join" },
+  { href: "/shikshak/niyams", icon: "sparkles-outline", en: "Niyam catalog", hi: "नियम सूची", accent: "niyam" },
+  { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "सूचनाएँ", accent: "notifications" },
+  { href: "/gallery", icon: "images-outline", en: "Punya Wall", hi: "पुण्य दीवार", accent: "punya" },
+  { href: "/shikshak/profile", icon: "person-circle-outline", en: "Profile", hi: "प्रोफ़ाइल", accent: "profile" },
 ];
 
 /** Sanchalak shortcuts — management surfaces that sit outside the five-tab bar. */
 export const SANCHALAK_ACTIONS: QuickAction[] = [
-  { href: "/admin/centres", icon: "business-outline", en: "Centres", hi: "केंद्र" },
-  { href: "/admin/shikshaks", icon: "people-circle-outline", en: "Shikshaks", hi: "शिक्षक" },
-  { href: "/admin/courses", icon: "library-outline", en: "Courses", hi: "पाठ्यक्रम" },
-  { href: "/admin/holidays", icon: "calendar-outline", en: "Holidays", hi: "अवकाश" },
-  { href: "/admin/notices", icon: "megaphone-outline", en: "Notices", hi: "सूचनाएँ" },
-  { href: "/admin/niyam-review", icon: "clipboard-outline", en: "Niyam review", hi: "नियम समीक्षा" },
-  { href: "/admin/join", icon: "person-add-outline", en: "Join approvals", hi: "Join स्वीकृति" },
-  { href: "/admin/attendance", icon: "checkmark-done-outline", en: "Attendance", hi: "उपस्थिति" },
+  { href: "/admin/centres", icon: "business-outline", en: "Centres", hi: "केंद्र", accent: "centres" },
+  { href: "/admin/shikshaks", icon: "people-circle-outline", en: "Shikshaks", hi: "शिक्षक", accent: "shikshaks" },
+  { href: "/admin/courses", icon: "library-outline", en: "Courses", hi: "पाठ्यक्रम", accent: "courses" },
+  { href: "/admin/holidays", icon: "calendar-outline", en: "Holidays", hi: "अवकाश", accent: "holidays" },
+  { href: "/admin/notices", icon: "megaphone-outline", en: "Notices", hi: "सूचनाएँ", accent: "notices" },
+  { href: "/admin/niyam-review", icon: "clipboard-outline", en: "Niyam review", hi: "नियम समीक्षा", accent: "niyam" },
+  { href: "/admin/join", icon: "person-add-outline", en: "Join approvals", hi: "Join स्वीकृति", accent: "join" },
+  { href: "/admin/attendance", icon: "checkmark-done-outline", en: "Attendance", hi: "उपस्थिति", accent: "attendance" },
   {
     href: "/admin/service-requests",
     icon: "chatbubbles-outline",
     en: "Service requests",
     hi: "सेवा अनुरोध",
+    accent: "serviceRequests",
   },
-  { href: "/admin/homework", icon: "book-outline", en: "Homework", hi: "गृहकार्य" },
-  { href: "/admin/gallery", icon: "images-outline", en: "Gallery", hi: "गैलरी" },
-  { href: "/admin/reports", icon: "document-text-outline", en: "Reports", hi: "रिपोर्ट" },
-  { href: "/admin/enrolments", icon: "clipboard-outline", en: "Enrolments", hi: "नामांकन" },
-  { href: "/admin/students", icon: "people-outline", en: "Students", hi: "विद्यार्थी" },
-  { href: "/gallery", icon: "ribbon-outline", en: "Punya Wall", hi: "पुण्य दीवार" },
-  { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "अधिसूचनाएँ" },
+  { href: "/admin/homework", icon: "book-outline", en: "Homework", hi: "गृहकार्य", accent: "homework" },
+  { href: "/admin/gallery", icon: "images-outline", en: "Gallery", hi: "गैलरी", accent: "gallery" },
+  { href: "/admin/reports", icon: "document-text-outline", en: "Reports", hi: "रिपोर्ट", accent: "reports" },
+  { href: "/admin/enrolments", icon: "clipboard-outline", en: "Enrolments", hi: "नामांकन", accent: "enrolments" },
+  { href: "/admin/students", icon: "people-outline", en: "Students", hi: "विद्यार्थी", accent: "students" },
+  { href: "/gallery", icon: "ribbon-outline", en: "Punya Wall", hi: "पुण्य दीवार", accent: "punya" },
+  { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "अधिसूचनाएँ", accent: "notifications" },
+  { href: "/library", icon: "library-outline", en: "Library", hi: "पुस्तकालय", accent: "library" },
+  { href: "/shivirs", icon: "bonfire-outline", en: "Shivirs", hi: "शिविर", accent: "shivirs" },
+];
+
+/** Guest home + tabs — stay on `/guest/*` so we do not leave the guest navigator. */
+export const GUEST_BROWSE_ACTIONS: QuickAction[] = [
+  { href: "/guest/centres", icon: "location-outline", en: "Centres", hi: "केंद्र", accent: "centres" },
+  { href: "/guest/shivirs", icon: "bonfire-outline", en: "Shivirs", hi: "शिविर", accent: "shivirs" },
+  { href: "/guest/library", icon: "library-outline", en: "Library", hi: "पुस्तकालय", accent: "library" },
+  { href: "/guest/notices", icon: "megaphone-outline", en: "Notices", hi: "सूचनाएँ", accent: "notices" },
+];
+
+/** Signed-in homes — shared stack routes, not the guest tab navigator. */
+export const SIGNED_IN_BROWSE_ACTIONS: QuickAction[] = [
+  { href: "/centres", icon: "location-outline", en: "Centres", hi: "केंद्र", accent: "centres" },
+  { href: "/shivirs", icon: "bonfire-outline", en: "Shivirs", hi: "शिविर", accent: "shivirs" },
+  { href: "/library", icon: "library-outline", en: "Library", hi: "पुस्तकालय", accent: "library" },
+  { href: "/notices", icon: "megaphone-outline", en: "Notices", hi: "सूचनाएँ", accent: "notices" },
 ];
 
 function ActionTile({ action }: { action: QuickAction }) {
@@ -110,14 +132,14 @@ function ActionTile({ action }: { action: QuickAction }) {
           {
             alignItems: "center",
             paddingVertical: 14,
-            borderRadius: c.radius ?? 12,
-            backgroundColor: c.muted,
+            borderRadius: c.activityTileRadius,
+            backgroundColor: c[ACTIVITY_ACCENT_TOKEN[action.accent]],
           },
           animStyle,
         ]}
       >
         <View style={{ position: "relative" }}>
-          <Ionicons name={action.icon} size={26} color={c.primary} />
+          <Ionicons name={action.icon} size={26} color={c.activityInk} />
           {badge > 0 ? (
             <View
               style={{
@@ -146,7 +168,7 @@ function ActionTile({ action }: { action: QuickAction }) {
             </View>
           ) : null}
         </View>
-        <Body style={{ fontSize: 11, marginTop: 6, textAlign: "center" }}>
+        <Body style={{ fontSize: 11, marginTop: 6, textAlign: "center", color: c.activityInk }}>
           {hi ? action.hi : action.en}
         </Body>
       </Animated.View>
@@ -159,21 +181,39 @@ export function QuickActions({
   actions = PARENT_ACTIONS,
   titleEn = "Activities",
   titleHi = "गतिविधियाँ",
+  hideTitle = false,
 }: {
   actions?: QuickAction[];
   titleEn?: string;
   titleHi?: string;
+  hideTitle?: boolean;
 }) {
   const { hi } = useLocale();
   return (
     <Card>
-      <Title style={{ fontSize: 16, marginBottom: 12 }}>{hi ? titleHi : titleEn}</Title>
+      {hideTitle ? null : (
+        <Title style={{ fontSize: 16, marginBottom: 12 }}>{hi ? titleHi : titleEn}</Title>
+      )}
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
         {actions.map((a) => (
           <ActionTile key={a.href} action={a} />
         ))}
       </View>
     </Card>
+  );
+}
+
+export function GuestQuickActions() {
+  return <QuickActions actions={GUEST_BROWSE_ACTIONS} hideTitle />;
+}
+
+export function BrowseQuickActions() {
+  return (
+    <QuickActions
+      actions={SIGNED_IN_BROWSE_ACTIONS}
+      titleEn="Browse"
+      titleHi="देखें"
+    />
   );
 }
 

@@ -414,6 +414,20 @@
       "when": 1790764800000,
       "tag": "0058_library_courses_join_rename",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "7",
+      "when": 1790851200000,
+      "tag": "0059_stavan_subsections",
+      "breakpoints": true
+    },
+    {
+      "idx": 60,
+      "version": "7",
+      "when": 1790937600000,
+      "tag": "0060_publish_pathshala_join",
+      "breakpoints": true
     }
   ]
 }

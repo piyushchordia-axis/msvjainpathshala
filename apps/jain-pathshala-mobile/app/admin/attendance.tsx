@@ -6,6 +6,7 @@ import { Linking, Pressable, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { bodyFamily } from "@/constants/typography";
 import { formatDate, formatTimeRange } from "@/lib/format";
 import {
@@ -282,14 +283,14 @@ export default function AdminAttendanceScreen() {
 
   if (selectedCentreId && selectedSessionId) {
     return (
-      <View style={{ flex: 1, backgroundColor: c.background }}>
+      <ActivityThemed accent="attendance">
         <SessionDetail
           centreId={selectedCentreId}
           sessionId={selectedSessionId}
           date={date}
           onBack={() => setSelectedSessionId(null)}
         />
-      </View>
+      </ActivityThemed>
     );
   }
 
@@ -302,7 +303,7 @@ export default function AdminAttendanceScreen() {
     (meta?.not_checked_in_count ?? 0) > 0;
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="attendance">
       <AppHeader
         title={hi ? "उपस्थिति" : "Attendance"}
         subtitle={hi ? "केंद्र मॉनिटर — केवल अवलोकन" : "Centre monitor — observe only"}
@@ -497,6 +498,6 @@ export default function AdminAttendanceScreen() {
           </>
         )}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

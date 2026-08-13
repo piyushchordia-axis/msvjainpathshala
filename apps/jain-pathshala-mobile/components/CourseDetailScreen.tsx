@@ -13,6 +13,7 @@ import {
 import { router, useLocalSearchParams } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
 import { CourseBrowseOutline } from "@/components/CourseBrowseOutline";
@@ -70,7 +71,7 @@ export function CourseDetailScreen({ persona }: { persona: "shikshak" | "sanchal
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="courses">
       <AppHeader
         title={
           studentId
@@ -272,6 +273,6 @@ export function CourseDetailScreen({ persona }: { persona: "shikshak" | "sanchal
           </Pressable>
         </Pressable>
       </Modal>
-    </View>
+    </ActivityThemed>
   );
 }

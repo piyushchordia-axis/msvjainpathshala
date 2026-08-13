@@ -18,6 +18,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { bodyFamily } from "@/constants/typography";
@@ -557,7 +558,7 @@ export default function NiyamReviewScreen() {
   const selectedCount = selected.size;
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="niyam">
       <AppHeader
         title={hi ? "नियम समीक्षा" : "Niyam review"}
         subtitle={
@@ -578,7 +579,6 @@ export default function NiyamReviewScreen() {
           paddingVertical: 8,
           paddingHorizontal: 12,
           gap: 8,
-          backgroundColor: c.background,
         }}
       >
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -684,7 +684,7 @@ export default function NiyamReviewScreen() {
         busy={busyId === rejectId && reject.isPending}
         windowExpired={rejectRow ? rejectRow.can_reject === false : false}
       />
-    </View>
+    </ActivityThemed>
   );
 }
 

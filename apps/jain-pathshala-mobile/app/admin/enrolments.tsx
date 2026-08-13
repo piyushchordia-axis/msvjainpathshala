@@ -11,6 +11,7 @@ import {
 import { fonts, bodyFamily } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAdminEnrolments, useEnrolmentAction } from "@/lib/queries";
 import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
@@ -75,7 +76,7 @@ function RejectSheet({
 
   return (
     <Modal visible={open} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: c.background }}>
+      <ActivityThemed accent="enrolments">
         <View
           style={{
             paddingHorizontal: 18,
@@ -169,7 +170,7 @@ function RejectSheet({
             loading={busy}
           />
         </KeyboardAwareScrollViewCompat>
-      </View>
+      </ActivityThemed>
     </Modal>
   );
 }
@@ -206,7 +207,7 @@ export default function EnrolmentsScreen() {
   };
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="enrolments">
       <AppHeader
         title={hi ? "नामांकन" : "Enrolments"}
         subtitle={hi ? "नामांकन अनुरोधों की समीक्षा करें" : "Review enrolment requests"}
@@ -319,6 +320,6 @@ export default function EnrolmentsScreen() {
         onSubmit={onReject}
         busy={mutate.isPending && mutate.variables?.action === "reject"}
       />
-    </View>
+    </ActivityThemed>
   );
 }

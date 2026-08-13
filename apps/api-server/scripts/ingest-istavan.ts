@@ -1,5 +1,5 @@
 /**
- * Ingest all MP3s from the Istavan folder into stavan_bhakti → Daily stavans.
+ * Ingest all MP3s from the Istavan folder into stavan_bhakti → Istavan.
  *
  * Usage (PowerShell):
  *   $env:DATABASE_URL = "postgres://jp:jp_dev_pwd@localhost:5434/jainpathshala"
@@ -19,7 +19,7 @@ import {
   upload_objects,
   users,
 } from "@workspace/db";
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { processLibraryMp3 } from "../src/lib/library-audio";
 
 const DEFAULT_DIR = "E:\\Enaa Creations\\MSV\\Istavan";
@@ -58,6 +58,60 @@ async function loadDotEnv() {
   }
 }
 
+async function ensureSubsection(
+  sectionId: string,
+  names: { en: string; hi: string; gu: string },
+  preferredOrder: number,
+) {
+  const [existing] = await db
+    .select()
+    .from(library_subsections)
+    .where(
+      and(
+        eq(library_subsections.section_id, sectionId),
+        eq(library_subsections.name_en, names.en),
+        isNull(library_subsections.deleted_at),
+      ),
+    )
+    .limit(1);
+  if (existing) return existing;
+
+  const [maxRow] = await db
+    .select({ order_index: library_subsections.order_index })
+    .from(library_subsections)
+    .where(
+      and(
+        eq(library_subsections.section_id, sectionId),
+        isNull(library_subsections.deleted_at),
+      ),
+    )
+    .orderBy(desc(library_subsections.order_index))
+    .limit(1);
+  const orderIndex =
+    maxRow && maxRow.order_index >= preferredOrder
+      ? maxRow.order_index + 1
+      : preferredOrder;
+
+  const [subsection] = await db
+    .insert(library_subsections)
+    .values({
+      section_id: sectionId,
+      name_en: names.en,
+      name_hi: names.hi,
+      name_gu: names.gu,
+      order_index: orderIndex,
+      draft_name_en: names.en,
+      draft_name_hi: names.hi,
+      draft_name_gu: names.gu,
+      draft_order_index: orderIndex,
+      is_published: true,
+      content_version: 1,
+    })
+    .returning();
+  if (!subsection) throw new Error(`Failed to create subsection ${names.en}`);
+  return subsection;
+}
+
 async function resolveSectionAndSubsection() {
   const [section] = await db
     .select()
@@ -72,37 +126,11 @@ async function resolveSectionAndSubsection() {
     );
   }
 
-  const [existingSub] = await db
-    .select()
-    .from(library_subsections)
-    .where(
-      and(
-        eq(library_subsections.section_id, section.id),
-        isNull(library_subsections.deleted_at),
-      ),
-    )
-    .orderBy(asc(library_subsections.order_index))
-    .limit(1);
-
-  if (existingSub) return { section, subsection: existingSub };
-
-  const [subsection] = await db
-    .insert(library_subsections)
-    .values({
-      section_id: section.id,
-      name_en: "Daily stavans",
-      name_hi: "दैनिक स्तवन",
-      name_gu: "દૈનિક સ્તવન",
-      order_index: 0,
-      draft_name_en: "Daily stavans",
-      draft_name_hi: "दैनिक स्तवन",
-      draft_name_gu: "દૈનિક સ્તવન",
-      draft_order_index: 0,
-      is_published: true,
-      content_version: 1,
-    })
-    .returning();
-  if (!subsection) throw new Error("Failed to create Daily stavans subsection");
+  const subsection = await ensureSubsection(
+    section.id,
+    { en: "Istavan", hi: "इस्तवन", gu: "ઇસ્તવન" },
+    1,
+  );
   return { section, subsection };
 }
 

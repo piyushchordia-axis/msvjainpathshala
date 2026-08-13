@@ -2,6 +2,7 @@
  * Local-only DownloadedAudio records for library audio offline playback.
  */
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
 
 export const LIBRARY_DOWNLOAD_STATUSES = [
@@ -40,6 +41,7 @@ export function libraryAudioPath(itemId: string): string {
 }
 
 export async function ensureLibraryAudioDir(): Promise<void> {
+  if (Platform.OS === "web") return;
   const dir = libraryAudioDir();
   if (!dir) return;
   const info = await FileSystem.getInfoAsync(dir);
@@ -129,8 +131,10 @@ export async function deleteDownloadedAudioWithFile(itemId: string): Promise<Dow
   const row = await getDownloadedAudio(itemId);
   const path = row?.localPath || libraryAudioPath(itemId);
   try {
-    const info = await FileSystem.getInfoAsync(path);
-    if (info.exists) await FileSystem.deleteAsync(path, { idempotent: true });
+    if (Platform.OS !== "web") {
+      const info = await FileSystem.getInfoAsync(path);
+      if (info.exists) await FileSystem.deleteAsync(path, { idempotent: true });
+    }
   } catch {
     /* ignore missing file */
   }
@@ -159,6 +163,7 @@ export async function isDownloadCurrent(
   const row = await getDownloadedAudio(itemId);
   if (!row || row.status !== "complete") return false;
   if (row.contentVersion !== contentVersion) return false;
+  if (Platform.OS === "web") return false;
   try {
     const info = await FileSystem.getInfoAsync(row.localPath);
     return info.exists;

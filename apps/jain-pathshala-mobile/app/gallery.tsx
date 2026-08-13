@@ -3,6 +3,7 @@ import { Image } from "expo-image";
 import { fonts } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { resolveUploadUrl } from "@/lib/api";
 import { useWallGallery, type GalleryMediaItem } from "@/lib/queries";
 import { formatAgeGroup } from "@workspace/api-zod";
@@ -89,6 +90,7 @@ export default function GalleryScreen() {
   );
 
   return (
+    <ActivityThemed accent="punya">
     <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0 }}>
       {isLoading ? (
         <View style={{ paddingHorizontal: 18, paddingTop: 8 }}>
@@ -144,5 +146,6 @@ export default function GalleryScreen() {
         />
       )}
     </Screen>
+    </ActivityThemed>
   );
 }

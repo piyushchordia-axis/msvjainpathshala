@@ -8,6 +8,7 @@ import * as Sharing from "expo-sharing";
 import { Ionicons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { resolveUploadUrl, ApiError } from "@/lib/api";
 import {
   useAdminCentres,
@@ -161,7 +162,7 @@ export default function ReportsScreen() {
   }
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="reports">
       <AppHeader
         title={hi ? "रिपोर्ट" : "Reports"}
         subtitle={hi ? "केंद्र मासिक PDF" : "Centre monthly PDF"}
@@ -277,6 +278,6 @@ export default function ReportsScreen() {
           </Card>
         ))}
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }

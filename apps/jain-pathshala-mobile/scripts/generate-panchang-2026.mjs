@@ -166,7 +166,7 @@ const vridhiDates = new Set([
 
 let tithi = 10;
 let paksha = "sud";
-let monthIdx = 3; // Magh around January
+let monthIdx = 2; // Paush around January — 13 Aug 2026 lands in Shravan
 let nakIdx = 0;
 const days = [];
 
@@ -240,7 +240,7 @@ for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
 
 const payload = {
   schemaVersion: 1,
-  contentVersion: 1,
+  contentVersion: 2,
   sect: "shwetambar",
   vikramSamvat: 2082,
   veerSamvat: 2552,

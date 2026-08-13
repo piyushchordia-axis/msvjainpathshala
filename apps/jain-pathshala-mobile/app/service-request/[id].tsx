@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useLocalSearchParams } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiGet, apiPost, ApiError } from "@/lib/api";
 import { bodyFamily } from "@/constants/typography";
@@ -119,7 +120,7 @@ export default function ServiceRequestThreadScreen() {
   const trimmed = reply.trim();
 
   return (
-    <View style={{ flex: 1, backgroundColor: c.background }}>
+    <ActivityThemed accent="serviceRequests">
       <Screen refreshing={detail.isRefetching} onRefresh={() => detail.refetch()}>
         <Card>
           <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
@@ -214,6 +215,6 @@ export default function ServiceRequestThreadScreen() {
           </Row>
         </Card>
       </Screen>
-    </View>
+    </ActivityThemed>
   );
 }
