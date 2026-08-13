@@ -74,6 +74,7 @@ export default function LibraryDownloadsScreen() {
                       title_hi: row.title_hi,
                       title_gu: row.title_gu,
                       localUri: row.localPath,
+                      source: "local",
                     });
                   }}
                   disabled={row.status !== "complete"}

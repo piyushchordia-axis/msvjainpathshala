@@ -17,12 +17,16 @@ import type { LibraryItemDto } from "@workspace/api-zod";
 
 export type PlaybackSpeed = 0.75 | 1 | 1.25 | 1.5;
 
+export type LibraryAudioSource = "local" | "remote";
+
 export type LibraryAudioTrack = {
   itemId: string;
   title_en: string;
   title_hi: string;
   title_gu: string;
   localUri: string;
+  /** Whether playback is from a device file or a streamed URL. */
+  source: LibraryAudioSource;
 };
 
 type LibraryAudioContextValue = {
@@ -34,10 +38,15 @@ type LibraryAudioContextValue = {
   rate: PlaybackSpeed;
   fullPlayerOpen: boolean;
   setFullPlayerOpen: (open: boolean) => void;
-  playItem: (item: LibraryItemDto, localUri: string) => Promise<void>;
+  playItem: (
+    item: LibraryItemDto,
+    localUri: string,
+    source?: LibraryAudioSource,
+  ) => Promise<void>;
   playTrack: (track: LibraryAudioTrack) => Promise<void>;
   togglePlayPause: () => void;
   seekTo: (seconds: number) => Promise<void>;
+  skipBy: (deltaSeconds: number) => Promise<void>;
   setSpeed: (rate: PlaybackSpeed) => void;
   stop: () => void;
 };
@@ -101,6 +110,14 @@ export function LibraryAudioProvider({ children }: { children: ReactNode }) {
 
   const playTrack = useCallback(
     async (next: LibraryAudioTrack) => {
+      const normalized: LibraryAudioTrack = {
+        ...next,
+        source:
+          next.source ??
+          (next.localUri.startsWith("file:") || next.localUri.startsWith("/")
+            ? "local"
+            : "remote"),
+      };
       await ensurePlaybackMode();
       const existing = playerRef.current;
       if (existing) {
@@ -114,9 +131,9 @@ export function LibraryAudioProvider({ children }: { children: ReactNode }) {
         playerRef.current = null;
       }
       try {
-        const player = createAudioPlayer({ uri: next.localUri }, { updateInterval: 250 });
+        const player = createAudioPlayer({ uri: normalized.localUri }, { updateInterval: 250 });
         playerRef.current = player;
-        setTrack(next);
+        setTrack(normalized);
         setLoaded(true);
         setFullPlayerOpen(true);
         setRate(1);
@@ -127,7 +144,7 @@ export function LibraryAudioProvider({ children }: { children: ReactNode }) {
         }
         player.play();
         setPlaying(true);
-        const title = next.title_en || next.title_hi || next.title_gu || "Audio";
+        const title = normalized.title_en || normalized.title_hi || normalized.title_gu || "Audio";
         setTimeout(() => activateLockScreen(title), 200);
       } catch {
         setTrack(null);
@@ -140,13 +157,20 @@ export function LibraryAudioProvider({ children }: { children: ReactNode }) {
   );
 
   const playItem = useCallback(
-    async (item: LibraryItemDto, localUri: string) => {
+    async (
+      item: LibraryItemDto,
+      localUri: string,
+      source: LibraryAudioSource = localUri.startsWith("file:") || localUri.startsWith("/")
+        ? "local"
+        : "remote",
+    ) => {
       await playTrack({
         itemId: item.id,
         title_en: item.title_en ?? "",
         title_hi: item.title_hi ?? "",
         title_gu: item.title_gu ?? "",
         localUri,
+        source,
       });
     },
     [playTrack],
@@ -172,9 +196,20 @@ export function LibraryAudioProvider({ children }: { children: ReactNode }) {
   const seekTo = useCallback(async (seconds: number) => {
     const p = playerRef.current;
     if (!p) return;
-    await p.seekTo(Math.max(0, seconds));
-    setPosition(seconds);
+    const dur = p.duration || 0;
+    const clamped = Math.max(0, dur > 0 ? Math.min(seconds, dur) : seconds);
+    await p.seekTo(clamped);
+    setPosition(clamped);
   }, []);
+
+  const skipBy = useCallback(
+    async (deltaSeconds: number) => {
+      const p = playerRef.current;
+      if (!p) return;
+      await seekTo((p.currentTime || 0) + deltaSeconds);
+    },
+    [seekTo],
+  );
 
   const setSpeed = useCallback((next: PlaybackSpeed) => {
     const p = playerRef.current;
@@ -221,6 +256,7 @@ export function LibraryAudioProvider({ children }: { children: ReactNode }) {
       playTrack,
       togglePlayPause,
       seekTo,
+      skipBy,
       setSpeed,
       stop,
     }),
@@ -236,6 +272,7 @@ export function LibraryAudioProvider({ children }: { children: ReactNode }) {
       playTrack,
       togglePlayPause,
       seekTo,
+      skipBy,
       setSpeed,
       stop,
     ],

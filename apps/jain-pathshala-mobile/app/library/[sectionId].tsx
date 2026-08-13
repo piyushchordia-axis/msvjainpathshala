@@ -25,6 +25,7 @@ import {
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 import { LibraryTextSheet } from "@/components/LibraryTextSheet";
 import { LibraryAudioButton } from "@/components/LibraryAudioButton";
+import { LibraryOfflineButton } from "@/components/LibraryOfflineButton";
 
 function CollapsibleGroup({
   title,
@@ -115,6 +116,7 @@ function ItemRow({
               onPress={() => void openVideo()}
             />
           ) : null}
+          {hasAudio ? <LibraryOfflineButton item={item} style={{ flex: 1 }} /> : null}
         </Row>
       ) : (
         <Body muted style={{ marginTop: 8, fontSize: 13, lineHeight: 22 }}>

@@ -11,7 +11,7 @@ import LibrarySectionPage from "@/pages/public/LibrarySectionPage";
 import LibraryItemPage from "@/pages/public/LibraryItemPage";
 import PanchangPage from "@/pages/public/PanchangPage";
 import GalleryPage from "@/pages/public/GalleryPage";
-import { AboutPage, MsvPage } from "@/pages/public/PublicStubs";
+import { AboutPage, MsvPage, CoursesPage } from "@/pages/public/PublicStubs";
 import ContactPage from "@/pages/public/ContactPage";
 import EnquirePage from "@/pages/public/EnquirePage";
 import DonatePage from "@/pages/public/DonatePage";
@@ -50,6 +50,7 @@ export default function PublicRoutes() {
         <Route path="/library/item/:id" component={LibraryItemPage} />
         <Route path="/library/:id" component={LibrarySectionPage} />
         <Route path="/panchang" component={PanchangPage} />
+        <Route path="/courses" component={CoursesPage} />
         <Route path="/gallery" component={GalleryPage} />
         <Route path="/about" component={AboutPage} />
         <Route path="/contact" component={ContactPage} />

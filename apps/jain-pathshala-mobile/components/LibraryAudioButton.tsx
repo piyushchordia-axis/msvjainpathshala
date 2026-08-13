@@ -1,4 +1,4 @@
-import { ActivityIndicator, Alert, Pressable, View, type StyleProp, type ViewStyle } from "react-native";
+import { Alert, Pressable, type StyleProp, type ViewStyle } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { LibraryItemDto } from "@workspace/api-zod";
 import { useColors } from "@/hooks/useColors";
@@ -11,9 +11,19 @@ import { useLibraryAudio } from "@/contexts/LibraryAudioContext";
 import { Body } from "@/components/ui";
 import { resolveUploadUrl } from "@/lib/api";
 
+function isPlayableLocalPath(path: string | null | undefined): path is string {
+  if (!path) return false;
+  return (
+    path.endsWith(".mp3") ||
+    path.endsWith(".m4a") ||
+    path.endsWith(".mp4") ||
+    path.endsWith(".aac")
+  );
+}
+
 /**
- * Library Audio: stream/play immediately. Offline files (from "Download all")
- * are used when remote is unavailable and the local file has a playable extension.
+ * Library Audio: play/pause. Prefers a ready offline `.mp3` when present;
+ * otherwise streams the remote signed URL.
  */
 export function LibraryAudioButton({
   item,
@@ -24,11 +34,10 @@ export function LibraryAudioButton({
 }) {
   const c = useColors();
   const { hi } = useLocale();
-  const { getRow, getProgress, cancel, retry } = useLibraryDownload();
+  const { getRow } = useLibraryDownload();
   const { playItem, track, playing, togglePlayPause } = useLibraryAudio();
   const row = getRow(item.id);
   const state = resolveAudioButtonState(row, item.content_version);
-  const progress = getProgress(item.id);
   const isCurrent = track?.itemId === item.id;
 
   const label = isCurrent
@@ -39,44 +48,33 @@ export function LibraryAudioButton({
       : hi
         ? "चलाएँ"
         : "Play"
-    : state === "queued" || state === "downloading"
-      ? hi
-        ? "रद्द"
-        : "Cancel"
-      : state === "failed"
-        ? hi
-          ? "पुनः"
-          : "Retry"
-        : hi
-          ? "ऑडियो"
-          : "Audio";
+    : hi
+      ? "ऑडियो"
+      : "Audio";
 
   const onPress = () => {
     if (isCurrent) {
       togglePlayPause();
       return;
     }
-    if (state === "queued" || state === "downloading") {
-      void cancel(item.id);
-      return;
-    }
-    if (state === "failed") {
-      void retry(item.id);
-      return;
-    }
 
-    // Prefer remote stream when online. Cached ".audio" downloads (legacy) and
-    // incomplete offline files were opening the player with no audible output.
-    const remote = resolveUploadUrl(item.audio_url);
+    // Prefer ready local file so offline playback works and saved copies are used.
     const localPath = state === "ready" ? row?.localPath : null;
-    const localLooksPlayable =
-      !!localPath &&
-      (localPath.endsWith(".mp3") ||
-        localPath.endsWith(".m4a") ||
-        localPath.endsWith(".mp4") ||
-        localPath.endsWith(".aac"));
+    const remote = resolveUploadUrl(item.audio_url);
 
-    const uri = remote ?? (localLooksPlayable ? localPath : null);
+    let uri: string | null = null;
+    let source: "local" | "remote" = "remote";
+    if (isPlayableLocalPath(localPath)) {
+      uri = localPath;
+      source = "local";
+    } else if (remote) {
+      uri = remote;
+      source = "remote";
+    } else if (isPlayableLocalPath(row?.localPath)) {
+      // Stale version or incomplete row — still try playable local as last resort.
+      uri = row!.localPath;
+      source = "local";
+    }
 
     if (!uri) {
       Alert.alert(
@@ -87,7 +85,7 @@ export function LibraryAudioButton({
       );
       return;
     }
-    void playItem(item, uri);
+    void playItem(item, uri, source);
   };
 
   return (
@@ -111,47 +109,11 @@ export function LibraryAudioButton({
         style,
       ]}
     >
-      {!isCurrent && (state === "downloading" || state === "queued") ? (
-        <View style={{ width: 18, height: 18, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator size="small" color={c.primary} />
-          {state === "downloading" && progress > 0 ? (
-            <View
-              style={{
-                position: "absolute",
-                bottom: -2,
-                left: 0,
-                right: 0,
-                height: 2,
-                backgroundColor: c.muted,
-                borderRadius: 1,
-                overflow: "hidden",
-              }}
-            >
-              <View
-                style={{
-                  height: 2,
-                  width: `${Math.round(progress * 100)}%`,
-                  backgroundColor: c.primary,
-                }}
-              />
-            </View>
-          ) : null}
-        </View>
-      ) : (
-        <Ionicons
-          name={
-            isCurrent
-              ? playing
-                ? "pause"
-                : "play"
-              : state === "failed"
-                ? "refresh-outline"
-                : "play"
-          }
-          size={16}
-          color={c.secondary}
-        />
-      )}
+      <Ionicons
+        name={isCurrent ? (playing ? "pause" : "play") : "play"}
+        size={16}
+        color={c.secondary}
+      />
       <Body numberOfLines={1} style={{ fontSize: 13, lineHeight: 18, color: c.secondary, flexShrink: 1 }}>
         {label}
       </Body>

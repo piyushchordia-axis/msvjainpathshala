@@ -407,6 +407,13 @@
       "when": 1790678400000,
       "tag": "0057_library_draft_published",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "7",
+      "when": 1790764800000,
+      "tag": "0058_library_courses_join_rename",
+      "breakpoints": true
     }
   ]
 }
