@@ -23,7 +23,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-/** Log in by raw phone (for self-created users): registered users get dev_code. */
+/** Log in by raw phone (for self-created users): use DEFAULT_OTP in tests. */
 async function loginByPhone(phone: string): Promise<string> {
   const send = await request(app).post("/api/auth/login").send({ phase: "send", phone });
   expect(send.status).toBe(200);

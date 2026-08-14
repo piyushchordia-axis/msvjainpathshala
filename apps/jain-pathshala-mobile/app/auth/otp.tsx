@@ -29,14 +29,12 @@ export default function OtpScreen() {
   const params = useLocalSearchParams<{
     phone?: string | string[];
     otp_token?: string | string[];
-    dev_code?: string | string[];
     returnTo?: string | string[];
   }>();
   const first = (v: string | string[] | undefined): string | undefined =>
     Array.isArray(v) ? v[0] : v;
   const phone = first(params.phone);
   const otp_token = first(params.otp_token);
-  const dev_code = first(params.dev_code);
   const returnTo = safeReturnTo(first(params.returnTo));
 
   const [otp, setOtp] = useState("");
@@ -101,22 +99,6 @@ export default function OtpScreen() {
 
       <Card>
         <Title style={{ fontSize: 22 }}>{hi ? "सत्यापन" : "Verify"}</Title>
-
-        {dev_code && __DEV__ ? (
-          <View
-            style={{
-              marginTop: 12,
-              backgroundColor: c.infoSoft,
-              borderRadius: 8,
-              paddingHorizontal: 12,
-              paddingVertical: 10,
-            }}
-          >
-            <Text style={{ fontFamily: bodyFamily(hi, "medium"), color: c.infoText, fontSize: 13 }}>
-              {hi ? "डेव कोड" : "Dev code"}: {dev_code}
-            </Text>
-          </View>
-        ) : null}
 
         {error ? (
           <View

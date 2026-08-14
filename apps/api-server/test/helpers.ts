@@ -6,7 +6,7 @@ import request from "supertest";
 import { pool, workerPool } from "@workspace/db";
 import app from "../src/app";
 
-/** Seeded login phones (OTP 123456 for all — see lib/db/src/seed.ts). */
+/** Seeded login phones (OTP via DEFAULT_OTP / OTP_ENABLED=false in tests). */
 export const SEED_PHONES = {
   super_admin: "+919800000001",
   state_admin: "+919800000002",

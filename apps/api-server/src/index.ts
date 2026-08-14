@@ -2,9 +2,9 @@ import { pool, workerPool } from "@workspace/db";
 import app from "./app";
 import { logger } from "./lib/logger";
 import { startScheduler } from "./lib/scheduler";
-import { getSmsProvider } from "./lib/sms";
+import { getSmsProvider, logSmsBalanceIfConfigured } from "./lib/sms";
 import { warmTestOtpNumbers } from "./lib/otp-test-numbers";
-import { warmFixedOtp } from "./lib/otp-fixed";
+import { warmOtpConfig } from "./lib/otp-config";
 import { assertProductionRedisConfigured } from "./lib/assert-production-redis";
 import { registerAllJobs } from "./jobs/register-all";
 import { attachAdminDashboardFeed } from "./lib/admin-dashboard-feed";
@@ -78,6 +78,7 @@ const server = app.listen(port, host, () => {
   if (process.env["NODE_ENV"] === "production") {
     try {
       getSmsProvider();
+      void logSmsBalanceIfConfigured();
     } catch (err) {
       logger.fatal({ err }, "SMS provider unavailable in production; refusing to start");
       process.exit(1);
@@ -97,7 +98,7 @@ const server = app.listen(port, host, () => {
   // login, i.e. exactly when nobody is reading — and an allow-list left behind
   // after review is precisely the thing that should be impossible to miss.
   warmTestOtpNumbers();
-  warmFixedOtp();
+  warmOtpConfig();
 });
 
 // PERF #18 — nginx upstream keepalive defaults to 60s; Node's keepAliveTimeout

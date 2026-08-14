@@ -87,6 +87,12 @@ const env = {
 
   CI: "false",
 
+  // babel-preset-expo's expo-router plugin skips EXPO_ROUTER_APP_ROOT inlining
+  // when NODE_ENV==='test' (vitest/shell leftover). That leaves
+  // process.env.EXPO_ROUTER_APP_ROOT in require.context and Metro fails.
+  NODE_ENV:
+    process.env.NODE_ENV === "production" ? "production" : "development",
+
   EXPO_PUBLIC_API_BASE_URL: apiBase,
 
   EXPO_PUBLIC_METRO_PORT: metroPort,
@@ -95,7 +101,43 @@ const env = {
 
 };
 
-
+// #region agent log
+{
+  const fs = await import("node:fs");
+  const payload = {
+    sessionId: "115197",
+    runId: "post-fix",
+    hypothesisId: "A",
+    location: "scripts/dev.mjs:env",
+    message: "Expo Metro spawn env — NODE_ENV drives expo-router APP_ROOT inlining",
+    data: {
+      NODE_ENV: env.NODE_ENV ?? null,
+      BABEL_ENV: env.BABEL_ENV ?? null,
+      inheritedNODE_ENV: process.env.NODE_ENV ?? null,
+      wouldSkipAppRootInline: env.NODE_ENV === "test",
+      metroPort,
+      projectRoot,
+    },
+    timestamp: Date.now(),
+  };
+  try {
+    fs.appendFileSync(
+      path.resolve(projectRoot, "..", "..", "debug-115197.log"),
+      JSON.stringify(payload) + "\n",
+    );
+  } catch {
+    /* ignore */
+  }
+  fetch("http://127.0.0.1:7744/ingest/33975112-0421-4ef6-a79e-c48c452c7ec5", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": "115197",
+    },
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+}
+// #endregion
 
 console.log(`Metro port: ${metroPort}`);
 

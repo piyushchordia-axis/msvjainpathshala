@@ -1238,11 +1238,6 @@ async function main(): Promise<void> {
   /* ---------------- Settings ---------------- */
   await db.insert(settings).values([
     {
-      key: "default_otp_code",
-      value: "123456",
-      updated_at: new Date(),
-    },
-    {
       key: "gallery_carousel_interval_ms",
       value: "2000",
       updated_at: new Date(),
@@ -1593,7 +1588,7 @@ async function main(): Promise<void> {
   `);
 
   console.log("Seed complete.");
-  console.log("\nLogin phones (OTP code: 123456 for all users via settings):");
+  console.log("\nLogin phones (OTP: set OTP_ENABLED=false + DEFAULT_OTP, or use live SMS):");
   console.log("  --- Mumbai / national ---");
   console.log("  super_admin : +919800000001");
   console.log("  state_admin : +919800000002  (Maharashtra)");

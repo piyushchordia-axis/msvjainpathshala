@@ -76,8 +76,7 @@ export function generateOtpToken(): string {
 
 export function generateOtpCode(): string {
   // CSPRNG, not Math.random: this is the sole authentication factor, and V8's
-  // PRNG state is recoverable from observed outputs. Unused when the SMS
-  // provider mints the code itself (2Factor AUTOGEN).
+  // PRNG state is recoverable from observed outputs.
   return String(randomInt(0, 1_000_000)).padStart(6, "0");
 }
 

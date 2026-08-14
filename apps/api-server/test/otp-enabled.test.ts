@@ -3,7 +3,7 @@ import request from "supertest";
 import app from "../src/app";
 import { pool, db, otp_codes } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { _resetFixedOtp } from "../src/lib/otp-fixed";
+import { _resetOtpConfig } from "../src/lib/otp-config";
 import { _resetTestOtpNumbers } from "../src/lib/otp-test-numbers";
 import { SEED_PHONES } from "./helpers";
 
@@ -22,28 +22,35 @@ beforeAll(() => {
 });
 
 afterEach(() => {
+  delete process.env.OTP_ENABLED;
+  delete process.env.DEFAULT_OTP;
+  delete process.env.DEFAULT_OTP_FLAG;
   delete process.env.OTP_FIXED_ENABLED;
   delete process.env.OTP_FIXED_CODE;
-  _resetFixedOtp();
+  _resetOtpConfig();
 });
 
 afterAll(async () => {
+  delete process.env.OTP_ENABLED;
+  delete process.env.DEFAULT_OTP;
+  delete process.env.DEFAULT_OTP_FLAG;
   delete process.env.OTP_FIXED_ENABLED;
   delete process.env.OTP_FIXED_CODE;
-  _resetFixedOtp();
+  _resetOtpConfig();
   for (const token of createdTokens) {
     await db.delete(otp_codes).where(eq(otp_codes.otp_token, token));
   }
   await pool.end();
 });
 
-describe("OTP_FIXED_ENABLED", () => {
-  it("accepts the default fixed code 123456 and skips SMS session", async () => {
-    process.env.OTP_FIXED_ENABLED = "true";
-    _resetFixedOtp();
+describe("OTP_ENABLED / DEFAULT_OTP / DEFAULT_OTP_FLAG", () => {
+  it("OTP_ENABLED=false accepts DEFAULT_OTP 123456 and stores a local hash", async () => {
+    process.env.OTP_ENABLED = "false";
+    _resetOtpConfig();
 
     const sent = await send(PHONE);
     expect(sent.status).toBe(200);
+    expect(sent.body.data.dev_code).toBeUndefined();
 
     const [row] = await db
       .select()
@@ -57,16 +64,16 @@ describe("OTP_FIXED_ENABLED", () => {
       phase: "verify",
       otp_token: sent.body.data.otp_token,
       code: "123456",
-      device_id: "otp-fixed-default",
+      device_id: "otp-default",
     });
     expect(verified.status).toBe(200);
     expect(verified.body.data.user.phone).toBe(PHONE);
   });
 
-  it("honours OTP_FIXED_CODE when set", async () => {
-    process.env.OTP_FIXED_ENABLED = "1";
-    process.env.OTP_FIXED_CODE = "654321";
-    _resetFixedOtp();
+  it("honours a custom DEFAULT_OTP when SMS is off", async () => {
+    process.env.OTP_ENABLED = "false";
+    process.env.DEFAULT_OTP = "654321";
+    _resetOtpConfig();
 
     const sent = await send(PHONE);
     expect(sent.status).toBe(200);
@@ -75,7 +82,7 @@ describe("OTP_FIXED_ENABLED", () => {
       phase: "verify",
       otp_token: sent.body.data.otp_token,
       code: "123456",
-      device_id: "otp-fixed-custom-wrong",
+      device_id: "otp-custom-wrong",
     });
     expect(wrong.status).toBe(401);
 
@@ -84,39 +91,76 @@ describe("OTP_FIXED_ENABLED", () => {
       phase: "verify",
       otp_token: sent2.body.data.otp_token,
       code: "654321",
-      device_id: "otp-fixed-custom-ok",
+      device_id: "otp-custom-ok",
     });
     expect(ok.status).toBe(200);
   });
 
-  it("rejects a wrong code while the flag is on", async () => {
-    process.env.OTP_FIXED_ENABLED = "yes";
-    _resetFixedOtp();
+  it("rejects a wrong code while OTP_ENABLED=false", async () => {
+    process.env.OTP_ENABLED = "false";
+    _resetOtpConfig();
 
     const sent = await send(PHONE);
     const verified = await request(app).post("/api/auth/login").send({
       phase: "verify",
       otp_token: sent.body.data.otp_token,
       code: "000000",
-      device_id: "otp-fixed-reject",
+      device_id: "otp-reject",
     });
     expect(verified.status).toBe(401);
   });
 
-  it("when disabled, does not accept an arbitrary fixed code from OTP_FIXED_CODE alone", async () => {
-    // Flag off — OTP_FIXED_CODE must not apply. Non-prod still uses
-    // settings.default_otp_code (123456); a different fixed code must fail.
-    process.env.OTP_FIXED_ENABLED = "false";
-    process.env.OTP_FIXED_CODE = "654321";
-    _resetFixedOtp();
+  it("OTP_ENABLED=true + DEFAULT_OTP_FLAG=false does not accept DEFAULT_OTP", async () => {
+    process.env.OTP_ENABLED = "true";
+    process.env.DEFAULT_OTP_FLAG = "false";
+    process.env.DEFAULT_OTP = "654321";
+    _resetOtpConfig();
 
     const sent = await send(PHONE);
+    expect(sent.status).toBe(200);
+    expect(sent.body.data.dev_code).toBeUndefined();
+
     const verified = await request(app).post("/api/auth/login").send({
       phase: "verify",
       otp_token: sent.body.data.otp_token,
       code: "654321",
-      device_id: "otp-fixed-off",
+      device_id: "otp-live-random",
     });
     expect(verified.status).toBe(401);
+  });
+
+  it("OTP_ENABLED=true + DEFAULT_OTP_FLAG=true sends DEFAULT_OTP (mock SMS)", async () => {
+    process.env.OTP_ENABLED = "true";
+    process.env.DEFAULT_OTP_FLAG = "true";
+    process.env.DEFAULT_OTP = "654321";
+    _resetOtpConfig();
+
+    const sent = await send(PHONE);
+    expect(sent.status).toBe(200);
+
+    const verified = await request(app).post("/api/auth/login").send({
+      phase: "verify",
+      otp_token: sent.body.data.otp_token,
+      code: "654321",
+      device_id: "otp-live-fixed",
+    });
+    expect(verified.status).toBe(200);
+    expect(verified.body.data.user.phone).toBe(PHONE);
+  });
+
+  it("deprecated OTP_FIXED_ENABLED=true still maps to fixed OTP", async () => {
+    process.env.OTP_FIXED_ENABLED = "true";
+    process.env.OTP_FIXED_CODE = "111222";
+    _resetOtpConfig();
+
+    const sent = await send(PHONE);
+    expect(sent.status).toBe(200);
+    const verified = await request(app).post("/api/auth/login").send({
+      phase: "verify",
+      otp_token: sent.body.data.otp_token,
+      code: "111222",
+      device_id: "otp-compat",
+    });
+    expect(verified.status).toBe(200);
   });
 });

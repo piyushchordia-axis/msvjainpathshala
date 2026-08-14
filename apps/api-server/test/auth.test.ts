@@ -16,8 +16,8 @@ import { SEED_PHONES, loginAs, auth } from "./helpers";
  *    per-IP / per-phone verify caps never fire here. The PER-OTP-ROW
  *    attempts_count cap (MAX_OTP_ATTEMPTS = 5) is NOT bypassed — it is enforced
  *    by the route logic, so the lockout test below is meaningful.
- *  - Seeded phones all accept OTP 123456 (the dev default surfaced as dev_code
- *    in the send response). We only rely on dev_code for the happy paths and
+ *  - Seeded phones accept DEFAULT_OTP 123456 when OTP_ENABLED is false (tests).
+ *    Login helpers fall back to "123456" when the send response has no code.
  *    use a deliberately-wrong code for the lockout test.
  *
  * Self-created fixtures (temp users + hand-inserted otp rows) are cleaned up in

@@ -1,6 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { z } from "zod";
-import { db, users, otp_codes, device_sessions, settings } from "@workspace/db";
+import { db, users, otp_codes, device_sessions } from "@workspace/db";
 import { and, eq, isNull } from "drizzle-orm";
 import {
   loginRequestSchema,
@@ -20,7 +20,7 @@ import {
 import { setAuthCookies, clearAuthCookies } from "../lib/cookies";
 import { getSmsProvider } from "../lib/sms";
 import { testOtpCodeFor } from "../lib/otp-test-numbers";
-import { fixedOtpCode, isFixedOtpEnabled } from "../lib/otp-fixed";
+import { defaultOtpCode, isDefaultOtpFlag, isOtpEnabled } from "../lib/otp-config";
 import { logger } from "../lib/logger";
 import { rateLimit } from "../lib/ratelimit";
 import { auditFromReq } from "../lib/audit";
@@ -32,7 +32,6 @@ const router: IRouter = Router();
 const OTP_TTL_SECONDS = 5 * 60;
 const MAX_OTP_ATTEMPTS = 5;
 const RL_WINDOW_SECONDS = 15 * 60;
-const isProd = process.env.NODE_ENV === "production";
 
 // Mask a phone number for logs: keep only the last 4 digits (e.g. "****1234")
 // so operational logs never carry a full PII phone number.
@@ -87,97 +86,50 @@ router.post("/login", async (req: Request, res: Response) => {
     const testCode = testOtpCodeFor(parsed.phone);
     if (testCode) code = testCode;
 
-    // UAT global fixed OTP (OTP_FIXED_ENABLED): all phones use one known code
-    // and skip SMS. Honoured in any NODE_ENV so staging can enable it without
-    // flipping NODE_ENV. Per-phone OTP_TEST_NUMBERS still wins when present.
-    const fixedEnabled = !testCode && isFixedOtpEnabled();
-    if (fixedEnabled) {
-      code = fixedOtpCode();
-    }
-
-    // Dev-only fixed OTP: in non-production, a `default_otp_code` settings row
-    // (e.g. "000000") overrides the random code so every login uses one known
-    // code without live SMS. NEVER honoured in production — there, real SMS (or
-    // a nominated test number / OTP_FIXED_ENABLED) is the path. Skipped when
-    // OTP_FIXED_ENABLED already set the code.
-    if (!isProd && !testCode && !fixedEnabled) {
-      const [otpSetting] = await db
-        .select()
-        .from(settings)
-        .where(eq(settings.key, "default_otp_code"))
-        .limit(1);
-      if (otpSetting?.value) {
-        code = otpSetting.value;
-      }
+    // OTP_ENABLED=false → DEFAULT_OTP, skip SMS.
+    // OTP_ENABLED=true + DEFAULT_OTP_FLAG=true → DEFAULT_OTP over SMS.
+    // OTP_ENABLED=true + DEFAULT_OTP_FLAG=false → random code over SMS.
+    // Per-phone OTP_TEST_NUMBERS still wins when present.
+    const liveSms = !testCode && isOtpEnabled();
+    if (!testCode && (!liveSms || isDefaultOtpFlag())) {
+      code = defaultOtpCode();
     }
 
     const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
 
-    // With a provider that mints its own code (2Factor AUTOGEN) the send has to
-    // happen first, because the session id it returns *is* the challenge — we
-    // never learn the code. Registered phones only, mirroring the dev_code and
-    // SMS gating below; test numbers and OTP_FIXED_ENABLED skip the provider.
-    const provider = getSmsProvider();
-    const deliverBySms = !!user && !testCode && !fixedEnabled;
-    let sessionId: string | null = null;
-    let deliveryFailed = false;
-    if (deliverBySms && provider.ownsCode) {
-      try {
-        sessionId = await provider.sendOtp(parsed.phone, code);
-      } catch (err) {
-        logger.error({ err, phone: maskPhone(parsed.phone) }, "OTP SMS delivery failed");
-        deliveryFailed = true;
-      }
-    }
-
-    // Always create a token row so timing does not leak whether the phone exists.
+    // Always hash + store locally. Providers only deliver our code — never
+    // AUTOGEN session ids. Always insert a row so timing does not leak whether
+    // the phone exists. Test numbers and OTP_ENABLED=false skip SMS.
+    const deliverBySms = !!user && !testCode && liveSms;
     await db.insert(otp_codes).values({
       phone: parsed.phone,
       otp_token: otpToken,
-      code_hash: sessionId ? null : await hashOtpCode(code),
-      session_id: sessionId,
+      code_hash: await hashOtpCode(code),
+      session_id: null,
       expires_at: expiresAt,
     });
 
-    // Deliver the code via SMS for registered phones only (mirrors dev_code
-    // gating). In dev/test the mock resolves without network, so existing tests
-    // and the dev_code path are unaffected.
-    if (deliverBySms && !provider.ownsCode) {
+    // Dispatch SMS off the request path so response timing does not reveal
+    // whether the number is registered. Failures are logged (masked phone);
+    // the client still gets 200 + otp_token and verifies against our hash.
+    if (deliverBySms) {
+      const phone = parsed.phone;
       try {
-        await provider.sendOtp(parsed.phone, code);
+        void getSmsProvider()
+          .sendOtp(phone, code)
+          .catch((err) => {
+            logger.error({ err, phone: maskPhone(phone) }, "OTP SMS delivery failed");
+          });
       } catch (err) {
-        logger.error({ err, phone: maskPhone(parsed.phone) }, "OTP SMS delivery failed");
-        deliveryFailed = true;
+        // getSmsProvider() can throw synchronously (e.g. key without template).
+        logger.error({ err, phone: maskPhone(phone) }, "OTP SMS delivery failed");
       }
     }
 
-    // A delivery failure is reported, not swallowed. Previously the request
-    // still returned 200 and the user only discovered the problem as a bogus
-    // "Incorrect code" a screen later — which also hides a misconfigured or
-    // out-of-credit SMS account behind what looks like user error. The trade-off
-    // is a narrow registration oracle *while delivery is broken*: unknown
-    // numbers never attempt a send and so still get 200. That window only
-    // exists when the SMS path is already down, and the diagnosability is worth
-    // far more than the leak.
-    if (deliveryFailed) {
-      fail(res, 503, "ERR_SMS_UNAVAILABLE", "We couldn't send your code right now. Please try again in a moment.");
-      return;
-    }
-
-    const payload: { otp_token: string; expires_in_seconds: number; dev_code?: string } = {
+    const payload: { otp_token: string; expires_in_seconds: number } = {
       otp_token: otpToken,
       expires_in_seconds: OTP_TTL_SECONDS,
     };
-    // Surface the code in the response for registered users (no real SMS).
-    // DEV-ONLY: returning the OTP in the response is an account-takeover
-    // backdoor in production — gate it behind a non-prod environment. Skipped
-    // when the provider owns the code: `code` was never sent to anyone, so
-    // echoing it would just hand back a value that cannot verify. Also skipped
-    // for test numbers: the reviewer already has that code out of band, and
-    // echoing it would turn the allow-list into a public oracle. OTP_FIXED_ENABLED
-    // in non-prod may still echo (operators already know the code); in prod it
-    // never echoes — unset the flag before real SMS traffic.
-    if (user && !isProd && !sessionId && !testCode) payload.dev_code = code;
     res.status(200).json({ data: payload });
     return;
   }
@@ -205,20 +157,11 @@ router.post("/login", async (req: Request, res: Response) => {
     return;
   }
 
-  // A session_id means the provider holds the code (2Factor AUTOGEN) and is the
-  // only thing that can check it; otherwise compare against our stored hash. A
-  // provider error is treated as a mismatch — never as a pass.
-  let matched: boolean;
-  if (otp.session_id) {
-    try {
-      matched = await getSmsProvider().verifyOtp(otp.session_id, parsed.code);
-    } catch (err) {
-      logger.error({ err, phone: maskPhone(otp.phone) }, "OTP provider verify failed");
-      matched = false;
-    }
-  } else {
-    matched = otp.code_hash !== null && (await verifyOtpCode(otp.code_hash, parsed.code));
-  }
+  // Verification is always local (argon2id). Legacy AUTOGEN rows may still have
+  // session_id and a null code_hash — those cannot be verified remotely anymore
+  // and are treated as a mismatch (request a new code).
+  const matched =
+    otp.code_hash !== null && (await verifyOtpCode(otp.code_hash, parsed.code));
 
   if (!matched) {
     await db

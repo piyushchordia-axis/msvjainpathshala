@@ -33,7 +33,7 @@ export default function PhoneScreen() {
     setBusy(true);
     setError(null);
     try {
-      const res = await apiPost<OtpSendResponse & { dev_code?: string }>(
+      const res = await apiPost<OtpSendResponse>(
         "/api/auth/login",
         { phase: "send", phone: e164 },
       );
@@ -42,7 +42,6 @@ export default function PhoneScreen() {
         params: {
           phone: e164,
           otp_token: res.otp_token,
-          dev_code: res.dev_code ?? "",
           ...(returnTo ? { returnTo } : {}),
         },
       });

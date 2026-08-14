@@ -69,17 +69,24 @@ comment in `.replit`).
 
 ### SMS / OTP (required in production)
 
-The mock SMS provider is refused at first send in production, so configure one real
-adapter. MSG91 (India) is implicit when its credentials are present, or pick `generic`.
+The mock SMS provider is refused at boot in production, so configure one real
+adapter. We mint and verify OTPs locally; the provider only delivers the code.
+2Factor.in is preferred when its key is present; otherwise MSG91 or `generic`.
 
 | Var | Purpose |
 |-----|---------|
-| `SMS_PROVIDER` | `msg91` or `generic` (optional — inferred from the keys below). |
+| `SMS_PROVIDER` | `2factor`, `msg91`, or `generic` (optional — inferred from the keys below). |
+| `TWO_FACTOR_API_KEY` | 2Factor account key (required for `2factor`). |
+| `TWO_FACTOR_TEMPLATE` | DLT-approved template name (e.g. `oceanlogin`) — required with the key. |
 | `MSG91_AUTH_KEY` | MSG91 auth key (required for `msg91`). |
 | `MSG91_TEMPLATE_ID` | MSG91 OTP template id (required for `msg91`). |
 | `MSG91_SENDER_ID` | Optional MSG91 sender id. |
 | `SMS_API_URL` | Generic provider endpoint that accepts `POST { phone, code }` (required for `generic`). |
 | `SMS_API_KEY` | Optional bearer token for the generic endpoint. |
+| `OTP_ENABLED` | `true` = send SMS via 2Factor; `false` = `DEFAULT_OTP`, skip SMS. |
+| `DEFAULT_OTP_FLAG` | With SMS on: `true` = send `DEFAULT_OTP`; `false`/unset = generate random OTP. |
+| `DEFAULT_OTP` | Fixed code when SMS is off, or when `DEFAULT_OTP_FLAG=true` (default `123456`). |
+| `OTP_TEST_NUMBERS` | Store-review allow-list `+E164:code,...` (honoured in prod). |
 
 ### Payments — Razorpay (required for live donations)
 

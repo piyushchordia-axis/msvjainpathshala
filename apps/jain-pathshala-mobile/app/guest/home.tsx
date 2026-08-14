@@ -30,7 +30,6 @@ export default function GuestHomeScreen() {
   const [digits, setDigits] = useState("");
   const [otp, setOtp] = useState("");
   const [otpToken, setOtpToken] = useState<string | null>(null);
-  const [devCode, setDevCode] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -44,12 +43,11 @@ export default function GuestHomeScreen() {
     setBusy(true);
     setError(null);
     try {
-      const res = await apiPost<OtpSendResponse & { dev_code?: string }>(
+      const res = await apiPost<OtpSendResponse>(
         "/api/auth/login",
         { phase: "send", phone: e164 },
       );
       setOtpToken(res.otp_token);
-      setDevCode(res.dev_code ?? null);
       setOtp("");
     } catch (err) {
       setError(
@@ -96,7 +94,6 @@ export default function GuestHomeScreen() {
 
   const changeNumber = () => {
     setOtpToken(null);
-    setDevCode(null);
     setOtp("");
     setError(null);
   };
@@ -160,22 +157,6 @@ export default function GuestHomeScreen() {
                 ? `हमने ${e164} पर 6-अंकीय कोड भेजा।`
                 : `We sent a 6-digit code to ${e164}.`}
             </Body>
-          ) : null}
-
-          {devCode && __DEV__ && awaitingOtp ? (
-            <View
-              style={{
-                marginTop: 12,
-                backgroundColor: c.infoSoft,
-                borderRadius: 8,
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-              }}
-            >
-              <Text style={{ fontFamily: bodyFamily(hi, "medium"), color: c.infoText, fontSize: 13 }}>
-                {hi ? "डेव कोड" : "Dev code"}: {devCode}
-              </Text>
-            </View>
           ) : null}
 
           {error ? (

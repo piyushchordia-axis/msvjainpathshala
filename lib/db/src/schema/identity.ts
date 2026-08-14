@@ -84,10 +84,9 @@ export const otp_codes = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     phone: varchar("phone", { length: 15 }).notNull(),
     otp_token: text("otp_token").notNull(),
-    // Exactly one of these carries the challenge:
-    //  - code_hash: we minted the code and verify it locally (mock/MSG91/generic).
-    //  - session_id: the provider minted + delivered the code and verifies it for
-    //    us (2Factor AUTOGEN); we never see the code at all.
+    // code_hash: we always mint the code and verify it locally. session_id is
+    // legacy (pre delivery-only 2Factor AUTOGEN) and is no longer written;
+    // verify treats null code_hash as a mismatch.
     code_hash: text("code_hash"),
     session_id: text("session_id"),
     attempts_count: integer("attempts_count").notNull().default(0),

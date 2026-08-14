@@ -92,8 +92,9 @@ Must exist for awards, OTP (dev), and codes to work.
 
 | key | value | notes |
 |-----|-------|-------|
-| `default_otp_code` | `123456` | Dev/fixed OTP path only — **not for production** |
 | `gallery_carousel_interval_ms` | `2000` | |
+
+OTP for local login is controlled by env (`OTP_ENABLED` / `DEFAULT_OTP` in `apps/api-server/.env`), not a settings row.
 
 ### A6. Entity code counters (`entity_code_counters`)
 
@@ -103,7 +104,7 @@ Seeded so next minted codes continue the series (STU/PAR/CAD/SAD/SHK/SAN/MSV sco
 
 ## Layer B — Personas (login users)
 
-Dev OTP for all: **`123456`** (via `settings.default_otp_code`).
+Dev OTP: set `OTP_ENABLED=false` and `DEFAULT_OTP=123456` in `apps/api-server/.env` (or enable live SMS with `OTP_ENABLED=true`).
 
 ### B1. Mumbai / national
 
