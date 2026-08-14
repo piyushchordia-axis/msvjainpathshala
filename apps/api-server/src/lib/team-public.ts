@@ -177,31 +177,6 @@ export function serializeTeamMember(
   const photo_url = isScenicPlaceholderUrl(storedPhoto)
     ? dummyTeamPhotoUrl(row.id, row.user_gender)
     : signUploadUrl(storedPhoto);
-  // #region agent log
-  fetch("http://127.0.0.1:7744/ingest/33975112-0421-4ef6-a79e-c48c452c7ec5", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0083e4" },
-    body: JSON.stringify({
-      sessionId: "0083e4",
-      runId: "post-fix",
-      hypothesisId: "B",
-      location: "team-public.ts:serializeTeamMember",
-      message: "team photo emit",
-      data: {
-        id: row.id,
-        hasUserPhoto: Boolean(row.user_photo_url),
-        hasOverride: Boolean(photo_asset_id),
-        kind: photo_url.includes("/uploads/")
-          ? "upload"
-          : photo_url.includes("/portraits/")
-            ? "dummy"
-            : "other",
-        hasSig: /[?&]sig=/.test(photo_url),
-      },
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-  // #endregion
 
   const card: TeamMemberCard = {
     id: row.id,
