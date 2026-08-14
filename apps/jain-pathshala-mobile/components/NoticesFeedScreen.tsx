@@ -44,7 +44,11 @@ function useNoticesFeed(enabled: boolean) {
   });
 }
 
-export function NoticesFeedScreen({ tabBarInset = false }: { tabBarInset?: boolean }) {
+function NoticesListBody({
+  tabBarInset = false,
+}: {
+  tabBarInset?: boolean;
+}) {
   const { hi } = useLocale();
   const { user } = useAuth();
   const qc = useQueryClient();
@@ -71,10 +75,81 @@ export function NoticesFeedScreen({ tabBarInset = false }: { tabBarInset?: boole
   }, [isMember, memberFeed.data]);
 
   return (
+    <Screen
+      refreshing={isRefetching}
+      onRefresh={refetch}
+      contentStyle={{ paddingBottom: tabBarInset ? 110 : undefined }}
+    >
+      {isLoading ? (
+        <StateView status="loading" emptyText="" />
+      ) : isError ? (
+        <StateView
+          status="error"
+          emptyText=""
+          errorText={hi ? "घोषणाएँ लोड नहीं हो सकीं।" : "Could not load notices."}
+          onRetry={refetch}
+          retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
+        />
+      ) : items.length === 0 ? (
+        <StateView
+          status="empty"
+          emptyText={hi ? "अभी कोई घोषणा नहीं है।" : "No notices right now."}
+        />
+      ) : (
+        items.map((notice) => {
+          const title = hi && notice.title_hi ? notice.title_hi : notice.title_en;
+          const content = hi && notice.content_hi ? notice.content_hi : notice.content_en;
+          const isFeed = (n: typeof notice): n is FeedNotice => "audience" in n;
+          const unread = isFeed(notice) && !notice.read_at;
+          const internal = isFeed(notice) && !notice.is_public;
+          return (
+            <Card key={notice.id}>
+              <Row style={{ gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                {unread ? <Pill tone="info" label={hi ? "नया" : "New"} /> : null}
+                {notice.is_critical ? (
+                  <Pill tone="error" label={hi ? "महत्वपूर्ण" : "Important"} />
+                ) : null}
+                {notice.pinned ? <Pill tone="warning" label={hi ? "पिन किया" : "Pinned"} /> : null}
+                {internal ? <Pill tone="neutral" label={hi ? "आंतरिक" : "Internal"} /> : null}
+              </Row>
+              <Title style={{ fontSize: 18 }}>{title}</Title>
+              {content ? (
+                <Body muted style={{ marginTop: 6, lineHeight: 22 }}>
+                  {content}
+                </Body>
+              ) : null}
+              <Body muted style={{ marginTop: 10, fontSize: 12 }}>
+                {formatDate(notice.created_at)}
+              </Body>
+            </Card>
+          );
+        })
+      )}
+    </Screen>
+  );
+}
+
+export function NoticesFeedScreen({
+  tabBarInset = false,
+  embedded = false,
+}: {
+  tabBarInset?: boolean;
+  /** Inside the notifications hub — no page chrome / pastel wrap. */
+  embedded?: boolean;
+}) {
+  const { hi } = useLocale();
+  const { user } = useAuth();
+  const isMember = !!user;
+
+  if (embedded) {
+    return <NoticesListBody />;
+  }
+
+  return (
     <ActivityThemed accent="notices">
       {tabBarInset ? (
         <AppHeader
-          title={hi ? "सूचनाएँ" : "Notices"}
+          title={hi ? "घोषणाएँ" : "Notices"}
           subtitle={
             isMember
               ? hi
@@ -86,42 +161,7 @@ export function NoticesFeedScreen({ tabBarInset = false }: { tabBarInset?: boole
           }
         />
       ) : null}
-      <Screen refreshing={isRefetching} onRefresh={refetch} contentStyle={{ paddingBottom: tabBarInset ? 110 : undefined }}>
-        {isLoading ? (
-          <StateView status="loading" emptyText="" />
-        ) : isError ? (
-          <StateView
-            status="error"
-            emptyText=""
-            errorText={hi ? "सूचनाएँ लोड नहीं हो सकीं।" : "Could not load notices."}
-            onRetry={refetch}
-            retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
-          />
-        ) : items.length === 0 ? (
-          <StateView status="empty" emptyText={hi ? "अभी कोई सूचना नहीं है।" : "No notices right now."} />
-        ) : (
-          items.map((notice) => {
-            const title = hi && notice.title_hi ? notice.title_hi : notice.title_en;
-            const content = hi && notice.content_hi ? notice.content_hi : notice.content_en;
-            const isFeed = (n: typeof notice): n is FeedNotice => "audience" in n;
-            const unread = isFeed(notice) && !notice.read_at;
-            const internal = isFeed(notice) && !notice.is_public;
-            return (
-              <Card key={notice.id}>
-                <Row style={{ gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-                  {unread ? <Pill tone="info" label={hi ? "नया" : "New"} /> : null}
-                  {notice.is_critical ? <Pill tone="error" label={hi ? "महत्वपूर्ण" : "Important"} /> : null}
-                  {notice.pinned ? <Pill tone="warning" label={hi ? "पिन किया" : "Pinned"} /> : null}
-                  {internal ? <Pill tone="neutral" label={hi ? "आंतरिक" : "Internal"} /> : null}
-                </Row>
-                <Title style={{ fontSize: 18 }}>{title}</Title>
-                {content ? <Body muted style={{ marginTop: 6, lineHeight: 22 }}>{content}</Body> : null}
-                <Body muted style={{ marginTop: 10, fontSize: 12 }}>{formatDate(notice.created_at)}</Body>
-              </Card>
-            );
-          })
-        )}
-      </Screen>
+      <NoticesListBody tabBarInset={tabBarInset} />
     </ActivityThemed>
   );
 }

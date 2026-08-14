@@ -38,11 +38,11 @@ function statusColors(
   tone: ReturnType<typeof statusTone>,
   c: ReturnType<typeof useColors>,
 ) {
-  if (tone === "success") return { bg: "#E4F5E8", fg: "#1F6B35" };
-  if (tone === "warning") return { bg: "#FFF1D6", fg: "#8A5A00" };
-  if (tone === "error") return { bg: "#FDE8E8", fg: "#9B1C1C" };
-  if (tone === "primary") return { bg: c.saffron, fg: "#FFFFFF" };
-  return { bg: "#EEE7DF", fg: c.mutedForeground };
+  if (tone === "success") return { bg: c.successSoft, fg: c.successText };
+  if (tone === "warning") return { bg: c.warningSoft, fg: c.warningText };
+  if (tone === "error") return { bg: c.errorSoft, fg: c.errorText };
+  if (tone === "primary") return { bg: c.saffron, fg: c.primaryForeground };
+  return { bg: c.muted, fg: c.foreground };
 }
 
 type Props = {

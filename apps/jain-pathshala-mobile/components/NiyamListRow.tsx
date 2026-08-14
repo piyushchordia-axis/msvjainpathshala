@@ -6,12 +6,27 @@ import { Body, Row } from "@/components/ui";
 export function niyamAccent(type: string, c: ReturnType<typeof useColors>) {
   const t = type.toLowerCase();
   if (t === "weekly") {
-    return { bg: "#F3E8E8", stripe: c.maroon, badge: c.maroon, badgeFg: "#FFFFFF" };
+    return {
+      bg: c.errorSoft,
+      stripe: c.maroon,
+      badge: c.maroon,
+      badgeFg: c.secondaryForeground,
+    };
   }
   if (t === "monthly") {
-    return { bg: "#FFF4DB", stripe: c.gold, badge: c.gold, badgeFg: "#1A0700" };
+    return {
+      bg: c.warningSoft,
+      stripe: c.gold,
+      badge: c.gold,
+      badgeFg: c.foreground,
+    };
   }
-  return { bg: "#FDE9DC", stripe: c.saffron, badge: c.saffron, badgeFg: "#FFFFFF" };
+  return {
+    bg: c.accent,
+    stripe: c.saffron,
+    badge: c.saffron,
+    badgeFg: c.primaryForeground,
+  };
 }
 
 type Props = {
@@ -32,11 +47,11 @@ function statusColors(
   tone: NonNullable<Props["statusTone"]>,
   c: ReturnType<typeof useColors>,
 ) {
-  if (tone === "success") return { bg: "#E4F5E8", fg: "#1F6B35" };
-  if (tone === "warning") return { bg: "#FFF1D6", fg: "#8A5A00" };
-  if (tone === "error") return { bg: "#FDE8E8", fg: "#9B1C1C" };
-  if (tone === "primary") return { bg: c.saffron, fg: "#FFFFFF" };
-  return { bg: "#EEE7DF", fg: c.mutedForeground };
+  if (tone === "success") return { bg: c.successSoft, fg: c.successText };
+  if (tone === "warning") return { bg: c.warningSoft, fg: c.warningText };
+  if (tone === "error") return { bg: c.errorSoft, fg: c.errorText };
+  if (tone === "primary") return { bg: c.saffron, fg: c.primaryForeground };
+  return { bg: c.muted, fg: c.foreground };
 }
 
 /** Compact colorful niyam row — shared by submit picker and view screens. */
@@ -90,7 +105,7 @@ export function NiyamListRow({
                 paddingVertical: 3,
               }}
             >
-              <Body style={{ fontSize: 11, fontWeight: "700", color: statusPal.fg }}>
+              <Body style={{ fontSize: 12, fontWeight: "700", color: statusPal.fg }}>
                 {statusLabel}
               </Body>
             </View>
@@ -114,8 +129,9 @@ export function NiyamListRow({
           <Body
             style={{
               marginTop: 3,
-              fontSize: 11,
-              color: c.mutedForeground,
+              fontSize: 13,
+              lineHeight: 18,
+              color: emphasizedMeta ? c.foreground : c.mutedForeground,
               fontWeight: emphasizedMeta ? "600" : "400",
             }}
             numberOfLines={1}

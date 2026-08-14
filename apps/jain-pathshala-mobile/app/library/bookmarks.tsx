@@ -15,7 +15,6 @@ import {
   type LibraryTreePayload,
 } from "@/lib/library/helpers";
 import { Body, Card, Row, Screen, StateView, Title } from "@/components/ui";
-import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 
 export default function LibraryBookmarksScreen() {
   const { hi } = useLocale();
@@ -37,8 +36,7 @@ export default function LibraryBookmarksScreen() {
   const rows = listItemsInTrees(trees).filter(({ item }) => ids.has(item.id));
 
   return (
-    <ActivityThemed accent="library">
-      <Screen refreshing={isRefetching} onRefresh={() => void refetch()} contentStyle={{ paddingBottom: 120 }}>
+    <Screen refreshing={isRefetching} onRefresh={() => void refetch()} contentStyle={{ paddingBottom: 120 }}>
         {isLoading && rows.length === 0 ? (
           <StateView status="loading" emptyText="" />
         ) : isError && rows.length === 0 ? (
@@ -110,6 +108,5 @@ export default function LibraryBookmarksScreen() {
           })
         )}
       </Screen>
-    </ActivityThemed>
   );
 }

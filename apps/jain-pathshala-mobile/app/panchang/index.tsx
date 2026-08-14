@@ -17,7 +17,6 @@ import {
 } from "@/lib/panchang/load";
 import type { PanchangYear } from "@/lib/panchang/schema";
 import { PanchangMonthCalendar } from "@/components/PanchangMonthCalendar";
-import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { Body, Card, Screen, StateView, Title } from "@/components/ui";
 
 /**
@@ -79,7 +78,6 @@ export default function PanchangScreen() {
   const maxMonth = yearData ? `${year}-12` : undefined;
 
   return (
-    <ActivityThemed accent="library">
     <Screen contentStyle={{ paddingBottom: 40 }}>
       <Title style={{ fontSize: 22, lineHeight: 30, marginBottom: 4 }}>
         {hi ? "पंचांग" : "Panchang"}
@@ -139,6 +137,5 @@ export default function PanchangScreen() {
         </>
       )}
     </Screen>
-    </ActivityThemed>
   );
 }

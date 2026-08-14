@@ -5,7 +5,7 @@ import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useOverview } from "@/lib/queries";
-import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
+import { AppHeader, HeaderHomeActions } from "@/components/AppHeader";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
 import { SanchalakQuickActions } from "@/components/QuickActions";
@@ -34,10 +34,10 @@ export default function DashboardScreen() {
         title={`${hi ? "जय जिनेन्द्र" : "Jai Jinendra"}, ${firstName}`}
         subtitle={hi ? "संगठन का अवलोकन" : "Organisation overview"}
         right={
-          <ProfileAvatarButton
+          <HeaderHomeActions
             name={user?.full_name}
             photoUrl={user?.photo_url}
-            href="/admin/profile"
+            profileHref="/admin/profile"
           />
         }
       />

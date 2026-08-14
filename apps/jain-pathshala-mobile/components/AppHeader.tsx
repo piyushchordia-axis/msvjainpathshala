@@ -1,12 +1,14 @@
 import { type ReactNode } from "react";
 import { Pressable, Text, View } from "react-native";
 import { Image } from "expo-image";
-import { useRouter } from "expo-router";
+import { Ionicons } from "@expo/vector-icons";
+import { useRouter, type Href } from "expo-router";
 import { bodyFamily } from "@/constants/typography";
 import { useActivityPageBg } from "@/contexts/ActivityThemeContext";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { resolveUploadUrl } from "@/lib/api";
+import { useNotifications } from "@/lib/queries";
 import { Body, Title, useWebTopInset } from "@/components/ui";
 
 /** EN / हिं switch — use on Profile (and auth/guest settings), not on every screen. */
@@ -105,6 +107,96 @@ export function ProfileAvatarButton({
         </Text>
       )}
     </Pressable>
+  );
+}
+
+/** Bell → Notifications | Notices hub. Shows unread count from the inbox API. */
+export function HeaderBellButton({
+  href = "/notifications" as Href,
+  size = 40,
+}: {
+  href?: Href;
+  size?: number;
+}) {
+  const c = useColors();
+  const { hi } = useLocale();
+  const router = useRouter();
+  const notifications = useNotifications();
+  const unread = notifications.data?.unread_count ?? 0;
+  const badge = unread > 99 ? "99+" : unread > 0 ? String(unread) : null;
+
+  return (
+    <Pressable
+      onPress={() => router.push(href)}
+      accessibilityRole="button"
+      accessibilityLabel={
+        unread > 0
+          ? hi
+            ? `सूचनाएँ, ${unread} अपठित`
+            : `Notifications, ${unread} unread`
+          : hi
+            ? "सूचनाएँ और घोषणाएँ"
+            : "Notifications and notices"
+      }
+      hitSlop={8}
+      style={{
+        width: size,
+        height: size,
+        borderRadius: size / 2,
+        alignItems: "center",
+        justifyContent: "center",
+        backgroundColor: c.muted,
+      }}
+    >
+      <Ionicons name="notifications-outline" size={22} color={c.secondary} />
+      {badge ? (
+        <View
+          style={{
+            position: "absolute",
+            top: 2,
+            right: 2,
+            minWidth: 16,
+            height: 16,
+            paddingHorizontal: 4,
+            borderRadius: 999,
+            backgroundColor: c.primary,
+            alignItems: "center",
+            justifyContent: "center",
+            borderWidth: 1.5,
+            borderColor: c.card,
+          }}
+        >
+          <Text
+            style={{
+              fontFamily: bodyFamily(false, "semibold"),
+              fontSize: 9,
+              lineHeight: 11,
+              color: c.primaryForeground,
+            }}
+          >
+            {badge}
+          </Text>
+        </View>
+      ) : null}
+    </Pressable>
+  );
+}
+
+/** Home trailing cluster: bell + profile avatar. */
+export function HeaderHomeActions({
+  name,
+  photoUrl,
+  profileHref,
+}: {
+  name?: string | null;
+  photoUrl?: string | null;
+  profileHref: string;
+}) {
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+      <HeaderBellButton />
+      <ProfileAvatarButton name={name} photoUrl={photoUrl} href={profileHref} />
+    </View>
   );
 }
 

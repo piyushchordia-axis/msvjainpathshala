@@ -54,7 +54,7 @@ export default function GuestLayout() {
       {tab("centres", hi ? "केंद्र" : "Centres", "location")}
       {tab("shivirs", hi ? "शिविर" : "Shivirs", "bonfire")}
       {tab("library", hi ? "पुस्तकालय" : "Library", "library")}
-      {tab("notices", hi ? "सूचनाएँ" : "Notices", "notifications")}
+      {tab("notices", hi ? "घोषणाएँ" : "Notices", "megaphone")}
       {tab("more", hi ? "और" : "More", "ellipsis-horizontal")}
     </Tabs>
   );

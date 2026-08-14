@@ -94,6 +94,11 @@ export const niyam_submissions = pgTable(
     student_idx: index("idx_niyam_submissions_student").on(t.student_id),
     niyam_idx: index("idx_niyam_submissions_niyam").on(t.niyam_id),
     status_date_idx: index("idx_niyam_submissions_status_date").on(t.status, t.submission_date),
+    student_niyam_date_idx: index("idx_niyam_submissions_student_niyam_date").on(
+      t.student_id,
+      t.niyam_id,
+      t.submission_date,
+    ),
   }),
 );
 
@@ -133,6 +138,7 @@ export const niyam_streaks = pgTable(
     ...timestamps(),
   },
   (t) => ({
+    student_niyam_uq: uniqueIndex("niyam_streaks_student_niyam_uq").on(t.student_id, t.niyam_id),
     student_idx: index("idx_niyam_streaks_student").on(t.student_id),
     niyam_idx: index("idx_niyam_streaks_niyam").on(t.niyam_id),
   }),

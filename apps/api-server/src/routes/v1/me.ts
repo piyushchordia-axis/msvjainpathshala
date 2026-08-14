@@ -41,7 +41,7 @@ import { upsertIdCardArt } from "../../lib/idcard-render";
 import { auditFromReq } from "../../lib/audit";
 import { storage } from "../../lib/storage";
 import { clampLimit, ownedStudentId } from "../../lib/route-helpers";
-import { studentCanAccessNiyam } from "../../lib/niyam-audience";
+import { studentNiyamAccessWhere } from "../../lib/niyam-audience";
 import { toSessionUser } from "../../lib/session-user";
 import { invalidateAuthUserCache } from "../../lib/auth-user-cache";
 import { galleryVisibilityBodySchema } from "@workspace/api-zod";
@@ -459,13 +459,12 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
   }
 
   const today = istCalendarDate();
+  const audienceWhere = studentCtx ? studentNiyamAccessWhere(studentCtx) : undefined;
   const rows = await db
     .select({
       id: niyams.id,
       title_en: niyams.title_en,
       title_hi: niyams.title_hi,
-      description_en: niyams.description_en,
-      description_hi: niyams.description_hi,
       niyam_type: niyams.niyam_type,
       proof_type: niyams.proof_type,
       proof_required: niyams.proof_required,
@@ -485,23 +484,12 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
         eq(niyams.is_active, true),
         lte(niyams.start_date, today),
         or(isNull(niyams.end_date), gte(niyams.end_date, today)),
+        audienceWhere,
       ),
     )
     .orderBy(desc(niyams.points));
 
-  const items = studentCtx
-    ? rows.filter((n) =>
-        studentCanAccessNiyam(
-          {
-            msv_audience: n.msv_audience,
-            scope: n.scope,
-            state_id: n.state_id,
-            city_id: n.city_id,
-          },
-          studentCtx!,
-        ),
-      )
-    : rows;
+  const items = rows;
 
   // Current-period submission status in one query (no N+1).
   let periodByNiyam = new Map<

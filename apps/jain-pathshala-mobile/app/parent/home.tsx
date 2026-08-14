@@ -7,7 +7,7 @@ import { useSessionView } from "@/contexts/SessionViewContext";
 import { useAttendance, usePunya } from "@/lib/queries";
 import { calendarEventTone, previewAttendanceLabel } from "@/lib/attendance-calendar";
 import { formatDate } from "@/lib/format";
-import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
+import { AppHeader, HeaderHomeActions } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
@@ -62,10 +62,10 @@ export default function ParentHome() {
         title={hi ? `जय जिनेन्द्र, ${firstName}` : `Jai Jinendra, ${firstName}`}
         subtitle={hi ? "अपने बच्चे की प्रगति देखें" : "Track your child's progress"}
         right={
-          <ProfileAvatarButton
+          <HeaderHomeActions
             name={user?.full_name}
             photoUrl={user?.photo_url}
-            href="/parent/profile"
+            profileHref="/parent/profile"
           />
         }
       />

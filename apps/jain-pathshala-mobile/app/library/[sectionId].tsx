@@ -19,7 +19,6 @@ import {
 import { openLibraryExternalUrl } from "@/lib/library/open-external";
 import { useLibraryBookmarks } from "@/lib/library/bookmarks";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
-import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { LibraryTextSheet } from "@/components/LibraryTextSheet";
 import { LibraryAudioButton } from "@/components/LibraryAudioButton";
 import { LibraryOfflineButton } from "@/components/LibraryOfflineButton";
@@ -74,8 +73,16 @@ function CollapsibleGroup({
   const [open, setOpen] = useState(true);
   if (count === 0) return null;
   return (
-    <Card style={{ backgroundColor: c.muted }}>
-      <Pressable onPress={() => setOpen((v) => !v)} accessibilityRole="button">
+    <View style={{ marginBottom: 4 }}>
+      <Pressable
+        onPress={() => setOpen((v) => !v)}
+        accessibilityRole="button"
+        style={{
+          paddingVertical: 10,
+          borderBottomWidth: 1,
+          borderBottomColor: c.border,
+        }}
+      >
         <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
           <Title style={{ fontSize: 15, lineHeight: 22, flex: 1, paddingRight: 8 }}>
             {title}
@@ -95,7 +102,7 @@ function CollapsibleGroup({
           {hi ? "विवरण के लिए टैप करें" : "Tap to expand"}
         </Body>
       ) : null}
-    </Card>
+    </View>
   );
 }
 
@@ -264,18 +271,15 @@ export default function LibrarySectionScreen() {
 
   if (isLoading && !section) {
     return (
-      <ActivityThemed accent="library">
-        <Screen>
+      <Screen>
           <StateView status="loading" emptyText="" />
         </Screen>
-      </ActivityThemed>
     );
   }
 
   if (isError && !section) {
     return (
-      <ActivityThemed accent="library">
-        <Screen refreshing={isRefetching} onRefresh={refetch}>
+      <Screen refreshing={isRefetching} onRefresh={refetch}>
           <StateView
             status="error"
             emptyText=""
@@ -284,27 +288,23 @@ export default function LibrarySectionScreen() {
             retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
           />
         </Screen>
-      </ActivityThemed>
     );
   }
 
   if (!section || section.type !== "item_list") {
     return (
-      <ActivityThemed accent="library">
-        <Screen>
+      <Screen>
           <StateView
             status="empty"
             emptyText={hi ? "यह खंड उपलब्ध नहीं है।" : "That section is not available."}
           />
         </Screen>
-      </ActivityThemed>
     );
   }
 
   if (section.requires_login && !authed) {
     return (
-      <ActivityThemed accent="library">
-        <Screen>
+      <Screen>
           <StateView
             status="empty"
             emptyText={
@@ -326,7 +326,6 @@ export default function LibrarySectionScreen() {
             />
           </View>
         </Screen>
-      </ActivityThemed>
     );
   }
 
@@ -339,7 +338,6 @@ export default function LibrarySectionScreen() {
   const emptySection = !hasSubs && filteredLoose.length === 0 && !query && !bookmarksOnly;
 
   return (
-    <ActivityThemed accent="library">
     <>
     <Screen refreshing={isRefetching} onRefresh={refetch}>
       <Title style={{ fontSize: 22, lineHeight: 30, marginBottom: 12 }}>{title}</Title>
@@ -349,8 +347,10 @@ export default function LibrarySectionScreen() {
           flexDirection: "row",
           alignItems: "center",
           gap: 8,
-          backgroundColor: c.muted,
+          backgroundColor: c.card,
           borderRadius: c.radius,
+          borderWidth: 1,
+          borderColor: c.border,
           paddingHorizontal: 12,
           minHeight: 44,
           marginBottom: 12,
@@ -479,6 +479,5 @@ export default function LibrarySectionScreen() {
       {/* Outside ScrollView — BottomSheetModal fails to present when nested in Screen scroll on iOS */}
       <LibraryTextSheet item={readerItem} onClose={() => setReaderItem(null)} />
     </>
-    </ActivityThemed>
   );
 }

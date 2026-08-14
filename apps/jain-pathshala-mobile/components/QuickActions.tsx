@@ -27,7 +27,6 @@ export type QuickAction = {
 };
 
 const PARENT_ACTIONS: QuickAction[] = [
-  { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "सूचनाएँ", accent: "notifications" },
   { href: "/my-attendance", icon: "checkmark-done-outline", en: "Attendance", hi: "उपस्थिति", accent: "attendance" },
   { href: "/niyam-submit", icon: "sparkles-outline", en: "Submit Niyam", hi: "नियम भेजें", accent: "niyam" },
   { href: "/courses", icon: "library-outline", en: "Courses", hi: "पाठ्यक्रम", accent: "courses" },
@@ -54,7 +53,6 @@ export const SHIKSHAK_ACTIONS: QuickAction[] = [
   { href: "/shikshak/niyam-review", icon: "clipboard-outline", en: "Niyam review", hi: "नियम समीक्षा", accent: "niyam" },
   { href: "/shikshak/join-approvals", icon: "person-add-outline", en: "Join approvals", hi: "Join स्वीकृति", accent: "join" },
   { href: "/shikshak/niyams", icon: "sparkles-outline", en: "Niyam catalog", hi: "नियम सूची", accent: "niyam" },
-  { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "सूचनाएँ", accent: "notifications" },
   { href: "/gallery", icon: "images-outline", en: "Punya Wall", hi: "पुण्य दीवार", accent: "punya" },
   { href: "/shikshak/profile", icon: "person-circle-outline", en: "Profile", hi: "प्रोफ़ाइल", accent: "profile" },
 ];
@@ -65,7 +63,7 @@ export const SANCHALAK_ACTIONS: QuickAction[] = [
   { href: "/admin/shikshaks", icon: "people-circle-outline", en: "Shikshaks", hi: "शिक्षक", accent: "shikshaks" },
   { href: "/admin/courses", icon: "library-outline", en: "Courses", hi: "पाठ्यक्रम", accent: "courses" },
   { href: "/admin/holidays", icon: "calendar-outline", en: "Holidays", hi: "अवकाश", accent: "holidays" },
-  { href: "/admin/notices", icon: "megaphone-outline", en: "Notices", hi: "सूचनाएँ", accent: "notices" },
+  { href: "/admin/notices", icon: "megaphone-outline", en: "Manage notices", hi: "सूचना प्रबंधन", accent: "notices" },
   { href: "/admin/niyam-review", icon: "clipboard-outline", en: "Niyam review", hi: "नियम समीक्षा", accent: "niyam" },
   { href: "/admin/join", icon: "person-add-outline", en: "Join approvals", hi: "Join स्वीकृति", accent: "join" },
   { href: "/admin/attendance", icon: "checkmark-done-outline", en: "Attendance", hi: "उपस्थिति", accent: "attendance" },
@@ -82,7 +80,6 @@ export const SANCHALAK_ACTIONS: QuickAction[] = [
   { href: "/admin/enrolments", icon: "clipboard-outline", en: "Enrolments", hi: "नामांकन", accent: "enrolments" },
   { href: "/admin/students", icon: "people-outline", en: "Students", hi: "विद्यार्थी", accent: "students" },
   { href: "/gallery", icon: "ribbon-outline", en: "Punya Wall", hi: "पुण्य दीवार", accent: "punya" },
-  { href: "/notifications", icon: "notifications-outline", en: "Notifications", hi: "अधिसूचनाएँ", accent: "notifications" },
   { href: "/library", icon: "library-outline", en: "Library", hi: "पुस्तकालय", accent: "library" },
   { href: "/shivirs", icon: "bonfire-outline", en: "Shivirs", hi: "शिविर", accent: "shivirs" },
 ];
@@ -100,7 +97,6 @@ export const SIGNED_IN_BROWSE_ACTIONS: QuickAction[] = [
   { href: "/centres", icon: "location-outline", en: "Centres", hi: "केंद्र", accent: "centres" },
   { href: "/shivirs", icon: "bonfire-outline", en: "Shivirs", hi: "शिविर", accent: "shivirs" },
   { href: "/library", icon: "library-outline", en: "Library", hi: "पुस्तकालय", accent: "library" },
-  { href: "/notices", icon: "megaphone-outline", en: "Notices", hi: "सूचनाएँ", accent: "notices" },
 ];
 
 function ActionTile({ action }: { action: QuickAction }) {
@@ -139,7 +135,7 @@ function ActionTile({ action }: { action: QuickAction }) {
         ]}
       >
         <View style={{ position: "relative" }}>
-          <Ionicons name={action.icon} size={26} color={c.activityInk} />
+          <Ionicons name={action.icon} size={26} color={c.activityInkStrong} />
           {badge > 0 ? (
             <View
               style={{
@@ -168,7 +164,15 @@ function ActionTile({ action }: { action: QuickAction }) {
             </View>
           ) : null}
         </View>
-        <Body style={{ fontSize: 11, marginTop: 6, textAlign: "center", color: c.activityInk }}>
+        <Body
+          style={{
+            fontSize: 13,
+            lineHeight: 18,
+            marginTop: 6,
+            textAlign: "center",
+            color: c.activityInkStrong,
+          }}
+        >
           {hi ? action.hi : action.en}
         </Body>
       </Animated.View>

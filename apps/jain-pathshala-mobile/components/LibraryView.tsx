@@ -19,7 +19,6 @@ import {
 import type { SearchHit } from "@/lib/library/search-query";
 import { AppHeader } from "@/components/AppHeader";
 import { LibrarySearchResults } from "@/components/LibrarySearchResults";
-import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { Body, Card, Row, Screen, StateView, Title } from "@/components/ui";
 
 export type LibraryViewProps = {
@@ -203,7 +202,7 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
   );
 
   return (
-    <ActivityThemed accent="library">
+    <View style={{ flex: 1, backgroundColor: c.background }}>
       {showAppHeader ? (
         <AppHeader
           title={hi ? "पुस्तकालय" : "Digital library"}
@@ -218,6 +217,7 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
           paddingBottom: 8,
           borderBottomWidth: 1,
           borderBottomColor: c.border,
+          backgroundColor: c.background,
         }}
       >
         <View
@@ -225,8 +225,10 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
             flexDirection: "row",
             alignItems: "center",
             gap: 8,
-            backgroundColor: c.muted,
+            backgroundColor: c.card,
             borderRadius: c.radius,
+            borderWidth: 1,
+            borderColor: c.border,
             paddingHorizontal: 12,
             minHeight: 44,
           }}
@@ -348,6 +350,6 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
           })
         )}
       </Screen>
-    </ActivityThemed>
+    </View>
   );
 }

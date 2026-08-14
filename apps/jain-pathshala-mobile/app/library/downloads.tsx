@@ -6,7 +6,6 @@ import { formatBytes } from "@/lib/library/downloaded-audio";
 import { useLibraryDownload } from "@/contexts/LibraryDownloadContext";
 import { useLibraryAudio } from "@/contexts/LibraryAudioContext";
 import { Body, Button, Card, Row, Screen, StateView, Title } from "@/components/ui";
-import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 
 export default function LibraryDownloadsScreen() {
   const { hi } = useLocale();
@@ -35,7 +34,6 @@ export default function LibraryDownloadsScreen() {
   };
 
   return (
-    <ActivityThemed accent="library">
     <Screen contentStyle={{ paddingBottom: 120 }}>
       <Body muted style={{ marginBottom: 12, fontSize: 13 }}>
         {hi ? `कुल ${formatBytes(totalBytes)}` : `Total ${formatBytes(totalBytes)}`}
@@ -123,6 +121,5 @@ export default function LibraryDownloadsScreen() {
         </>
       )}
     </Screen>
-    </ActivityThemed>
   );
 }

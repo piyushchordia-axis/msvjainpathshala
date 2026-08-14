@@ -428,6 +428,20 @@
       "when": 1790937600000,
       "tag": "0060_publish_pathshala_join",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "7",
+      "when": 1791024000000,
+      "tag": "0061_niyam_perf_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 62,
+      "version": "7",
+      "when": 1791110400000,
+      "tag": "0062_deactivate_test_niyams",
+      "breakpoints": true
     }
   ]
 }

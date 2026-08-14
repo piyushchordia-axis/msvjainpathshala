@@ -7,7 +7,7 @@ import { useSessionView } from "@/contexts/SessionViewContext";
 import { useAttendance, usePunya } from "@/lib/queries";
 import { calendarEventTone, previewAttendanceLabel } from "@/lib/attendance-calendar";
 import { formatDate } from "@/lib/format";
-import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
+import { AppHeader, HeaderHomeActions } from "@/components/AppHeader";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
@@ -48,10 +48,10 @@ export default function StudentHome() {
         title={`${hi ? "जय जिनेन्द्र" : "Jai Jinendra"}, ${firstName}`}
         subtitle={hi ? "आपकी पाठशाला यात्रा" : "Your pathshala journey"}
         right={
-          <ProfileAvatarButton
+          <HeaderHomeActions
             name={activeChild?.full_name ?? user?.full_name}
             photoUrl={activeChild?.photo_url}
-            href="/student/profile"
+            profileHref="/student/profile"
           />
         }
       />

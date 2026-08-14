@@ -136,9 +136,9 @@ export function LibraryOfflineButton({
           paddingVertical: 8,
           borderRadius: 8,
           borderWidth: 1,
-          borderColor: state === "ready" ? c.primary : c.border,
+          borderColor: c.border,
           minWidth: 0,
-          backgroundColor: state === "ready" ? c.accent : "transparent",
+          backgroundColor: "transparent",
         },
         style,
       ]}
@@ -170,7 +170,11 @@ export function LibraryOfflineButton({
           ) : null}
         </View>
       ) : (
-          <Ionicons name={iconName} size={compact ? 22 : 16} color={c.secondary} />
+          <Ionicons
+            name={iconName}
+            size={compact ? 22 : 16}
+            color={state === "ready" ? c.secondary : c.foreground}
+          />
       )}
       {!compact ? (
         <Body

@@ -8,7 +8,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToday } from "@/lib/queries";
 import type { ShikshakSessionRow } from "@/lib/types";
 import { formatDate } from "@/lib/format";
-import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
+import { AppHeader, HeaderHomeActions } from "@/components/AppHeader";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
 import { BrowseQuickActions, ShikshakQuickActions } from "@/components/QuickActions";
@@ -229,10 +229,10 @@ export default function TodayScreen() {
         title={hi ? `जय जिनेन्द्र, ${firstName}` : `Jai Jinendra, ${firstName}`}
         subtitle={hi ? "डैशबोर्ड — आज के सत्र और गुरुजी मेनू" : "Dashboard — today's sessions and Guruji menu"}
         right={
-          <ProfileAvatarButton
+          <HeaderHomeActions
             name={user?.full_name}
             photoUrl={user?.photo_url}
-            href="/shikshak/profile"
+            profileHref="/shikshak/profile"
           />
         }
       />

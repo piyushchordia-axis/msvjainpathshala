@@ -12,7 +12,6 @@ import {
 } from "@/lib/library/helpers";
 import { LibraryTextSheet } from "@/components/LibraryTextSheet";
 import { Screen, StateView } from "@/components/ui";
-import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 
 /**
  * Deep-link / returnTo host: loads the item then presents LibraryTextSheet.
@@ -47,18 +46,15 @@ export default function LibraryItemTextHost() {
 
   if (isLoading && !found) {
     return (
-      <ActivityThemed accent="library">
-        <Screen>
+      <Screen>
           <StateView status="loading" emptyText="" />
         </Screen>
-      </ActivityThemed>
     );
   }
 
   if ((isError && !found) || !found) {
     return (
-      <ActivityThemed accent="library">
-        <Screen refreshing={isRefetching} onRefresh={refetch}>
+      <Screen refreshing={isRefetching} onRefresh={refetch}>
           <StateView
             status="error"
             emptyText=""
@@ -67,12 +63,10 @@ export default function LibraryItemTextHost() {
             retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
           />
         </Screen>
-      </ActivityThemed>
     );
   }
 
   return (
-    <ActivityThemed accent="library">
     <Screen>
       <StateView status="loading" emptyText="" />
       <LibraryTextSheet
@@ -84,6 +78,5 @@ export default function LibraryItemTextHost() {
         }}
       />
     </Screen>
-    </ActivityThemed>
   );
 }

@@ -93,7 +93,7 @@ function RootLayoutNav() {
       <Stack.Screen name="info/[slug]" options={{ title: "" }} />
       <Stack.Screen name="gallery" options={{ title: "Punya Wall" }} />
       {/* Wave 4 — new student/parent flows */}
-      <Stack.Screen name="notifications" options={{ title: "Notifications" }} />
+      <Stack.Screen name="notifications" options={{ title: "Inbox" }} />
       <Stack.Screen name="niyam-submit" options={{ title: "Submit Niyam" }} />
       <Stack.Screen name="niyam-submissions" options={{ title: "All submissions" }} />
       <Stack.Screen name="homework" options={{ title: "Homework" }} />

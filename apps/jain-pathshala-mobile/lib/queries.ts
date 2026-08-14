@@ -380,11 +380,14 @@ export function usePunya(studentId?: string) {
   });
 }
 
-export function useStudentNiyams(studentId?: string) {
+export function useStudentNiyams(studentId?: string, opts?: { limit?: number }) {
+  const limit = opts?.limit;
   return useQuery({
-    queryKey: qk.niyams(studentId ?? ""),
-    queryFn: () =>
-      apiGet<List<NiyamSubmissionRow>>(`/v1/me/students/${studentId}/niyams`),
+    queryKey: [...qk.niyams(studentId ?? ""), limit ?? "default"] as const,
+    queryFn: () => {
+      const qs = limit != null ? `?limit=${encodeURIComponent(String(limit))}` : "";
+      return apiGet<List<NiyamSubmissionRow>>(`/v1/me/students/${studentId}/niyams${qs}`);
+    },
     enabled: !!studentId,
   });
 }

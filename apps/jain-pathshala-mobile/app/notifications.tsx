@@ -1,134 +1,118 @@
-import { useCallback } from "react";
-import { FlatList, Platform, Pressable, RefreshControl, View, type ListRenderItem } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { Pressable, Text, View } from "react-native";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { bodyFamily } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { ActivityThemed } from "@/contexts/ActivityThemeContext";
-import { useMarkNotificationRead, useNotifications, type NotificationRow } from "@/lib/queries";
-import { formatDate } from "@/lib/format";
+import { useNotifications } from "@/lib/queries";
 import { AppHeader } from "@/components/AppHeader";
-import { Body, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { NotificationsInbox } from "@/components/NotificationsInbox";
+import { NoticesFeedScreen } from "@/components/NoticesFeedScreen";
 
-export default function Notifications() {
+type HubTab = "notifications" | "notices";
+
+function parseTab(raw: string | string[] | undefined): HubTab {
+  const v = Array.isArray(raw) ? raw[0] : raw;
+  return v === "notices" ? "notices" : "notifications";
+}
+
+function HubSegment({
+  active,
+  onChange,
+}: {
+  active: HubTab;
+  onChange: (tab: HubTab) => void;
+}) {
   const c = useColors();
   const { hi } = useLocale();
-
-  const notifications = useNotifications();
-  const markRead = useMarkNotificationRead();
-
-  const rows = notifications.data?.items ?? [];
-  const unreadCount = notifications.data?.unread_count ?? 0;
-
-  const onPressRow = useCallback(
-    (id: string, isUnread: boolean) => {
-      if (!isUnread || markRead.isPending) return;
-      markRead.mutate({ id });
-    },
-    [markRead],
-  );
-
-  const onRefresh = useCallback(() => {
-    notifications.refetch();
-  }, [notifications]);
-
-  const renderItem: ListRenderItem<NotificationRow> = useCallback(
-    ({ item }) => {
-      const isUnread = !item.read_at;
-      const title = hi ? item.title_hi ?? item.title_en : item.title_en;
-      const body = hi ? item.body_hi ?? item.body_en : item.body_en;
-      return (
-        <Pressable onPress={() => onPressRow(item.id, isUnread)} disabled={!isUnread}>
-          <Card
-            style={
-              isUnread ? { borderColor: c.primary, backgroundColor: c.accent } : undefined
-            }
-          >
-            <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
-              <View style={{ flex: 1, paddingRight: 10 }}>
-                <Title style={{ fontSize: 16 }}>{title}</Title>
-                <Body muted style={{ fontSize: 11, marginTop: 2 }}>
-                  {formatDate(item.created_at)}
-                </Body>
-              </View>
-              {isUnread ? <Pill label={hi ? "नया" : "New"} tone="primary" /> : null}
-            </Row>
-            {body ? (
-              <Body muted={!isUnread} style={{ marginTop: 8 }}>
-                {body}
-              </Body>
-            ) : null}
-          </Card>
-        </Pressable>
-      );
-    },
-    [c.accent, c.primary, hi, onPressRow],
-  );
-
-  const keyExtractor = useCallback((item: NotificationRow) => item.id, []);
+  const tabs: Array<{ key: HubTab; en: string; hi: string }> = [
+    { key: "notifications", en: "Notifications", hi: "अधिसूचनाएँ" },
+    { key: "notices", en: "Notices", hi: "घोषणाएँ" },
+  ];
 
   return (
-    <ActivityThemed accent="notifications">
-      <AppHeader
-        title={hi ? "सूचनाएँ" : "Notifications"}
-        subtitle={
-          unreadCount > 0
-            ? hi
-              ? `${unreadCount} अपठित सूचनाएँ`
-              : `${unreadCount} unread`
-            : hi
-              ? "आपके लिए सभी अपडेट"
-              : "All your updates"
-        }
-      />
-      <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0 }}>
-        {notifications.isLoading ? (
-          <View style={{ paddingHorizontal: 18, paddingTop: 8 }}>
-            <StateView status="loading" emptyText="" />
-          </View>
-        ) : notifications.isError ? (
-          <View style={{ paddingHorizontal: 18, paddingTop: 8 }}>
-            <StateView
-              status="error"
-              emptyText=""
-              errorText={hi ? "सूचनाएँ लोड नहीं हुईं।" : "Could not load notifications."}
-              onRetry={notifications.refetch}
-              retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
-            />
-          </View>
-        ) : (
-          <FlatList
-            data={rows}
-            keyExtractor={keyExtractor}
-            renderItem={renderItem}
-            ListEmptyComponent={
-              <StateView
-                status="empty"
-                emptyText={hi ? "अभी कोई सूचना नहीं है।" : "No notifications yet."}
-              />
-            }
-            contentContainerStyle={{
-              paddingHorizontal: 18,
-              paddingTop: 8,
-              paddingBottom: 40,
-              gap: 14,
+    <View
+      style={{
+        flexDirection: "row",
+        marginHorizontal: 18,
+        marginBottom: 8,
+        borderWidth: 1,
+        borderColor: c.border,
+        borderRadius: 999,
+        overflow: "hidden",
+        backgroundColor: c.card,
+      }}
+    >
+      {tabs.map((t) => {
+        const selected = active === t.key;
+        return (
+          <Pressable
+            key={t.key}
+            onPress={() => onChange(t.key)}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+            style={{
+              flex: 1,
+              paddingVertical: 10,
+              alignItems: "center",
+              backgroundColor: selected ? c.primary : "transparent",
             }}
-            refreshControl={
-              <RefreshControl
-                refreshing={!!notifications.isRefetching}
-                onRefresh={onRefresh}
-                tintColor={c.primary}
-                colors={[c.primary]}
-              />
-            }
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-            initialNumToRender={10}
-            maxToRenderPerBatch={8}
-            windowSize={7}
-            removeClippedSubviews={Platform.OS !== "web"}
-          />
-        )}
-      </Screen>
-    </ActivityThemed>
+          >
+            <Text
+              style={{
+                fontFamily: bodyFamily(hi, "semibold"),
+                fontSize: 13,
+                color: selected ? c.primaryForeground : c.mutedForeground,
+              }}
+            >
+              {hi ? t.hi : t.en}
+            </Text>
+          </Pressable>
+        );
+      })}
+    </View>
   );
 }
 
+/** Signed-in hub: Notifications inbox + Notices feed behind the header bell. */
+export default function NotificationsHub() {
+  const { hi } = useLocale();
+  const router = useRouter();
+  const params = useLocalSearchParams<{ tab?: string | string[] }>();
+  const [tab, setTab] = useState<HubTab>(() => parseTab(params.tab));
+  const notifications = useNotifications();
+  const unreadCount = notifications.data?.unread_count ?? 0;
+
+  useEffect(() => {
+    setTab(parseTab(params.tab));
+  }, [params.tab]);
+
+  const onChangeTab = (next: HubTab) => {
+    setTab(next);
+    router.setParams({ tab: next });
+  };
+
+  const subtitle = useMemo(() => {
+    if (tab === "notices") {
+      return hi ? "पाठशाला और केंद्र की घोषणाएँ" : "Pathshala and centre announcements";
+    }
+    if (unreadCount > 0) {
+      return hi ? `${unreadCount} अपठित अधिसूचनाएँ` : `${unreadCount} unread`;
+    }
+    return hi ? "आपके लिए सभी अपडेट" : "All your updates";
+  }, [hi, tab, unreadCount]);
+
+  return (
+    <ActivityThemed accent={tab === "notices" ? "notices" : "notifications"}>
+      <AppHeader
+        title={hi ? "सूचना केंद्र" : "Inbox"}
+        subtitle={subtitle}
+      />
+      <HubSegment active={tab} onChange={onChangeTab} />
+      <View style={{ flex: 1 }}>
+        {tab === "notifications" ? <NotificationsInbox /> : <NoticesFeedScreen embedded />}
+      </View>
+    </ActivityThemed>
+  );
+}
