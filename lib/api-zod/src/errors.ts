@@ -88,6 +88,13 @@ export const ERROR_CODES = [
   "ERR_COURSE_NODE_NOT_FOUND",
   "ERR_COURSE_STUDENT_OUT_OF_SCOPE",
   "ERR_COURSE_NOT_PUBLISHABLE",
+  // Geography
+  "ERR_CITY_SLUG_CONFLICT",
+  // Team directory
+  "ERR_TEAM_PUBLISH_FORBIDDEN",
+  "ERR_TEAM_SCOPE_INVALID",
+  "ERR_TEAM_DESIGNATION_REQUIRED",
+  "ERR_TEAM_MEMBER_DUPLICATE",
 ] as const;
 
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -162,6 +169,11 @@ export const ErrorCode = {
   COURSE_NODE_NOT_FOUND: "ERR_COURSE_NODE_NOT_FOUND",
   COURSE_STUDENT_OUT_OF_SCOPE: "ERR_COURSE_STUDENT_OUT_OF_SCOPE",
   COURSE_NOT_PUBLISHABLE: "ERR_COURSE_NOT_PUBLISHABLE",
+  CITY_SLUG_CONFLICT: "ERR_CITY_SLUG_CONFLICT",
+  TEAM_PUBLISH_FORBIDDEN: "ERR_TEAM_PUBLISH_FORBIDDEN",
+  TEAM_SCOPE_INVALID: "ERR_TEAM_SCOPE_INVALID",
+  TEAM_DESIGNATION_REQUIRED: "ERR_TEAM_DESIGNATION_REQUIRED",
+  TEAM_MEMBER_DUPLICATE: "ERR_TEAM_MEMBER_DUPLICATE",
 } as const satisfies Record<string, ErrorCode>;
 
 /** Server + client upload size cap (multer + pre-upload guard). */
@@ -227,5 +239,25 @@ export const ERROR_MESSAGES = {
   ERR_TRANSLATION_FAILED: {
     en: "The translation could not be used — check the English text and try again, or type the Hindi yourself.",
     hi: "अनुवाद उपयोग नहीं हो सका — अंग्रेज़ी पाठ जाँचकर फिर कोशिश करें, या हिंदी स्वयं लिखें।",
+  },
+  ERR_CITY_SLUG_CONFLICT: {
+    en: "That city slug is already taken — choose a different slug (for example append the state code).",
+    hi: "यह शहर स्लग पहले से उपयोग में है — कोई अन्य स्लग चुनें (उदाहरण के लिए राज्य कोड जोड़ें)।",
+  },
+  ERR_TEAM_PUBLISH_FORBIDDEN: {
+    en: "You cannot manage Team members outside your scope — ask a city or state admin.",
+    hi: "आप अपनी सीमा के बाहर टीम सदस्यों का प्रबंधन नहीं कर सकते — सिटी या राज्य एडमिन से संपर्क करें।",
+  },
+  ERR_TEAM_SCOPE_INVALID: {
+    en: "That Team scope does not match state/city/centre — fix the geography fields and try again.",
+    hi: "यह टीम स्कोप राज्य/शहर/केंद्र से मेल नहीं खाता — भूगोल फ़ील्ड ठीक करके फिर कोशिश करें।",
+  },
+  ERR_TEAM_DESIGNATION_REQUIRED: {
+    en: "This Team card has no designation — set designation_en (and designation_hi) before publishing.",
+    hi: "इस टीम कार्ड पर पदनाम नहीं है — प्रकाशित करने से पहले designation_en (और designation_hi) सेट करें।",
+  },
+  ERR_TEAM_MEMBER_DUPLICATE: {
+    en: "That user already has a Team card — edit the existing row instead of creating another.",
+    hi: "उस उपयोगकर्ता का टीम कार्ड पहले से है — नया बनाने के बजाय मौजूदा पंक्ति संपादित करें।",
   },
 } as const satisfies Partial<Record<ErrorCode, { en: string; hi: string }>>;

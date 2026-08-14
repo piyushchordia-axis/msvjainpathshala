@@ -49,13 +49,3 @@ export function MsvPage() {
     />
   );
 }
-
-export function CoursesPage() {
-  return (
-    <PageStub
-      kicker="Courses"
-      title="Pathshala courses"
-      body="Browse and track courses in the Jain Pathshala mobile app after you sign in. A fuller web catalogue is on the way."
-    />
-  );
-}

@@ -306,6 +306,8 @@ export default function ShikshaksScreen() {
       <AppHeader
         title={hi ? "शिक्षक" : "Shikshaks"}
         subtitle={hi ? "केंद्र और बैच नियुक्तियाँ" : "Centre and batch assignments"}
+        showBack
+        backHref="/admin/dashboard"
       />
       <Screen
         refreshing={refreshing}

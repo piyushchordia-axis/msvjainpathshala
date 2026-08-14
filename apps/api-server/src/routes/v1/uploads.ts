@@ -24,6 +24,9 @@ import {
 import { storage, makeKey } from "../../lib/storage";
 import { fileTypeFromBuffer } from "file-type";
 import { stripImageMetadataToFile, ImageNormaliseError } from "../../lib/image-normalise";
+import { assetIdFromTeamPhotoKey } from "../../lib/team-admin";
+import { hasMinRole } from "../../lib/roles";
+import type { Role } from "@workspace/api-zod";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -33,7 +36,10 @@ const MAGIC_SAMPLE_BYTES = 4096;
 // Folders that hold admin-published content — students/parents must not be able
 // to plant files under these paths. (niyam-proof/homework/registration/
 // student-photos/user-photos/misc stay open to any authenticated user.)
-const ADMIN_FOLDERS = new Set(["gallery", "library", "id-cards", "competitions", "shivirs"]);
+const ADMIN_FOLDERS = new Set(["gallery", "library", "id-cards", "competitions", "shivirs", "team-photos"]);
+
+/** Media purpose team_photo — 5 MB, images only (running stand-in for SPEC media finalize). */
+const TEAM_PHOTO_MAX_BYTES = 5 * 1024 * 1024;
 
 const folderSchema = z.enum([
   "niyam-proof",
@@ -46,6 +52,7 @@ const folderSchema = z.enum([
   "user-photos",
   "competitions",
   "shivirs",
+  "team-photos",
   "misc",
 ]);
 
@@ -83,20 +90,38 @@ router.post("/", uploadMultipart.single("file"), async (req: Request, res: Respo
       fail(res, 422, "ERR_VALIDATION_FAILED", `File type not allowed (${file.mimetype || "unknown"}).`);
       return;
     }
-    const folderParse = folderSchema.safeParse(req.body?.folder ?? "misc");
+    const purpose =
+      typeof req.body?.purpose === "string" ? String(req.body.purpose).trim() : "";
+    // purpose=team_photo is the SPEC media kind; map onto folder team-photos.
+    const folderRaw =
+      purpose === "team_photo" ? "team-photos" : (req.body?.folder ?? "misc");
+    const folderParse = folderSchema.safeParse(folderRaw);
     if (!folderParse.success) {
       // Never silently downgrade to misc — that hid the homework-proof folder bug.
       fail(
         res,
         422,
         "ERR_VALIDATION_FAILED",
-        `Unknown upload folder "${String(req.body?.folder)}".`,
+        `Unknown upload folder "${String(folderRaw)}".`,
       );
       return;
     }
     const folder = folderParse.data;
     if (ADMIN_FOLDERS.has(folder) && !canAccessAdminPanel(req.authUser!.role)) {
       fail(res, 403, "ERR_FORBIDDEN", "You may not upload to this folder.");
+      return;
+    }
+    if (folder === "team-photos" && !hasMinRole(req.authUser!.role as Role, "city_admin")) {
+      fail(res, 403, "ERR_TEAM_PUBLISH_FORBIDDEN", "You may not upload Team photos.");
+      return;
+    }
+    if (folder === "team-photos" && file.size > TEAM_PHOTO_MAX_BYTES) {
+      fail(
+        res,
+        400,
+        "ERR_FILE_TOO_LARGE",
+        "That Team photo is too large (max 5 MB). Use a smaller image and try again.",
+      );
       return;
     }
 
@@ -133,6 +158,10 @@ router.post("/", uploadMultipart.single("file"), async (req: Request, res: Respo
       );
       return;
     }
+    if (folder === "team-photos" && !contentMime.startsWith("image/")) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Team photos must be images (JPEG, PNG, WebP, or GIF).");
+      return;
+    }
 
     // Strip EXIF/GPS from images before disk/S3. Stream to a sibling temp file
     // so the normalised bytes never sit in heap (PERF #18). Videos are NOT
@@ -167,7 +196,8 @@ router.post("/", uploadMultipart.single("file"), async (req: Request, res: Respo
       .insert(upload_objects)
       .values({ key, uploaded_by: req.authUser!.id, content_type: storeMime })
       .onConflictDoNothing();
-    ok(res, stored);
+    const assetId = folder === "team-photos" ? assetIdFromTeamPhotoKey(key) : null;
+    ok(res, assetId ? { ...stored, asset_id: assetId, purpose: "team_photo" } : stored);
   } finally {
     await safeUnlink(tempPath);
     // normalised sibling may exist even when put failed mid-flight

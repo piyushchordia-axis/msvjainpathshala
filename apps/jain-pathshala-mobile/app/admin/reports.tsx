@@ -166,6 +166,8 @@ export default function ReportsScreen() {
       <AppHeader
         title={hi ? "रिपोर्ट" : "Reports"}
         subtitle={hi ? "केंद्र मासिक PDF" : "Centre monthly PDF"}
+        showBack
+        backHref="/admin/dashboard"
       />
       <Screen
         refreshing={centresQ.isRefetching || reportsQ.isRefetching}

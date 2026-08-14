@@ -75,7 +75,7 @@ async function seedFixtures(pool: pg.Pool): Promise<Fixtures> {
     );
     const stateId = state.rows[0].id as string;
     const city = await client.query(
-      `insert into cities (state_id, name, code) values ($1, 'Test City', 'TC') returning id`,
+      `insert into cities (state_id, name, code, slug) values ($1, 'Test City', 'TC', 'test-city') returning id`,
       [stateId],
     );
     const cityId = city.rows[0].id as string;

@@ -177,6 +177,8 @@ export default function HolidaysScreen() {
       <AppHeader
         title={hi ? "अवकाश" : "Holidays"}
         subtitle={hi ? "केंद्र के अवकाश दिन" : "Centre holiday calendar"}
+        showBack
+        backHref="/admin/dashboard"
       />
       <Screen
         refreshing={centresQ.isRefetching || holidaysQ.isRefetching}

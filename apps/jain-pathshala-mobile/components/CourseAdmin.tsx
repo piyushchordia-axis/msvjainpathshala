@@ -18,6 +18,7 @@ import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
 import { CentreSwitcher, usePersistedCentreId } from "@/components/CentreSwitcher";
+import { CourseFolderCard } from "@/components/CourseFolderCard";
 import { Body, Button, Card, Pill, Screen, StateView, Title } from "@/components/ui";
 import {
   useAdminBatches,
@@ -156,6 +157,8 @@ export default function CourseAdmin({ persona }: { persona: CourseAdminPersona }
             ? "पाठ्यक्रम देखें · विद्यार्थी के लिए प्रगति अपडेट करें"
             : "View courses · update Progress for a student"
         }
+        showBack
+        backHref={isSanchalak ? "/admin/dashboard" : "/shikshak/today"}
       />
       <Screen
         refreshing={coursesQ.isFetching}
@@ -232,17 +235,13 @@ export default function CourseAdmin({ persona }: { persona: CourseAdminPersona }
           courses.map((course) => {
             const title = hi ? course.name_hi || course.name_en : course.name_en;
             return (
-              <Card key={course.id} style={{ gap: 10 }}>
-                <Text
-                  style={{
-                    fontSize: 16,
-                    lineHeight: 24,
-                    fontFamily: bodyFamily(hi, "semibold"),
-                    color: c.foreground,
-                  }}
-                >
-                  {title}
-                </Text>
+              <CourseFolderCard
+                key={course.id}
+                title={title}
+                subtitle={course.academic_year}
+                showChevron
+                onPress={() => openBrowse(course.id)}
+              >
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
                   <Pill label={course.kind} />
                   {course.academic_year ? <Pill label={course.academic_year} /> : null}
@@ -274,7 +273,7 @@ export default function CourseAdmin({ persona }: { persona: CourseAdminPersona }
                     />
                   </View>
                 </View>
-              </Card>
+              </CourseFolderCard>
             );
           })
         )}

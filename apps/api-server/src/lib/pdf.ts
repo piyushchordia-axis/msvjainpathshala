@@ -16,8 +16,14 @@ import devanagariFont from "../../assets/fonts/NotoSansDevanagari-Regular.ttf";
 
 const A4: [number, number] = [595.28, 841.89];
 const MARGIN = 50;
-const INK = rgb(0.12, 0.12, 0.14);
-const MUTED = rgb(0.45, 0.45, 0.5);
+const INK = rgb(0.1, 0.04, 0);
+const MUTED = rgb(0.55, 0.44, 0.37);
+/** Design-token RGB equivalents (pdf-lib cannot use CSS variables). */
+const SAFFRON = rgb(0.831, 0.384, 0.102); // saffron #D4621A
+const MAROON = rgb(0.478, 0.094, 0.094); // maroon #7A1818
+const CREAM = rgb(0.992, 0.973, 0.949); // cream #FDF8F2
+const CREAM_DARK = rgb(0.961, 0.929, 0.878); // cream-dark #F5EDE0
+const WHITE = rgb(1, 1, 1);
 
 /** Replace characters outside WinAnsi (e.g. Devanagari) so Helvetica won't throw. */
 export function sanitize(text: string): string {
@@ -107,8 +113,166 @@ export class PdfBuilder {
     this.y -= 6;
     const t = this.prepare(text);
     const font = this.fontFor(t, true);
-    this.page.drawText(t, { x: MARGIN, y: this.y, size: 12, font, color: INK });
+    this.page.drawText(t, { x: MARGIN, y: this.y, size: 12, font, color: MAROON });
     this.y -= 18;
+    return this;
+  }
+
+  /** Saffron band at the top of the current page — call first. */
+  headerBand(titleEn: string, titleHi: string): this {
+    const h = 76;
+    const top = A4[1];
+    this.page.drawRectangle({ x: 0, y: top - h, width: A4[0], height: h, color: SAFFRON });
+    this.page.drawRectangle({ x: 0, y: top - h - 4, width: A4[0], height: 4, color: MAROON });
+    const en = this.prepare(titleEn);
+    const hi = this.prepare(titleHi);
+    this.page.drawText(en, {
+      x: MARGIN,
+      y: top - 30,
+      size: 16,
+      font: this.fontFor(en, true),
+      color: WHITE,
+    });
+    if (hi) {
+      this.page.drawText(hi, {
+        x: MARGIN,
+        y: top - 50,
+        size: 12,
+        font: this.fontFor(hi),
+        color: CREAM,
+      });
+    }
+    this.y = top - h - 22;
+    return this;
+  }
+
+  /** Cream callout box — EN then HI on separate lines. */
+  callout(en: string, hi?: string, size = 10): this {
+    const maxWidth = A4[0] - MARGIN * 2 - 16;
+    const enP = this.prepare(en);
+    const hiP = hi ? this.prepare(hi) : "";
+    const enFont = this.fontFor(enP);
+    const hiFont = hiP ? this.fontFor(hiP) : this.font;
+    const enLines = this.wrap(enP, enFont, size, maxWidth);
+    const hiLines = hiP ? this.wrap(hiP, hiFont, size, maxWidth) : [];
+    const lineH = size + 4;
+    const pad = 10;
+    const boxH = pad * 2 + (enLines.length + hiLines.length) * lineH;
+    this.ensure(boxH + 8);
+    const boxBottom = this.y - boxH + size;
+    this.page.drawRectangle({
+      x: MARGIN,
+      y: boxBottom,
+      width: A4[0] - MARGIN * 2,
+      height: boxH,
+      color: CREAM_DARK,
+    });
+    let ty = this.y - pad;
+    for (const line of enLines) {
+      this.page.drawText(line, { x: MARGIN + 8, y: ty, size, font: enFont, color: INK });
+      ty -= lineH;
+    }
+    for (const line of hiLines) {
+      this.page.drawText(line, { x: MARGIN + 8, y: ty, size, font: hiFont, color: INK });
+      ty -= lineH;
+    }
+    this.y -= boxH + 10;
+    return this;
+  }
+
+  /** Two-column metric table: EN label, HI label, value. No mixed-script keys. */
+  metricRows(
+    rows: Array<{ en: string; hi?: string; value: string }>,
+    size = 10,
+  ): this {
+    const innerW = A4[0] - MARGIN * 2;
+    const valueW = 150;
+    const labelW = innerW - valueW - 8;
+    const lineH = size + 3;
+    for (const row of rows) {
+      const en = this.prepare(row.en);
+      const hi = row.hi ? this.prepare(row.hi) : "";
+      const val = this.prepare(row.value);
+      const enFont = this.fontFor(en);
+      const hiFont = hi ? this.fontFor(hi) : this.font;
+      const valFont = this.fontFor(val, true);
+      const enLines = this.wrap(en, enFont, size, labelW);
+      const hiLines = hi ? this.wrap(hi, hiFont, size, labelW) : [];
+      const blockH = Math.max(enLines.length + hiLines.length, 1) * lineH + 6;
+      this.ensure(blockH);
+      this.page.drawRectangle({
+        x: MARGIN,
+        y: this.y - blockH + size,
+        width: innerW,
+        height: blockH,
+        color: CREAM,
+      });
+      let ty = this.y - 4;
+      for (const line of enLines) {
+        this.page.drawText(line, { x: MARGIN + 6, y: ty, size, font: enFont, color: INK });
+        ty -= lineH;
+      }
+      for (const line of hiLines) {
+        this.page.drawText(line, { x: MARGIN + 6, y: ty, size: size - 1, font: hiFont, color: MUTED });
+        ty -= lineH;
+      }
+      const valY = this.y - 4;
+      const vw = valFont.widthOfTextAtSize(val, size);
+      this.page.drawText(val, {
+        x: MARGIN + innerW - 8 - vw,
+        y: valY,
+        size,
+        font: valFont,
+        color: INK,
+      });
+      this.y -= blockH + 2;
+    }
+    return this;
+  }
+
+  /** Simple grid table. Headers and cells are single-script (no mixed EN/HI in one cell). */
+  dataTable(headers: string[], rows: string[][], colWeights: number[], size = 9): this {
+    const innerW = A4[0] - MARGIN * 2;
+    const totalW = colWeights.reduce((s, w) => s + w, 0) || 1;
+    const widths = colWeights.map((w) => (w / totalW) * innerW);
+    const pad = 5;
+    const lineH = size + 4;
+
+    const drawRow = (cells: string[], header: boolean) => {
+      const prepared = cells.map((c, i) => {
+        const t = this.prepare(c);
+        const font = this.fontFor(t, header);
+        const max = Math.max(12, widths[i]! - pad * 2);
+        const lines = this.wrap(t, font, size, max);
+        return { lines, font };
+      });
+      const nLines = Math.max(1, ...prepared.map((p) => p.lines.length));
+      const rowH = nLines * lineH + pad;
+      this.ensure(rowH);
+      this.page.drawRectangle({
+        x: MARGIN,
+        y: this.y - rowH + size,
+        width: innerW,
+        height: rowH,
+        color: header ? SAFFRON : CREAM,
+      });
+      let x = MARGIN;
+      const color = header ? WHITE : INK;
+      for (let i = 0; i < prepared.length; i++) {
+        const cell = prepared[i]!;
+        let ty = this.y - 2;
+        for (const line of cell.lines) {
+          this.page.drawText(line, { x: x + pad, y: ty, size, font: cell.font, color });
+          ty -= lineH;
+        }
+        x += widths[i]!;
+      }
+      this.y -= rowH;
+    };
+
+    drawRow(headers, true);
+    for (const r of rows) drawRow(r, false);
+    this.y -= 8;
     return this;
   }
 

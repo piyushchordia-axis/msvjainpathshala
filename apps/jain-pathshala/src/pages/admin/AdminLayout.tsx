@@ -30,7 +30,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
   const impActive = readCookie('jp_imp_active') === 'true';
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="flex h-screen flex-col overflow-hidden bg-background md:flex-row">
       <Sidebar user={user} />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -41,7 +41,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           />
         ) : null}
 
-        <main className="flex-1 overflow-y-auto px-6 py-6">
+        <main className="flex-1 overflow-y-auto px-4 py-4 md:px-6 md:py-6">
           {children}
         </main>
       </div>

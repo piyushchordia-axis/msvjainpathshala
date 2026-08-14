@@ -33,6 +33,12 @@ export const QUEUE_NAMES = {
   IDCARD_GENERATION: "idcard.generation",
   /** Centre monthly aggregate PDF (Sanchalak / admin). */
   REPORT_GENERATION: "report.generation",
+  /**
+   * Generic one-shot / throttled data backfills (SPEC §18.7).
+   * Payload: `{ kind: string, ... }` — handlers dispatch on `kind`.
+   * Do not invent per-feature backfill queue names; reuse this.
+   */
+  DB_BACKFILL_GENERIC: "db.backfill.generic",
 } as const;
 
 export type QueueName = (typeof QUEUE_NAMES)[keyof typeof QUEUE_NAMES];
@@ -60,3 +66,9 @@ export const CRON_EXPRESSIONS = {
   /** Top-score catch-up for released exams (primary path is enqueue on release). */
   EXAM_TOP_SCORE: "15 3 * * *",
 } as const;
+
+/**
+ * Public Team directory is scoped to this city slug.
+ * Empty string restores the national city index.
+ */
+export const TEAM_PUBLIC_CITY_SLUG = "indore";

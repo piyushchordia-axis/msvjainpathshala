@@ -13,6 +13,8 @@ import { ACTIVITY_ACCENT_TOKEN, type ActivityAccentKey } from "@/constants/activ
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { bodyFamily } from "@/constants/typography";
+import { useAuth } from "@/contexts/AuthContext";
+import { ROLE_PRECEDENCE } from "@/lib/auth";
 import { useAdminCentres, useAttendanceAlerts, useOverview } from "@/lib/queries";
 import { Card, Body, Title } from "@/components/ui";
 
@@ -84,9 +86,15 @@ export const SANCHALAK_ACTIONS: QuickAction[] = [
   { href: "/shivirs", icon: "bonfire-outline", en: "Shivirs", hi: "शिविर", accent: "shivirs" },
 ];
 
+/** City+ extras that sit on the same manage grid (web nav items that exist on mobile). */
+const CITY_ADMIN_EXTRA_ACTIONS: QuickAction[] = [
+  { href: "/team", icon: "people-outline", en: "Team", hi: "टीम", accent: "shikshaks" },
+];
+
 /** Guest home + tabs — stay on `/guest/*` so we do not leave the guest navigator. */
 export const GUEST_BROWSE_ACTIONS: QuickAction[] = [
   { href: "/guest/centres", icon: "location-outline", en: "Centres", hi: "केंद्र", accent: "centres" },
+  { href: "/team", icon: "people-outline", en: "Team", hi: "टीम", accent: "shikshaks" },
   { href: "/guest/shivirs", icon: "bonfire-outline", en: "Shivirs", hi: "शिविर", accent: "shivirs" },
   { href: "/guest/library", icon: "library-outline", en: "Library", hi: "पुस्तकालय", accent: "library" },
   { href: "/guest/notices", icon: "megaphone-outline", en: "Notices", hi: "सूचनाएँ", accent: "notices" },
@@ -95,6 +103,7 @@ export const GUEST_BROWSE_ACTIONS: QuickAction[] = [
 /** Signed-in homes — shared stack routes, not the guest tab navigator. */
 export const SIGNED_IN_BROWSE_ACTIONS: QuickAction[] = [
   { href: "/centres", icon: "location-outline", en: "Centres", hi: "केंद्र", accent: "centres" },
+  { href: "/team", icon: "people-outline", en: "Team", hi: "टीम", accent: "shikshaks" },
   { href: "/shivirs", icon: "bonfire-outline", en: "Shivirs", hi: "शिविर", accent: "shivirs" },
   { href: "/library", icon: "library-outline", en: "Library", hi: "पुस्तकालय", accent: "library" },
 ];
@@ -231,7 +240,23 @@ export function ShikshakQuickActions() {
   );
 }
 
+const NO_EXTRA: QuickAction[] = [];
+
 export function SanchalakQuickActions() {
+  return <AdminManageQuickActions extra={NO_EXTRA} />;
+}
+
+/** City / state / super — sanchalak manage grid plus city-level destinations. */
+export function AdminHomeQuickActions() {
+  const { user } = useAuth();
+  const cityPlus =
+    !!user && (ROLE_PRECEDENCE[user.role] ?? 0) >= ROLE_PRECEDENCE.city_admin;
+  return (
+    <AdminManageQuickActions extra={cityPlus ? CITY_ADMIN_EXTRA_ACTIONS : []} />
+  );
+}
+
+function AdminManageQuickActions({ extra }: { extra: QuickAction[] }) {
   const centresQ = useAdminCentres();
   const [centreId, setCentreId] = useState<string | null>(null);
 
@@ -271,12 +296,12 @@ export function SanchalakQuickActions() {
 
   const actions = useMemo(
     () =>
-      SANCHALAK_ACTIONS.map((a) => {
+      [...SANCHALAK_ACTIONS, ...extra].map((a) => {
         if (a.href === "/admin/attendance") return { ...a, badge: alertCount };
         if (a.href === "/admin/service-requests") return { ...a, badge: openSr };
         return a;
       }),
-    [alertCount, openSr],
+    [alertCount, extra, openSr],
   );
 
   return (

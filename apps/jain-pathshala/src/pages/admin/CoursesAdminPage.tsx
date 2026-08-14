@@ -3,7 +3,7 @@
  * Prefills for punya_points are UI-only (CU22); DB default stays 0.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { Plus, Trash2, Pencil, ChevronUp, ChevronDown, Archive, Send } from 'lucide-react';
+import { Plus, Trash2, Pencil, ChevronUp, ChevronDown, Archive, Send, ChevronLeft } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -631,11 +631,13 @@ function CourseTreeEditor({
   reloadTree,
   onPublish,
   onArchive,
+  onClose,
 }: {
   tree: CourseTree;
   reloadTree: () => void;
   onPublish: () => void;
   onArchive: () => void;
+  onClose: () => void;
 }) {
   const [busy, setBusy] = useState(false);
   const isDraft = tree.course.status === 'draft';
@@ -723,6 +725,10 @@ function CourseTreeEditor({
     <Card className="space-y-5 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
+          <Button type="button" size="sm" variant="outline" onClick={onClose} className="mb-3">
+            <ChevronLeft className="mr-1 h-4 w-4" />
+            Back to courses
+          </Button>
           <h3 className="font-display text-lg text-secondary">
             {tree.course.name_en}{' '}
             <Badge variant="secondary" className="ml-2 uppercase">
@@ -1460,17 +1466,26 @@ export default function CoursesAdminPage() {
     }
   }
 
+  function closeEditor() {
+    setSelectedId(null);
+    setTree(null);
+    setTreeError(null);
+  }
+
+  const editing = !!selectedId;
+
   return (
     <AdminPageShell
       title="Courses"
       subtitle="Author courses and templates, publish with the CU4 gate, and archive stale years."
-      actions={<AddCourseDialog onAdded={reload} />}
+      actions={editing ? undefined : <AddCourseDialog onAdded={reload} />}
     >
       {error ? <AdminError message={error} /> : null}
 
-      <CatalogueNudges items={items} onArchive={(c) => void openArchive(c)} />
+      <div className={editing ? 'hidden md:block' : undefined}>
+        <CatalogueNudges items={items} onArchive={(c) => void openArchive(c)} />
 
-      <AdminTable
+        <AdminTable
         columns={['Name', 'Kind', 'Year', 'Status', 'City', 'Sections', '']}
         loading={loading}
         empty=""
@@ -1526,6 +1541,7 @@ export default function CoursesAdminPage() {
           </tr>
         ))}
       </AdminTable>
+      </div>
 
       {treeError ? <AdminError message={treeError} /> : null}
       {treeLoading && !tree ? (
@@ -1536,6 +1552,7 @@ export default function CoursesAdminPage() {
           reloadTree={reloadTree}
           onPublish={() => void publishSelected()}
           onArchive={() => void openArchive(tree.course)}
+          onClose={closeEditor}
         />
       ) : null}
 

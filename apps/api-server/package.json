@@ -25,6 +25,7 @@
     "@socket.io/redis-adapter": "^8.3.0",
     "@workspace/api-zod": "workspace:*",
     "@workspace/db": "workspace:*",
+    "@workspace/i18n": "workspace:*",
     "argon2": "^0.45.1",
     "bullmq": "^5.34.5",
     "bwip-js": "^4.11.2",

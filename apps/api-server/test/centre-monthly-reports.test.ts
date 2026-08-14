@@ -5,7 +5,7 @@ import app from "../src/app";
 import { pool } from "@workspace/db";
 import { loginAs, auth } from "./helpers";
 import { registerReportJobs } from "../src/jobs/report-jobs";
-import { composeCentreMonthlySnapshot } from "../src/lib/centre-monthly-report";
+import { composeCentreMonthlySnapshot, buildCentreMonthlyReportPdf } from "../src/lib/centre-monthly-report";
 import { rateToPercent1 } from "../src/lib/attendance-rate";
 
 registerReportJobs();
@@ -119,6 +119,38 @@ describe("centre monthly reports", () => {
       .send({ month: FIXTURE_MONTH });
     expect(res.status).toBe(403);
     expect(res.body.error.code).toBe("ERR_FORBIDDEN");
+  });
+
+  it("city_admin generates for a centre in their city and is forbidden outside", async () => {
+    const city = await loginAs("city_admin");
+    const forbidden = await request(app)
+      .post(`/v1/admin/centres/${KOTHRUD}/reports/monthly`)
+      .set(auth(city.token))
+      .send({ month: EMPTY_MONTH });
+    expect(forbidden.status).toBe(403);
+    expect(forbidden.body.error.code).toBe("ERR_FORBIDDEN");
+
+    const res = await request(app)
+      .post(`/v1/admin/centres/${GHATKOPAR}/reports/monthly`)
+      .set(auth(city.token))
+      .send({ month: EMPTY_MONTH });
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe("queued");
+    expect(res.body.data.job_id).toBeTruthy();
+    createdReports.push(res.body.data.job_id);
+
+    const done = await pollReport(city.token, GHATKOPAR, EMPTY_MONTH, res.body.data.job_id);
+    expect(done.status, done.error_message ?? undefined).toBe("ready");
+    expect(done.pdf_url).toBeTruthy();
+  });
+
+  it("readable PDF is a valid document that includes the centre name", async () => {
+    const snap = await composeCentreMonthlySnapshot(GHATKOPAR, EMPTY_MONTH);
+    expect(snap.centre_name.length).toBeGreaterThan(0);
+    const pdf = await buildCentreMonthlyReportPdf(snap);
+    expect(pdf.subarray(0, 5).toString("latin1")).toBe("%PDF-");
+    // Content streams are Flate-compressed; a real bilingual report is not a tiny stub.
+    expect(pdf.length).toBeGreaterThan(2_000);
   });
 
   it("attendance % in the snapshot matches AT5 for a seeded fixture", async () => {

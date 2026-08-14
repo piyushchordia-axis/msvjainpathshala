@@ -37,10 +37,12 @@ import studentsRouter from "./v1/students";
 import centresRouter from "./v1/centres";
 import translateRouter from "./v1/translate";
 import certificatesRouter from "./v1/certificates";
+import teamRouter from "./v1/team";
 
 const router: IRouter = Router();
 
 router.use("/public", publicRouter);
+router.use("/team", teamRouter);
 router.use("/certificates", certificatesRouter);
 router.use("/sync", syncRouter);
 router.use("/admin", adminRouter);

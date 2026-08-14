@@ -53,7 +53,7 @@ export type CentreMonthlySnapshot = {
   niyam_pct: number | null;
   homework_rate: number | null;
   homework_pct: number | null;
-  punya_by_feature: Array<{ feature_key: string; points: number }>;
+  punya_by_feature: Array<{ feature_key: string; label: string; points: number }>;
   punya_total: number;
   enrolment: { joined: number; deactivated: number; pending: number };
   sessions: { total: number; cancelled: number };
@@ -156,9 +156,12 @@ export async function composeCentreMonthlySnapshot(
   ]);
 
   const punyaResult = await db.execute(sql`
-    select pt.feature_key, coalesce(sum(pt.points), 0)::int as points
+    select pt.feature_key,
+           coalesce(max(pf.label), pt.feature_key) as label,
+           coalesce(sum(pt.points), 0)::int as points
     from punya_transactions pt
     inner join students st on st.id = pt.student_id
+    left join punya_features pf on pf.key = pt.feature_key
     where st.centre_id = ${centreId}::uuid
       and st.deleted_at is null
       and pt.created_at >= ${fromTs}
@@ -167,10 +170,12 @@ export async function composeCentreMonthlySnapshot(
     order by points desc, pt.feature_key
   `);
   const punyaRows =
-    (punyaResult as unknown as { rows?: Array<{ feature_key: string; points: number }> }).rows ??
-    [];
+    (punyaResult as unknown as {
+      rows?: Array<{ feature_key: string; label: string; points: number }>;
+    }).rows ?? [];
   const punya_by_feature = punyaRows.map((r) => ({
     feature_key: String(r.feature_key),
+    label: String(r.label || r.feature_key),
     points: Number(r.points),
   }));
   const punya_total = punya_by_feature.reduce((s, r) => s + r.points, 0);
@@ -242,77 +247,100 @@ export async function buildCentreMonthlyReportPdf(
   snap: CentreMonthlySnapshot,
 ): Promise<Buffer> {
   const pdf = await PdfBuilder.createBilingual();
-  const monthLabel = snap.month;
+  const monthDate = new Date(`${snap.month}-01T00:00:00+05:30`);
+  const monthEn = Number.isNaN(monthDate.getTime())
+    ? snap.month
+    : monthDate.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+  const monthHi = Number.isNaN(monthDate.getTime())
+    ? snap.month
+    : monthDate.toLocaleDateString("hi-IN", { month: "long", year: "numeric" });
 
-  pdf.title("Centre monthly report / केंद्र मासिक रिपोर्ट");
+  pdf.headerBand("Centre monthly report", "केंद्र मासिक रिपोर्ट");
+  pdf.bilingual(snap.centre_name, snap.centre_name, 14);
+  pdf.bilingual(monthEn, monthHi, 11);
+  pdf.bilingual(`Period: ${snap.from} – ${snap.to}`, `अवधि: ${snap.from} – ${snap.to}`, 10);
+  pdf.spacer(8);
+
+  pdf.heading("Summary");
+  pdf.bilingual("Summary", "सारांश", 10);
   pdf.spacer(4);
-  pdf.bilingual(`Centre: ${snap.centre_name}`, `केंद्र: ${snap.centre_name}`);
-  pdf.bilingual(`Month: ${monthLabel}`, `माह: ${monthLabel}`);
-  pdf.bilingual(`Period: ${snap.from} – ${snap.to}`, `अवधि: ${snap.from} – ${snap.to}`);
-  pdf.hr();
 
-  pdf.heading("Summary / सारांश");
   if (snap.no_sessions) {
-    pdf.bilingual(
-      "No sessions were scheduled or held at this centre in this month.",
-      "इस माह इस केंद्र पर कोई सत्र निर्धारित या आयोजित नहीं हुआ।",
-    );
-    pdf.bilingual(
-      "Attendance rate is not applicable (no sessions — not 0%).",
-      "उपस्थिति दर लागू नहीं (कोई सत्र नहीं — 0% नहीं)।",
-    );
-  } else {
-    pdf.keyValue(
-      "Attendance / उपस्थिति",
-      formatPct(snap.attendance_rate, "n/a — no countable marks"),
+    pdf.callout(
+      "No sessions were scheduled or held at this centre in this month. Attendance is not applicable (not 0%).",
+      "इस माह इस केंद्र पर कोई सत्र निर्धारित या आयोजित नहीं हुआ। उपस्थिति दर लागू नहीं (0% नहीं)।",
     );
   }
-  pdf.keyValue(
-    "Niyam completion / नियम पूर्णता",
-    formatPct(snap.niyam_rate, "n/a — no submissions"),
-  );
-  pdf.keyValue(
-    "Homework completion / गृहकार्य",
-    formatPct(snap.homework_rate, "n/a — no homework set"),
-  );
-  pdf.keyValue("Sessions / सत्र", String(snap.sessions.total));
-  pdf.keyValue("Cancelled / रद्द", String(snap.sessions.cancelled));
-  pdf.keyValue("Holidays / अवकाश", String(snap.holidays));
 
-  pdf.hr();
-  pdf.heading("Enrolment movement / नामांकन गति");
-  pdf.keyValue("Joined (approved) / जुड़े", String(snap.enrolment.joined));
-  pdf.keyValue("Deactivated / निष्क्रिय", String(snap.enrolment.deactivated));
-  pdf.keyValue("Pending / लंबित", String(snap.enrolment.pending));
+  pdf.metricRows([
+    ...(snap.no_sessions
+      ? []
+      : [
+          {
+            en: "Attendance",
+            hi: "उपस्थिति",
+            value: formatPct(snap.attendance_rate, "n/a — no countable marks"),
+          },
+        ]),
+    {
+      en: "Niyam completion",
+      hi: "नियम पूर्णता",
+      value: formatPct(snap.niyam_rate, "n/a — no submissions"),
+    },
+    {
+      en: "Homework completion",
+      hi: "गृहकार्य",
+      value: formatPct(snap.homework_rate, "n/a — no homework set"),
+    },
+    { en: "Sessions", hi: "सत्र", value: String(snap.sessions.total) },
+    { en: "Cancelled", hi: "रद्द", value: String(snap.sessions.cancelled) },
+    { en: "Holidays", hi: "अवकाश", value: String(snap.holidays) },
+  ]);
 
-  pdf.hr();
-  pdf.heading("Punya by feature / पुण्य (feature_key)");
+  pdf.spacer(8);
+  pdf.heading("Enrolment");
+  pdf.bilingual("Enrolment movement", "नामांकन गति", 10);
+  pdf.spacer(4);
+  pdf.metricRows([
+    { en: "Joined (approved)", hi: "जुड़े", value: String(snap.enrolment.joined) },
+    { en: "Deactivated", hi: "निष्क्रिय", value: String(snap.enrolment.deactivated) },
+    { en: "Pending", hi: "लंबित", value: String(snap.enrolment.pending) },
+  ]);
+
+  pdf.spacer(8);
+  pdf.heading("Punya");
+  pdf.bilingual("Punya by feature", "पुण्य", 10);
+  pdf.spacer(4);
   if (snap.punya_by_feature.length === 0) {
     pdf.bilingual("No Punya earned this month.", "इस माह कोई पुण्य अर्जित नहीं हुआ।");
   } else {
-    pdf.keyValue("Total / कुल", String(snap.punya_total));
-    for (const row of snap.punya_by_feature) {
-      pdf.keyValue(row.feature_key, String(row.points));
-    }
+    pdf.metricRows([{ en: "Total", hi: "कुल", value: String(snap.punya_total) }]);
+    pdf.dataTable(
+      ["Feature", "Points"],
+      snap.punya_by_feature.map((row) => [row.label, String(row.points)]),
+      [3, 1],
+    );
   }
 
-  pdf.hr();
-  pdf.heading("Per batch / प्रति बैच");
+  pdf.heading("Batches");
+  pdf.bilingual("Per batch", "प्रति बैच", 10);
+  pdf.spacer(4);
   if (snap.batches.length === 0) {
     pdf.bilingual("No batches at this centre.", "इस केंद्र पर कोई बैच नहीं।");
   } else {
-    for (const b of snap.batches) {
-      const att =
-        b.attendance_pct == null ? "n/a" : `${b.attendance_pct}%`;
-      const hw = b.homework_pct == null ? "n/a" : `${b.homework_pct}%`;
-      pdf.text(
-        `${b.batch_name} — students ${b.student_count}, attendance ${att}, homework ${hw}`,
-        10,
-      );
-    }
+    pdf.dataTable(
+      ["Batch", "Students", "Attendance", "Homework"],
+      snap.batches.map((b) => [
+        b.batch_name,
+        String(b.student_count),
+        b.attendance_pct == null ? "n/a" : `${b.attendance_pct}%`,
+        b.homework_pct == null ? "n/a" : `${b.homework_pct}%`,
+      ]),
+      [3, 1.2, 1.4, 1.4],
+    );
   }
 
-  pdf.spacer(16);
+  pdf.spacer(8);
   pdf.bilingual(
     "Aggregate centre summary — no individual student names.",
     "केंद्र सारांश — व्यक्तिगत विद्यार्थी नाम शामिल नहीं।",

@@ -186,6 +186,11 @@ app.use("/v1/public", (_req, res, next) => {
   res.setHeader("Cache-Control", "public, max-age=60, stale-while-revalidate=300");
   next();
 });
+app.use("/v1/team", (_req, res, next) => {
+  // Public Team directory — hour-long cache (ISR-equivalent for the SPA client).
+  res.setHeader("Cache-Control", "public, max-age=3600, stale-while-revalidate=86400");
+  next();
+});
 
 app.use("/api", router);
 app.use("/v1", v1Router);

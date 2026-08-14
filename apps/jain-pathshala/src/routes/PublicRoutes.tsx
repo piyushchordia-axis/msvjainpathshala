@@ -3,6 +3,8 @@ import { PublicLayout } from "@/pages/public/PublicLayout";
 import HomePage from "@/pages/public/HomePage";
 import CentresPage from "@/pages/public/CentresPage";
 import CentreDetailPage from "@/pages/public/CentreDetailPage";
+import TeamPage from "@/pages/public/TeamPage";
+import TeamCityPage from "@/pages/public/TeamCityPage";
 import ShivirsPage from "@/pages/public/ShivirsPage";
 import ShivirDetailPage from "@/pages/public/ShivirDetailPage";
 import NoticesPage from "@/pages/public/NoticesPage";
@@ -11,7 +13,10 @@ import LibrarySectionPage from "@/pages/public/LibrarySectionPage";
 import LibraryItemPage from "@/pages/public/LibraryItemPage";
 import PanchangPage from "@/pages/public/PanchangPage";
 import GalleryPage from "@/pages/public/GalleryPage";
-import { AboutPage, MsvPage, CoursesPage } from "@/pages/public/PublicStubs";
+import { AboutPage, MsvPage } from "@/pages/public/PublicStubs";
+import CoursesPage from "@/pages/public/CoursesPage";
+import CourseDetailPage from "@/pages/public/CourseDetailPage";
+import CertificatesPage from "@/pages/public/CertificatesPage";
 import ContactPage from "@/pages/public/ContactPage";
 import EnquirePage from "@/pages/public/EnquirePage";
 import DonatePage from "@/pages/public/DonatePage";
@@ -43,6 +48,8 @@ export default function PublicRoutes() {
         <Route path="/join/sanchalak/complete-payment" component={SanchalakCompletePaymentPage} />
         <Route path="/centres" component={CentresPage} />
         <Route path="/centres/:id" component={CentreDetailPage} />
+        <Route path="/team/:citySlug" component={TeamCityPage} />
+        <Route path="/team" component={TeamPage} />
         <Route path="/shivirs" component={ShivirsPage} />
         <Route path="/shivirs/:id" component={ShivirDetailPage} />
         <Route path="/notices" component={NoticesPage} />
@@ -50,7 +57,9 @@ export default function PublicRoutes() {
         <Route path="/library/item/:id" component={LibraryItemPage} />
         <Route path="/library/:id" component={LibrarySectionPage} />
         <Route path="/panchang" component={PanchangPage} />
+        <Route path="/courses/:id" component={CourseDetailPage} />
         <Route path="/courses" component={CoursesPage} />
+        <Route path="/certificates" component={CertificatesPage} />
         <Route path="/gallery" component={GalleryPage} />
         <Route path="/about" component={AboutPage} />
         <Route path="/contact" component={ContactPage} />

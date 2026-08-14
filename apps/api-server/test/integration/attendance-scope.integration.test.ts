@@ -68,8 +68,8 @@ describe("attendance scope RBAC (403)", () => {
       );
 
       const otherCity = await client.query(
-        `insert into cities (state_id, name, code)
-         select state_id, 'Other City', 'OC' from centres where id = $1 returning id`,
+        `insert into cities (state_id, name, code, slug)
+         select state_id, 'Other City', 'OC', 'other-city' from centres where id = $1 returning id`,
         [h.fixtures.centreId],
       );
       otherCityId = otherCity.rows[0].id as string;

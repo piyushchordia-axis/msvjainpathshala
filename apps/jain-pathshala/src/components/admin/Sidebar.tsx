@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Camera, LogOut } from 'lucide-react';
+import { Camera, LogOut, Menu } from 'lucide-react';
 import { Link, useLocation } from 'wouter';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/lib/auth-context';
@@ -9,6 +9,13 @@ import { apiPut, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
 import { t, type Locale } from '@workspace/i18n';
 import { filterNavForRole, type NavGroup } from './sidebar-nav';
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from '@/components/ui/sheet';
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? '';
 
@@ -30,10 +37,12 @@ function NavBlock({
   groups,
   pathname,
   locale,
+  onNavigate,
 }: {
   groups: NavGroup[];
   pathname: string;
   locale: Locale;
+  onNavigate?: () => void;
 }) {
   return (
     <nav aria-label="Admin" className="flex-1 space-y-6 overflow-y-auto px-3 py-4">
@@ -50,6 +59,7 @@ function NavBlock({
                 <li key={item.href}>
                   <Link
                     href={item.href}
+                    onClick={() => onNavigate?.()}
                     className={cn(
                       'group flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
                       active
@@ -105,6 +115,7 @@ export function Sidebar({ user }: { user: SessionUser }) {
   const { logout, setUser } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   async function onPick(file: File | null) {
     if (!file || busy) return;
@@ -134,66 +145,109 @@ export function Sidebar({ user }: { user: SessionUser }) {
     }
   }
 
+  const brand = (
+    <div className="flex h-16 items-center gap-3 border-b border-maroon-700/40 px-4">
+      <img src={`${import.meta.env.BASE_URL}logo-mark.svg`} alt="" className="h-8 w-8" />
+      <div className="leading-tight">
+        <div className="font-display text-base text-cream">Jain Pathshala</div>
+        <div className="text-[10px] uppercase tracking-[0.18em] text-cream-deeper/70">Admin</div>
+      </div>
+    </div>
+  );
+
+  const account = (
+    <div className="border-t border-maroon-700/40 p-3">
+      <div className="flex items-center gap-3 rounded-md bg-maroon-700/40 px-3 py-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => fileRef.current?.click()}
+          aria-label={user.photo_url ? 'Change profile photo' : 'Add profile photo'}
+          title={user.photo_url ? 'Change photo' : 'Add photo'}
+          className="relative size-9 shrink-0 overflow-hidden rounded-full bg-primary text-primary-foreground ring-offset-2 hover:ring-2 hover:ring-primary/60 disabled:opacity-60"
+        >
+          {user.photo_url ? (
+            <img
+              src={user.photo_url}
+              alt=""
+              width={36}
+              height={36}
+              className="size-full object-cover"
+            />
+          ) : (
+            <span className="flex size-full items-center justify-center font-semibold text-sm">
+              {initials(user.full_name, user.phone)}
+            </span>
+          )}
+          <span className="absolute inset-x-0 bottom-0 flex justify-center bg-ink/55 py-0.5">
+            <Camera className="size-2.5 text-cream" aria-hidden />
+          </span>
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-medium text-cream">{user.full_name || user.phone}</div>
+          <div className="truncate text-[11px] uppercase tracking-wide text-cream-deeper/70">{user.role}</div>
+        </div>
+        <button
+          type="button"
+          onClick={() => void logout()}
+          aria-label="Sign out"
+          className="rounded-md p-1.5 text-cream-deeper/80 hover:bg-maroon-700 hover:text-cream"
+        >
+          <LogOut className="size-4" />
+        </button>
+      </div>
+    </div>
+  );
+
   return (
-    <aside className="hidden h-screen w-[220px] shrink-0 flex-col border-r border-maroon-700/40 bg-secondary text-cream md:flex">
-      <div className="flex h-16 items-center gap-3 border-b border-maroon-700/40 px-4">
-        <img src={`${import.meta.env.BASE_URL}logo-mark.svg`} alt="" className="h-8 w-8" />
-        <div className="leading-tight">
-          <div className="font-display text-base text-cream">Jain Pathshala</div>
+    <>
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={(e) => void onPick(e.target.files?.[0] ?? null)}
+      />
+      <aside className="hidden h-screen w-[220px] shrink-0 flex-col border-r border-maroon-700/40 bg-secondary text-cream md:flex">
+        {brand}
+        <NavBlock groups={groups} pathname={pathname} locale={locale} />
+        {account}
+      </aside>
+
+      <div className="flex h-14 shrink-0 items-center gap-2 border-b border-border bg-secondary px-3 text-cream md:hidden">
+        <Sheet open={menuOpen} onOpenChange={setMenuOpen}>
+          <SheetTrigger asChild>
+            <button
+              type="button"
+              className="inline-flex h-10 w-10 items-center justify-center rounded-md text-cream hover:bg-maroon-700"
+              aria-label={locale === 'hi' ? 'मेनू खोलें' : 'Open menu'}
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+          </SheetTrigger>
+          <SheetContent
+            side="left"
+            className="flex h-full w-[min(100%,20rem)] flex-col gap-0 bg-secondary p-0 text-cream [&>button]:text-cream"
+          >
+            <SheetHeader className="sr-only">
+              <SheetTitle>Admin</SheetTitle>
+            </SheetHeader>
+            {brand}
+            <NavBlock
+              groups={groups}
+              pathname={pathname}
+              locale={locale}
+              onNavigate={() => setMenuOpen(false)}
+            />
+            {account}
+          </SheetContent>
+        </Sheet>
+        <img src={`${import.meta.env.BASE_URL}logo-mark.svg`} alt="" className="h-7 w-7" />
+        <div className="min-w-0 leading-tight">
+          <div className="truncate font-display text-sm text-cream">Jain Pathshala</div>
           <div className="text-[10px] uppercase tracking-[0.18em] text-cream-deeper/70">Admin</div>
         </div>
       </div>
-
-      <NavBlock groups={groups} pathname={pathname} locale={locale} />
-
-      <div className="border-t border-maroon-700/40 p-3">
-        <div className="flex items-center gap-3 rounded-md bg-maroon-700/40 px-3 py-2">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => fileRef.current?.click()}
-            aria-label={user.photo_url ? 'Change profile photo' : 'Add profile photo'}
-            title={user.photo_url ? 'Change photo' : 'Add photo'}
-            className="relative size-9 shrink-0 overflow-hidden rounded-full bg-primary text-primary-foreground ring-offset-2 hover:ring-2 hover:ring-primary/60 disabled:opacity-60"
-          >
-            {user.photo_url ? (
-              <img
-                src={user.photo_url}
-                alt=""
-                width={36}
-                height={36}
-                className="size-full object-cover"
-              />
-            ) : (
-              <span className="flex size-full items-center justify-center font-semibold text-sm">
-                {initials(user.full_name, user.phone)}
-              </span>
-            )}
-            <span className="absolute inset-x-0 bottom-0 flex justify-center bg-ink/55 py-0.5">
-              <Camera className="size-2.5 text-cream" aria-hidden />
-            </span>
-          </button>
-          <input
-            ref={fileRef}
-            type="file"
-            accept="image/*"
-            className="hidden"
-            onChange={(e) => void onPick(e.target.files?.[0] ?? null)}
-          />
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium text-cream">{user.full_name || user.phone}</div>
-            <div className="truncate text-[11px] uppercase tracking-wide text-cream-deeper/70">{user.role}</div>
-          </div>
-          <button
-            type="button"
-            onClick={() => void logout()}
-            aria-label="Sign out"
-            className="rounded-md p-1.5 text-cream-deeper/80 hover:bg-maroon-700 hover:text-cream"
-          >
-            <LogOut className="size-4" />
-          </button>
-        </div>
-      </div>
-    </aside>
+    </>
   );
 }

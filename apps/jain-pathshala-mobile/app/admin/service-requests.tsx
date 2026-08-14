@@ -442,6 +442,8 @@ export default function AdminServiceRequestsScreen() {
       <AppHeader
         title={tr(locale, "title")}
         subtitle={tr(locale, "adminSubtitle")}
+        showBack
+        backHref="/admin/dashboard"
       />
       <Screen refreshing={list.isRefetching} onRefresh={() => list.refetch()}>
         <Row style={{ gap: 8, flexWrap: "wrap", marginBottom: 4 }}>

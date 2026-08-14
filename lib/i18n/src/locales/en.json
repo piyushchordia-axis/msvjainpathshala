@@ -145,5 +145,19 @@
     "colStatus": "Status",
     "colAssigned": "Assigned",
     "colCreated": "Created"
+  },
+  "team": {
+    "designation": {
+      "super_admin": "",
+      "state_admin": "State admin",
+      "city_admin": "City admin",
+      "sanchalak": "Sanchalak",
+      "shikshak": "Guruji / Didi",
+      "shikshak_male": "Guruji",
+      "shikshak_female": "Didi",
+      "parent": "Parent",
+      "student": "Student",
+      "guest": "Guest"
+    }
   }
 }

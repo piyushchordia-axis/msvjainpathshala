@@ -1,22 +1,31 @@
 /**
- * Parent / student course catalogue — numbered status strips + ChildSwitcher.
+ * Parent / student course catalogue — folder cards + ChildSwitcher.
  */
 import { View } from "react-native";
 import { router } from "expo-router";
-import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { AppHeader } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
-import { CourseLearnerRow } from "@/components/CourseLearnerRow";
-import { Button, Row, Screen, StateView } from "@/components/ui";
-import { useCoursesCatalogue, usePublicCoursesCatalogue } from "@/lib/queries";
-import type { CourseProgressStatus } from "@/lib/course-labels";
+import { CourseFolderCard } from "@/components/CourseFolderCard";
+import { Button, Screen, StateView } from "@/components/ui";
+import { routeForRole } from "@/lib/roles";
+import {
+  useCoursesCatalogue,
+  usePublicCoursesCatalogue,
+  useStudentCertificates,
+} from "@/lib/queries";
+
+function courseSubtitle(course: {
+  academic_year: string | null;
+  kind: string;
+}): string {
+  return course.academic_year ? course.academic_year : course.kind;
+}
 
 export default function CoursesCatalogueScreen() {
-  const c = useColors();
   const { hi } = useLocale();
   const { user } = useAuth();
   const guest = !user;
@@ -25,6 +34,23 @@ export default function CoursesCatalogueScreen() {
   const publicQ = usePublicCoursesCatalogue(guest);
   const coursesQ = guest ? publicQ : memberQ;
   const courses = coursesQ.data?.items ?? [];
+  const certsQ = useStudentCertificates(activeStudentId ?? undefined, !guest && !!activeStudentId);
+  const courseCertTitles = new Set<string>();
+  for (const row of certsQ.data?.items ?? []) {
+    if (row.kind !== "course" || row.voided_at) continue;
+    if (row.title_en) courseCertTitles.add(row.title_en);
+    if (row.title_hi) courseCertTitles.add(row.title_hi);
+  }
+
+  const certificatesBtn = guest ? undefined : (
+    <Button
+      compact
+      variant="outline"
+      label={hi ? "प्रमाणपत्र" : "Certificates"}
+      icon="ribbon-outline"
+      onPress={() => router.push("/certificates" as never)}
+    />
+  );
 
   return (
     <ActivityThemed accent="courses">
@@ -39,12 +65,16 @@ export default function CoursesCatalogueScreen() {
               ? "सक्रिय पाठ्यक्रम और प्रगति"
               : "Active courses and progress"
         }
+        showBack
+        backHref={routeForRole(user?.role)}
+        right={certificatesBtn}
       />
       <Screen
         refreshing={coursesQ.isFetching}
         onRefresh={() => {
           if (!guest) refetch();
           void coursesQ.refetch();
+          if (!guest) void certsQ.refetch();
         }}
       >
         {guest ? (
@@ -72,27 +102,15 @@ export default function CoursesCatalogueScreen() {
               }
             />
           ) : (
-            <View
-              style={{
-                backgroundColor: c.card,
-                borderRadius: c.radius,
-                borderWidth: 1,
-                borderColor: c.border,
-                overflow: "hidden",
-              }}
-            >
-              {courses.map((course, i) => {
+            <View style={{ gap: 10 }}>
+              {courses.map((course) => {
                 const title = hi ? course.name_hi || course.name_en : course.name_en;
-                const status: CourseProgressStatus = "not_started";
                 return (
-                  <CourseLearnerRow
+                  <CourseFolderCard
                     key={course.id}
-                    index={i + 1}
                     title={title}
-                    status={status}
-                    certifiedAt={null}
+                    subtitle={courseSubtitle(course)}
                     showChevron
-                    subtitle={course.academic_year ? course.academic_year : course.kind}
                     onPress={() => router.push(`/course/${course.id}` as never)}
                   />
                 );
@@ -131,22 +149,6 @@ export default function CoursesCatalogueScreen() {
           <>
             <ChildSwitcher />
 
-            <Row
-              style={{
-                justifyContent: "flex-end",
-                alignItems: "center",
-                marginBottom: 6,
-                marginTop: 2,
-              }}
-            >
-              <Button
-                variant="outline"
-                label={hi ? "प्रमाणपत्र" : "Certificates"}
-                icon="ribbon-outline"
-                onPress={() => router.push("/certificates" as never)}
-              />
-            </Row>
-
             {coursesQ.isLoading ? (
               <StateView status="loading" emptyText="" />
             ) : coursesQ.isError ? (
@@ -171,31 +173,25 @@ export default function CoursesCatalogueScreen() {
                 }
               />
             ) : (
-              <View
-                style={{
-                  backgroundColor: c.card,
-                  borderRadius: c.radius,
-                  borderWidth: 1,
-                  borderColor: c.border,
-                  overflow: "hidden",
-                }}
-              >
-                {courses.map((course, i) => {
+              <View style={{ gap: 10 }}>
+                {courses.map((course) => {
                   const title = hi ? course.name_hi || course.name_en : course.name_en;
-                  // Catalogue has no per-course progress aggregate — neutral strip until opened.
-                  const status: CourseProgressStatus = "not_started";
+                  const certified =
+                    courseCertTitles.has(course.name_en) ||
+                    (!!course.name_hi && courseCertTitles.has(course.name_hi));
                   return (
-                    <CourseLearnerRow
+                    <CourseFolderCard
                       key={course.id}
-                      index={i + 1}
                       title={title}
-                      status={status}
-                      certifiedAt={null}
+                      subtitle={courseSubtitle(course)}
                       showChevron
-                      subtitle={
-                        course.academic_year
-                          ? course.academic_year
-                          : course.kind
+                      certificateLabel={
+                        certified ? (hi ? "प्रमाणपत्र" : "Certificate") : null
+                      }
+                      onCertificatePress={
+                        certified
+                          ? () => router.push("/certificates" as never)
+                          : undefined
                       }
                       onPress={() => router.push(`/course/${course.id}` as never)}
                     />

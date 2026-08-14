@@ -307,6 +307,8 @@ export default function AdminAttendanceScreen() {
       <AppHeader
         title={hi ? "उपस्थिति" : "Attendance"}
         subtitle={hi ? "केंद्र मॉनिटर — केवल अवलोकन" : "Centre monitor — observe only"}
+        showBack
+        backHref="/admin/dashboard"
       />
       <Screen
         refreshing={alertsQ.isRefetching || sessionsQ.isRefetching}

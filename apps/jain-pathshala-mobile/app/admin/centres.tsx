@@ -145,6 +145,8 @@ export default function CentresScreen() {
       <AppHeader
         title={hi ? "केंद्र" : "Centres"}
         subtitle={hi ? "आपके दायरे के केंद्र" : "Centres in your scope"}
+        showBack
+        backHref="/admin/dashboard"
       />
       <Screen refreshing={isRefetching} onRefresh={refetch}>
         {isLoading ? (

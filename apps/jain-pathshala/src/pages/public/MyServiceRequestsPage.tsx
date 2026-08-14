@@ -451,7 +451,7 @@ export default function MyServiceRequestsPage() {
             {tr(locale, 'signInPrompt')}
           </p>
           <Button asChild className="mt-6">
-            <Link href="/admin/login">{tr(locale, 'signIn')}</Link>
+            <Link href="/login?return=%2Fmy-requests">{tr(locale, 'signIn')}</Link>
           </Button>
         </Card>
       </section>

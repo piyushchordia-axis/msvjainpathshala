@@ -19,6 +19,7 @@ export function Footer() {
 
         <nav aria-label="Footer" className="grid grid-cols-2 gap-x-12 gap-y-2 text-sm">
           {/* /about and /msv are stubs without real content yet — links hidden until those pages are ready. */}
+          <Link className="text-muted-foreground hover:text-foreground" href="/team">{hi ? 'टीम' : 'Team'}</Link>
           <Link className="text-muted-foreground hover:text-foreground" href="/contact">{hi ? 'संपर्क' : 'Contact'}</Link>
           <Link className="text-muted-foreground hover:text-foreground" href="/donate">{hi ? 'दान करें' : 'Donate'}</Link>
           <Link className="text-muted-foreground hover:text-foreground" href="/enquire">{hi ? 'पूछताछ' : 'Enquire'}</Link>

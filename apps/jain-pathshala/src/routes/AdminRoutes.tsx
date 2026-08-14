@@ -65,6 +65,7 @@ const SettingsPage = lazy(() =>
 );
 
 const CoursesAdminPage = lazy(() => import("@/pages/admin/CoursesAdminPage"));
+const TeamAdminPage = lazy(() => import("@/pages/admin/TeamAdminPage"));
 const ExamsPage = lazy(() =>
   import("@/pages/admin/AdminExtendedPages").then((m) => ({ default: m.ExamsPage })),
 );
@@ -125,6 +126,7 @@ export default function AdminRoutes() {
           <Route path="/admin/library/panchang" component={AdminLibraryPage} />
           <Route path="/admin/library/media" component={AdminLibraryPage} />
           <Route path="/admin/library" component={AdminLibraryPage} />
+          <Route path="/admin/team" component={TeamAdminPage} />
           <Route path="/admin/donations" component={DonationsPage} />
           <Route path="/admin/service-requests" component={ServiceRequestsAdminPage} />
           <Route path="/admin/registration-forms" component={RegistrationFormsPage} />

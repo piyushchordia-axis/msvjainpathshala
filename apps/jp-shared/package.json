@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     "./constants": "./src/constants.ts",
-    "./errors": "./src/errors.ts"
+    "./errors": "./src/errors.ts",
+    "./city-slug": "./src/city-slug.ts"
   }
 }

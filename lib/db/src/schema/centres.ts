@@ -35,6 +35,8 @@ export const centres = pgTable(
      */
     code: varchar("code", { length: 16 }),
     name: text("name").notNull(),
+    /** Stable Team directory / Centre Locator sort key (keyset pagination). */
+    order: integer("order").notNull().default(0),
     locality: text("locality"),
     pincode: varchar("pincode", { length: 10 }),
     contact_phone: varchar("contact_phone", { length: 15 }),

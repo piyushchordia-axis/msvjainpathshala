@@ -19,6 +19,7 @@ export default function GuestMoreScreen() {
   const { hi } = useLocale();
 
   const resources: LinkRow[] = [
+    { label: hi ? "टीम" : "Team", sub: hi ? "नेतृत्व, संचालक और गुरुजी" : "Leadership, Sanchalaks and Gurujis", icon: "people-outline", href: "/team" as Href },
     { label: hi ? "पुण्य दीवार" : "Punya Wall", sub: hi ? "बच्चों के पूर्ण किए नियम" : "Niyams completed by children", icon: "ribbon-outline", href: "/gallery" },
   ];
 

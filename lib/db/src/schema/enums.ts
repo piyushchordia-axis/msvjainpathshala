@@ -143,6 +143,14 @@ export const NOTIFICATION_KINDS = [
   "gallery",
 ] as const;
 export const DONATION_PAYMENT_STATUSES = ["created", "pending", "captured", "failed", "refunded"] as const;
+
+/** Team module — public directory scope (national → centre). */
+export const TEAM_SCOPE_LEVELS = ["national", "state", "city", "centre"] as const;
+/** Team category layout. `featured` is reserved; renderers fall back to grid. */
+export const TEAM_DISPLAY_STYLES = ["featured", "grid", "list"] as const;
+/** Optional grouping within a team category (e.g. Gurujis by centre). */
+export const TEAM_GROUP_BYS = ["none", "centre"] as const;
+
 export const AUDIT_ACTIONS = [
   "create",
   "update",
@@ -209,3 +217,6 @@ export const quizScopeEnum = pgEnum("quiz_scope_enum", QUIZ_SCOPES);
 export const competitionStatusEnum = pgEnum("competition_status_enum", COMPETITION_STATUSES);
 export const notificationKindEnum = pgEnum("notification_kind_enum", NOTIFICATION_KINDS);
 export const donationPaymentStatusEnum = pgEnum("donation_payment_status_enum", DONATION_PAYMENT_STATUSES);
+export const teamScopeLevelEnum = pgEnum("team_scope_level", TEAM_SCOPE_LEVELS);
+export const teamDisplayStyleEnum = pgEnum("team_display_style", TEAM_DISPLAY_STYLES);
+export const teamGroupByEnum = pgEnum("team_group_by", TEAM_GROUP_BYS);

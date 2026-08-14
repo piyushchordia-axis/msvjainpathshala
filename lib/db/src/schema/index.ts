@@ -25,5 +25,6 @@ export * from "./competitions";
 export * from "./quizzes";
 export * from "./notifications";
 export * from "./reports";
+export * from "./team";
 
 // (enquiries lives in ./notifications; no separate file)

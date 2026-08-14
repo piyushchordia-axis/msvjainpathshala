@@ -3,7 +3,7 @@
  */
 import { useMemo, useState } from "react";
 import { Alert, Modal, Pressable, StyleSheet, Text, View } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, type Href } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { ActivityThemed } from "@/contexts/ActivityThemeContext";
@@ -94,7 +94,12 @@ export default function LearnerSectionScreen() {
 
   return (
     <ActivityThemed accent="courses">
-      <AppHeader compact title={sectionTitle} />
+      <AppHeader
+        compact
+        title={sectionTitle}
+        showBack
+        backHref={`/course/${courseId}` as Href}
+      />
       <Screen
         refreshing={treeQ.isFetching}
         onRefresh={() => {

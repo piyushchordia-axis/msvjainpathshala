@@ -206,6 +206,9 @@ export function AppHeader({
   subtitle,
   right,
   compact,
+  showBack,
+  backHref,
+  onBack,
 }: {
   title: string;
   subtitle?: string;
@@ -213,9 +216,30 @@ export function AppHeader({
   right?: ReactNode;
   /** Tighter vertical padding (e.g. ID card). */
   compact?: boolean;
+  /** Leading chevron — hidden-tab and stack screens that have no native header. */
+  showBack?: boolean;
+  /** Used when the navigator has no history (common for hidden persona tabs). */
+  backHref?: Href;
+  onBack?: () => void;
 }) {
   const pageBg = useActivityPageBg();
   const top = useWebTopInset();
+  const c = useColors();
+  const { hi } = useLocale();
+  const router = useRouter();
+
+  function goBack() {
+    if (onBack) {
+      onBack();
+      return;
+    }
+    if (router.canGoBack()) {
+      router.back();
+      return;
+    }
+    if (backHref) router.replace(backHref);
+  }
+
   return (
     <View
       style={{
@@ -226,6 +250,17 @@ export function AppHeader({
       }}
     >
       <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+        {showBack ? (
+          <Pressable
+            onPress={goBack}
+            accessibilityRole="button"
+            accessibilityLabel={hi ? "पीछे" : "Back"}
+            hitSlop={12}
+            style={{ paddingRight: 2, marginLeft: -4 }}
+          >
+            <Ionicons name="chevron-back" size={26} color={c.primary} />
+          </Pressable>
+        ) : null}
         <View style={{ flex: 1, minWidth: 0 }}>
           <Title>{title}</Title>
           {subtitle ? <Body muted style={{ marginTop: 3 }}>{subtitle}</Body> : null}

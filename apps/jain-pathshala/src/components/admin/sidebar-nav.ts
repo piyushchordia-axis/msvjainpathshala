@@ -99,6 +99,7 @@ export const ADMIN_NAV: NavGroup[] = [
         gate: 'featureMedia',
       },
       { href: '/admin/library', label: 'Library', icon: Library, min: 'city_admin' },
+      { href: '/admin/team', label: 'Team', icon: Users, min: 'city_admin' },
       { href: '/admin/donations', label: 'Donations', icon: BarChart3, min: 'city_admin' },
       { href: '/admin/service-requests', label: 'Service requests', icon: LifeBuoy, min: 'sanchalak' },
       { href: '/admin/shivir-dashboard', label: 'Shivir attendance', icon: ScanLine, min: 'city_admin' },

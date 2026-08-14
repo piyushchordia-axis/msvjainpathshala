@@ -29,7 +29,12 @@ export default function LearnerCourseDetailScreen() {
 
   return (
     <ActivityThemed accent="courses">
-      <AppHeader compact title={courseTitle} />
+      <AppHeader
+        compact
+        title={courseTitle}
+        showBack
+        backHref="/courses"
+      />
       <Screen
         refreshing={treeQ.isFetching}
         onRefresh={() => {

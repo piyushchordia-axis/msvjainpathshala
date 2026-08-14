@@ -26,6 +26,7 @@ router.get("/cities", async (_req: Request, res: Response) => {
       id: cities.id,
       name: cities.name,
       code: cities.code,
+      slug: cities.slug,
       state_name: states.name,
     })
     .from(cities)

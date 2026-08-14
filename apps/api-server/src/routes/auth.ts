@@ -417,6 +417,9 @@ async function handleDeleteAccount(req: Request, res: Response): Promise<void> {
   const { invalidateAuthUserCache } = await import("../lib/auth-user-cache");
   await invalidateAuthUserCache(uid);
 
+  const { unpublishTeamMemberForUser } = await import("../lib/team-members-sync");
+  await unpublishTeamMemberForUser(uid);
+
   // Already deleted (idempotent) — still revoke sessions + clear cookies below.
   await db
     .update(device_sessions)

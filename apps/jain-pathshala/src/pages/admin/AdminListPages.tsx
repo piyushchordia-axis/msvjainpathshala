@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Plus } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Pencil, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import {
@@ -26,6 +26,7 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { slugifyCityName } from '@jp/shared/city-slug';
 
 /* ─── shared form helper ─── */
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -1342,12 +1343,22 @@ export function ServiceRequestsPage() {
   );
 }
 
+/** Previous calendar month in Asia/Kolkata as YYYY-MM (matches report cron). */
+function lastCompletedMonthYmIst(): string {
+  const nowYm = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 7);
+  const [ys, ms] = nowYm.split('-');
+  const y = Number(ys);
+  const m = Number(ms);
+  if (m === 1) return `${y - 1}-12`;
+  return `${y}-${String(m - 1).padStart(2, '0')}`;
+}
+
 export function ReportsPage() {
+  const { user } = useAuth();
   const [centres, setCentres] = useState<GeoOption[]>([]);
+  const [centresLoaded, setCentresLoaded] = useState(false);
   const [centreId, setCentreId] = useState('');
-  const [month, setMonth] = useState(() =>
-    new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 7),
-  );
+  const [month, setMonth] = useState(lastCompletedMonthYmIst);
   const [items, setItems] = useState<
     Array<{
       id: string;
@@ -1361,8 +1372,12 @@ export function ReportsPage() {
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [nowTick, setNowTick] = useState(() => Date.now());
+  const pendingSince = useRef<number | null>(null);
 
   const maxMonth = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }).slice(0, 7);
+  const canGenerateAll =
+    centres.length > 1 && roleSatisfies((user?.role ?? 'guest') as Role, 'city_admin');
 
   useEffect(() => {
     void apiGet<{ items: GeoOption[] }>('/v1/admin/centres')
@@ -1371,7 +1386,8 @@ export function ReportsPage() {
         setCentres(list);
         if (list[0]) setCentreId(list[0].id);
       })
-      .catch(() => setError('Could not load centres.'));
+      .catch(() => setError('Could not load centres.'))
+      .finally(() => setCentresLoaded(true));
   }, []);
 
   const reload = useCallback(() => {
@@ -1390,19 +1406,37 @@ export function ReportsPage() {
     reload();
   }, [reload]);
 
+  const pending = items.some((r) => r.status === 'queued' || r.status === 'generating');
+
   useEffect(() => {
-    const pending = items.some((r) => r.status === 'queued' || r.status === 'generating');
-    if (!pending) return;
+    if (!pending) {
+      pendingSince.current = null;
+      return;
+    }
+    if (pendingSince.current == null) pendingSince.current = Date.now();
     const t = setInterval(() => reload(), 2000);
     return () => clearInterval(t);
-  }, [items, reload]);
+  }, [pending, reload]);
+
+  useEffect(() => {
+    if (!pending) return;
+    const t = setInterval(() => setNowTick(Date.now()), 5000);
+    return () => clearInterval(t);
+  }, [pending]);
+
+  const stuckWaiting =
+    pending && pendingSince.current != null && nowTick - pendingSince.current > 30_000;
+
+  async function generateOne(id: string): Promise<void> {
+    await apiPost(`/v1/admin/centres/${id}/reports/monthly`, { month });
+  }
 
   async function onGenerate() {
     if (!centreId) return;
     setGenerating(true);
     setError(null);
     try {
-      await apiPost(`/v1/admin/centres/${centreId}/reports/monthly`, { month });
+      await generateOne(centreId);
       toast.success('Report queued — it will appear below when ready.');
       reload();
     } catch (err) {
@@ -1415,7 +1449,38 @@ export function ReportsPage() {
     }
   }
 
-  const busy = generating || items.some((r) => r.status === 'queued' || r.status === 'generating');
+  async function onGenerateAll() {
+    if (centres.length === 0) return;
+    setGenerating(true);
+    setError(null);
+    let okCount = 0;
+    let failCount = 0;
+    let lastErr: string | undefined;
+    for (const c of centres) {
+      try {
+        await generateOne(c.id);
+        okCount += 1;
+      } catch (err) {
+        failCount += 1;
+        lastErr = err instanceof ApiError ? err.message : undefined;
+      }
+    }
+    if (okCount > 0) {
+      toast.success(
+        failCount > 0
+          ? `Queued ${okCount} of ${centres.length} reports.`
+          : `Queued reports for ${okCount} Pathshalas.`,
+      );
+      reload();
+    }
+    if (failCount > 0) {
+      toast.error('Could not generate every report.', lastErr);
+    }
+    setGenerating(false);
+  }
+
+  const busy = generating || pending;
+  const noCentres = centresLoaded && centres.length === 0;
 
   return (
     <AdminPageShell
@@ -1423,9 +1488,9 @@ export function ReportsPage() {
       subtitle="Monthly centre PDF for trustees — attendance, Niyam, homework, Punya (no student names)."
       actions={
         <div className="flex flex-wrap items-center gap-2">
-          <Select value={centreId} onValueChange={setCentreId}>
+          <Select value={centreId} onValueChange={setCentreId} disabled={noCentres}>
             <SelectTrigger className="w-56">
-              <SelectValue placeholder="Select centre" />
+              <SelectValue placeholder={noCentres ? 'No Pathshala' : 'Select centre'} />
             </SelectTrigger>
             <SelectContent>
               {centres.map((c) => (
@@ -1448,10 +1513,26 @@ export function ReportsPage() {
           <Button size="sm" onClick={() => void onGenerate()} disabled={!centreId || busy}>
             {busy ? 'Generating…' : 'Generate'}
           </Button>
+          {canGenerateAll ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void onGenerateAll()}
+              disabled={busy}
+            >
+              Generate for all centres
+            </Button>
+          ) : null}
         </div>
       }
     >
+      {noCentres ? (
+        <AdminError message="No Pathshala in your city — ask a state admin to assign your city." />
+      ) : null}
       {error ? <AdminError message={error} /> : null}
+      {stuckWaiting ? (
+        <AdminError message="Report is waiting on the worker — check that the API worker is running." />
+      ) : null}
       <AdminTable
         columns={['Month', 'Status', 'Created', 'Download']}
         loading={loading}
@@ -1504,7 +1585,15 @@ export function AuditPage() {
 
 /* ——— System ——— */
 interface GeoStateRow { id: string; name: string; code: string }
-interface GeoCityRow { id: string; name: string; state_name: string }
+interface GeoCityRow {
+  id: string;
+  name: string;
+  code: string;
+  slug: string;
+  state_id: string;
+  state_name: string;
+  state_code?: string;
+}
 
 function AddStateDialog({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
@@ -1561,16 +1650,37 @@ function AddCityDialog({ states, onAdded }: { states: GeoStateRow[]; onAdded: ()
   const [stateId, setStateId] = useState('');
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
+  const [slug, setSlug] = useState('');
+  const [slugTouched, setSlugTouched] = useState(false);
+
+  function onNameChange(value: string) {
+    setName(value);
+    if (!slugTouched) setSlug(slugifyCityName(value));
+  }
+
+  function reset() {
+    setStateId('');
+    setName('');
+    setCode('');
+    setSlug('');
+    setSlugTouched(false);
+  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!stateId || !name.trim() || !code.trim()) return;
+    const trimmedSlug = slug.trim().toLowerCase();
+    if (!stateId || !name.trim() || !code.trim() || !trimmedSlug) return;
     setBusy(true);
     try {
-      await apiPost('/v1/admin/cities', { state_id: stateId, name: name.trim(), code: code.trim() });
+      await apiPost('/v1/admin/cities', {
+        state_id: stateId,
+        name: name.trim(),
+        code: code.trim(),
+        slug: trimmedSlug,
+      });
       toast.success('City added.');
       setOpen(false);
-      setStateId(''); setName(''); setCode('');
+      reset();
       onAdded();
     } catch (err) {
       toast.error('Failed to add city.', err instanceof ApiError ? err.message : undefined);
@@ -1580,7 +1690,7 @@ function AddCityDialog({ states, onAdded }: { states: GeoStateRow[]; onAdded: ()
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) reset(); }}>
       <DialogTrigger asChild>
         <Button size="sm"><Plus className="mr-1 h-4 w-4" />Add city</Button>
       </DialogTrigger>
@@ -1598,15 +1708,109 @@ function AddCityDialog({ states, onAdded }: { states: GeoStateRow[]; onAdded: ()
             </Select>
           </FormRow>
           <FormRow label="City name *">
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Indore" required />
+            <Input
+              value={name}
+              onChange={(e) => onNameChange(e.target.value)}
+              placeholder="e.g. Indore"
+              required
+            />
           </FormRow>
           <FormRow label="Code *">
             <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. IDR" required />
           </FormRow>
+          <FormRow label="Slug *">
+            <Input
+              value={slug}
+              onChange={(e) => { setSlugTouched(true); setSlug(e.target.value.toLowerCase()); }}
+              placeholder="e.g. indore"
+              required
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Public URL key — unique across all cities. Auto-filled from the name until you edit it.
+            </p>
+          </FormRow>
           <div className="flex justify-end gap-2 pt-2">
             <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
-            <Button type="submit" disabled={busy || !stateId || !name.trim() || !code.trim()}>
+            <Button type="submit" disabled={busy || !stateId || !name.trim() || !code.trim() || !slug.trim()}>
               {busy ? 'Saving…' : 'Add city'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function EditCityDialog({
+  city,
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  city: GeoCityRow | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSaved: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [slug, setSlug] = useState('');
+
+  useEffect(() => {
+    if (!city || !open) return;
+    setName(city.name);
+    setCode(city.code);
+    setSlug(city.slug);
+  }, [city, open]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!city) return;
+    const trimmedSlug = slug.trim().toLowerCase();
+    if (!name.trim() || !code.trim() || !trimmedSlug) return;
+    setBusy(true);
+    try {
+      await apiPatch(`/v1/admin/cities/${city.id}`, {
+        name: name.trim(),
+        code: code.trim(),
+        slug: trimmedSlug,
+      });
+      toast.success('City updated.');
+      onOpenChange(false);
+      onSaved();
+    } catch (err) {
+      toast.error('Failed to update city.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Edit city</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <FormRow label="City name *">
+            <Input value={name} onChange={(e) => setName(e.target.value)} required />
+          </FormRow>
+          <FormRow label="Code *">
+            <Input value={code} onChange={(e) => setCode(e.target.value)} required />
+          </FormRow>
+          <FormRow label="Slug *">
+            <Input
+              value={slug}
+              onChange={(e) => setSlug(e.target.value.toLowerCase())}
+              required
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Changing the slug updates public Centre Locator / Team routes for this city.
+            </p>
+          </FormRow>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || !name.trim() || !code.trim() || !slug.trim()}>
+              {busy ? 'Saving…' : 'Save'}
             </Button>
           </div>
         </form>
@@ -1621,6 +1825,7 @@ export function GeographyPage() {
   const [cities, setCities] = useState<GeoCityRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [editCity, setEditCity] = useState<GeoCityRow | null>(null);
 
   const reload = useCallback(() => {
     setLoading(true);
@@ -1662,16 +1867,30 @@ export function GeographyPage() {
             </tr>
           ))}
         </AdminTable>
-        <AdminTable columns={['City', 'State']} loading={loading} empty="" colSpan={2}>
-          {cities.length === 0 && !loading ? <AdminEmptyRow colSpan={2} message="No cities." /> : null}
+        <AdminTable columns={['City', 'Slug', 'State', '']} loading={loading} empty="" colSpan={4}>
+          {cities.length === 0 && !loading ? <AdminEmptyRow colSpan={4} message="No cities." /> : null}
           {cities.map((c) => (
             <tr key={c.id}>
               <td className="px-4 py-3">{c.name}</td>
+              <td className="px-4 py-3 font-mono text-xs">{c.slug}</td>
               <td className="px-4 py-3 text-xs text-muted-foreground">{c.state_name}</td>
+              <td className="px-4 py-3 text-right">
+                {canEdit ? (
+                  <Button size="sm" variant="ghost" onClick={() => setEditCity(c)}>
+                    <Pencil className="h-3.5 w-3.5" />
+                  </Button>
+                ) : null}
+              </td>
             </tr>
           ))}
         </AdminTable>
       </div>
+      <EditCityDialog
+        city={editCity}
+        open={editCity !== null}
+        onOpenChange={(v) => { if (!v) setEditCity(null); }}
+        onSaved={reload}
+      />
     </AdminPageShell>
   );
 }

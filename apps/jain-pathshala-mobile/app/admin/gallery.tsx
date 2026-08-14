@@ -341,6 +341,8 @@ export default function AdminGalleryScreen() {
             ? "छिपाएँ या हटाएँ — विशेष दिखाना सिटी एडमिन का काम है"
             : "Hide or take down — featuring stays with city admin"
         }
+        showBack
+        backHref="/admin/dashboard"
       />
 
       <View style={{ paddingHorizontal: 16, paddingBottom: 8 }}>

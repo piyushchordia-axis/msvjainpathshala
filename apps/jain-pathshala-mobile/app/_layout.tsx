@@ -84,6 +84,8 @@ function RootLayoutNav() {
 
       {/* Shared detail screens (pushed from any persona) */}
       <Stack.Screen name="centres" options={{ title: "Centres" }} />
+      <Stack.Screen name="team/index" options={{ title: "Team" }} />
+      <Stack.Screen name="team/[citySlug]" options={{ title: "Team" }} />
       <Stack.Screen name="shivirs" options={{ title: "Shivirs" }} />
       <Stack.Screen name="notices" options={{ title: "Notices" }} />
       <Stack.Screen name="centre/[id]" options={{ title: "Centre" }} />
@@ -98,12 +100,8 @@ function RootLayoutNav() {
       <Stack.Screen name="niyam-submissions" options={{ title: "All submissions" }} />
       <Stack.Screen name="homework" options={{ title: "Homework" }} />
       <Stack.Screen name="homework-assignment/[id]" options={{ title: "Review homework" }} />
-      <Stack.Screen name="courses" options={{ title: "Courses" }} />
-      <Stack.Screen name="course/[id]/index" options={{ title: "Course" }} />
-      <Stack.Screen
-        name="course/[id]/section/[sectionId]"
-        options={{ title: "Section" }}
-      />
+      <Stack.Screen name="courses" options={{ headerShown: false, title: "Courses" }} />
+      <Stack.Screen name="course/[id]" options={{ headerShown: false, title: "Course" }} />
       <Stack.Screen name="certificates" options={{ title: "Certificates" }} />
       <Stack.Screen name="student-detail/[id]" options={{ title: "Student" }} />
       <Stack.Screen name="my-attendance" options={{ title: "Attendance" }} />

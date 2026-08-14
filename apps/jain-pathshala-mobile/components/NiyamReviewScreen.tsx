@@ -15,7 +15,7 @@ import {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Image as ExpoImage } from "expo-image";
 import { Ionicons } from "@expo/vector-icons";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, usePathname } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { ActivityThemed } from "@/contexts/ActivityThemeContext";
@@ -370,6 +370,7 @@ function ReviewRow({
 export default function NiyamReviewScreen() {
   const c = useColors();
   const { hi } = useLocale();
+  const pathname = usePathname();
   const params = useLocalSearchParams<{ student_id?: string }>();
   const filterStudentId =
     typeof params.student_id === "string"
@@ -570,6 +571,8 @@ export default function NiyamReviewScreen() {
               ? "लंबित प्रस्तुतियों की जाँच करें"
               : "Review pending submissions"
         }
+        showBack
+        backHref={pathname.includes("/shikshak/") ? "/shikshak/today" : "/admin/dashboard"}
       />
 
       <View

@@ -20,6 +20,7 @@ import {
 import { and, eq, isNull } from "drizzle-orm";
 import { allocateParentCode, allocateStudentCode } from "./entity-codes";
 import type { ErrorCode } from "@workspace/api-zod";
+import { syncTeamMemberForUser } from "./team-members-sync";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -342,6 +343,7 @@ export async function provisionStaffRegistration(
       gender: null,
     });
     await ensureCentreAssignment(tx, kind, userId, centre.id, reviewerId);
+    await syncTeamMemberForUser(userId, tx);
     return { userId };
   });
 }

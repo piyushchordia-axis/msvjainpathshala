@@ -1,4 +1,4 @@
-import { index, pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { index, pgTable, text, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
 
 import { timestamps } from "./_helpers";
 
@@ -18,10 +18,13 @@ export const cities = pgTable(
       .references(() => states.id, { onDelete: "restrict" }),
     name: text("name").notNull(),
     code: text("code").notNull(),
+    /** Public route key — globally unique (not per-state); flat Centre Locator / Team URLs. */
+    slug: varchar("slug", { length: 120 }).notNull(),
     ...timestamps(),
   },
   (t) => ({
     state_idx: index("idx_cities_state").on(t.state_id),
+    slug_uq: uniqueIndex("cities_slug_uq").on(t.slug),
   }),
 );
 

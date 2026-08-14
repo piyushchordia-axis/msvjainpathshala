@@ -549,6 +549,8 @@ export default function NoticesScreen() {
       <AppHeader
         title={hi ? "सूचनाएँ" : "Notices"}
         subtitle={hi ? "माता-पिता के लिए सूचनाएँ" : "Notices for parents"}
+        showBack
+        backHref="/admin/dashboard"
         right={
           <Pressable onPress={openCreate} hitSlop={12} disabled={!selectedCentreId}>
             <Text

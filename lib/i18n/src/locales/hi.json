@@ -145,5 +145,19 @@
     "colStatus": "स्थिति",
     "colAssigned": "सौंपा गया",
     "colCreated": "बनाया गया"
+  },
+  "team": {
+    "designation": {
+      "super_admin": "",
+      "state_admin": "राज्य एडमिन",
+      "city_admin": "शहर एडमिन",
+      "sanchalak": "संचालक",
+      "shikshak": "गुरुजी / दीदी",
+      "shikshak_male": "गुरुजी",
+      "shikshak_female": "दीदी",
+      "parent": "अभिभावक",
+      "student": "विद्यार्थी",
+      "guest": "अतिथि"
+    }
   }
 }

@@ -818,7 +818,7 @@ export default function ExamsPage() {
             {hi ? 'परीक्षा देने के लिए कृपया लॉगिन करें।' : 'Please sign in to take your exams.'}
           </p>
           <Link
-            href="/admin/login"
+            href="/login?return=%2Fexams"
             className="mt-4 inline-flex items-center rounded-md bg-primary px-3 py-2 text-sm font-semibold text-primary-foreground hover:bg-primary/90"
           >
             {hi ? 'लॉगिन' : 'Sign in'}

@@ -70,6 +70,17 @@ export function CourseDetailScreen({ persona }: { persona: "shikshak" | "sanchal
     router.replace(`${base}/${courseId}?${qs.toString()}` as never);
   }
 
+  const listHref = persona === "sanchalak" ? "/admin/courses" : "/shikshak/courses";
+  const base = persona === "sanchalak" ? "/admin/course" : "/shikshak/course";
+
+  function goBack() {
+    if (studentId) {
+      router.replace(`${base}/${courseId}` as never);
+      return;
+    }
+    router.replace(listHref as never);
+  }
+
   return (
     <ActivityThemed accent="courses">
       <AppHeader
@@ -83,6 +94,8 @@ export function CourseDetailScreen({ persona }: { persona: "shikshak" | "sanchal
               : "Course"
         }
         subtitle={studentId ? studentName : undefined}
+        showBack
+        onBack={goBack}
       />
       <Screen>
         {!courseId ? (

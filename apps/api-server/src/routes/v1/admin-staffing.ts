@@ -21,6 +21,7 @@ import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, inCentreScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { allocateSanchalakCode, allocateShikshakCode } from "../../lib/entity-codes";
+import { syncTeamMemberForUser } from "../../lib/team-members-sync";
 import type { Role } from "@workspace/api-zod";
 
 const phoneSchema = z.string().regex(/^\+[1-9]\d{6,14}$/, "Phone must be E.164 (+91…)");
@@ -184,6 +185,7 @@ router.post("/centres/:id/sanchalaks", async (req: Request, res: Response) => {
     summary: `Assigned sanchalak ${target.full_name} to ${centre.name}.`,
     metadata: { user_id: target.id, centre_id: centre.id },
   });
+  await syncTeamMemberForUser(target.id);
   ok(res, { id: assignmentId, user_id: target.id, centre_id: centre.id });
 });
 
@@ -257,6 +259,7 @@ router.post("/centres/:id/sanchalaks/:userId/remove", async (req: Request, res: 
     summary: `Removed sanchalak from ${centre.name}.`,
     metadata: { user_id: userId, centre_id: centre.id, removed: true },
   });
+  await syncTeamMemberForUser(userId);
   ok(res, { id: row.id, removed: true });
 });
 
@@ -401,6 +404,7 @@ router.post("/centres/:id/shikshaks", async (req: Request, res: Response) => {
     summary: `Tagged shikshak ${target.full_name} to ${centre.name}.`,
     metadata: { user_id: target.id, centre_id: centre.id },
   });
+  await syncTeamMemberForUser(target.id);
   ok(res, { id: assignmentId, user_id: target.id, centre_id: centre.id });
 });
 
@@ -500,6 +504,7 @@ router.post("/centres/:id/shikshaks/:userId/remove", async (req: Request, res: R
       primary_batch_ids: result.primary_batch_ids,
     },
   });
+  await syncTeamMemberForUser(userId);
   ok(res, result);
 });
 
@@ -1167,6 +1172,7 @@ router.post("/users/staff", async (req: Request, res: Response) => {
     summary: `Created ${body.role} ${created.user.full_name} (${created.user.display_code ?? created.user.phone}).`,
     metadata: { role: body.role, phone: created.user.phone, display_code: created.user.display_code },
   });
+  await syncTeamMemberForUser(created.user.id);
   ok(res, created.user);
 });
 
@@ -1304,6 +1310,8 @@ router.post("/centres/:id/staff", async (req: Request, res: Response) => {
       batch_ids: batchResults.map((b) => b.batch_id),
     },
   });
+
+  await syncTeamMemberForUser(userId);
 
   ok(res, {
     user: userRow,

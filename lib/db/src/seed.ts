@@ -71,6 +71,7 @@ import {
   push_quiz_questions,
   enquiries,
   entity_code_counters,
+  team_categories,
 } from "./schema";
 import { tierForPoints } from "./schema/enums";
 import { sql, eq } from "drizzle-orm";
@@ -150,6 +151,7 @@ async function main(): Promise<void> {
       shikshak_batch_assignments, shikshak_centre_assignments, sanchalak_centre_assignments,
       centre_holidays, batches, centres, entity_code_counters,
       notice_reads, settings,
+      team_members, team_categories,
       otp_codes, device_sessions, users,
       cities, states
     restart identity cascade
@@ -203,20 +205,54 @@ async function main(): Promise<void> {
 
   const [mumbai] = await db
     .insert(cities)
-    .values({ state_id: maharashtra.id, name: "Mumbai", code: "MUM" })
+    .values({ state_id: maharashtra.id, name: "Mumbai", code: "MUM", slug: "mumbai" })
     .returning();
   const [pune] = await db
     .insert(cities)
-    .values({ state_id: maharashtra.id, name: "Pune", code: "PUN" })
+    .values({ state_id: maharashtra.id, name: "Pune", code: "PUN", slug: "pune" })
     .returning();
   const [ahmedabad] = await db
     .insert(cities)
-    .values({ state_id: gujarat.id, name: "Ahmedabad", code: "AMD" })
+    .values({ state_id: gujarat.id, name: "Ahmedabad", code: "AMD", slug: "ahmedabad" })
     .returning();
   const [indore] = await db
     .insert(cities)
-    .values({ state_id: madhyaPradesh.id, name: "Indore", code: "IDR" })
+    .values({ state_id: madhyaPradesh.id, name: "Indore", code: "IDR", slug: "indore" })
     .returning();
+
+  /* ---------------- Team categories (public directory) ---------------- */
+  await db.insert(team_categories).values([
+    {
+      key: "core_team",
+      name_en: "Core Team",
+      name_hi: "मुख्य टीम",
+      order: 1,
+      display_style: "grid",
+      group_by: "none",
+      is_lazy_loaded: false,
+      is_published: true,
+    },
+    {
+      key: "sanchalak",
+      name_en: "Sanchalak",
+      name_hi: "संचालक",
+      order: 2,
+      display_style: "grid",
+      group_by: "none",
+      is_lazy_loaded: false,
+      is_published: true,
+    },
+    {
+      key: "shikshak",
+      name_en: "Gurujis & Didis",
+      name_hi: "गुरुजी एवं दीदी",
+      order: 3,
+      display_style: "grid",
+      group_by: "centre",
+      is_lazy_loaded: true,
+      is_published: true,
+    },
+  ]);
 
   /* ---------------- Users (personas) ---------------- */
   const [superAdmin] = await db
@@ -1547,6 +1583,14 @@ async function main(): Promise<void> {
   await db.update(users).set({ centre_id_default: centreA.id }).where(eq(users.id, shikshak.id));
   await db.update(users).set({ centre_id_default: centreIndore.id }).where(eq(users.id, indoreSanchalak.id));
   await db.update(users).set({ centre_id_default: centreIndore.id }).where(eq(users.id, indoreShikshak.id));
+
+  // Team cards draw illustrated Jain-person placeholders when photo_url is empty.
+  await db.execute(sql`
+    UPDATE users
+    SET photo_url = NULL
+    WHERE role IN ('super_admin', 'state_admin', 'city_admin', 'sanchalak', 'shikshak')
+      AND photo_url LIKE '%picsum.photos%'
+  `);
 
   console.log("Seed complete.");
   console.log("\nLogin phones (OTP code: 123456 for all users via settings):");

@@ -712,6 +712,8 @@ export default function HomeworkAdmin({ persona }: { persona: HomeworkAdminPerso
               ? "असाइनमेंट खोलकर प्रस्तुत कार्य देखें और जाँचें"
               : "Open an assignment to see and grade submitted work"
         }
+        showBack
+        backHref={isSanchalak ? "/admin/dashboard" : "/shikshak/today"}
       />
       <Screen refreshing={list.isRefetching} onRefresh={list.refetch}>
         {isSanchalak ? (

@@ -39,6 +39,7 @@ import adminModulesRouter from "./admin-modules";
 import adminCoursesRouter from "./admin-courses";
 import adminStaffingRouter from "./admin-staffing";
 import adminLibraryRouter from "./admin-library";
+import adminTeamRouter from "./admin-team";
 import { canTransitionEnrolment } from "./enrolments";
 import { clampLimit, inScope, scopedCentreFilter, scopedBatchFilter } from "../../lib/route-helpers";
 import { getCentresAttendanceRate, rateToPercent1 } from "../../lib/attendance-rate";
@@ -126,6 +127,7 @@ router.use(adminModulesRouter);
 router.use(adminCoursesRouter);
 router.use(adminStaffingRouter);
 router.use("/library", adminLibraryRouter);
+router.use("/team", adminTeamRouter);
 
 /** Returns a Drizzle condition limiting `column` to the user's scope, or undefined for unrestricted. */
 

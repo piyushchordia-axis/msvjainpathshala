@@ -442,6 +442,34 @@
       "when": 1791110400000,
       "tag": "0062_deactivate_test_niyams",
       "breakpoints": true
+    },
+    {
+      "idx": 63,
+      "version": "7",
+      "when": 1791196800000,
+      "tag": "0063_cities_slug",
+      "breakpoints": true
+    },
+    {
+      "idx": 64,
+      "version": "7",
+      "when": 1791283200000,
+      "tag": "0064_team_module",
+      "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "7",
+      "when": 1791369600000,
+      "tag": "0065_team_members_unpublished_by",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "7",
+      "when": 1791456000000,
+      "tag": "0066_centres_order",
+      "breakpoints": true
     }
   ]
 }

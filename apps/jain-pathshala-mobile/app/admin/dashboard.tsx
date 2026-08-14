@@ -8,7 +8,7 @@ import { useOverview } from "@/lib/queries";
 import { AppHeader, HeaderHomeActions } from "@/components/AppHeader";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
-import { SanchalakQuickActions } from "@/components/QuickActions";
+import { AdminHomeQuickActions } from "@/components/QuickActions";
 import { Body, Button, Card, Numeric, Row, Screen, StateView, Title } from "@/components/ui";
 
 export default function DashboardScreen() {
@@ -41,13 +41,17 @@ export default function DashboardScreen() {
           />
         }
       />
-      <Screen refreshing={isRefetching} onRefresh={refetch}>
+      <Screen
+        refreshing={isRefetching}
+        onRefresh={refetch}
+        contentStyle={{ paddingBottom: 110 }}
+      >
         <AnimatedMount delay={0}>
           <GalleryCarousel />
         </AnimatedMount>
 
         <AnimatedMount delay={40}>
-          <SanchalakQuickActions />
+          <AdminHomeQuickActions />
         </AnimatedMount>
 
         {isLoading ? (

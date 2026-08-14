@@ -29,10 +29,11 @@ import {
   shikshak_centre_assignments,
 } from "@workspace/db";
 import { ageGroupFromDob } from "@workspace/db";
-import { and, asc, count, desc, eq, gte, inArray, isNull, lte, lt, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, inArray, isNull, lte, lt, ne, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
+import { isValidCitySlug, slugifyCityName } from "@jp/shared/city-slug";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState, inBatchWriteScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
@@ -96,7 +97,9 @@ router.get("/centres", async (req: Request, res: Response) => {
       name: centres.name,
       locality: centres.locality,
       pincode: centres.pincode,
+      city_id: centres.city_id,
       city_name: cities.name,
+      state_id: centres.state_id,
       state_name: states.name,
       contact_phone: centres.contact_phone,
       contact_email: centres.contact_email,
@@ -757,6 +760,11 @@ router.post(
       })
       .returning({ id: centre_monthly_reports.id });
 
+    if (!row) {
+      fail(res, 500, "ERR_INTERNAL", "Could not queue the report — try again in a moment.");
+      return;
+    }
+
     await auditFromReq(req, {
       action: "create",
       entityKind: "centre_monthly_report",
@@ -765,10 +773,27 @@ router.post(
       metadata: { centre_id: centreId, month },
     });
 
-    // Return queued immediately; job may run inline when REDIS_URL is unset.
-    void enqueueJob(QUEUE_NAMES.REPORT_GENERATION, { report_id: row.id }).catch((err) => {
+    try {
+      await enqueueJob(QUEUE_NAMES.REPORT_GENERATION, { report_id: row.id });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : "enqueue failed";
       logger.warn({ err, reportId: row.id }, "report.generation enqueue failed");
-    });
+      await db
+        .update(centre_monthly_reports)
+        .set({
+          status: "failed",
+          error_message: detail.slice(0, 500),
+          updated_at: new Date(),
+        })
+        .where(eq(centre_monthly_reports.id, row.id));
+      fail(
+        res,
+        503,
+        "ERR_INTERNAL",
+        "The report could not be queued — try again in a moment.",
+      );
+      return;
+    }
 
     ok(res, { job_id: row.id, status: "queued" as const });
   },
@@ -1147,8 +1172,10 @@ router.get("/geography", async (_req: Request, res: Response) => {
       id: cities.id,
       name: cities.name,
       code: cities.code,
+      slug: cities.slug,
       state_id: cities.state_id,
       state_name: states.name,
+      state_code: states.code,
     })
     .from(cities)
     .innerJoin(states, eq(states.id, cities.state_id))
@@ -1206,6 +1233,25 @@ const createCitySchema = z.object({
   state_id: z.string().uuid(),
   name: z.string().min(1).max(100),
   code: z.string().min(2).max(10).transform((s) => s.toUpperCase()),
+  slug: z
+    .string()
+    .min(1)
+    .max(120)
+    .transform((s) => s.trim().toLowerCase())
+    .optional(),
+});
+
+const patchCitySchema = z.object({
+  name: z.string().min(1).max(100).optional(),
+  code: z.string().min(2).max(10).transform((s) => s.toUpperCase()).optional(),
+  slug: z
+    .string()
+    .min(1)
+    .max(120)
+    .transform((s) => s.trim().toLowerCase())
+    .optional(),
+}).refine((b) => b.name !== undefined || b.code !== undefined || b.slug !== undefined, {
+  message: "At least one field required",
 });
 
 /* POST /v1/admin/cities */
@@ -1222,6 +1268,12 @@ router.post("/cities", async (req: Request, res: Response) => {
     .limit(1);
   if (!stateRow) { fail(res, 404, "ERR_NOT_FOUND", "State not found."); return; }
 
+  const slug = body.slug ?? slugifyCityName(body.name);
+  if (!isValidCitySlug(slug)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "City slug must be lowercase letters, digits, and hyphens.");
+    return;
+  }
+
   // Same name twice within one state is a duplicate; the same name in another
   // state is legitimate (e.g. Aurangabad exists in more than one state).
   const [dupe] = await db
@@ -1231,18 +1283,125 @@ router.post("/cities", async (req: Request, res: Response) => {
     .limit(1);
   if (dupe) { fail(res, 409, "ERR_ALREADY_EXISTS", "That city already exists in this state."); return; }
 
-  const [row] = await db
-    .insert(cities)
-    .values({ state_id: body.state_id, name: body.name, code: body.code })
-    .returning({ id: cities.id, name: cities.name, code: cities.code, state_id: cities.state_id });
-  await auditFromReq(req, {
-    action: "create",
-    entityKind: "city",
-    entityId: row.id,
-    summary: `City ${row.name} created.`,
-    metadata: { name: row.name, code: row.code, state_id: row.state_id },
-  });
-  ok(res, row, undefined, 201);
+  const [slugTaken] = await db
+    .select({ id: cities.id })
+    .from(cities)
+    .where(eq(cities.slug, slug))
+    .limit(1);
+  if (slugTaken) {
+    fail(res, 409, "ERR_CITY_SLUG_CONFLICT", "That city slug is already taken — choose a different slug.");
+    return;
+  }
+
+  try {
+    const [row] = await db
+      .insert(cities)
+      .values({ state_id: body.state_id, name: body.name, code: body.code, slug })
+      .returning({
+        id: cities.id,
+        name: cities.name,
+        code: cities.code,
+        slug: cities.slug,
+        state_id: cities.state_id,
+      });
+    await auditFromReq(req, {
+      action: "create",
+      entityKind: "city",
+      entityId: row.id,
+      summary: `City ${row.name} created.`,
+      metadata: { name: row.name, code: row.code, slug: row.slug, state_id: row.state_id },
+    });
+    ok(res, row, undefined, 201);
+  } catch (err) {
+    // Race on unique slug — surface as the domain conflict, not 500.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/cities_slug_uq|unique.*slug/i.test(msg)) {
+      fail(res, 409, "ERR_CITY_SLUG_CONFLICT", "That city slug is already taken — choose a different slug.");
+      return;
+    }
+    throw err;
+  }
+});
+
+/* PATCH /v1/admin/cities/:id */
+router.patch("/cities/:id", async (req: Request, res: Response) => {
+  if (!requireNationalAdmin(req, res)) return;
+  const id = String(req.params.id);
+  let body: z.infer<typeof patchCitySchema>;
+  try { body = patchCitySchema.parse(req.body); }
+  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid city data."); return; }
+
+  const [existing] = await db
+    .select({
+      id: cities.id,
+      name: cities.name,
+      code: cities.code,
+      slug: cities.slug,
+      state_id: cities.state_id,
+    })
+    .from(cities)
+    .where(eq(cities.id, id))
+    .limit(1);
+  if (!existing) { fail(res, 404, "ERR_NOT_FOUND", "City not found."); return; }
+
+  const nextName = body.name ?? existing.name;
+  const nextCode = body.code ?? existing.code;
+  const nextSlug = body.slug ?? existing.slug;
+
+  if (!isValidCitySlug(nextSlug)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "City slug must be lowercase letters, digits, and hyphens.");
+    return;
+  }
+
+  if (nextName !== existing.name) {
+    const [dupe] = await db
+      .select({ id: cities.id })
+      .from(cities)
+      .where(and(eq(cities.state_id, existing.state_id), eq(cities.name, nextName), ne(cities.id, id)))
+      .limit(1);
+    if (dupe) { fail(res, 409, "ERR_ALREADY_EXISTS", "That city already exists in this state."); return; }
+  }
+
+  if (nextSlug !== existing.slug) {
+    const [slugTaken] = await db
+      .select({ id: cities.id })
+      .from(cities)
+      .where(and(eq(cities.slug, nextSlug), ne(cities.id, id)))
+      .limit(1);
+    if (slugTaken) {
+      fail(res, 409, "ERR_CITY_SLUG_CONFLICT", "That city slug is already taken — choose a different slug.");
+      return;
+    }
+  }
+
+  try {
+    const [row] = await db
+      .update(cities)
+      .set({ name: nextName, code: nextCode, slug: nextSlug, updated_at: new Date() })
+      .where(eq(cities.id, id))
+      .returning({
+        id: cities.id,
+        name: cities.name,
+        code: cities.code,
+        slug: cities.slug,
+        state_id: cities.state_id,
+      });
+    await auditFromReq(req, {
+      action: "update",
+      entityKind: "city",
+      entityId: row.id,
+      summary: `City ${row.name} updated.`,
+      metadata: { name: row.name, code: row.code, slug: row.slug, state_id: row.state_id },
+    });
+    ok(res, row);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (/cities_slug_uq|unique.*slug/i.test(msg)) {
+      fail(res, 409, "ERR_CITY_SLUG_CONFLICT", "That city slug is already taken — choose a different slug.");
+      return;
+    }
+    throw err;
+  }
 });
 
 /* GET /v1/admin/settings */
@@ -1381,6 +1540,76 @@ router.post("/centres", async (req: Request, res: Response) => {
     contact_phone: body.contact_phone ?? null,
     contact_email: body.contact_email ?? null,
   }).returning({ id: centres.id, name: centres.name, code: centres.code });
+  ok(res, row);
+});
+
+const patchCentreStatusSchema = z.object({
+  status: z.enum(["active", "inactive"]),
+});
+
+/* PATCH /v1/admin/centres/:id — activate / deactivate (city_admin+) */
+router.patch("/centres/:id", async (req: Request, res: Response) => {
+  const role = req.authUser!.role;
+  if (role !== "super_admin" && role !== "state_admin" && role !== "city_admin") {
+    fail(res, 403, "ERR_FORBIDDEN", "Only city admins and above can update centres.");
+    return;
+  }
+  const id = String(req.params.id);
+  if (!UUID_RE.test(id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Centre not found.");
+    return;
+  }
+  let body: z.infer<typeof patchCentreStatusSchema>;
+  try {
+    body = patchCentreStatusSchema.parse(req.body);
+  } catch {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid centre status.");
+    return;
+  }
+
+  const scope = await resolveAdminScope(req.authUser!);
+  const [existing] = await db
+    .select({
+      id: centres.id,
+      name: centres.name,
+      status: centres.status,
+      city_id: centres.city_id,
+      state_id: centres.state_id,
+    })
+    .from(centres)
+    .where(and(eq(centres.id, id), isNull(centres.deleted_at)))
+    .limit(1);
+  if (!existing) {
+    fail(res, 404, "ERR_NOT_FOUND", "Centre not found.");
+    return;
+  }
+  if (!inScope(scope, existing.id)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope.");
+    return;
+  }
+
+  const [row] = await db
+    .update(centres)
+    .set({ status: body.status, updated_at: new Date() })
+    .where(eq(centres.id, id))
+    .returning({
+      id: centres.id,
+      name: centres.name,
+      status: centres.status,
+    });
+
+  if (body.status === "inactive") {
+    const { unpublishTeamMembersForCentre } = await import("../../lib/team-members-sync");
+    await unpublishTeamMembersForCentre(id);
+  }
+
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "centre",
+    entityId: row.id,
+    summary: `Centre ${row.name} set to ${body.status}.`,
+    metadata: { status: body.status },
+  });
   ok(res, row);
 });
 

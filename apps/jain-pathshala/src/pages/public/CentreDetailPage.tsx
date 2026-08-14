@@ -3,6 +3,10 @@ import { Link, useParams } from 'wouter';
 import { Card } from '@/components/ui/card';
 import { useLocale } from '@/lib/locale-context';
 import { formatAgeGroups } from '@workspace/api-zod';
+import {
+  TeamMemberCard,
+  type TeamCardModel,
+} from '@/components/public/TeamMemberCard';
 
 interface CentreDetail {
   id: string;
@@ -26,6 +30,15 @@ interface BatchRow {
   language_preference: string | null;
 }
 
+type CentreTeamCategory = {
+  id: string;
+  key: string;
+  name_en: string;
+  name_hi: string;
+  member_count: number;
+  members: TeamCardModel[];
+};
+
 const DAY = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 function hhmm(t: string): string {
@@ -44,24 +57,67 @@ export default function CentreDetailPage() {
 
   const [centre, setCentre] = useState<CentreDetail | null>(null);
   const [batches, setBatches] = useState<BatchRow[]>([]);
+  const [teamCategories, setTeamCategories] = useState<CentreTeamCategory[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
   useEffect(() => {
-    if (!centreId) { setLoading(false); setNotFound(true); return; }
-    fetch(`/v1/public/centres/${centreId}`, { headers: { Accept: 'application/json' } })
-      .then((r) => {
-        if (r.status === 404) { setNotFound(true); return null; }
-        return r.ok ? r.json() : null;
+    if (!centreId) {
+      setLoading(false);
+      setNotFound(true);
+      return;
+    }
+
+    let cancelled = false;
+    setLoading(true);
+    setNotFound(false);
+
+    Promise.all([
+      fetch(`/v1/public/centres/${centreId}`, { headers: { Accept: 'application/json' } }),
+      fetch(`/v1/team/centres/${centreId}`, { headers: { Accept: 'application/json' } }),
+    ])
+      .then(async ([centreRes, teamRes]) => {
+        if (centreRes.status === 404) {
+          if (!cancelled) setNotFound(true);
+          return;
+        }
+        if (!centreRes.ok) throw new Error('centre fetch failed');
+
+        const centreJson = (await centreRes.json()) as {
+          data?: { centre?: CentreDetail | null; batches?: BatchRow[] };
+        };
+        if (!centreJson.data?.centre) {
+          if (!cancelled) setNotFound(true);
+          return;
+        }
+        if (cancelled) return;
+
+        setCentre(centreJson.data.centre);
+        setBatches(centreJson.data.batches ?? []);
+
+        // Team is optional — 404 / failure omits the block, does not fail the page.
+        if (!teamRes.ok) {
+          setTeamCategories([]);
+          return;
+        }
+        const teamJson = (await teamRes.json()) as {
+          data?: { categories?: CentreTeamCategory[] };
+        };
+        // Only keep categories that actually have cards — omit empty headings.
+        setTeamCategories(
+          (teamJson.data?.categories ?? []).filter((c) => (c.members?.length ?? 0) > 0),
+        );
       })
-      .then((json: { data?: { centre?: CentreDetail | null; batches?: BatchRow[] } } | null) => {
-        if (!json) return;
-        setCentre(json.data?.centre ?? null);
-        setBatches(json.data?.batches ?? []);
-        if (!json.data?.centre) setNotFound(true);
+      .catch(() => {
+        if (!cancelled) setNotFound(true);
       })
-      .catch(() => setNotFound(true))
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
   }, [centreId]);
 
   if (loading) {
@@ -128,6 +184,33 @@ export default function CentreDetailPage() {
           ))}
         </div>
       )}
+
+      {teamCategories.length > 0 ? (
+        <div className="mt-12 space-y-10">
+          <h2
+            className="font-display text-2xl text-secondary"
+            style={{ lineHeight: '1.3' }}
+          >
+            {hi ? 'टीम' : 'Team'}
+          </h2>
+          {teamCategories.map((cat) => (
+            <section key={cat.id} aria-labelledby={`centre-team-${cat.id}`}>
+              <h3
+                id={`centre-team-${cat.id}`}
+                className="break-words font-display text-xl text-secondary"
+                style={{ lineHeight: '22px' }}
+              >
+                {hi ? cat.name_hi : cat.name_en}
+              </h3>
+              <div className="mt-4 grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {cat.members.map((m) => (
+                  <TeamMemberCard key={m.id} member={m} locale={locale} />
+                ))}
+              </div>
+            </section>
+          ))}
+        </div>
+      ) : null}
 
       <div className="mt-10">
         <Link
