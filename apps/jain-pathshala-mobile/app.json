@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "Jain Pathshala Mobile",
+    "name": "MSV SMART Jain Pathshala",
     "slug": "jain-pathshala-mobile",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "jain-pathshala-mobile",

@@ -5,7 +5,10 @@
  *   DEFAULT_OTP_FLAG=true  (with SMS on) → send DEFAULT_OTP over SMS
  *   DEFAULT_OTP_FLAG=false (with SMS on) → generate a fresh code for SMS
  *
- * Unset OTP_ENABLED defaults to false (DEFAULT_OTP, no SMS).
+ * Unset OTP_ENABLED defaults to false (DEFAULT_OTP, no SMS) OUTSIDE production,
+ * and to true (live SMS) under NODE_ENV=production. An unset variable must never
+ * mean "every registered phone accepts a fixed code" on a public deployment —
+ * turning OTP off is a deliberate act and has to be spelled out in the env.
  * Unset DEFAULT_OTP_FLAG defaults to false (random when SMS is on).
  *
  * Soft-compat: if OTP_ENABLED is unset and OTP_FIXED_ENABLED is set, map
@@ -70,7 +73,11 @@ function load(): void {
         )
       : parseCode(process.env["DEFAULT_OTP"], "DEFAULT_OTP");
   } else {
-    _otpEnabled = false;
+    // Nothing configured. Outside production that means "local/UAT, use
+    // DEFAULT_OTP". In production it must mean the opposite: a missing variable
+    // cannot be allowed to silently downgrade a public API to a fixed code that
+    // signs in every registered phone, super_admin included.
+    _otpEnabled = process.env.NODE_ENV === "production";
     _defaultCode = parseCode(process.env["DEFAULT_OTP"], "DEFAULT_OTP");
   }
 
@@ -88,6 +95,10 @@ function load(): void {
       logger.warn(
         { codeLength: _defaultCode!.length, production: inProd },
         "[otp] DEFAULT_OTP_FLAG=true — live SMS will send DEFAULT_OTP (fixed code) instead of a random OTP.",
+      );
+    } else if (inProd && !envIsSet("OTP_ENABLED")) {
+      logger.warn(
+        "[otp] OTP_ENABLED is unset; defaulting to live SMS because NODE_ENV=production. Set it explicitly to remove the ambiguity.",
       );
     }
   }
