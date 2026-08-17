@@ -264,7 +264,14 @@ export default function ServiceRequestsAdminPage() {
         empty=""
         colSpan={7}
         footer={
-          <AdminLoadMore hasMore={hasMore} loadingMore={loadingMore} onLoadMore={() => void loadMore()} />
+          <>
+            {items.length > 0 ? (
+              <p className="border-t border-border bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
+                Showing {items.length} result{items.length !== 1 ? 's' : ''}.
+              </p>
+            ) : null}
+            <AdminLoadMore hasMore={hasMore} loadingMore={loadingMore} onLoadMore={() => void loadMore()} />
+          </>
         }
       >
         {items.length === 0 && !loading ? (

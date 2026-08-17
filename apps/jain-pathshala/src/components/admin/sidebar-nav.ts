@@ -41,6 +41,14 @@ export interface NavItem {
   min: Role;
   /** When set, visibility uses a narrower capability gate instead of min alone. */
   gate?: 'featureMedia' | 'administerExams';
+  /**
+   * Modelled for `findNavItemForPath` but never rendered in the sidebar — route
+   * aliases that share a page with a visible entry. A path the nav does not
+   * model resolves to null, which `AdminRouteGuard` treats as "no extra
+   * restriction", so an unmodelled alias is an ALLOW: `/admin/curriculum`
+   * rendered the full courses page for any shikshak who typed it.
+   */
+  hidden?: boolean;
 }
 
 export interface NavGroup {
@@ -68,6 +76,8 @@ export const ADMIN_NAV: NavGroup[] = [
     items: [
       { href: '/admin/batches', label: 'Batches', icon: CalendarDays, min: 'sanchalak' },
       { href: '/admin/courses', label: 'Courses', icon: ScrollText, min: 'city_admin' },
+      // Alias route for the same CoursesAdminPage — same requirement, no second row.
+      { href: '/admin/curriculum', label: 'Courses', icon: ScrollText, min: 'city_admin', hidden: true },
       { href: '/admin/exams', label: 'Exams', icon: ListChecks, min: 'city_admin', gate: 'administerExams' },
       { href: '/admin/exam-builder', label: 'Exam builder', icon: ClipboardList, min: 'city_admin', gate: 'administerExams' },
       { href: '/admin/exam-grading', label: 'Exam grading', icon: ClipboardCheck, min: 'city_admin', gate: 'administerExams' },
@@ -157,6 +167,6 @@ export function findNavItemForPath(path: string): NavItem | null {
 export function filterNavForRole(role: Role): NavGroup[] {
   return ADMIN_NAV.map((group) => ({
     heading: group.heading,
-    items: group.items.filter((i) => navItemAllows(role, i)),
+    items: group.items.filter((i) => !i.hidden && navItemAllows(role, i)),
   })).filter((g) => g.items.length > 0);
 }

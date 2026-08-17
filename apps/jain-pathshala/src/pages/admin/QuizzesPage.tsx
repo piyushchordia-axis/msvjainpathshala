@@ -403,6 +403,7 @@ function AddQuestionDialog({ onAdded }: { onAdded: () => void }) {
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Add question to bank</DialogTitle></DialogHeader>
         <form className="space-y-4 pt-2" onSubmit={submit}>
+          {opts.error ? <TargetLoadError onRetry={opts.retry} /> : null}
           <QuizScopeTargets
             scope={scope}
             onScopeChange={setScope}
@@ -581,6 +582,7 @@ function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; o
           <FormRow label="Title (English) *">
             <Input value={title} onChange={(e) => setTitle(e.target.value)} />
           </FormRow>
+          {opts.error ? <TargetLoadError onRetry={opts.retry} /> : null}
           <QuizScopeTargets
             scope={scope}
             onScopeChange={setScope}
@@ -704,6 +706,7 @@ function CreatePushDialog({ onAdded }: { onAdded: () => void }) {
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>Start a live push quiz</DialogTitle></DialogHeader>
         <form className="space-y-4 pt-2" onSubmit={submit}>
+          {opts.error ? <TargetLoadError onRetry={opts.retry} /> : null}
           <QuizScopeTargets
             scope={scope}
             onScopeChange={setScope}
@@ -905,6 +908,20 @@ function AttemptsResultsPanel({
 // ─── Page ───────────────────────────────────────────────────────────────────
 type Tab = 'bank' | 'events' | 'push';
 
+/** Server clamp on the three quiz list endpoints (clampLimit(…, 100, 300)). */
+const LIST_MAX = 300;
+
+/** A full page back means the server had at least this many — the rest is unreachable. */
+function TruncationNotice({ count, noun }: { count: number; noun: string }) {
+  if (count < LIST_MAX) return null;
+  return (
+    <p className="mt-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+      Showing the newest {LIST_MAX} {noun}. There are more than this — narrow the
+      filters to reach them.
+    </p>
+  );
+}
+
 type ResultsView =
   | { kind: 'event'; id: string; title: string }
   | { kind: 'push'; id: string; title: string }
@@ -924,10 +941,18 @@ export default function QuizzesPage() {
     setLoading(true);
     setError(null);
     try {
+      // XC-WEB-02 — these three endpoints clamp at LIST_MAX and expose no
+      // cursor, so anything past it is unreachable. Ask for the full clamp and
+      // report the ceiling rather than showing a truncated prefix as if it were
+      // the whole list. Real paging needs server-side cursors (see the notice
+      // rendered below); push quizzes additionally order by a computed
+      // expiry-then-start expression that keyset paging cannot express as-is.
       const [q, ev, pq] = await Promise.all([
-        apiGet<{ items: QuestionRow[] }>(`/v1/quizzes/questions?limit=200&is_active=${filter}`),
-        apiGet<{ items: EventRow[] }>('/v1/quizzes/events?limit=200'),
-        apiGet<{ items: PushRow[] }>('/v1/quizzes/push?limit=200'),
+        apiGet<{ items: QuestionRow[] }>(
+          `/v1/quizzes/questions?limit=${LIST_MAX}&is_active=${filter}`,
+        ),
+        apiGet<{ items: EventRow[] }>(`/v1/quizzes/events?limit=${LIST_MAX}`),
+        apiGet<{ items: PushRow[] }>(`/v1/quizzes/push?limit=${LIST_MAX}`),
       ]);
       setQuestions(q?.items ?? []);
       setEvents(ev?.items ?? []);
@@ -1003,6 +1028,10 @@ export default function QuizzesPage() {
           Push quizzes ({pushes.length})
         </Button>
       </div>
+
+      {tab === 'bank' ? <TruncationNotice count={questions.length} noun="questions" /> : null}
+      {tab === 'events' ? <TruncationNotice count={events.length} noun="quiz events" /> : null}
+      {tab === 'push' ? <TruncationNotice count={pushes.length} noun="push quizzes" /> : null}
 
       {tab === 'bank' ? (
         <div className="flex flex-wrap gap-2">

@@ -2,8 +2,8 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { randomUUID } from "node:crypto";
 import app from "../src/app";
-import { pool, db, users, otp_codes, device_sessions } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { pool, db, users, otp_codes, device_sessions, audit_logs } from "@workspace/db";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { hashSecret } from "../src/lib/tokens";
 import { SEED_PHONES, loginAs, auth } from "./helpers";
 
@@ -208,14 +208,25 @@ describe("auth / OTP login", () => {
     expect(typeof newRefresh).toBe("string");
     expect(newRefresh).not.toBe(oldRefresh);
 
-    // Reusing the OLD (rotated-away) refresh token must fail.
+    // Sanity before any reuse: rotation did not break the live session.
+    const stillGood = await request(app).post("/api/auth/refresh").send({ refresh_token: newRefresh });
+    expect(stillGood.status).toBe(200);
+    const currentRefresh = stillGood.body.data.tokens.refresh_token as string;
+
+    // Reusing a rotated-away refresh token must fail.
     const reuse = await request(app).post("/api/auth/refresh").send({ refresh_token: oldRefresh });
     expect(reuse.status).toBe(401);
     expect(reuse.body.error.code).toBe("ERR_REFRESH_INVALID");
 
-    // The NEW token still works (sanity: rotation didn't break the live session).
-    const stillGood = await request(app).post("/api/auth/refresh").send({ refresh_token: newRefresh });
-    expect(stillGood.status).toBe(200);
+    // …and it now takes the whole family down with it. This assertion was
+    // previously the opposite (the live token kept working after a replay),
+    // which is exactly the hole XC-API-05 closed: only one party can hold the
+    // current token, so a replay proves a second copy exists and we cannot tell
+    // which caller is the thief. Both are cut; the real user re-authenticates.
+    const afterReuse = await request(app)
+      .post("/api/auth/refresh")
+      .send({ refresh_token: currentRefresh });
+    expect(afterReuse.status).toBe(401);
   });
 
   it("logout revokes the device session so a subsequent refresh 401s", async () => {
@@ -335,6 +346,71 @@ describe("admin impersonation", () => {
     expect(inactiveRes.status).toBe(404);
   });
 
+  it("start sets jp_imp_by and writes TWO audit entries — one per identity", async () => {
+    const admin = await loginAs("super_admin");
+    const target = await makeUser({ full_name: "Impersonation Subject" });
+
+    const res = await request(app)
+      .post(`/v1/admin/impersonate/${target.id}`)
+      .set(auth(admin.token));
+    expect(res.status).toBe(200);
+    // The admin's own id rides along so later audited actions can carry it.
+    expect(cookieValue(res, "jp_imp_by")).toBe(admin.user.id);
+
+    // Entry 1 — on the ADMIN's trail, naming the subject.
+    const [adminEntry] = await db
+      .select()
+      .from(audit_logs)
+      .where(
+        and(
+          eq(audit_logs.actor_user_id, admin.user.id),
+          eq(audit_logs.entity_kind, "impersonation"),
+          eq(audit_logs.entity_id, target.id),
+        ),
+      )
+      .orderBy(desc(audit_logs.created_at))
+      .limit(1);
+    expect(adminEntry).toBeTruthy();
+    expect(adminEntry.metadata?.subject_id).toBe(target.id);
+
+    // Entry 2 — on the SUBJECT's trail, naming the impersonator.
+    const [subjectEntry] = await db
+      .select()
+      .from(audit_logs)
+      .where(
+        and(
+          eq(audit_logs.actor_user_id, target.id),
+          eq(audit_logs.entity_kind, "impersonation"),
+          eq(audit_logs.entity_id, admin.user.id),
+        ),
+      )
+      .orderBy(desc(audit_logs.created_at))
+      .limit(1);
+    expect(subjectEntry).toBeTruthy();
+    expect(subjectEntry.metadata?.impersonator_id).toBe(admin.user.id);
+  });
+
+  it("audited actions during impersonation carry impersonator_id (stop entry)", async () => {
+    // The stop route runs auditFromReq while the impersonation cookies are
+    // still present, so its own audit entry must carry the impersonator.
+    const impersonatorId = randomUUID();
+    const res = await request(app)
+      .post("/v1/admin/impersonate/stop")
+      .set("Cookie", ["jp_imp_active=true", `jp_imp_by=${impersonatorId}`])
+      .set("X-Requested-With", "XMLHttpRequest");
+    expect(res.status).toBe(200);
+
+    const [entry] = await db
+      .select()
+      .from(audit_logs)
+      .where(eq(audit_logs.entity_kind, "impersonation"))
+      .orderBy(desc(audit_logs.created_at))
+      .limit(1);
+    expect(entry).toBeTruthy();
+    expect(entry.summary).toContain("Stopped impersonation");
+    expect(entry.metadata?.impersonator_id).toBe(impersonatorId);
+  });
+
   it("stop clears the impersonation cookies (authenticated via jp_imp_active)", async () => {
     // Stop authenticates off the jp_imp_active cookie (the live session during
     // impersonation is the SUBJECT, who may have no admin-panel access).
@@ -356,5 +432,92 @@ describe("admin impersonation", () => {
       .set("X-Requested-With", "XMLHttpRequest");
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe("ERR_NO_IMPERSONATION");
+  });
+});
+
+/**
+ * Device-session cap + refresh-token reuse detection (XC-API-05).
+ *
+ * Login inserted a device_sessions row unconditionally: there was no cap at all,
+ * and refresh rotated the hash IN PLACE, so a replayed old token merely missed
+ * the lookup and 401'd while the thief's rolling session stayed alive.
+ */
+describe("device sessions and refresh families", () => {
+  /** Full send+verify for a user, returning the issued refresh token. */
+  async function signIn(phone: string, deviceId: string): Promise<string> {
+    const send = await request(app).post("/api/auth/login").send({ phase: "send", phone });
+    expect(send.status).toBe(200);
+    const res = await request(app).post("/api/auth/login").send({
+      phase: "verify",
+      otp_token: send.body.data.otp_token,
+      code: send.body.data.dev_code ?? "123456",
+      device_id: deviceId,
+    });
+    expect(res.status).toBe(200);
+    return res.body.data.tokens.refresh_token as string;
+  }
+
+  async function liveSessions(userId: string) {
+    return db
+      .select({ id: device_sessions.id, device_id: device_sessions.device_id })
+      .from(device_sessions)
+      .where(and(eq(device_sessions.user_id, userId), isNull(device_sessions.revoked_at)));
+  }
+
+  it("caps live sessions at five, revoking the oldest on the sixth device", async () => {
+    const user = await makeUser();
+    for (let i = 1; i <= 6; i++) {
+      await signIn(user.phone, `cap-device-${i}`);
+    }
+    const live = await liveSessions(user.id);
+    expect(live).toHaveLength(5);
+    // The first device is the one evicted; the newest is still live.
+    const ids = live.map((s) => s.device_id);
+    expect(ids).not.toContain("cap-device-1");
+    expect(ids).toContain("cap-device-6");
+  });
+
+  it("re-login on the same device replaces its session instead of consuming a slot", async () => {
+    // Without this, six sign-ins from ONE handset would evict five genuine other
+    // devices to make room for duplicates of the phone already in your hand.
+    const user = await makeUser();
+    for (let i = 0; i < 3; i++) {
+      await signIn(user.phone, "same-handset");
+    }
+    const live = await liveSessions(user.id);
+    expect(live).toHaveLength(1);
+    expect(live[0]!.device_id).toBe("same-handset");
+  });
+
+  it("revokes the whole family when a superseded refresh token is replayed", async () => {
+    const user = await makeUser();
+    const first = await signIn(user.phone, "reuse-device");
+
+    const rotate = await request(app).post("/api/auth/refresh").send({ refresh_token: first });
+    expect(rotate.status).toBe(200);
+    const second = rotate.body.data.tokens.refresh_token as string;
+    expect(second).not.toBe(first);
+
+    // Replay the superseded token — the thief's copy.
+    const replay = await request(app).post("/api/auth/refresh").send({ refresh_token: first });
+    expect(replay.status).toBe(401);
+
+    // The legitimate current token is dead too: we cannot tell the parties apart,
+    // so the safe move is to force a fresh OTP login.
+    const afterReuse = await request(app).post("/api/auth/refresh").send({ refresh_token: second });
+    expect(afterReuse.status).toBe(401);
+    expect(await liveSessions(user.id)).toHaveLength(0);
+  });
+
+  it("leaves an ordinary unknown refresh token as a plain 401", async () => {
+    // A random/expired token must NOT trip reuse detection — no family to revoke.
+    const user = await makeUser();
+    await signIn(user.phone, "untouched-device");
+
+    const res = await request(app)
+      .post("/api/auth/refresh")
+      .send({ refresh_token: `not-a-real-token-${randomUUID()}` });
+    expect(res.status).toBe(401);
+    expect(await liveSessions(user.id)).toHaveLength(1);
   });
 });

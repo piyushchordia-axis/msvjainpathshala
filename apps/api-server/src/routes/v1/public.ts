@@ -267,10 +267,27 @@ router.get("/library", async (_req: Request, res: Response) => {
   ok(res, { sections }, { count: sections.length });
 });
 
-/* GET /v1/public/courses?limit=&offset= — active standard catalogue (read-only). */
+/* GET /v1/public/courses?city_id=&limit=&offset= — active standard catalogue.
+ *
+ * `city_id` is OPTIONAL and narrows to national + that city, matching the
+ * authenticated CU3 predicate in lib/course-visibility.ts. It is deliberately
+ * not applied by default: 78 of 88 active standard courses carry a city_id, so
+ * defaulting a city-less guest to national-only would hide ~89% of the
+ * catalogue. Course names and their city are not sensitive — a guest browsing
+ * what exists nationally is the intended behaviour; the filter serves the join
+ * flow, which has already asked for a city.
+ */
 router.get("/courses", async (req: Request, res: Response) => {
   const limit = clampLimit(req.query.limit, 100, 200);
   const offset = parseOffset(req.query.offset);
+  const cityIdRaw = typeof req.query.city_id === "string" ? req.query.city_id : "";
+  if (cityIdRaw && !UUID_RE.test(cityIdRaw)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "city_id must be a valid id.");
+    return;
+  }
+  const cityFilter = cityIdRaw
+    ? or(isNull(courses.city_id), eq(courses.city_id, cityIdRaw))
+    : undefined;
   const rows = await db
     .select({
       id: courses.id,
@@ -279,12 +296,24 @@ router.get("/courses", async (req: Request, res: Response) => {
       kind: courses.kind,
       academic_year: courses.academic_year,
       punya_points: courses.punya_points,
+      // Returned so the catalogue can show/filter by city instead of presenting
+      // a Mumbai course and a national one as indistinguishable.
+      city_id: courses.city_id,
+      city_name: cities.name,
     })
     .from(courses)
+    .leftJoin(cities, eq(cities.id, courses.city_id))
     // MSV-track curricula are programme-internal (admission is admin discretion,
     // Q1/Q2) — the guest catalogue is the standard track only. Previously every
     // active course of any kind was listed publicly, uncapped.
-    .where(and(eq(courses.status, "active"), isNull(courses.deleted_at), ne(courses.kind, "msv")))
+    .where(
+      and(
+        eq(courses.status, "active"),
+        isNull(courses.deleted_at),
+        ne(courses.kind, "msv"),
+        cityFilter,
+      ),
+    )
     .orderBy(asc(courses.name_en), asc(courses.id))
     .offset(offset)
     .limit(limit + 1);

@@ -62,11 +62,24 @@ export type PendingShivirScanOp = {
 
 /** One proof file, matching the online submit route's media[] wire shape. */
 export type PendingProofMedia = {
+  /** Empty string while `pending_upload` — the remote URL is not known yet. */
   url: string;
   /** Wire placeholder — the server derives the real kind from upload_objects. */
   kind: "photo" | "video" | "audio";
   mime?: string;
   size_bytes?: number;
+  /**
+   * Offline proof capture. A parent who photographs proof out of signal used to
+   * be blocked outright: the direct apiUpload failed, the item went `failed`,
+   * and `mediaReady` disabled Submit — so neither the proof NOR the submission
+   * survived. The file now goes to the media-upload queue and the submission is
+   * enqueued immediately carrying these fields; `planDrain` holds the op back
+   * until every `pending_upload` clears.
+   */
+  local_uri?: string;
+  /** Correlates with a PendingMediaUpload row; cleared once the URL lands. */
+  media_upload_id?: string;
+  pending_upload?: boolean;
 };
 
 export type PendingNiyamSubmissionOp = {

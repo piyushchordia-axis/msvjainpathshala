@@ -27,6 +27,30 @@ export function inScope(scope: AdminScope, centreId: string | null): boolean {
   return scope.centreIds.includes(centreId);
 }
 
+const CURSOR_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Opaque keyset cursor over a (timestamp, uuid) pair — the standard shape for
+ * newest-first admin lists. Same encoding as the private pair in audit-logs.ts;
+ * new callers use this rather than adding a third copy.
+ */
+export function encodeTimeCursor(ts: Date, id: string): string {
+  return Buffer.from(`${ts.toISOString()}|${id}`, "utf8").toString("base64url");
+}
+
+export function decodeTimeCursor(raw: unknown): { createdAt: Date; id: string } | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const [tsIso, id] = Buffer.from(raw, "base64url").toString("utf8").split("|");
+    if (!tsIso || !id || !CURSOR_UUID_RE.test(id)) return null;
+    const createdAt = new Date(tsIso);
+    if (!Number.isFinite(createdAt.getTime())) return null;
+    return { createdAt, id };
+  } catch {
+    return null;
+  }
+}
+
 export function clampLimit(raw: unknown, fallback: number, max: number): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return fallback;

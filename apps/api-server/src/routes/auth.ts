@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { z } from "zod";
 import { db, users, otp_codes, device_sessions } from "@workspace/db";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull } from "drizzle-orm";
 import {
   loginRequestSchema,
 } from "@workspace/api-zod";
@@ -32,6 +32,72 @@ const router: IRouter = Router();
 const OTP_TTL_SECONDS = 5 * 60;
 const MAX_OTP_ATTEMPTS = 5;
 const RL_WINDOW_SECONDS = 15 * 60;
+/** CLAUDE.md auth rules — max 5 device sessions per user; a 6th revokes the oldest. */
+const MAX_DEVICE_SESSIONS = 5;
+
+/**
+ * Enforce the device cap for `userId` before a new session is inserted.
+ *
+ * Two things happen here, and the first matters more:
+ *
+ * 1. Any live session for the SAME device_id is revoked. Login inserted
+ *    unconditionally, so signing in six times on one handset created six rows —
+ *    the cap would then have evicted five genuine OTHER devices to make room for
+ *    duplicates of the one already in your hand.
+ * 2. If 5 or more sessions remain, the oldest are revoked until 4 are left, so
+ *    the caller's insert lands on exactly 5.
+ *
+ * Ordered by last_used_at (a session never refreshed sorts first via its null),
+ * falling back to created_at.
+ */
+async function enforceDeviceSessionCap(
+  // Structural, matching the SettingsReader pattern in lib/platform-settings.ts —
+  // a drizzle transaction is not assignable to `typeof db` ($client is missing).
+  tx: Pick<typeof db, "select" | "update">,
+  userId: string,
+  deviceId: string,
+): Promise<void> {
+  const now = new Date();
+  await tx
+    .update(device_sessions)
+    .set({ revoked_at: now })
+    .where(
+      and(
+        eq(device_sessions.user_id, userId),
+        eq(device_sessions.device_id, deviceId),
+        isNull(device_sessions.revoked_at),
+      ),
+    );
+
+  const live = await tx
+    .select({
+      id: device_sessions.id,
+      last_used_at: device_sessions.last_used_at,
+      created_at: device_sessions.created_at,
+    })
+    .from(device_sessions)
+    .where(
+      and(
+        eq(device_sessions.user_id, userId),
+        isNull(device_sessions.revoked_at),
+        gt(device_sessions.expires_at, now),
+      ),
+    );
+
+  const surplus = live.length - (MAX_DEVICE_SESSIONS - 1);
+  if (surplus <= 0) return;
+
+  const oldestFirst = [...live].sort((a, b) => {
+    const at = a.last_used_at?.getTime() ?? a.created_at?.getTime() ?? 0;
+    const bt = b.last_used_at?.getTime() ?? b.created_at?.getTime() ?? 0;
+    return at - bt;
+  });
+  const evict = oldestFirst.slice(0, surplus).map((s) => s.id);
+  await tx
+    .update(device_sessions)
+    .set({ revoked_at: now })
+    .where(inArray(device_sessions.id, evict));
+}
 
 // Mask a phone number for logs: keep only the last 4 digits (e.g. "****1234")
 // so operational logs never carry a full PII phone number.
@@ -188,13 +254,17 @@ router.post("/login", async (req: Request, res: Response) => {
   const access = signAccessToken(user.id);
   const refresh = generateRefreshToken();
 
-  await db.insert(device_sessions).values({
-    user_id: user.id,
-    device_id: parsed.device_id,
-    platform: "web",
-    refresh_token_hash: refresh.hash,
-    expires_at: refresh.expiresAt,
-    last_used_at: new Date(),
+  await db.transaction(async (tx) => {
+    await enforceDeviceSessionCap(tx, user.id, parsed.device_id);
+    await tx.insert(device_sessions).values({
+      user_id: user.id,
+      device_id: parsed.device_id,
+      platform: "web",
+      refresh_token_hash: refresh.hash,
+      expires_at: refresh.expiresAt,
+      last_used_at: new Date(),
+      // family_id defaults to a fresh uuid — a login starts a new rotation chain.
+    });
   });
   await db.update(users).set({ last_login_at: new Date() }).where(eq(users.id, user.id));
 
@@ -231,6 +301,51 @@ router.post("/login", async (req: Request, res: Response) => {
   });
 });
 
+/**
+ * A presented token that maps to an ALREADY-REVOKED row is a replay of a token
+ * that was consumed by rotation — proof that a second copy of it exists.
+ *
+ * Guarded on the family still having live sessions, which distinguishes a replay
+ * from the benign cases that also leave revoked rows behind: an ordinary logout,
+ * and a session evicted by the 5-device cap. Both leave the family with nothing
+ * live, so neither raises a false alarm.
+ *
+ * Only one party can hold the current token, and we cannot tell which caller is
+ * the thief — so the whole family goes. The real user re-authenticates by OTP;
+ * the attacker's rolling session dies with it.
+ */
+async function revokeFamilyOnReuse(
+  session: typeof device_sessions.$inferSelect,
+  req: Request,
+): Promise<void> {
+  if (!session.revoked_at) return;
+
+  const revoked = await db
+    .update(device_sessions)
+    .set({ revoked_at: new Date() })
+    .where(
+      and(
+        eq(device_sessions.family_id, session.family_id),
+        isNull(device_sessions.revoked_at),
+      ),
+    )
+    .returning({ id: device_sessions.id });
+
+  if (revoked.length === 0) return; // logout / cap eviction — nothing live to protect.
+
+  logger.warn(
+    { user_id: session.user_id, family_id: session.family_id, revoked: revoked.length },
+    "[auth] refresh token reuse detected; family revoked",
+  );
+  await auditFromReq(req, {
+    action: "logout",
+    entityKind: "auth_session",
+    entityId: session.user_id,
+    summary: "Refresh token reuse detected — all sessions in the family were revoked.",
+    metadata: { family_id: session.family_id, revoked_sessions: revoked.length },
+  });
+}
+
 router.post("/refresh", async (req: Request, res: Response) => {
   const incoming = (req.cookies as Record<string, string> | undefined)?.jp_refresh
     ?? (typeof req.body?.refresh_token === "string" ? req.body.refresh_token : undefined);
@@ -238,12 +353,17 @@ router.post("/refresh", async (req: Request, res: Response) => {
     fail(res, 401, "ERR_NO_REFRESH", "No refresh token provided.");
     return;
   }
+  const incomingHash = hashSecret(incoming);
   const [session] = await db
     .select()
     .from(device_sessions)
-    .where(eq(device_sessions.refresh_token_hash, hashSecret(incoming)))
+    .where(eq(device_sessions.refresh_token_hash, incomingHash))
     .limit(1);
   if (!session || session.revoked_at || session.expires_at.getTime() < Date.now()) {
+    // A revoked row means this exact token was already consumed by a rotation —
+    // i.e. replayed. Previously this path just 401'd and the thief kept
+    // refreshing indefinitely on their own rotated copy.
+    if (session) await revokeFamilyOnReuse(session, req);
     fail(res, 401, "ERR_REFRESH_INVALID", "Session expired. Please sign in again.");
     return;
   }
@@ -255,10 +375,26 @@ router.post("/refresh", async (req: Request, res: Response) => {
 
   const access = signAccessToken(user.id);
   const refresh = generateRefreshToken();
-  await db
-    .update(device_sessions)
-    .set({ refresh_token_hash: refresh.hash, expires_at: refresh.expiresAt, last_used_at: new Date() })
-    .where(eq(device_sessions.id, session.id));
+  // Rotate by revoking this row and inserting a successor in the same family,
+  // rather than overwriting the hash in place. The consumed token stays on
+  // record, so a replay is detectable however many times the real user has
+  // rotated since. Exactly one row per family stays live, so the 5-device cap
+  // (which counts revoked_at IS NULL) is unaffected.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(device_sessions)
+      .set({ revoked_at: new Date() })
+      .where(eq(device_sessions.id, session.id));
+    await tx.insert(device_sessions).values({
+      user_id: session.user_id,
+      device_id: session.device_id,
+      platform: session.platform,
+      family_id: session.family_id,
+      refresh_token_hash: refresh.hash,
+      expires_at: refresh.expiresAt,
+      last_used_at: new Date(),
+    });
+  });
 
   const sessionUser = toSessionUser(user);
   setAuthCookies(res, sessionUser, access.token, access.expiresAt, refresh.token, refresh.expiresAt);

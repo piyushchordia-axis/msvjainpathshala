@@ -22,6 +22,7 @@ import {
   storageExtForUpload,
 } from "../../lib/upload";
 import { storage, makeKey } from "../../lib/storage";
+import { rateLimit } from "../../lib/ratelimit";
 import { fileTypeFromBuffer } from "file-type";
 import { stripImageMetadataToFile, ImageNormaliseError } from "../../lib/image-normalise";
 import { assetIdFromTeamPhotoKey } from "../../lib/team-admin";
@@ -80,6 +81,14 @@ async function safeUnlink(filePath: string | undefined): Promise<void> {
 router.post("/", uploadMultipart.single("file"), async (req: Request, res: Response) => {
   const tempPath = req.file?.path;
   try {
+    // Authenticated multipart write straight to object storage — direct spend
+    // with no cap. Keyed per USER, not per IP: a centre behind one NAT would
+    // otherwise share a single budget. Inside the try so the `finally` below
+    // still reclaims the spooled temp file on the 429 path.
+    if (await rateLimit(`uploads:user:${req.authUser!.id}`, 60, 3600)) {
+      fail(res, 429, "ERR_RATE_LIMITED", "Too many uploads just now — please try again in a little while.");
+      return;
+    }
     const file = req.file;
     if (!file || !tempPath) {
       fail(res, 422, "ERR_VALIDATION_FAILED", "No file provided or file type not allowed.");

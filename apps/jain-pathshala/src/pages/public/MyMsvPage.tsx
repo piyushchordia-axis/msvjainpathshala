@@ -132,7 +132,7 @@ export default function MyMsvPage() {
   if (!canView) {
     return (
       <div className="mx-auto max-w-2xl py-16 text-center">
-        <h1 className="font-display text-3xl text-secondary">{hi ? 'MSV कार्यक्रम' : 'MSV programme'}</h1>
+        <h1 className="font-display text-3xl text-secondary">MSV</h1>
         <p className="mt-4 text-muted-foreground">
           {hi
             ? 'यह पृष्ठ अभिभावक और विद्यार्थी खातों के लिए है। कृपया साइन इन करें।'
@@ -153,7 +153,7 @@ export default function MyMsvPage() {
             {hi ? 'कार्यक्रम' : 'Programme'}
           </p>
           <h1 className="mt-3 font-display text-4xl text-secondary md:text-5xl">
-            {hi ? 'MSV कार्यक्रम' : 'MSV programme'}
+            MSV
           </h1>
           <p className="mt-4 max-w-2xl text-muted-foreground">
             {hi

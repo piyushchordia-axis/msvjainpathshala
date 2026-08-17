@@ -69,6 +69,6 @@ export function handleMulterError(
     res,
     422,
     ErrorCode.VALIDATION_FAILED,
-    prefersHindi(req) ? "अपलोड अमान्य है। फिर कोशिश करें。" : "Upload is invalid. Please try again.",
+    prefersHindi(req) ? "अपलोड अमान्य है। फिर कोशिश करें।" : "Upload is invalid. Please try again.",
   );
 }

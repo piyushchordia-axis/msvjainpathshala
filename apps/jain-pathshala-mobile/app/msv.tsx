@@ -118,7 +118,7 @@ export default function MsvScreen() {
     <ActivityThemed accent="courses">
       <View style={{ flex: 1, backgroundColor: c.background }}>
         <AppHeader
-          title={hi ? "MSV कार्यक्रम" : "MSV programme"}
+          title="MSV"
           subtitle={hi ? "आवेदन और स्थिति" : "Apply and track status"}
         />
         <Screen>

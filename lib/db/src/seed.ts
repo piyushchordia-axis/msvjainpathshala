@@ -1193,17 +1193,20 @@ async function main(): Promise<void> {
     },
   ]);
 
-  /* ---------------- Queue stats (dev) ---------------- */
+  /* ---------------- Queue stats (dev) ----------------
+     Names must be real QUEUE_NAMES members (@jp/shared/constants) — the old
+     seed invented SPEC-era queues ('notifications.fanout', 'punya.award')
+     that do not exist, so the admin Queues page opened on a dead DLQ. */
   await db.insert(queue_stats).values([
     {
-      queue_name: "notifications.fanout",
+      queue_name: "notifications.parent",
       waiting: 3,
       active: 1,
       completed_24h: 128,
       failed: 2,
     },
     {
-      queue_name: "punya.award",
+      queue_name: "punya.reconcile",
       waiting: 0,
       active: 0,
       completed_24h: 45,
@@ -1220,14 +1223,14 @@ async function main(): Promise<void> {
 
   await db.insert(queue_dlq_jobs).values([
     {
-      queue_name: "notifications.fanout",
+      queue_name: "notifications.parent",
       job_id: "nf-2025-001",
       payload: { event: "enrolment.approved", user_id: parent.id },
       error_message: "FCM token expired",
       failed_at: daysAgo(2),
     },
     {
-      queue_name: "punya.award",
+      queue_name: "punya.reconcile",
       job_id: "pa-2025-007",
       payload: { student_id: studentRows[0]?.id, points: 10 },
       error_message: "Duplicate idempotency key",

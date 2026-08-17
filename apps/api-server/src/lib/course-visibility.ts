@@ -4,6 +4,7 @@
  */
 import { and, eq, isNull, or, type SQL } from "drizzle-orm";
 import { centres, courses, students, db } from "@workspace/db";
+import { MIN_STUDENT_VIEW_AGE, meetsStudentViewAge } from "@workspace/api-zod";
 
 export type VisibilityStudent = {
   id: string;
@@ -67,4 +68,25 @@ export async function loadActiveStudent(studentId: string): Promise<{
     .where(and(eq(students.id, studentId), isNull(students.deleted_at)))
     .limit(1);
   return row ?? null;
+}
+
+/**
+ * Q4 student-view age gate, shared by the online route and the offline sync
+ * service so the two can never disagree or drift apart on the threshold.
+ *
+ * `meetsStudentViewAge` is false for BOTH a too-young child and a missing DOB,
+ * and those need different messages: an under-age child is told their parent can
+ * do it, while a child with no DOB on record is told what has to be fixed and by
+ * whom. Reporting "too young" to a 14-year-old whose DOB was never captured
+ * sends the family arguing with the wrong thing. Messages are built from
+ * MIN_STUDENT_VIEW_AGE — never retype the number.
+ */
+export function studentViewAgeRefusal(dob: string | null): string | null {
+  if (!dob) {
+    return "Your date of birth is not on record, so we cannot confirm your age — ask your centre to add it, or your parent can update this for you.";
+  }
+  if (!meetsStudentViewAge(dob)) {
+    return `Updating your own progress needs age ${MIN_STUDENT_VIEW_AGE} or older — your parent can update it for you.`;
+  }
+  return null;
 }

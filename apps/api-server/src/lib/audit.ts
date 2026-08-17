@@ -66,8 +66,18 @@ export async function auditFromReq(
   req: Request,
   input: Omit<AuditInput, "actorId" | "actorRole" | "ip">,
 ): Promise<void> {
+  // During impersonation the actor is the SUBJECT (the session really is
+  // theirs), but the trail must never lose who was driving: every audited
+  // action carries impersonator_id (CLAUDE.md impersonation rule). jp_imp_by
+  // is HttpOnly and set only by the super_admin start route.
+  const cookies = (req as Request & { cookies?: Record<string, string> }).cookies;
+  const impersonatorId =
+    cookies?.jp_imp_active === "true" && cookies?.jp_imp_by ? cookies.jp_imp_by : null;
   await writeAudit({
     ...input,
+    ...(impersonatorId
+      ? { metadata: { ...(input.metadata ?? {}), impersonator_id: impersonatorId } }
+      : {}),
     actorId: req.authUser?.id ?? null,
     actorRole: (req.authUser?.role as Role | undefined) ?? null,
     ip: req.ip ?? null,

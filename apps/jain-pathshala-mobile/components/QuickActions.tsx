@@ -40,7 +40,7 @@ const PARENT_ACTIONS: QuickAction[] = [
   // MSV apply/status had no entry point at all — the endpoints existed but a
   // parent could not reach them, and a pending or rejected application was
   // invisible (only an approved badge rendered, on the home screen).
-  { href: "/msv", icon: "school-outline", en: "MSV programme", hi: "MSV कार्यक्रम", accent: "courses" },
+  { href: "/msv", icon: "school-outline", en: "MSV", hi: "MSV", accent: "courses" },
 ];
 
 /** Guruji shortcuts — mirrors web admin items that exist on mobile. */

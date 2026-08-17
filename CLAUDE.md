@@ -91,7 +91,7 @@ super_admin → state_admin → city_admin → sanchalak → shikshak → parent
 4. `sanchalak` — centre head (one or more centres); display name: "Sanchalak"
 5. `shikshak` — teacher (one or more batches); display name: "Guruji" (male) / "Didi" (female)
 6. `parent` — parent/Abhivaavak, manages one or more children
-7. `student` — age 13+, accessed via student-view toggle on parent's account (NOT a separate login)
+7. `student` — age 8+, with their own OTP login when a distinct mobile is registered (see Q4)
 8. `guest` — unauthenticated public user
 
 **Role enforcement rules:**
@@ -107,9 +107,11 @@ super_admin → state_admin → city_admin → sanchalak → shikshak → parent
 - **Single login entry point:** mobile number + OTP only. No username/password. No role selector.
 - **Role auto-detection:** role is read from `users.role` column after OTP verify.
 - **OTP:** 6-digit, 5-minute TTL, max 5 verify attempts, argon2id hash stored (never plaintext).
-- **JWT:** RS256, 15-minute access token, 30-day refresh token with family-based reuse detection.
-- **Device sessions:** max 5 per user. 6th login revokes the oldest session.
-- **Student view toggle:** parent switches context to see their child's view. Child must be ≥ 13 years old and have `student_view_enabled = true`.
+- **Access token — shipped reality (reconciled 2026-08-17):** HMAC-SHA256 (`lib/tokens.ts`), **1-hour** TTL, env-overridable. The SPEC target is RS256 / 15 minutes; that is **NOT YET IMPLEMENTED** and is an accepted deviation, not a bug to re-raise. Changing it is a deliberate migration (key management + `JWT_PREVIOUS_PUBLIC_KEY_PEM` rotation), not a refactor.
+- **Refresh token:** 30 days, rotated on every use, with **family-based reuse detection** (enforced). Rotation revokes the current `device_sessions` row and inserts a successor sharing its `family_id`, so every consumed token stays on record. Presenting a revoked hash whose family still has live rows proves a second copy exists — the whole family is revoked and audited. Only one party can hold the current token and we cannot tell which caller is the thief, so both are cut; the real user re-authenticates by OTP. Do NOT "fix" this back to rotating in place: that is the hole (`0070_session_family_and_kind_check.sql`).
+- **Device sessions:** max 5 per user (enforced in the OTP-verify transaction). A 6th login revokes the oldest by `last_used_at`. Re-login on an existing `device_id` **replaces** that device's session rather than consuming a slot — otherwise six sign-ins from one handset evict five genuine other devices.
+- **Read/write split — shipped reality:** there is no `dbRead` replica pool; `DATABASE_URL_READ` is unused. Accepted deviation.
+- **Student view toggle:** parent switches context to see their child's view. Child must be ≥ 8 years old (Q4) and have `student_view_enabled = true`.
 - **Admin impersonation:** super_admin only. Writes TWO audit log entries. All actions during impersonation carry `impersonator_id`.
 
 ---
@@ -127,17 +129,17 @@ Creating or editing MSV-type curricula is restricted to `super_admin` at the **s
 ### Q3 — 80G certificates: toggleable
 `platform_settings.eighty_g_enabled` controls whether 80G certificates are generated. Default is `false`. When toggled on, both `eighty_g_registration_number` AND `organization_pan` must be set or the toggle is rejected. Existing certificates are never deleted when toggled off.
 
-### Q4 — Student view: 13+ hard gate
-Student view toggle via `POST /v1/auth/switch-view` is blocked if `students.dob` computes to age < 13. This is enforced in the auth service, not the client.
-
-**Shipped reality — two gates, not one (resolved 2026-08-17).** `POST /v1/auth/switch-view` was never built. What shipped instead is a separate `users.role='student'` OTP login, provisioned during join approval when the child registers a distinct mobile number. That mechanism needs its own, lower threshold, so the single inline `13` became two constants in `lib/api-zod/src/contracts.ts`:
+### Q4 — Student age gates: 8+ (lowered from 13 on 2026-08-17)
+**Shipped reality — two gates, not one.** `POST /v1/auth/switch-view` was never built. What shipped instead is a separate `users.role='student'` OTP login, provisioned during join approval when the child registers a distinct mobile number. Two constants in `lib/api-zod/src/contracts.ts`:
 
 | Constant | Value | Gates |
 |---|---|---|
 | `MIN_STUDENT_LOGIN_AGE` | **8** | Being provisioned an independent OTP login (`lib/join-provision.ts`) |
-| `MIN_STUDENT_VIEW_AGE` | **13** | Student-view capability — writing one's own course progress (`courses.ts`, `services/course-access.ts`) |
+| `MIN_STUDENT_VIEW_AGE` | **8** | Student-view capability — writing one's own course progress (`courses.ts`, `services/course-access.ts`) |
 
-Holding a login is not the same as being the authoritative writer of your own progress record: an 8-year-old may sign in, a 13-year-old may self-certify. Both are enforced server-side; a missing or unparseable DOB fails both. Under-age children are still enrolled normally — they simply get no independent login and reach the app through their parent. Provisioning must **never throw** on an under-age child: it runs inside the sanchalak/city_admin approval transaction, and failing would reject a legitimate enrolment.
+Both thresholds are **8**: a child old enough to sign in on their own is treated as old enough to tick off their own progress. They remain **two separate constants** because they gate different capabilities — whether a login exists at all, versus whether the holder may write their own progress record — and they have held different values before. Never collapse them into one, and never retype the number: user-facing copy is built from the constant (see `studentViewAgeRefusal` in `apps/api-server/src/lib/course-visibility.ts`, shared by the online route and the offline sync path so the two cannot drift).
+
+Both are enforced server-side; a missing or unparseable DOB fails both, and is reported as its own distinct message ("date of birth is not on record") rather than as "too young" — roughly 12% of seeded students have no DOB, so conflating the two sends families arguing with the wrong thing. Under-age children are still enrolled normally — they simply get no independent login and reach the app through their parent. Provisioning must **never throw** on an under-age child: it runs inside the sanchalak/city_admin approval transaction, and failing would reject a legitimate enrolment.
 
 ### Q5 — Niyam rejection: 30-day window only
 A niyam submission can only be rejected within 30 days of submission. After 30 days, the reject button in admin UI is disabled AND the API returns `ERR_NIYAM_REVERSAL_WINDOW_EXPIRED` (409). On rejection: Punya is reversed, streak is recomputed, gallery item (if any) is hidden.

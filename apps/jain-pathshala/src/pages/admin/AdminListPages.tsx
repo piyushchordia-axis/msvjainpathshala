@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pencil, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import {
   AdminEmptyRow,
   AdminError,
@@ -20,6 +19,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
+import { ImpersonateButton } from '@/components/admin/ImpersonateButton';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
 } from '@/components/ui/dialog';
@@ -160,196 +160,6 @@ export function CentresPage() {
             <td className="px-4 py-3 text-xs">{c.contact_phone ?? '—'}</td>
             <td className="px-4 py-3">{c.batch_count}</td>
             <td className="px-4 py-3 text-xs capitalize">{c.status}</td>
-          </tr>
-        ))}
-      </AdminTable>
-    </AdminPageShell>
-  );
-}
-
-/* ——— Notices ——— */
-interface NoticeRow {
-  id: string;
-  title_en: string;
-  audience: string;
-  is_public: boolean;
-  pinned: boolean;
-  is_critical: boolean;
-  created_at: string;
-}
-
-const NOTICE_AUDIENCES = ['national', 'state', 'city', 'centre', 'batch', 'msv'] as const;
-
-function AddNoticeDialog({ onAdded }: { onAdded: () => void }) {
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [title, setTitle] = useState('');
-  const [titleHi, setTitleHi] = useState('');
-  const [content, setContent] = useState('');
-  const [audience, setAudience] = useState<string>('national');
-  const [isPublic, setIsPublic] = useState(true);
-  const [pinned, setPinned] = useState(false);
-  const [critical, setCritical] = useState(false);
-
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!title.trim()) return;
-    setBusy(true);
-    try {
-      await apiPost('/v1/admin/notices', {
-        title_en: title.trim(),
-        title_hi: titleHi.trim() || undefined,
-        content_en: content.trim() || undefined,
-        audience,
-        is_public: isPublic,
-        pinned,
-        is_critical: critical,
-        publish_now: true,
-      });
-      toast.success('Notice published.');
-      setOpen(false);
-      setTitle(''); setTitleHi(''); setContent('');
-      onAdded();
-    } catch (err) {
-      toast.error('Failed to create notice.', err instanceof ApiError ? err.message : undefined);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        <Button size="sm"><Plus className="mr-1 h-4 w-4" />New notice</Button>
-      </DialogTrigger>
-      <DialogContent className="max-w-lg">
-        <DialogHeader><DialogTitle>Create notice</DialogTitle></DialogHeader>
-        <form className="space-y-4 pt-2" onSubmit={submit}>
-          <FormRow label="Title (English) *">
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} required />
-          </FormRow>
-          <FormRow label="Title (Hindi)">
-            <Input value={titleHi} onChange={(e) => setTitleHi(e.target.value)} />
-          </FormRow>
-          <FormRow label="Content">
-            <Textarea rows={3} value={content} onChange={(e) => setContent(e.target.value)} />
-          </FormRow>
-          <FormRow label="Audience">
-            <Select value={audience} onValueChange={setAudience}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {NOTICE_AUDIENCES.map((a) => (
-                  <SelectItem key={a} value={a} className="capitalize">{a}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </FormRow>
-          <div className="flex flex-wrap gap-4 text-sm">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} className="rounded" />
-              Public
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={pinned} onChange={(e) => setPinned(e.target.checked)} className="rounded" />
-              Pinned
-            </label>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input type="checkbox" checked={critical} onChange={(e) => setCritical(e.target.checked)} className="rounded" />
-              Critical
-            </label>
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
-            <Button type="submit" disabled={busy || !title.trim()}>{busy ? 'Publishing…' : 'Publish'}</Button>
-          </div>
-        </form>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
-export function NoticesPage() {
-  const { items, loading, error, reload } = useAdminList<NoticeRow>('/v1/admin/notices?limit=100');
-  return (
-    <AdminPageShell title="Notices" subtitle="Published and draft notices in your scope." actions={<AddNoticeDialog onAdded={reload} />}>
-      {error ? <AdminError message={error} /> : null}
-      <AdminTable columns={['Title', 'Audience', 'Flags', 'Created']} loading={loading} empty="" colSpan={4}>
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={4} message="No notices yet." /> : null}
-        {items.map((n) => (
-          <tr key={n.id} className="hover:bg-muted/30">
-            <td className="px-4 py-3 font-medium">{n.title_en}</td>
-            <td className="px-4 py-3 text-xs capitalize">{n.audience}</td>
-            <td className="px-4 py-3 flex flex-wrap gap-1">
-              {n.pinned ? <Badge variant="secondary">Pinned</Badge> : null}
-              {n.is_critical ? <Badge className="bg-red-100 text-red-800">Critical</Badge> : null}
-              {n.is_public ? <Badge>Public</Badge> : <Badge variant="outline">Internal</Badge>}
-            </td>
-            <td className="px-4 py-3 text-xs text-muted-foreground">
-              {new Date(n.created_at).toLocaleDateString('en-GB')}
-            </td>
-          </tr>
-        ))}
-      </AdminTable>
-    </AdminPageShell>
-  );
-}
-
-/* ——— Gallery ——— */
-interface GalleryRow {
-  id: string;
-  student_name: string;
-  niyam_title_en: string;
-  is_featured: boolean;
-  is_public: boolean;
-  created_at: string;
-}
-
-function GalleryActions({ id, featured, onChanged }: { id: string; featured: boolean; onChanged: () => void }) {
-  const [busy, setBusy] = useState(false);
-  async function toggle() {
-    setBusy(true);
-    try {
-      const res = await fetch(
-        `${(import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''}/v1/gallery/admin/${id}/featured`,
-        {
-          method: 'PATCH',
-          credentials: 'include',
-          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-          body: JSON.stringify({ featured_gallery: !featured }),
-        },
-      );
-      if (!res.ok) throw new Error('feature');
-      toast.success(featured ? 'Removed from Punya Wall.' : 'Featured on Punya Wall.');
-      onChanged();
-    } catch (err) {
-      toast.error('Action failed.', err instanceof Error ? err.message : undefined);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <Button size="sm" variant="outline" disabled={busy} onClick={toggle}>
-      {featured ? 'Unfeature' : 'Feature'}
-    </Button>
-  );
-}
-
-export function GalleryPage() {
-  const { items, loading, error, reload } = useAdminList<GalleryRow>('/v1/admin/gallery?limit=100');
-  return (
-    <AdminPageShell title="Gallery" subtitle="Niyam submissions shared to the public gallery.">
-      {error ? <AdminError message={error} /> : null}
-      <AdminTable columns={['Student', 'Niyam', 'Featured', 'Public', 'Actions']} loading={loading} empty="" colSpan={5}>
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={5} message="No gallery items." /> : null}
-        {items.map((g) => (
-          <tr key={g.id} className="hover:bg-muted/30">
-            <td className="px-4 py-3">{g.student_name}</td>
-            <td className="px-4 py-3 text-xs">{g.niyam_title_en}</td>
-            <td className="px-4 py-3">{g.is_featured ? 'Yes' : '—'}</td>
-            <td className="px-4 py-3">{g.is_public ? 'Yes' : 'No'}</td>
-            <td className="px-4 py-3">
-              <GalleryActions id={g.id} featured={g.is_featured} onChanged={reload} />
-            </td>
           </tr>
         ))}
       </AdminTable>
@@ -1198,44 +1008,16 @@ export function ShikshaksPage() {
   return (
     <AdminPageShell title="Shikshaks" subtitle="Gurujis and Didis teaching batches in your scope.">
       {error ? <AdminError message={error} /> : null}
-      <AdminTable columns={['Name', 'Phone', 'Batches']} loading={loading} empty="" colSpan={3}>
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={3} message="No shikshaks in scope." /> : null}
+      <AdminTable columns={['Name', 'Phone', 'Batches', '']} loading={loading} empty="" colSpan={4}>
+        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={4} message="No shikshaks in scope." /> : null}
         {items.map((s) => (
           <tr key={s.id} className="hover:bg-muted/30">
             <td className="px-4 py-3 font-medium">{s.full_name}</td>
             <td className="px-4 py-3 text-xs">{s.phone}</td>
             <td className="px-4 py-3">{s.batch_count}</td>
-          </tr>
-        ))}
-      </AdminTable>
-    </AdminPageShell>
-  );
-}
-
-interface MsvRow {
-  id: string;
-  student_name: string;
-  student_code: string;
-  status: string;
-  reason: string | null;
-  created_at: string;
-}
-
-export function MsvEnrolmentsPage() {
-  const { items, loading, error } = useAdminList<MsvRow>('/v1/admin/msv-enrolments?limit=100');
-  return (
-    <AdminPageShell title="MSV applications" subtitle="Megh Sanskar Vatika programme applications.">
-      {error ? <AdminError message={error} /> : null}
-      <AdminTable columns={['Student', 'Code', 'Status', 'Reason', 'Applied']} loading={loading} empty="" colSpan={5}>
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={5} message="No MSV applications." /> : null}
-        {items.map((m) => (
-          <tr key={m.id} className="hover:bg-muted/30">
-            <td className="px-4 py-3 font-medium">{m.student_name}</td>
-            <td className="px-4 py-3 font-mono text-xs">{m.student_code}</td>
-            <td className="px-4 py-3 text-xs capitalize">{m.status}</td>
-            <td className="px-4 py-3 text-xs text-muted-foreground">{m.reason ?? '—'}</td>
-            <td className="px-4 py-3 text-xs">
-              {new Date(m.created_at).toLocaleDateString('en-GB')}
+            <td className="px-4 py-3">
+              {/* Renders only for super_admin (SUP-API-03). */}
+              <ImpersonateButton userId={s.id} name={s.full_name} role="shikshak" />
             </td>
           </tr>
         ))}
@@ -1452,50 +1234,6 @@ export function HolidaysPage() {
                 <HolidayActions centreId={centreId} holiday={h} onChanged={reload} />
               ) : null}
             </td>
-          </tr>
-        ))}
-      </AdminTable>
-    </AdminPageShell>
-  );
-}
-
-interface SessionRow {
-  id: string;
-  session_date: string;
-  status: string;
-  topic: string | null;
-  batch_name: string;
-  centre_name: string;
-  present_count: number;
-  total_count: number;
-}
-
-/** Dead export — never routed; label kept consistent until cleanup deletes this page. */
-export function ServiceRequestsPage() {
-  const { items, loading, error } = useAdminList<SessionRow>('/v1/admin/sessions?limit=50');
-  return (
-    <AdminPageShell
-      title="Requests"
-      subtitle="Recent batch sessions — use Enrolments for pending approvals."
-    >
-      {error ? <AdminError message={error} /> : null}
-      <AdminTable
-        columns={['Date', 'Centre', 'Batch', 'Topic', 'Attendance', 'Status']}
-        loading={loading}
-        empty=""
-        colSpan={6}
-      >
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={6} message="No sessions." /> : null}
-        {items.map((s) => (
-          <tr key={s.id} className="hover:bg-muted/30">
-            <td className="px-4 py-3 text-xs">{s.session_date}</td>
-            <td className="px-4 py-3 text-xs">{s.centre_name}</td>
-            <td className="px-4 py-3 text-xs">{s.batch_name}</td>
-            <td className="px-4 py-3 text-xs">{s.topic ?? '—'}</td>
-            <td className="px-4 py-3 text-xs">
-              {s.present_count}/{s.total_count}
-            </td>
-            <td className="px-4 py-3 text-xs capitalize">{s.status}</td>
           </tr>
         ))}
       </AdminTable>
@@ -1734,12 +1472,6 @@ export function ReportsPage() {
         ))}
       </AdminTable>
     </AdminPageShell>
-  );
-}
-
-export function AuditPage() {
-  return (
-    <PunyaAuditTable title="Audit log" subtitle="Punya and manual awards recorded in your scope." />
   );
 }
 
@@ -2067,9 +1799,153 @@ interface SettingRow {
   updated_at: string;
 }
 
+/** Keys the PATCH endpoint accepts (client + platform allowlists). */
+const WRITABLE_SETTING_KEYS = [
+  'gallery_carousel_interval_ms',
+  'eighty_g_enabled',
+  'eighty_g_registration_number',
+  'organization_pan',
+];
+
+/** Inline value editor for one writable setting row (SUP-API-01). */
+function SettingRowView({ s, canEdit, onSaved }: { s: SettingRow; canEdit: boolean; onSaved: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(s.value ?? '');
+  const [busy, setBusy] = useState(false);
+  const writable = canEdit && WRITABLE_SETTING_KEYS.includes(s.key);
+
+  async function save() {
+    setBusy(true);
+    try {
+      await apiPatch('/v1/admin/settings', { key: s.key, value });
+      toast.success(`Setting ${s.key} updated.`);
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      toast.error('Could not update the setting.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <tr className="hover:bg-muted/30">
+      <td className="px-4 py-3 font-mono text-xs">{s.key}</td>
+      <td className="px-4 py-3 text-xs max-w-md">
+        {editing ? (
+          <div className="flex items-center gap-2">
+            <Input value={value} onChange={(e) => setValue(e.target.value)} className="h-8" />
+            <Button size="sm" disabled={busy} onClick={() => void save()}>Save</Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                setValue(s.value ?? '');
+                setEditing(false);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        ) : (
+          <span className="block truncate">{s.value ?? '—'}</span>
+        )}
+      </td>
+      <td className="px-4 py-3 text-xs text-muted-foreground">
+        {new Date(s.updated_at).toLocaleDateString('en-GB')}
+      </td>
+      <td className="px-4 py-3">
+        {writable && !editing ? (
+          <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>Edit</Button>
+        ) : null}
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * Q3 — 80G configuration card. The toggle is server-enforced: enabling
+ * requires both the registration number and the organisation PAN.
+ */
+function EightyGCard({ items, onSaved }: { items: SettingRow[]; onSaved: () => void }) {
+  const get = (key: string) => items.find((s) => s.key === key)?.value ?? '';
+  const enabled = get('eighty_g_enabled').toLowerCase() === 'true';
+  const [regNo, setRegNo] = useState(get('eighty_g_registration_number'));
+  const [pan, setPan] = useState(get('organization_pan'));
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    setRegNo(get('eighty_g_registration_number'));
+    setPan(get('organization_pan'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
+
+  async function patch(key: string, value: string) {
+    await apiPatch('/v1/admin/settings', { key, value });
+  }
+
+  async function saveFields() {
+    setBusy(true);
+    try {
+      await patch('eighty_g_registration_number', regNo.trim());
+      await patch('organization_pan', pan.trim());
+      toast.success('80G details saved.');
+      onSaved();
+    } catch (err) {
+      toast.error('Could not save the 80G details.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggle(next: boolean) {
+    setBusy(true);
+    try {
+      await patch('eighty_g_enabled', next ? 'true' : 'false');
+      toast.success(next ? '80G receipts enabled.' : '80G receipts disabled.', next
+        ? 'New captured donations will be stamped 80G-eligible.'
+        : 'Existing receipts are kept; new donations will not claim 80G.');
+      onSaved();
+    } catch (err) {
+      toast.error('Could not change the 80G toggle.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card className="max-w-xl p-5">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold">80G donation receipts</p>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Off by default. Enabling requires the 80G registration number and organisation PAN —
+            both are printed on every eligible receipt. Turning it off keeps existing receipts.
+          </p>
+        </div>
+        <Switch checked={enabled} disabled={busy} onCheckedChange={(v) => void toggle(v)} />
+      </div>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div>
+          <Label className="text-xs font-medium">80G registration number</Label>
+          <Input value={regNo} onChange={(e) => setRegNo(e.target.value)} className="mt-1" />
+        </div>
+        <div>
+          <Label className="text-xs font-medium">Organisation PAN</Label>
+          <Input value={pan} onChange={(e) => setPan(e.target.value)} className="mt-1" />
+        </div>
+      </div>
+      <Button size="sm" className="mt-3" disabled={busy} onClick={() => void saveFields()}>
+        Save 80G details
+      </Button>
+    </Card>
+  );
+}
+
 export function SettingsPage() {
   const { user } = useAuth();
-  const { items, loading, error } = useAdminList<SettingRow>('/v1/admin/settings');
+  const { items, loading, error, reload } = useAdminList<SettingRow>('/v1/admin/settings');
   const canEdit = user?.role === 'super_admin';
   return (
     <AdminPageShell
@@ -2082,16 +1958,11 @@ export function SettingsPage() {
       }
     >
       {error ? <AdminError message={error} /> : null}
-      <AdminTable columns={['Key', 'Value', 'Updated']} loading={loading} empty="" colSpan={3}>
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={3} message="No settings." /> : null}
+      {canEdit ? <EightyGCard items={items} onSaved={() => void reload()} /> : null}
+      <AdminTable columns={['Key', 'Value', 'Updated', '']} loading={loading} empty="" colSpan={4}>
+        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={4} message="No settings." /> : null}
         {items.map((s) => (
-          <tr key={s.key} className="hover:bg-muted/30">
-            <td className="px-4 py-3 font-mono text-xs">{s.key}</td>
-            <td className="px-4 py-3 text-xs max-w-md truncate">{s.value ?? '—'}</td>
-            <td className="px-4 py-3 text-xs text-muted-foreground">
-              {new Date(s.updated_at).toLocaleDateString('en-GB')}
-            </td>
-          </tr>
+          <SettingRowView key={s.key} s={s} canEdit={canEdit} onSaved={() => void reload()} />
         ))}
       </AdminTable>
     </AdminPageShell>

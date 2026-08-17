@@ -12,6 +12,7 @@ import type {
   PendingAttendanceOp,
   PendingCheckInOp,
   PendingCheckOutOp,
+  PendingNiyamSubmissionOp,
   QueuedOp,
 } from "./types";
 
@@ -37,6 +38,17 @@ function keyFromCheckout(op: QueuedOp): SessionKey | null {
   const p = op.payload as PendingCheckOutOp;
   if (!p?.batch_id || !p?.session_date) return null;
   return sessionKey(p.batch_id, p.session_date);
+}
+
+/**
+ * A niyam submission whose proof is still in the media-upload queue. Sending it
+ * now would post an empty `url` and the server would reject a submission whose
+ * proof is merely a few seconds behind. The media queue clears `pending_upload`
+ * as each file lands (and drops it after MAX_ATTEMPTS), so this always resolves.
+ */
+export function niyamMediaPending(op: QueuedOp): boolean {
+  const p = op.payload as PendingNiyamSubmissionOp;
+  return (p?.media ?? []).some((m) => m?.pending_upload === true);
 }
 
 /**
@@ -96,6 +108,10 @@ export function planDrain(
         // Check-out must not close a session before its marks arrive.
         if (pendingAttendanceKeys.has(k)) return false;
         return true;
+      }
+      if (queue === QUEUE_KEYS.niyam_submissions) {
+        // Hold until every proof file has a real URL (or has been dropped).
+        return !niyamMediaPending(op);
       }
       return true;
     });

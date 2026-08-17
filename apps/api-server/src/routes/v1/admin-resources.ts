@@ -51,6 +51,7 @@ import {
   MANUAL_AWARD_FEATURE_KEY,
 } from "../../lib/punya-award-limits";
 import { isClientSettingKey } from "../../lib/client-settings";
+import { isPlatformSettingKey, getEightyGConfig } from "../../lib/platform-settings";
 import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
 import { rejectionWindowFields } from "../../lib/niyam-constants";
 import { signUploadUrl } from "../../lib/file-tokens";
@@ -1430,7 +1431,9 @@ const patchSettingSchema = z.object({
   value: z.string().max(4000),
 });
 
-/* PATCH /v1/admin/settings — super_admin only; allowlisted client keys only */
+/* PATCH /v1/admin/settings — super_admin only; allowlisted client + platform
+   keys. The 80G toggle enforces Q3: enabling requires BOTH the registration
+   number and the organisation PAN to already be set. */
 router.patch("/settings", async (req: Request, res: Response) => {
   if (req.authUser!.role !== "super_admin") {
     fail(res, 403, "ERR_FORBIDDEN", "Only super admins can update client settings.");
@@ -1443,9 +1446,30 @@ router.patch("/settings", async (req: Request, res: Response) => {
     fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid settings payload.");
     return;
   }
-  if (!isClientSettingKey(body.key)) {
+  if (!isClientSettingKey(body.key) && !isPlatformSettingKey(body.key)) {
     fail(res, 422, "ERR_VALIDATION_FAILED", "That settings key is not writable via this endpoint.");
     return;
+  }
+
+  if (body.key === "eighty_g_enabled") {
+    const value = body.value.trim().toLowerCase();
+    if (value !== "true" && value !== "false") {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "eighty_g_enabled must be 'true' or 'false'.");
+      return;
+    }
+    body = { ...body, value };
+    if (value === "true") {
+      const config = await getEightyGConfig();
+      if (!config.registrationNumber || !config.organizationPan) {
+        fail(
+          res,
+          422,
+          "ERR_VALIDATION_FAILED",
+          "Set the 80G registration number and organisation PAN first — receipts must carry both before 80G can be enabled.",
+        );
+        return;
+      }
+    }
   }
 
   const now = new Date();

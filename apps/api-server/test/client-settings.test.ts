@@ -66,3 +66,63 @@ describe("client settings", () => {
       .send({ key: "gallery_carousel_interval_ms", value: "2000" });
   });
 });
+
+describe("80G platform settings (Q3)", () => {
+  async function patchSetting(token: string, key: string, value: string) {
+    return request(app).patch("/v1/admin/settings").set(auth(token)).send({ key, value });
+  }
+
+  it("rejects a non-boolean eighty_g_enabled value", async () => {
+    const admin = await loginAs("super_admin");
+    const res = await patchSetting(admin.token, "eighty_g_enabled", "yes please");
+    expect(res.status).toBe(422);
+    expect(res.body.error?.message).toContain("'true' or 'false'");
+  });
+
+  it("refuses to enable 80G until both registration number and PAN are set, then allows it", async () => {
+    const admin = await loginAs("super_admin");
+
+    // Clean slate: disabled, both fields blank (blank normalises to unset).
+    for (const [key, value] of [
+      ["eighty_g_enabled", "false"],
+      ["eighty_g_registration_number", ""],
+      ["organization_pan", ""],
+    ] as const) {
+      const r = await patchSetting(admin.token, key, value);
+      expect(r.status).toBe(200);
+    }
+
+    const blocked = await patchSetting(admin.token, "eighty_g_enabled", "true");
+    expect(blocked.status).toBe(422);
+    expect(blocked.body.error?.code).toBe("ERR_VALIDATION_FAILED");
+    expect(blocked.body.error?.message).toContain("80G registration number and organisation PAN");
+
+    // Half the pair is still not enough.
+    expect((await patchSetting(admin.token, "eighty_g_registration_number", "AAATM1234FF20214")).status).toBe(200);
+    const stillBlocked = await patchSetting(admin.token, "eighty_g_enabled", "true");
+    expect(stillBlocked.status).toBe(422);
+
+    // Full pair → toggle accepted (value normalised to lowercase 'true').
+    expect((await patchSetting(admin.token, "organization_pan", "AAATM1234F")).status).toBe(200);
+    const enabled = await patchSetting(admin.token, "eighty_g_enabled", "TRUE");
+    expect(enabled.status).toBe(200);
+    expect(enabled.body.data.value).toBe("true");
+
+    // Turning it off never requires the pair.
+    const disabled = await patchSetting(admin.token, "eighty_g_enabled", "false");
+    expect(disabled.status).toBe(200);
+
+    // Leave the shared dev DB the way we found it: toggle off, fields blank.
+    await patchSetting(admin.token, "eighty_g_registration_number", "");
+    await patchSetting(admin.token, "organization_pan", "");
+  });
+
+  it("never exposes platform 80G keys on the public settings endpoint", async () => {
+    const res = await request(app).get("/v1/settings/public");
+    expect(res.status).toBe(200);
+    const keys = (res.body.data.items as Array<{ key: string }>).map((i) => i.key);
+    expect(keys).not.toContain("organization_pan");
+    expect(keys).not.toContain("eighty_g_registration_number");
+    expect(keys).not.toContain("eighty_g_enabled");
+  });
+});

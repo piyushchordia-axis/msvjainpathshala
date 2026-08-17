@@ -34,11 +34,15 @@ vi.mock("@/lib/api", () => ({ apiPost: (...args: unknown[]) => apiPost(...args) 
 
 import { QUEUE_KEYS } from "../queue-keys";
 import { clearAllQueues, readQueue } from "../storage";
+import { planDrain } from "../drain";
+import type { PendingNiyamSubmissionOp } from "../types";
 import {
   enqueueNiyamSubmission,
   enqueueShivirScan,
   drainQueues,
   classifyTransportStatus,
+  resolveNiyamMediaUrl,
+  dropNiyamMedia,
   MAX_OPS_PER_BATCH,
 } from "../sync-engine";
 
@@ -184,5 +188,72 @@ describe("classifyTransportStatus", () => {
 
   it("falls back to `status` for non-ApiError shapes", () => {
     expect(classifyTransportStatus({ status: 500 })).toBe(500);
+  });
+});
+
+/**
+ * Offline niyam proof (XC-MOB-02 residual).
+ *
+ * The submission producer shipped, but proof media still went straight to
+ * apiUpload: out of signal that threw, the item went `failed`, and `mediaReady`
+ * then DISABLED Submit — so the parent lost the photo and could not submit at
+ * all. Media now parks in the durable upload queue, the submission is enqueued
+ * immediately carrying local URIs, and planDrain holds it until the URLs land.
+ */
+describe("offline niyam proof media", () => {
+  it("holds the submission while a proof is still pending upload", async () => {
+    const opId = await enqueueNiyamSubmission({
+      niyam_id: "11111111-1111-4111-8111-111111111111",
+      student_id: "22222222-2222-4222-8222-222222222222",
+      media: [
+        { url: "", kind: "photo", local_uri: "file:///a.jpg", media_upload_id: "m1", pending_upload: true },
+      ],
+    });
+
+    const [op] = await readQueue<PendingNiyamSubmissionOp>(QUEUE_KEYS.niyam_submissions);
+    expect(planDrain({ [QUEUE_KEYS.niyam_submissions]: [op!] } as never)).toHaveLength(0);
+
+    await resolveNiyamMediaUrl({
+      submission_op_id: opId,
+      media_upload_id: "m1",
+      url: "https://x/niyam-proof/a.jpg",
+    });
+
+    const [after] = await readQueue<PendingNiyamSubmissionOp>(QUEUE_KEYS.niyam_submissions);
+    expect(after!.payload.media![0]!.pending_upload).toBe(false);
+    expect(after!.payload.media![0]!.url).toBe("https://x/niyam-proof/a.jpg");
+    // Local URI is cleared so a synced op stops referencing a file that may be gone.
+    expect(after!.payload.media![0]!.local_uri).toBeUndefined();
+    expect(planDrain({ [QUEUE_KEYS.niyam_submissions]: [after!] } as never)).toHaveLength(1);
+  });
+
+  it("releases the submission when a proof can never be uploaded", async () => {
+    // Escape hatch, mirroring the FAILED-checkin release: one unsendable photo
+    // must not strand the submission forever.
+    const opId = await enqueueNiyamSubmission({
+      niyam_id: "11111111-1111-4111-8111-111111111111",
+      student_id: "22222222-2222-4222-8222-222222222222",
+      media: [
+        { url: "https://x/ok.jpg", kind: "photo" },
+        { url: "", kind: "video", local_uri: "file:///b.mp4", media_upload_id: "m2", pending_upload: true },
+      ],
+    });
+
+    await dropNiyamMedia({ submission_op_id: opId, media_upload_id: "m2" });
+
+    const [after] = await readQueue<PendingNiyamSubmissionOp>(QUEUE_KEYS.niyam_submissions);
+    expect(after!.payload.media).toHaveLength(1);
+    expect(after!.payload.media![0]!.url).toBe("https://x/ok.jpg");
+    expect(planDrain({ [QUEUE_KEYS.niyam_submissions]: [after!] } as never)).toHaveLength(1);
+  });
+
+  it("leaves a fully-uploaded submission drainable", async () => {
+    await enqueueNiyamSubmission({
+      niyam_id: "11111111-1111-4111-8111-111111111111",
+      student_id: "22222222-2222-4222-8222-222222222222",
+      media: [{ url: "https://x/a.jpg", kind: "photo" }],
+    });
+    const [op] = await readQueue<PendingNiyamSubmissionOp>(QUEUE_KEYS.niyam_submissions);
+    expect(planDrain({ [QUEUE_KEYS.niyam_submissions]: [op!] } as never)).toHaveLength(1);
   });
 });

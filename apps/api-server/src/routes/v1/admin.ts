@@ -28,7 +28,7 @@ import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
-import { auditFromReq } from "../../lib/audit";
+import { auditFromReq, writeAudit } from "../../lib/audit";
 import { materialiseHomeworkForStudentBatch } from "../../lib/homework-materialise";
 import { signAccessToken, generateRefreshToken, verifyAccessToken, hashSecret } from "../../lib/tokens";
 import { setAuthCookies, setImpersonationCookies, clearAuthCookies } from "../../lib/cookies";
@@ -189,14 +189,26 @@ router.post("/impersonate/:userId", requireRole("super_admin"), async (req: Requ
 
   const subject = toSessionUser(target);
   setAuthCookies(res, subject, access.token, access.expiresAt, refresh.token, refresh.expiresAt);
-  setImpersonationCookies(res, req.authUser!.full_name, refresh.expiresAt);
+  setImpersonationCookies(res, req.authUser!.full_name, req.authUser!.id, refresh.expiresAt);
 
+  // TWO audit entries (CLAUDE.md impersonation rule): one on the admin's own
+  // trail, one on the subject's — both identities' histories must show it.
   await auditFromReq(req, {
     action: "config_change",
     entityKind: "impersonation",
     entityId: target.id,
     summary: `Started impersonating ${target.full_name} (${target.role}).`,
     metadata: { subject_id: target.id, subject_role: target.role },
+  });
+  await writeAudit({
+    actorId: target.id,
+    actorRole: target.role as Role,
+    action: "config_change",
+    entityKind: "impersonation",
+    entityId: req.authUser!.id,
+    summary: `Session impersonated by ${req.authUser!.full_name} (super_admin).`,
+    metadata: { impersonator_id: req.authUser!.id },
+    ip: req.ip ?? null,
   });
 
   ok(res, {

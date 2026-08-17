@@ -13,6 +13,10 @@ import {
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { apiUpload, ApiError } from "@/lib/api";
+import {
+  enqueueProofMediaUpload,
+  NIYAM_UPLOAD_FOLDER,
+} from "@/lib/offline/media-upload-queue";
 import { fileTooLargeMessage, rejectIfOverUploadLimit } from "@/lib/upload-size-guard";
 import {
   VIDEO_MAX_DURATION_SEC,
@@ -195,66 +199,91 @@ export function NiyamProofPicker({
         mime,
       };
       onChange([...valueRef.current, placeholder]);
-      try {
-        const uploaded = await apiUpload({
-          uri: uploadUri,
-          name,
-          type: mime,
-          ...(blob ? { blob } : {}),
-        });
-        onChange(
-          valueRef.current.map((m) =>
-            m.localId === localId
+
+      // Route through the durable media queue instead of a bare apiUpload. The
+      // direct call failed outright out of signal, marked the item `failed`, and
+      // `mediaReady` then disabled Submit — so a parent who photographed proof
+      // offline lost the photo AND could not submit at all. Online this still
+      // uploads inline and returns `uploaded`, so nothing changes on a good link.
+      const result = await enqueueProofMediaUpload({
+        uri: uploadUri,
+        name,
+        mime,
+        sizeBytes,
+        hi,
+        folder: NIYAM_UPLOAD_FOLDER,
+      });
+
+      if (result.status === "rejected") {
+        onChange(valueRef.current.filter((m) => m.localId !== localId));
+        Alert.alert(hi ? "फ़ाइल बहुत बड़ी" : "File too large", result.message);
+        return;
+      }
+
+      onChange(
+        valueRef.current.map((m) =>
+          m.localId === localId
+            ? result.status === "uploaded"
               ? {
                   ...m,
-                  url: uploaded.url,
-                  mime: uploaded.content_type || mime,
-                  size_bytes: uploaded.size,
+                  url: result.remote_url,
+                  mime: result.mime ?? mime,
+                  size_bytes: result.size_bytes ?? m.size_bytes,
                   status: "ready" as const,
                   error: undefined,
+                  mediaUploadId: result.id,
                 }
-              : m,
-          ),
-        );
-      } catch (err) {
-        const message = uploadErrorMessage(err);
-        onChange(
-          valueRef.current.map((m) =>
-            m.localId === localId
-              ? { ...m, status: "failed" as const, error: message }
-              : m,
-          ),
-        );
-      }
+              : {
+                  ...m,
+                  status: "queued" as const,
+                  error: undefined,
+                  mediaUploadId: result.id,
+                }
+            : m,
+        ),
+      );
     },
-    [hi, onChange, uploadErrorMessage],
+    [hi, onChange],
   );
 
   async function retry(item: ProofMediaItem) {
     if (!item.previewUri) return;
     patch(item.localId, { status: "uploading", error: undefined });
-    try {
-      const mime = guessMime(item.kind, item.mime);
-      const name =
-        item.kind === "audio"
-          ? "recording.m4a"
-          : item.kind === "video"
-            ? "proof.mp4"
-            : "proof.jpg";
-      const uploaded = await uploadUri(ensureFileUri(item.previewUri), name, mime);
-      patch(item.localId, {
-        url: uploaded.url,
-        mime: uploaded.mime,
-        size_bytes: uploaded.size,
-        status: "ready",
-        error: undefined,
-      });
-    } catch (err) {
-      patch(item.localId, {
-        status: "failed",
-        error: uploadErrorMessage(err),
-      });
+    const mime = guessMime(item.kind, item.mime);
+    const name =
+      item.kind === "audio"
+        ? "recording.m4a"
+        : item.kind === "video"
+          ? "proof.mp4"
+          : "proof.jpg";
+    const uri = ensureFileUri(item.previewUri);
+    // Same queue as the first attempt — a manual retry that is still offline
+    // parks the file durably rather than dropping back to `failed`.
+    const result = await enqueueProofMediaUpload({
+      uri,
+      name,
+      mime,
+      sizeBytes: item.size_bytes ?? (await resolveLocalByteSize(uri)),
+      hi,
+      folder: NIYAM_UPLOAD_FOLDER,
+    });
+    if (result.status === "rejected") {
+      patch(item.localId, { status: "failed", error: result.message });
+      return;
     }
+    patch(
+      item.localId,
+      result.status === "uploaded"
+        ? {
+            url: result.remote_url,
+            mime: result.mime ?? mime,
+            size_bytes: result.size_bytes ?? item.size_bytes,
+            status: "ready",
+            error: undefined,
+            mediaUploadId: result.id,
+          }
+        : { status: "queued", error: undefined, mediaUploadId: result.id },
+    );
   }
 
   async function pickFromLibrary(media: "images" | "videos") {
@@ -568,11 +597,17 @@ export function NiyamProofPicker({
                 ? hi
                   ? "अपलोड हो रहा है…"
                   : "Uploading…"
-                : item.status === "failed"
-                  ? item.error ?? (hi ? "विफल" : "Failed")
-                  : hi
-                    ? "तैयार"
-                    : "Ready"}
+                : item.status === "queued"
+                  ? // Saved on the device — do NOT say "Ready", which reads as
+                    // "already sent" for a file that has not left the phone.
+                    hi
+                    ? "ऑफ़लाइन सहेजा गया — सिंक होगा"
+                    : "Saved offline — will sync"
+                  : item.status === "failed"
+                    ? item.error ?? (hi ? "विफल" : "Failed")
+                    : hi
+                      ? "तैयार"
+                      : "Ready"}
             </Body>
           </View>
           {item.status === "failed" ? (

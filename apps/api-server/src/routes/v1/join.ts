@@ -632,15 +632,17 @@ async function safeUnlink(filePath: string | undefined): Promise<void> {
 }
 
 router.post("/uploads", uploadMultipart.single("file"), async (req: Request, res: Response) => {
-  // Unauthenticated multipart writing to object storage — direct, unbounded
-  // spend without a cap. Registrations need a photo + a payment screenshot, so
-  // the budget stays comfortable for real families.
-  if (await rateLimit(`join:upload:ip:${req.ip ?? "unknown"}`, 30, 3600)) {
-    fail(res, 429, "ERR_RATE_LIMITED", "Too many uploads just now — please try again later.");
-    return;
-  }
   const tempPath = req.file?.path;
   try {
+    // Unauthenticated multipart writing to object storage — direct, unbounded
+    // spend without a cap. Registrations need a photo + a payment screenshot, so
+    // the budget stays comfortable for real families. Inside the try: multer has
+    // already spooled the file by now, so returning before the `finally` below
+    // orphaned a temp file on every throttled request.
+    if (await rateLimit(`join:upload:ip:${req.ip ?? "unknown"}`, 30, 3600)) {
+      fail(res, 429, "ERR_RATE_LIMITED", "Too many uploads just now — please try again later.");
+      return;
+    }
     const file = req.file;
     if (!file || !tempPath) {
       fail(

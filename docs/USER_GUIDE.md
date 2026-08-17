@@ -96,7 +96,7 @@ Mark attendance, approve Niyams, create homework, open web admin.
 
 ### Who you are
 
-A learner with your **own** OTP login (`student` role), typically age 13+ for full course actions.
+A learner with your **own** OTP login (`student` role), age 8+ for full course actions.
 
 ### Home
 
@@ -110,7 +110,7 @@ Same learner flows as a parent acting for one child: attendance history, Niyam, 
 
 - No Children tab / no siblings.
 - No gallery consent control (parent owns that).
-- Course progress may be blocked if under 13.
+- Course progress may be blocked if under 8, or if your date of birth is not on record — your parent can update it for you either way.
 
 ### Note
 

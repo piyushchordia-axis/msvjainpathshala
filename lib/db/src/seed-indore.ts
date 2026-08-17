@@ -113,13 +113,26 @@ function pickName(i: number, pool: string[]): string {
   return pool[i % pool.length]!;
 }
 
+/**
+ * Mid-band DOB so age_group stays consistent with AGE_GROUP_META.
+ *
+ * Derived from the CURRENT year, not hardcoded birth years: absolute years were
+ * band-correct the day they were written and then rotted by one year every year,
+ * so by 2026 every seeded `bal` child read as 9–11 against a 5–8 band. Anything
+ * that derives an age group from dob (or gates on age) then disagreed with the
+ * stored column.
+ */
 function dobForAgeGroup(ageGroup: AgeGroup, salt: number): string {
-  // Rough mid-band DOBs so age_group stays consistent with AGE_GROUP_META.
-  const year =
-    ageGroup === "bal" ? 2017 - (salt % 3) : ageGroup === "kishor" ? 2013 - (salt % 3) : 2009 - (salt % 3);
-  const month = String((salt % 12) + 1).padStart(2, "0");
-  const day = String((salt % 27) + 1).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+  // Second year of each band, minus 0–2 — stays inside the band either way.
+  const bandBase = ageGroup === "bal" ? 6 : ageGroup === "kishor" ? 10 : 14;
+  const age = bandBase + (salt % 3);
+  const month = (salt % 12) + 1;
+  const day = (salt % 27) + 1;
+  // Birthday already passed this year, so completed age is exactly `age`.
+  const now = new Date();
+  const bornThisYearAlready = month < now.getMonth() + 1;
+  const year = now.getFullYear() - age - (bornThisYearAlready ? 0 : 1);
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
 export type IndoreSeedResult = {

@@ -68,6 +68,13 @@ export const device_sessions = pgTable(
     device_id: text("device_id").notNull(),
     platform: text("platform").notNull(),
     refresh_token_hash: text("refresh_token_hash").notNull(),
+    /**
+     * Groups every rotation of one login. Refresh revokes the current row and
+     * inserts a successor in the same family, so a consumed token stays on
+     * record: presenting a revoked hash whose family still has live rows proves
+     * a second copy exists, and the whole family is cut.
+     */
+    family_id: uuid("family_id").notNull().defaultRandom(),
     expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
     last_used_at: timestamp("last_used_at", { withTimezone: true }),
     revoked_at: timestamp("revoked_at", { withTimezone: true }),
@@ -75,6 +82,12 @@ export const device_sessions = pgTable(
   },
   (t) => ({
     user_idx: index("idx_device_sessions_user").on(t.user_id),
+    user_active_idx: index("idx_device_sessions_user_active").on(
+      t.user_id,
+      t.revoked_at,
+      t.expires_at,
+    ),
+    family_idx: index("idx_device_sessions_family").on(t.family_id),
   }),
 );
 

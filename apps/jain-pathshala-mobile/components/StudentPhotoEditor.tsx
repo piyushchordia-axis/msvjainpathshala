@@ -80,7 +80,11 @@ export function StudentPhotoEditor({
       onPress={promptPick}
       loading={busy}
       disabled={busy}
-      style={inlineCta ? undefined : { minWidth: 140 }}
+      // Inline, the button shares a row with the name: full-width padding left
+      // the name ~50dp and wrapped it onto a second line, so go compact and let
+      // the name have the space.
+      compact={inlineCta}
+      style={inlineCta ? { flexShrink: 0 } : { minWidth: 140 }}
     />
   );
 
@@ -152,7 +156,9 @@ export function StudentPhotoEditor({
             <>
               <Row style={{ justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                 <View style={{ flex: 1, minWidth: 0 }}>
-                  <Title style={{ fontSize: 17 }}>{name}</Title>
+                  <Title style={{ fontSize: 17 }} numberOfLines={1}>
+                    {name}
+                  </Title>
                 </View>
                 {ctaButton}
               </Row>

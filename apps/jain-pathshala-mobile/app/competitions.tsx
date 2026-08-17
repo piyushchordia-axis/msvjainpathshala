@@ -46,8 +46,10 @@ export default function CompetitionsScreen() {
             err instanceof Error ? err.message : hi ? "पंजीकरण विफल रहा।" : "Registration failed.";
 
           if (status === 409) {
-            // Already registered — treat as success state.
-            setRegistered((prev) => ({ ...prev, [id]: true }));
+            // Already registered — treat as success state. Must use regKey: a
+            // bare `[id]` write is never read back by the (competition, child)
+            // lookup below, so the flip silently did nothing.
+            setRegistered((prev) => ({ ...prev, [regKey(id, activeStudentId)]: true }));
             title = hi ? "पहले से पंजीकृत" : "Already registered";
             message = hi
               ? "आप इस प्रतियोगिता के लिए पहले से पंजीकृत हैं।"

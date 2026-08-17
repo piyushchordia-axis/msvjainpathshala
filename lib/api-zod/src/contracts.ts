@@ -116,9 +116,10 @@ export function ageYearsFromDob(dob: string | Date, on: Date = new Date()): numb
 }
 
 /**
- * Two distinct age gates. They are deliberately separate constants: a child may
- * be old enough to hold their own login well before they are old enough to be
- * the authoritative writer of their own progress record.
+ * Two age gates, kept as separate constants even while they hold the same
+ * value: they gate different capabilities (holding a login vs being the
+ * authoritative writer of your own progress record) and have moved
+ * independently before, so collapsing them into one would lose that seam.
  *
  * Both are enforced server-side (join provisioning / auth + course services),
  * never only on the client. A missing or unparseable DOB fails both.
@@ -129,10 +130,12 @@ export const MIN_STUDENT_LOGIN_AGE = 8;
 
 /**
  * Q4 — minimum age for student-view capabilities (writing one's own course
- * progress). The threshold previously lived as an inline `13` at two call sites
- * with divergent return shapes; this is the single source of truth.
+ * progress). Lowered 13 → 8 in August 2026 to match the login age: a child old
+ * enough to sign in on their own is treated as old enough to tick off their own
+ * progress. Callers must build their messages from this constant, never retype
+ * the number.
  */
-export const MIN_STUDENT_VIEW_AGE = 13;
+export const MIN_STUDENT_VIEW_AGE = 8;
 
 function meetsAge(dob: string | Date | null | undefined, min: number, on: Date): boolean {
   if (!dob) return false;

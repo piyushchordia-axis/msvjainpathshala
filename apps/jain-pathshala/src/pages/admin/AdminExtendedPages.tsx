@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import {
   AdminEmptyRow,
   AdminError,
+  AdminLoadMore,
   AdminPageShell,
   AdminTable,
 } from '@/components/admin/AdminPageShell';
@@ -714,10 +715,24 @@ interface DonationRow {
 }
 
 export function DonationsPage() {
-  const { items: campaigns, loading: cLoad, error: cErr } =
-    useAdminList<CampaignRow>('/v1/admin/donations/campaigns');
-  const { items: donations, loading: dLoad, error: dErr } =
-    useAdminList<DonationRow>('/v1/admin/donations?limit=100');
+  const {
+    items: campaigns,
+    loading: cLoad,
+    error: cErr,
+    hasMore: cMore,
+    loadingMore: cMoreLoading,
+    loadMore: cLoadMore,
+  } = useAdminList<CampaignRow>('/v1/admin/donations/campaigns');
+  // XC-WEB-02 — this list stopped at the first 100 rows with no footer and no
+  // count, so the admin total silently under-reported against the bank.
+  const {
+    items: donations,
+    loading: dLoad,
+    error: dErr,
+    hasMore: dMore,
+    loadingMore: dMoreLoading,
+    loadMore: dLoadMore,
+  } = useAdminList<DonationRow>('/v1/admin/donations?limit=100');
 
   return (
     <AdminPageShell title="Donations" subtitle="Campaigns and captured donations.">
@@ -725,7 +740,19 @@ export function DonationsPage() {
       <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
         Campaigns
       </h3>
-      <AdminTable columns={['Name', 'City', 'Raised', 'Target', 'Public']} loading={cLoad} empty="" colSpan={5}>
+      <AdminTable
+        columns={['Name', 'City', 'Raised', 'Target', 'Public']}
+        loading={cLoad}
+        empty=""
+        colSpan={5}
+        footer={
+          <AdminLoadMore
+            hasMore={cMore}
+            loadingMore={cMoreLoading}
+            onLoadMore={() => void cLoadMore()}
+          />
+        }
+      >
         {campaigns.length === 0 && !cLoad ? <AdminEmptyRow colSpan={5} message="No campaigns." /> : null}
         {campaigns.map((c) => (
           <tr key={c.id}>
@@ -739,14 +766,29 @@ export function DonationsPage() {
       </AdminTable>
 
       {dErr ? <AdminError message={dErr} /> : null}
-      <h3 className="mt-8 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        Donations
-      </h3>
+      <div className="mt-8 flex items-baseline justify-between">
+        <h3 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          Donations
+        </h3>
+        {donations.length > 0 ? (
+          <span className="text-xs text-muted-foreground">
+            Showing {donations.length} donation{donations.length !== 1 ? 's' : ''}
+            {dMore ? ' — load more for the rest' : ''}.
+          </span>
+        ) : null}
+      </div>
       <AdminTable
         columns={['Donor', 'Amount', 'Purpose', 'Campaign', '80G', 'Status', 'Date']}
         loading={dLoad}
         empty=""
         colSpan={7}
+        footer={
+          <AdminLoadMore
+            hasMore={dMore}
+            loadingMore={dMoreLoading}
+            onLoadMore={() => void dLoadMore()}
+          />
+        }
       >
         {donations.length === 0 && !dLoad ? <AdminEmptyRow colSpan={7} message="No donations." /> : null}
         {donations.map((d) => (
@@ -791,39 +833,56 @@ export function QueuesPage() {
   const { user } = useAuth();
   const [stats, setStats] = useState<QueueStatRow[]>([]);
   const [dlq, setDlq] = useState<DlqRow[]>([]);
-  const [selectedQueue, setSelectedQueue] = useState('notifications.fanout');
+  // No hardcoded default — 'notifications.fanout' is a SPEC queue that never
+  // shipped, so the old initial DLQ fetch always targeted a queue that does
+  // not exist (SUP-DSN-01). Select the first real queue once stats arrive.
+  const [selectedQueue, setSelectedQueue] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  async function load() {
-    setLoading(true);
-    setError(null);
+  useEffect(() => {
+    if (user?.role !== 'super_admin') return;
+    void (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const s = await apiGet<{ items: QueueStatRow[] }>('/v1/admin/queues/stats');
+        const items = s?.items ?? [];
+        setStats(items);
+        if (items[0]) setSelectedQueue((cur) => cur ?? items[0].queue_name);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Could not load queues.');
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [user?.role]);
+
+  async function loadDlq(queue: string) {
     try {
-      const s = await apiGet<{ items: QueueStatRow[] }>('/v1/admin/queues/stats');
-      setStats(s?.items ?? []);
       const d = await apiGet<{ items: DlqRow[] }>(
-        `/v1/admin/queues/${encodeURIComponent(selectedQueue)}/dlq`,
+        `/v1/admin/queues/${encodeURIComponent(queue)}/dlq`,
       );
       setDlq(d?.items ?? []);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load queues.');
-    } finally {
-      setLoading(false);
+      setError(err instanceof Error ? err.message : 'Could not load the dead-letter queue.');
     }
   }
 
   useEffect(() => {
-    if (user?.role === 'super_admin') void load();
+    if (user?.role !== 'super_admin' || !selectedQueue) return;
+    void loadDlq(selectedQueue);
   }, [user?.role, selectedQueue]);
 
   async function replay(jobId: string) {
+    if (!selectedQueue) return;
     try {
       await apiPost(
         `/v1/admin/queues/${encodeURIComponent(selectedQueue)}/dlq/${encodeURIComponent(jobId)}/replay`,
         {},
       );
       toast.success('Job replayed.');
-      void load();
+      void loadDlq(selectedQueue);
     } catch (err) {
       toast.error('Replay failed.', err instanceof ApiError ? err.message : undefined);
     }
@@ -868,7 +927,7 @@ export function QueuesPage() {
       </AdminTable>
 
       <h3 className="mt-8 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-        DLQ: {selectedQueue}
+        DLQ: {selectedQueue ?? '—'}
       </h3>
       <AdminTable columns={['Job ID', 'Error', 'Failed', 'Actions']} loading={loading} empty="" colSpan={4}>
         {dlq.length === 0 && !loading ? (

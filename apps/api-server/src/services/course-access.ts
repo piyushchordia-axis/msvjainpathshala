@@ -2,10 +2,9 @@
  * Shared scope checks for online course routes and sync/batch handlers.
  */
 import type { User } from "@workspace/db";
-import { meetsStudentViewAge } from "@workspace/api-zod";
 import { hasMinRole } from "../lib/roles";
 import { resolveAdminScope, inBatchWriteScope } from "../lib/scope";
-import { loadActiveStudent } from "../lib/course-visibility";
+import { loadActiveStudent, studentViewAgeRefusal } from "../lib/course-visibility";
 
 export type CourseAccessDenied = {
   ok: false;
@@ -15,7 +14,11 @@ export type CourseAccessDenied = {
 
 export type CourseAccessOk = { ok: true };
 
-/** Parent / student self / shikshak+ inBatchWriteScope — same as online progress write. */
+/**
+ * Parent / student self (Q4 age gate) / shikshak+ inBatchWriteScope — the same
+ * rules as the online progress write, sharing one age-gate helper so the offline
+ * path can never accept a mark the online path would refuse.
+ */
 export async function assertCourseProgressWriteAccess(
   actor: User,
   studentId: string,
@@ -48,11 +51,12 @@ export async function assertCourseProgressWriteAccess(
         message: "You can only update your own course progress.",
       };
     }
-    if (!meetsStudentViewAge(stu.dob)) {
+    const refusal = studentViewAgeRefusal(stu.dob);
+    if (refusal) {
       return {
         ok: false,
         code: "ERR_FORBIDDEN",
-        message: "Student view requires age 13 or older.",
+        message: refusal,
       };
     }
     return { ok: true };

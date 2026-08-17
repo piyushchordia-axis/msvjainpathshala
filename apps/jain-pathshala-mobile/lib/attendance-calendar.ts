@@ -21,6 +21,8 @@ export type CalendarDayCell = {
   onLeave: boolean;
   isHoliday: boolean;
   holidayReason: string | null;
+  /** Today in Asia/Kolkata — drawn as a ring so the month has an anchor. */
+  isToday: boolean;
 };
 
 export type MonthListEntry = {
@@ -35,7 +37,15 @@ export type MonthListEntry = {
 };
 
 export function currentMonthIst(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }).slice(0, 7);
+  return todayIst().slice(0, 7);
+}
+
+/**
+ * Today as YYYY-MM-DD in Asia/Kolkata. The centre's day is the one that matters,
+ * so a parent travelling abroad still sees their child's date highlighted.
+ */
+export function todayIst(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 }
 
 export function shiftMonth(month: string, delta: number): string {
@@ -155,17 +165,21 @@ export function buildMonthDayCells(opts: {
   // Monday-first: JS getUTCDay Sun=0 → Mon=0.
   const firstDow = (new Date(Date.UTC(y, m - 1, 1)).getUTCDay() + 6) % 7;
   const totalDays = daysInMonth(opts.month);
+  const today = todayIst();
   const cells: CalendarDayCell[] = [];
 
+  const pad = (): CalendarDayCell => ({
+    date: null,
+    day: null,
+    markStatus: null,
+    onLeave: false,
+    isHoliday: false,
+    holidayReason: null,
+    isToday: false,
+  });
+
   for (let i = 0; i < firstDow; i++) {
-    cells.push({
-      date: null,
-      day: null,
-      markStatus: null,
-      onLeave: false,
-      isHoliday: false,
-      holidayReason: null,
-    });
+    cells.push(pad());
   }
 
   for (let day = 1; day <= totalDays; day++) {
@@ -181,18 +195,12 @@ export function buildMonthDayCells(opts: {
       onLeave,
       isHoliday,
       holidayReason: isHoliday ? (holidayByDate.get(date) ?? null) : null,
+      isToday: date === today,
     });
   }
 
   while (cells.length % 7 !== 0) {
-    cells.push({
-      date: null,
-      day: null,
-      markStatus: null,
-      onLeave: false,
-      isHoliday: false,
-      holidayReason: null,
-    });
+    cells.push(pad());
   }
 
   return cells;

@@ -1,6 +1,7 @@
 /**
  * Thin sync wrapper around niyam submission create.
  */
+import type { ErrorCode } from "@workspace/api-zod";
 import {
   db,
   niyams,
@@ -23,7 +24,7 @@ import {
 export class NiyamSubmitError extends Error {
   constructor(
     public readonly httpStatus: number,
-    public readonly code: string,
+    public readonly code: ErrorCode,
     message: string,
   ) {
     super(message);

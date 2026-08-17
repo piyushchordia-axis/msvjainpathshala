@@ -13,6 +13,8 @@ export type HolidayCalendarDay = {
   isHoliday: boolean;
   inRange: boolean;
   isRangeEdge: boolean;
+  /** Before `minDate` — rendered dimmed and not pressable. */
+  disabled: boolean;
 };
 
 function daysInMonth(month: string): number {
@@ -25,6 +27,7 @@ function buildHolidayMonthCells(opts: {
   holidayDates: Set<string>;
   rangeStart: string | null;
   rangeEnd: string | null;
+  minDate?: string | null;
 }): HolidayCalendarDay[] {
   const [y, m] = opts.month.split("-").map(Number) as [number, number];
   const firstDow = (new Date(Date.UTC(y, m - 1, 1)).getUTCDay() + 6) % 7;
@@ -39,8 +42,17 @@ function buildHolidayMonthCells(opts: {
     rangeTo = tmp;
   }
 
+  const pad = (): HolidayCalendarDay => ({
+    date: null,
+    day: null,
+    isHoliday: false,
+    inRange: false,
+    isRangeEdge: false,
+    disabled: false,
+  });
+
   for (let i = 0; i < firstDow; i++) {
-    cells.push({ date: null, day: null, isHoliday: false, inRange: false, isRangeEdge: false });
+    cells.push(pad());
   }
 
   for (let day = 1; day <= totalDays; day++) {
@@ -53,18 +65,24 @@ function buildHolidayMonthCells(opts: {
       isHoliday: opts.holidayDates.has(date),
       inRange,
       isRangeEdge,
+      disabled: !!opts.minDate && date < opts.minDate,
     });
   }
 
   while (cells.length % 7 !== 0) {
-    cells.push({ date: null, day: null, isHoliday: false, inRange: false, isRangeEdge: false });
+    cells.push(pad());
   }
   return cells;
 }
 
 /**
- * Month grid for centre holidays: shows existing holiday marks and supports
- * tap-to-pick an inclusive start/end range (no native date-picker dependency).
+ * Month grid supporting tap-to-pick of an inclusive start/end range, with
+ * existing holidays marked (no native date-picker dependency).
+ *
+ * Used both for centre holidays (admin) and for parent leave notices, where
+ * `minDate` blocks the past: a leave notice for a day that has already gone can
+ * never be consumed by the marking UI, so those days are made unpickable rather
+ * than rejected after the parent has filled the form.
  */
 export function HolidayMonthCalendar({
   month,
@@ -73,6 +91,8 @@ export function HolidayMonthCalendar({
   rangeStart,
   rangeEnd,
   onDayPress,
+  minDate,
+  rangeLegendLabel,
 }: {
   month: string;
   onMonthChange: (next: string) => void;
@@ -80,6 +100,10 @@ export function HolidayMonthCalendar({
   rangeStart: string | null;
   rangeEnd: string | null;
   onDayPress?: (date: string) => void;
+  /** Earliest selectable YYYY-MM-DD; earlier days render dimmed and inert. */
+  minDate?: string | null;
+  /** Overrides the "Selected range" legend wording. */
+  rangeLegendLabel?: string;
 }) {
   const c = useColors();
   const { hi } = useLocale();
@@ -94,9 +118,12 @@ export function HolidayMonthCalendar({
         holidayDates: holidaySet,
         rangeStart,
         rangeEnd,
+        minDate,
       }),
-    [month, holidaySet, rangeStart, rangeEnd],
+    [month, holidaySet, rangeStart, rangeEnd, minDate],
   );
+  // Nothing selectable before minDate's month, so stop the parent going there.
+  const canGoBack = !minDate || month > minDate.slice(0, 7);
 
   const weekdays = hi
     ? ["सो", "मं", "बु", "गु", "शु", "श", "र"]
@@ -111,11 +138,14 @@ export function HolidayMonthCalendar({
     <Card style={{ gap: 12 }}>
       <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
         <Pressable
-          onPress={() => onMonthChange(shiftMonth(month, -1))}
+          onPress={() => {
+            if (canGoBack) onMonthChange(shiftMonth(month, -1));
+          }}
           hitSlop={12}
+          disabled={!canGoBack}
           accessibilityLabel={hi ? "पिछला माह" : "Previous month"}
         >
-          <Ionicons name="chevron-back" size={22} color={c.foreground} />
+          <Ionicons name="chevron-back" size={22} color={canGoBack ? c.foreground : c.inkDim} />
         </Pressable>
         <Text
           style={{
@@ -148,7 +178,7 @@ export function HolidayMonthCalendar({
         <Row style={{ alignItems: "center", gap: 4 }}>
           <View style={{ width: 8, height: 8, borderRadius: 999, backgroundColor: c.primary }} />
           <Text style={{ fontFamily: bodyFamily(hi), fontSize: 11, color: c.mutedForeground, lineHeight: 16 }}>
-            {hi ? "चयनित सीमा" : "Selected range"}
+            {rangeLegendLabel ?? (hi ? "चयनित सीमा" : "Selected range")}
           </Text>
         </Row>
       </Row>
@@ -189,7 +219,11 @@ export function HolidayMonthCalendar({
                 <Pressable
                   key={cell.date}
                   onPress={() => onDayPress?.(cell.date!)}
-                  style={{ flex: 1, aspectRatio: 1, padding: 2 }}
+                  disabled={cell.disabled}
+                  accessibilityRole="button"
+                  accessibilityLabel={cell.date}
+                  accessibilityState={{ disabled: cell.disabled, selected: cell.inRange }}
+                  style={{ flex: 1, aspectRatio: 1, padding: 2, opacity: cell.disabled ? 0.35 : 1 }}
                 >
                   <View
                     style={{

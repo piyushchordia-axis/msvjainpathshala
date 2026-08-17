@@ -15,7 +15,6 @@ import {
   users,
   type User,
 } from "@workspace/db";
-import { meetsStudentViewAge } from "@workspace/api-zod";
 import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Role } from "@workspace/api-zod";
@@ -28,6 +27,7 @@ import {
   courseVisibleToStudentSql,
   loadActiveStudent,
   studentCityId,
+  studentViewAgeRefusal,
 } from "../../lib/course-visibility";
 import { getCourseProgress } from "../../lib/course-progress";
 import {
@@ -146,7 +146,8 @@ async function resolveNodeKind(nodeId: string): Promise<{
 
 /**
  * Who may write progress for this student (single-student route).
- * Parent: own child. Student: self and ≥13 (Q4). Shikshak+: inBatchWriteScope.
+ * Parent: own child. Student: self, and old enough per Q4 (MIN_STUDENT_VIEW_AGE).
+ * Shikshak+: inBatchWriteScope.
  */
 async function assertProgressWriteAccess(
   req: Request,
@@ -184,12 +185,13 @@ async function assertProgressWriteAccess(
         message: "You can only update your own course progress.",
       };
     }
-    if (!meetsStudentViewAge(stu.dob)) {
+    const refusal = studentViewAgeRefusal(stu.dob);
+    if (refusal) {
       return {
         ok: false,
         status: 403,
         code: "ERR_FORBIDDEN",
-        message: "Student view requires age 13 or older.",
+        message: refusal,
       };
     }
     return { ok: true };

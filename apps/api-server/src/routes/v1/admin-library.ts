@@ -20,6 +20,7 @@ import { requireRole } from "../../middlewares/auth";
 import { requireMinRole } from "../../lib/roles";
 import { auditFromReq } from "../../lib/audit";
 import { sanitizeLibraryHtml } from "../../lib/library-sanitize-html";
+import { videoEmbedUrl } from "../../lib/validation";
 import {
   publishItem,
   publishPanchangYear,
@@ -650,7 +651,11 @@ const itemCreateSchema = z.object({
   title_en: z.string().min(1),
   title_hi: z.string().nullable().optional(),
   title_gu: z.string().nullable().optional(),
-  youtube_url: z.string().nullable().optional(),
+  // Q7 — video embeds are YouTube/Vimeo links only. A bare z.string() here
+  // accepted `javascript:` and look-alike hosts (youtube.com.evil.tld), which
+  // are later rendered into an <a href>/iframe on public library pages.
+  // The PATCH schema derives from this object, so both paths are covered.
+  youtube_url: videoEmbedUrl(2000).nullable().optional(),
   text_content_en: z.string().nullable().optional(),
   text_content_hi: z.string().nullable().optional(),
   text_content_gu: z.string().nullable().optional(),

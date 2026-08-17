@@ -4,6 +4,7 @@
  * AT28 boundary: writes only to shivir_attendance_scans. Do not feed Pathshala
  * attendance_%, streaks, or auto Punya from this path.
  */
+import type { ErrorCode } from "@workspace/api-zod";
 import {
   db,
   shivir_sessions,
@@ -18,7 +19,7 @@ import { verifyCardSignature, parseCardPayload } from "../lib/idcard-crypto";
 export class ShivirScanError extends Error {
   constructor(
     public readonly httpStatus: number,
-    public readonly code: string,
+    public readonly code: ErrorCode,
     message: string,
   ) {
     super(message);

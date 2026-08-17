@@ -26,6 +26,7 @@ import {
   AdminTable,
 } from "@/components/admin/AdminPageShell";
 import { DragReorderList } from "@/pages/admin/library/DragReorderList";
+import { ImpersonateButton } from "@/components/admin/ImpersonateButton";
 import { PublishControls } from "@/pages/admin/library/PublishControls";
 import { toast } from "@/components/ui/toast-jp";
 import { Button } from "@/components/ui/button";
@@ -580,6 +581,8 @@ export default function TeamAdminPage() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap items-center justify-end gap-2">
+                      {/* Renders only for super_admin; linked-user rows only (SUP-API-03). */}
+                      <ImpersonateButton userId={m.user_id} name={displayName(m)} role={m.user?.role} />
                       <PublishControls
                         canPublish
                         isPublished={m.is_published}

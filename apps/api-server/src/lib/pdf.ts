@@ -365,6 +365,10 @@ export interface DonationReceiptInput {
   purpose?: string | null;
   campaign_name?: string | null;
   razorpay_payment_id?: string | null;
+  /** Q3 — the 80G block renders only when the donation was stamped eligible. */
+  eighty_g_eligible?: boolean;
+  eighty_g_registration_number?: string | null;
+  organization_pan?: string | null;
 }
 
 /** Format paise as an Indian-rupee amount string, e.g. 25000 -> "INR 250.00". */
@@ -385,14 +389,25 @@ export async function buildDonationReceiptPdf(input: DonationReceiptInput): Prom
     ? input.captured_at
     : date.toISOString().slice(0, 10);
 
+  const eightyG = input.eighty_g_eligible === true;
+
   pdf
     .title("Jain Pathshala")
-    .text("80G Donation Receipt")
+    // Q3: a receipt must only claim 80G deductibility when the donation was
+    // captured while the organisation's 80G registration was configured.
+    .text(eightyG ? "80G Donation Receipt" : "Donation Receipt")
     .spacer(4)
     .hr()
     .keyValue("Receipt No.", input.receipt_number)
     .keyValue("Financial Year", input.financial_year)
-    .keyValue("Date", dateStr)
+    .keyValue("Date", dateStr);
+  if (eightyG && input.eighty_g_registration_number) {
+    pdf.keyValue("80G Registration No.", input.eighty_g_registration_number);
+  }
+  if (eightyG && input.organization_pan) {
+    pdf.keyValue("Organisation PAN", input.organization_pan);
+  }
+  pdf
     .hr()
     .heading("Donor")
     .keyValue("Name", input.donor_name);
@@ -408,7 +423,9 @@ export async function buildDonationReceiptPdf(input: DonationReceiptInput): Prom
   pdf
     .hr()
     .text(
-      "This receipt is issued for the donation received with thanks. Donations to Jain Pathshala are eligible for deduction under Section 80G of the Income Tax Act, 1961, subject to applicable conditions.",
+      eightyG
+        ? "This receipt is issued for the donation received with thanks. Donations to Jain Pathshala are eligible for deduction under Section 80G of the Income Tax Act, 1961, subject to applicable conditions."
+        : "This receipt is issued for the donation received with thanks.",
       10,
     )
     .spacer(8)

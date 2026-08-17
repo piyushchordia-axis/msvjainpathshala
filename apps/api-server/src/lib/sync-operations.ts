@@ -3,6 +3,7 @@
  * Every sync/batch execution MUST write a row; success-replay returns stored payload.
  */
 import { db, sync_operations } from "@workspace/db";
+import type { ErrorCode } from "@workspace/api-zod";
 import { and, eq } from "drizzle-orm";
 
 export type SyncOpStatus = "success" | "duplicate" | "conflict" | "failed" | "processing";
@@ -11,7 +12,8 @@ export type SyncResult = {
   submission_op_id: string;
   status: SyncOpStatus;
   server_id?: string;
-  error?: { code: string; message: string; details?: unknown };
+  /** ErrorCode, not a bare string — every other path uses the enum (XC-API-06). */
+  error?: { code: ErrorCode; message: string; details?: unknown };
   /** Domain payload echoed to the client (also stored for replay). */
   data?: unknown;
 };

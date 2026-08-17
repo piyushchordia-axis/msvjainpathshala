@@ -26,17 +26,28 @@ function cellAccent(
   return { bg: "transparent", fg: c.foreground, border: "transparent" };
 }
 
-function LegendDot({ color, label }: { color: string; label: string }) {
+/** `ring` draws an outline instead of a fill — matches today's ring on the grid. */
+function LegendDot({
+  color,
+  label,
+  ring = false,
+}: {
+  color: string;
+  label: string;
+  ring?: boolean;
+}) {
   const c = useColors();
   const { hi } = useLocale();
   return (
     <Row style={{ alignItems: "center", gap: 4 }}>
       <View
         style={{
-          width: 8,
-          height: 8,
+          width: ring ? 10 : 8,
+          height: ring ? 10 : 8,
           borderRadius: 999,
-          backgroundColor: color,
+          backgroundColor: ring ? "transparent" : color,
+          borderWidth: ring ? 2 : 0,
+          borderColor: color,
         }}
       />
       <Text
@@ -118,6 +129,7 @@ export function AttendanceMonthCalendar({
         <LegendDot color={c.successText} label={hi ? "उपस्थित" : "Present"} />
         <LegendDot color={c.primary} label={hi ? "अवकाश" : "Leave"} />
         <LegendDot color={c.mutedForeground} label={hi ? "छुट्टी" : "Holiday"} />
+        <LegendDot color={c.primary} label={hi ? "आज" : "Today"} ring />
       </Row>
 
       <View style={{ flexDirection: "row" }}>
@@ -152,7 +164,8 @@ export function AttendanceMonthCalendar({
                   <View
                     style={{
                       flex: 1,
-                      borderRadius: 8,
+                      // Circular so today's ring reads as a ring, not a box.
+                      borderRadius: 999,
                       alignItems: "center",
                       justifyContent: "center",
                       backgroundColor: hasEvent ? accent.bg : "transparent",
@@ -160,9 +173,30 @@ export function AttendanceMonthCalendar({
                       borderColor: cell.isHoliday && cell.markStatus ? c.border : "transparent",
                     }}
                   >
+                    {/* Today's ring sits on its own layer: the tile's own border is
+                        already spoken for by the holiday+present combination, and an
+                        overlay keeps the ring visible on every event colour. */}
+                    {cell.isToday ? (
+                      <View
+                        pointerEvents="none"
+                        style={{
+                          position: "absolute",
+                          top: 0,
+                          right: 0,
+                          bottom: 0,
+                          left: 0,
+                          borderRadius: 999,
+                          borderWidth: 2,
+                          borderColor: c.primary,
+                        }}
+                      />
+                    ) : null}
                     <Text
                       style={{
-                        fontFamily: bodyFamily(hi, hasEvent ? "semibold" : "regular"),
+                        fontFamily: bodyFamily(
+                          hi,
+                          hasEvent || cell.isToday ? "semibold" : "regular",
+                        ),
                         fontSize: 13,
                         color: hasEvent ? accent.fg : c.foreground,
                       }}

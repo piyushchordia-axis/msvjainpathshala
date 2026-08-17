@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import type { User } from "@workspace/db";
-import { canAccessAdminPanel, type Role } from "@workspace/api-zod";
+import { canAccessAdminPanel, canViewDonations, type Role } from "@workspace/api-zod";
 import { verifyAccessToken } from "../lib/tokens";
 import { fail } from "../lib/envelope";
 import { loadAuthUser } from "../lib/auth-user-cache";
@@ -56,6 +56,20 @@ export function requireAdminPanel(req: Request, res: Response, next: NextFunctio
   const role = req.authUser?.role as Role | undefined;
   if (!canAccessAdminPanel(role)) {
     fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
+    return;
+  }
+  next();
+}
+
+/**
+ * Donor PII (name, phone, PAN, amounts). Gated on the shared `canViewDonations`
+ * roster rather than an inline role list, so the donation routes and the
+ * analytics overview cannot drift apart (XC-API-01).
+ */
+export function requireDonationView(req: Request, res: Response, next: NextFunction): void {
+  const role = req.authUser?.role as Role | undefined;
+  if (!canViewDonations(role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "You do not have access to donation records.");
     return;
   }
   next();

@@ -25,6 +25,7 @@ import { auditFromReq } from "../../lib/audit";
 import { storage } from "../../lib/storage";
 import { signUploadUrl } from "../../lib/file-tokens";
 import { buildDonationReceiptPdf } from "../../lib/pdf";
+import { getEightyGConfig } from "../../lib/platform-settings";
 import { getEmailProvider, hasRealEmailProvider } from "../../lib/email";
 import { requireAuth } from "../../middlewares/auth";
 import { cityIdsForState } from "../../lib/scope";
@@ -212,6 +213,12 @@ async function captureDonation(
     const seqRows = (seqRes as unknown as { rows?: Array<{ last_no: number }> }).rows ?? [];
     const receiptNumber = `JP/${fy}/${String(Number(seqRows[0]?.last_no ?? 1)).padStart(5, "0")}`;
 
+    // Q3: eligibility is stamped from the platform toggle at capture time —
+    // previously hardcoded true, asserting 80G deductibility the organisation
+    // may not be registered to offer. Rows keep their stamp if the toggle
+    // later changes; receipts are never deleted.
+    const eightyG = await getEightyGConfig(tx);
+
     await tx
       .update(donations)
       .set({
@@ -222,7 +229,7 @@ async function captureDonation(
         payment_captured_at: now,
         receipt_number: receiptNumber,
         financial_year: fy,
-        eighty_g_eligible: true,
+        eighty_g_eligible: eightyG.enabled,
       })
       .where(eq(donations.id, donation.id));
 
@@ -256,6 +263,7 @@ async function fetchDonationForReceipt(donationId: string) {
       receipt_number: donations.receipt_number,
       financial_year: donations.financial_year,
       razorpay_payment_id: donations.razorpay_payment_id,
+      eighty_g_eligible: donations.eighty_g_eligible,
       campaign_name: donation_campaigns.name,
       campaign_city_id: donation_campaigns.city_id,
     })
@@ -277,6 +285,9 @@ type ReceiptDonation = NonNullable<Awaited<ReturnType<typeof fetchDonationForRec
 async function generateAndStoreReceipt(
   donation: ReceiptDonation,
 ): Promise<{ url: string; pdf: Buffer }> {
+  // Q3: the 80G block renders only for donations stamped eligible at capture;
+  // the registration number + PAN come from platform settings.
+  const eightyG = donation.eighty_g_eligible ? await getEightyGConfig() : null;
   const pdf = await buildDonationReceiptPdf({
     receipt_number: donation.receipt_number ?? "—",
     financial_year: donation.financial_year ?? financialYearFor(donation.payment_captured_at ?? new Date()),
@@ -288,6 +299,9 @@ async function generateAndStoreReceipt(
     purpose: donation.purpose,
     campaign_name: donation.campaign_name,
     razorpay_payment_id: donation.razorpay_payment_id,
+    eighty_g_eligible: donation.eighty_g_eligible === true,
+    eighty_g_registration_number: eightyG?.registrationNumber ?? null,
+    organization_pan: eightyG?.organizationPan ?? null,
   });
   const stored = await storage.put(receiptKey(donation.id), pdf, "application/pdf");
   return { url: stored.url, pdf };

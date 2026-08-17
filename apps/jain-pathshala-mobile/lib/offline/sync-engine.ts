@@ -7,7 +7,7 @@ import { apiPost } from "@/lib/api";
 import { backoffDelayMs, MAX_ATTEMPTS, shouldRetry } from "./backoff";
 import { planDrain } from "./drain";
 import { DRAIN_ORDER, QUEUE_OP_TYPE, QUEUE_KEYS, type QueueKey } from "./queue-keys";
-import { readAllQueues, writeQueue, enqueueOp } from "./storage";
+import { readAllQueues, readQueue, writeQueue, enqueueOp } from "./storage";
 import type {
   PendingAcknowledgementOp,
   PendingAttendanceOp,
@@ -397,6 +397,64 @@ export async function enqueueShivirScan(input: {
   return submission_op_id;
 }
 
+/** Rewrites one queued niyam op's media[] in place. */
+async function patchNiyamMedia(
+  submissionOpId: string,
+  apply: (media: PendingProofMedia[]) => PendingProofMedia[],
+): Promise<void> {
+  const ops = await readQueue<PendingNiyamSubmissionOp>(QUEUE_KEYS.niyam_submissions);
+  const idx = findOpIndex(ops, submissionOpId);
+  if (idx < 0) return;
+  const op = ops[idx]!;
+  const media = op.payload.media ?? [];
+  const next = apply(media);
+  ops[idx] = { ...op, payload: { ...op.payload, media: next } };
+  await writeQueue(QUEUE_KEYS.niyam_submissions, ops as QueuedOp[]);
+}
+
+/**
+ * A queued proof finished uploading — write its URL onto the waiting submission
+ * and clear `pending_upload` so planDrain can release the op.
+ */
+export async function resolveNiyamMediaUrl(input: {
+  submission_op_id: string;
+  media_upload_id: string;
+  url: string;
+  mime?: string;
+  size_bytes?: number;
+}): Promise<void> {
+  await patchNiyamMedia(input.submission_op_id, (media) =>
+    media.map((m) =>
+      m.media_upload_id === input.media_upload_id
+        ? {
+            ...m,
+            url: input.url,
+            mime: input.mime ?? m.mime,
+            size_bytes: input.size_bytes ?? m.size_bytes,
+            pending_upload: false,
+            local_uri: undefined,
+          }
+        : m,
+    ),
+  );
+}
+
+/**
+ * A proof exhausted its upload attempts. Drop it so the submission still goes
+ * with whatever landed — the same escape-hatch reasoning as a FAILED checkin
+ * releasing attendance (AT8): one unsendable file must not strand the whole
+ * submission. If the niyam required proof the server returns a terminal 422,
+ * which surfaces in the six-state UI as `failed` with a manual retry.
+ */
+export async function dropNiyamMedia(input: {
+  submission_op_id: string;
+  media_upload_id: string;
+}): Promise<void> {
+  await patchNiyamMedia(input.submission_op_id, (media) =>
+    media.filter((m) => m.media_upload_id !== input.media_upload_id),
+  );
+}
+
 /** Manual retry — never silently discard failed ops. */
 export async function retryOp(queue: QueueKey, submissionOpId: string): Promise<void> {
   const queues = await readAllQueues();
@@ -618,8 +676,8 @@ export function startSyncLoop(): () => void {
     }
 
     try {
-      const { resumeHomeworkProofUploads } = await import("./media-upload-queue");
-      await resumeHomeworkProofUploads();
+      const { resumeProofMediaUploads } = await import("./media-upload-queue");
+      await resumeProofMediaUploads();
     } catch {
       /* media drain is best-effort */
     }

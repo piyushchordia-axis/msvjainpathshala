@@ -124,7 +124,7 @@ function RootLayoutNav() {
         options={{ headerShown: false, title: hi ? "पाठ्यक्रम" : "Course" }}
       />
       <Stack.Screen name="certificates" options={{ title: hi ? "प्रमाणपत्र" : "Certificates" }} />
-      <Stack.Screen name="msv" options={{ title: hi ? "MSV कार्यक्रम" : "MSV programme" }} />
+      <Stack.Screen name="msv" options={{ title: "MSV" }} />
       <Stack.Screen name="enquire" options={{ headerShown: false }} />
       <Stack.Screen name="donate" options={{ headerShown: false }} />
       <Stack.Screen name="student-detail/[id]" options={{ title: hi ? "विद्यार्थी" : "Student" }} />

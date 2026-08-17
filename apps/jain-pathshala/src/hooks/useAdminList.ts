@@ -2,9 +2,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { get } from '@/lib/api-client';
 
 type ListEnvelope<T> = {
-  data?: { items?: T[] };
+  data?: { items?: T[]; next_cursor?: string | null };
   meta?: { next_cursor?: string | null; has_more?: boolean };
 };
+
+/**
+ * `next_cursor` sits in `meta` on some list endpoints (gallery, homework) and in
+ * `data` on others (admin students, audit logs, niyam submissions). This hook
+ * read only `meta`, so every list backed by a `data`-style endpoint reported
+ * hasMore=false and its "Load more" button never rendered — the pagination was
+ * wired end-to-end but silently inert. Accept both rather than churn the routes.
+ */
+function readNextCursor<T>(envelope: ListEnvelope<T>): string | null {
+  const candidate = envelope.data?.next_cursor ?? envelope.meta?.next_cursor;
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : null;
+}
 
 function withCursor(path: string, cursor: string | null): string {
   if (!cursor) return path;
@@ -53,10 +65,7 @@ export function useAdminList<T>(path: string, deps: unknown[] = []): UseAdminLis
         });
         if (ac.signal.aborted) return;
         const page = envelope.data?.items ?? [];
-        const next =
-          typeof envelope.meta?.next_cursor === 'string' && envelope.meta.next_cursor.length > 0
-            ? envelope.meta.next_cursor
-            : null;
+        const next = readNextCursor(envelope);
         setItems((prev) => (mode === 'append' ? [...prev, ...page] : page));
         setNextCursor(next);
       } catch (err) {

@@ -16,6 +16,16 @@
       ],
       "port": 5173,
       "autoPort": false
+    },
+    {
+      "name": "mobile-web",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set EXPO_PUBLIC_API_BASE_URL=http://localhost:8080&& set BROWSER=none&& pnpm --filter @workspace/jain-pathshala-mobile exec expo start --web --port 8082"
+      ],
+      "port": 8082,
+      "autoPort": false
     }
   ]
 }

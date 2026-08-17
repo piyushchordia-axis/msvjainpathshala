@@ -253,8 +253,9 @@ export async function provisionStudentRegistration(
     // sanchalak/city_admin approval transaction, so failing would reject a
     // legitimate under-age enrolment outright.
     //
-    // Note this is a LOWER bar than MIN_STUDENT_VIEW_AGE (Q4): holding a login is
-    // not the same as being the authoritative writer of your own progress record.
+    // MIN_STUDENT_VIEW_AGE (Q4) now holds the same value, but stays a separate
+    // constant: this gate decides whether a login exists at all, that one decides
+    // whether the child may write their own progress record.
     const studentDob = dobFromAge(reg.age);
     const ageEligibleForOwnLogin = meetsStudentLoginAge(studentDob);
     let studentUserId: string | null = null;

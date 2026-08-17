@@ -22,14 +22,19 @@ import {
   centre_holidays,
   type User,
 } from "@workspace/db";
-import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
-import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
+import {
+  requireAuth,
+  requireAdminPanel,
+  requireRole,
+  requireDonationView,
+} from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
-import { clampLimit } from "../../lib/route-helpers";
+import { clampLimit, decodeTimeCursor, encodeTimeCursor } from "../../lib/route-helpers";
 import { validateNiyamPointsBounds } from "../../lib/niyam-points";
 import { generateExamAccessCode, hashOtpCode } from "../../lib/tokens";
 
@@ -450,7 +455,7 @@ router.get("/exams/:id/attempts", async (req: Request, res: Response) => {
    a shikshak typing the URL used to receive the full donor list. */
 router.get(
   "/donations/campaigns",
-  requireRole("super_admin", "state_admin", "city_admin"),
+  requireDonationView,
   async (req: Request, res: Response) => {
   const cityIds = await cityIdsForUser(req.authUser!);
   const rows = await db
@@ -480,14 +485,19 @@ router.get(
   ok(res, { items: rows }, { count: rows.length });
 });
 
-/* GET /v1/admin/donations — donor PII; city_admin+ only, matching
-   canViewDonations (XC-API-01). */
+/* GET /v1/admin/donations — donor PII; gated on canViewDonations (XC-API-01).
+   The roster lives in one place (@workspace/api-zod) so this route and the
+   analytics overview in admin.ts cannot drift apart. */
 router.get(
   "/donations",
-  requireRole("super_admin", "state_admin", "city_admin"),
+  requireDonationView,
   async (req: Request, res: Response) => {
   const cityIds = await cityIdsForUser(req.authUser!);
   const limit = clampLimit(req.query.limit, 100, 500);
+  // XC-WEB-02 — this list had no cursor at all, so it returned a truncated
+  // prefix and the admin total silently under-reported against the bank. Keyset
+  // on (created_at, id) to match the existing admin list pattern.
+  const cursor = decodeTimeCursor(req.query.cursor);
   const rows = await db
     .select({
       id: donations.id,
@@ -502,32 +512,52 @@ router.get(
       campaign_name: donation_campaigns.name,
       city_name: cities.name,
       payment_captured_at: donations.payment_captured_at,
+      created_at: donations.created_at,
     })
     .from(donations)
     .leftJoin(donation_campaigns, eq(donation_campaigns.id, donations.campaign_id))
     .leftJoin(cities, eq(cities.id, donation_campaigns.city_id))
     .where(
-      cityIds === null
-        ? undefined
-        : cityIds.length === 0
-          ? eq(donations.id, "00000000-0000-0000-0000-000000000000")
-          : or(isNull(donation_campaigns.city_id), inArray(donation_campaigns.city_id, cityIds)),
+      and(
+        cityIds === null
+          ? undefined
+          : cityIds.length === 0
+            ? eq(donations.id, "00000000-0000-0000-0000-000000000000")
+            : or(isNull(donation_campaigns.city_id), inArray(donation_campaigns.city_id, cityIds)),
+        cursor
+          ? or(
+              lt(donations.created_at, cursor.createdAt),
+              and(eq(donations.created_at, cursor.createdAt), lt(donations.id, cursor.id)),
+            )
+          : undefined,
+      ),
     )
-    .orderBy(desc(donations.created_at))
-    .limit(limit);
+    .orderBy(desc(donations.created_at), desc(donations.id))
+    .limit(limit + 1);
 
-  const items = rows.map((r) => ({
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  const items = page.map(({ created_at: _created, ...r }) => ({
     ...r,
     payment_captured_at: r.payment_captured_at ? r.payment_captured_at.toISOString() : null,
   }));
-  ok(res, { items }, { count: items.length });
+  ok(
+    res,
+    { items, next_cursor: hasMore && last ? encodeTimeCursor(last.created_at, last.id) : null },
+    { count: items.length },
+  );
 });
 
 /* ═══════════════════ CREATE routes ═══════════════════ */
 
 const createCurriculumSchema = z.object({
   name: z.string().min(1).max(300),
-  kind: z.string().default("standard"),
+  // Q2 — free-form `kind` stored anything: `kind:"MSV"` became an inert orphan
+  // that the Q2 check below (an exact "msv" compare) never saw, one
+  // case-normalisation change away from a city_admin creating MSV curricula.
+  // Backed by a CHECK constraint in migration 0070.
+  kind: z.enum(["standard", "msv"]).default("standard"),
   academic_year: z.string().max(20).optional(),
   city_id: z.string().uuid().optional(),
 });

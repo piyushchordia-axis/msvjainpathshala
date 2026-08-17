@@ -12,7 +12,7 @@ import {
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiGetEnvelope, ApiError } from "@/lib/api";
 // Type-only: the sync engine itself is imported dynamically at each call site so
 // the offline module stays out of the initial bundle.
-import type { SyncUiState } from "@/lib/offline/types";
+import type { PendingProofMedia, SyncUiState } from "@/lib/offline/types";
 import type {
   AdminBatchRow,
   AdminStudentRow,
@@ -1713,7 +1713,16 @@ interface SubmitNiyamInput {
   student_id: string;
   submission_date?: string;
   proof_url?: string;
-  media?: Array<{ url: string; kind: string; mime?: string; size_bytes?: number }>;
+  media?: Array<{
+    url: string;
+    kind: string;
+    mime?: string;
+    size_bytes?: number;
+    /** Set for proof captured offline and still in the media-upload queue. */
+    local_uri?: string;
+    media_upload_id?: string;
+    pending_upload?: boolean;
+  }>;
   notes?: string;
 }
 export interface SubmitNiyamNewBadge {
@@ -1754,7 +1763,7 @@ export function useSubmitNiyam() {
     }: SubmitNiyamInput): Promise<SubmitNiyamResult> => {
       const { enqueueNiyamSubmission, drainQueues } = await import("@/lib/offline/sync-engine");
 
-      const wireMedia =
+      const wireMedia: PendingProofMedia[] | undefined =
         media && media.length > 0
           ? media.map((m) => ({
               url: m.url,
@@ -1764,6 +1773,11 @@ export function useSubmitNiyam() {
                 | "audio",
               mime: m.mime,
               size_bytes: m.size_bytes,
+              // Proof still sitting in the media-upload queue (captured offline).
+              // planDrain holds the op back until these clear.
+              local_uri: m.local_uri,
+              media_upload_id: m.media_upload_id,
+              pending_upload: m.pending_upload,
             }))
           : proof_url
             ? [{ url: proof_url, kind: "photo" as const }]
@@ -1775,6 +1789,18 @@ export function useSubmitNiyam() {
         media: wireMedia,
         notes,
       });
+
+      // Point the queued proof files at the op they belong to, so an upload that
+      // completes minutes later knows which submission to fill in.
+      const pendingUploadIds = (wireMedia ?? [])
+        .filter((m) => m.pending_upload && m.media_upload_id)
+        .map((m) => m.media_upload_id as string);
+      if (pendingUploadIds.length > 0) {
+        const { linkNiyamMediaUploads } = await import(
+          "@/lib/offline/media-upload-queue"
+        );
+        await linkNiyamMediaUploads(submission_op_id, pendingUploadIds);
+      }
 
       // Best-effort immediate drain when online; offline this is a no-op and the
       // loop picks it up. The per-op result is returned so the screen can tell
