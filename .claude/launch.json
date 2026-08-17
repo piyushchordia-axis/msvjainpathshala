@@ -2,33 +2,19 @@
   "version": "0.0.1",
   "configurations": [
     {
+      "name": "api",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@workspace/api-server", "run", "dev"],
+      "port": 8080
+    },
+    {
       "name": "web",
-      "runtimeExecutable": "bash",
+      "runtimeExecutable": "cmd",
       "runtimeArgs": [
-        "-lc",
-        "cd /Users/sumit/Projects/Pathshala && PORT=5173 BASE_PATH=/ VITE_API_BASE_URL=http://localhost:8080 exec pnpm --config.verify-deps-before-run=false --filter @workspace/jain-pathshala run dev"
+        "/c",
+        "set BASE_PATH=/&& set PORT=5173&& set VITE_API_BASE_URL=http://localhost:8080&& pnpm --filter @workspace/jain-pathshala run dev"
       ],
       "port": 5173,
-      "autoPort": false
-    },
-    {
-      "name": "mobile",
-      "runtimeExecutable": "bash",
-      "runtimeArgs": [
-        "-lc",
-        "cd /Users/sumit/Projects/Pathshala/apps/jain-pathshala-mobile && EXPO_USE_LAN_API=1 EXPO_NO_TELEMETRY=1 BROWSER=none exec npx expo start --web --port 8081"
-      ],
-      "port": 8081,
-      "autoPort": false
-    },
-    {
-      "name": "mobile-web-8082",
-      "runtimeExecutable": "bash",
-      "runtimeArgs": [
-        "-lc",
-        "cd /Users/sumit/Projects/Pathshala/apps/jain-pathshala-mobile && EXPO_USE_LAN_API=1 EXPO_NO_TELEMETRY=1 BROWSER=none EXPO_PUBLIC_API_BASE_URL=http://localhost:8080 exec npx expo start --web --port 8082"
-      ],
-      "port": 8082,
       "autoPort": false
     }
   ]

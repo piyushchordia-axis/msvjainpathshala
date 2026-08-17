@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -9,7 +9,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { useLocale } from '@/lib/locale-context';
-import { ApiError, apiGet, apiPost } from '@/lib/api-client';
+import { apiGet, apiPost } from '@/lib/api-client';
+import { apiErrorMessage } from '@/lib/api-error-copy';
+import { mergeById, usePickerSearch } from '@/lib/picker-search';
 import {
   STUDENT_SECTIONS,
   fieldLabel,
@@ -24,7 +26,10 @@ import {
 } from '@/lib/join';
 import { JoinLangToggle, usePreferJoinHindi } from './JoinLangToggle';
 
-type Phase = 'loading' | 'closed' | 'form' | 'done';
+// 'error' is distinct from 'closed' on purpose: a dead network used to render
+// "Registration is closed" — a permanent-sounding refusal on the single
+// highest-value guest conversion path, when the server was merely unreachable.
+type Phase = 'loading' | 'error' | 'closed' | 'form' | 'done';
 
 export default function JoinStudentPage() {
   usePreferJoinHindi();
@@ -45,25 +50,28 @@ export default function JoinStudentPage() {
   const [error, setError] = useState<string | null>(null);
   const [reg, setReg] = useState<{ id: string; display_code: string } | null>(null);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const [s, f, c, centresRes] = await Promise.all([
-          apiGet<{ registration_open: boolean }>('/v1/join/settings?kind=student'),
-          apiGet<{ items: JoinField[] }>('/v1/join/form-fields?kind=student'),
-          apiGet<{ items: CityOption[] }>('/v1/public/cities'),
-          apiGet<{ items: CentreOption[] }>('/v1/public/centres'),
-        ]);
-        setAllFields(f.items);
-        setCities(c.items);
-        setCentres(centresRes.items.filter((x) => !!x.code));
-        setPhase(s.registration_open ? 'form' : 'closed');
-      } catch (e) {
-        setError(e instanceof ApiError ? e.message : 'Failed to load form');
-        setPhase('closed');
-      }
-    })();
+  const loadForm = useCallback(async () => {
+    setPhase('loading');
+    try {
+      const [s, f, c, centresRes] = await Promise.all([
+        apiGet<{ registration_open: boolean }>('/v1/join/settings?kind=student'),
+        apiGet<{ items: JoinField[] }>('/v1/join/form-fields?kind=student'),
+        apiGet<{ items: CityOption[] }>('/v1/public/cities'),
+        apiGet<{ items: CentreOption[] }>('/v1/public/centres'),
+      ]);
+      setAllFields(f.items);
+      setCities(c.items);
+      setCentres(centresRes.items.filter((x) => !!x.code));
+      // 'closed' is reserved for the real signal — registration_open === false.
+      setPhase(s.registration_open ? 'form' : 'closed');
+    } catch {
+      setPhase('error');
+    }
   }, []);
+
+  useEffect(() => {
+    void loadForm();
+  }, [loadForm]);
 
   const photo = useMemo(() => photoField(allFields), [allFields]);
   const section = STUDENT_SECTIONS[sectionIdx]!;
@@ -71,31 +79,46 @@ export default function JoinStudentPage() {
     () => fieldsForSection(allFields, section),
     [allFields, section],
   );
+  // Server-side ?q= merge — beyond the clamped first page a centre was
+  // unpickable however the guest spelled it (GST-PRF-03).
+  const cityQ = cityQuery.trim();
+  const cityExtra = usePickerSearch<CityOption>(
+    cityQ.length >= 2 ? `/v1/public/cities?q=${encodeURIComponent(cityQ)}` : null,
+  );
+  const centreQ = centreQuery.trim();
+  const centreExtra = usePickerSearch<CentreOption>(
+    cityId && centreQ.length >= 2
+      ? `/v1/public/centres?city_id=${encodeURIComponent(cityId)}&q=${encodeURIComponent(centreQ)}`
+      : null,
+  );
+
   const filteredCities = useMemo(() => {
-    const q = cityQuery.trim().toLowerCase();
-    if (!q) return cities;
-    return cities.filter(
+    const q = cityQ.toLowerCase();
+    const pool = mergeById(cities, cityExtra);
+    if (!q) return pool;
+    return pool.filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
         c.code.toLowerCase().includes(q) ||
         c.state_name.toLowerCase().includes(q),
     );
-  }, [cities, cityQuery]);
+  }, [cities, cityExtra, cityQ]);
 
-  const centresInCity = useMemo(
-    () => (cityId ? centres.filter((c) => c.city_id === cityId) : []),
-    [centres, cityId],
-  );
+  const centresInCity = useMemo(() => {
+    if (!cityId) return [];
+    const pool = mergeById(centres, centreExtra.filter((x) => !!x.code));
+    return pool.filter((c) => c.city_id === cityId);
+  }, [centres, centreExtra, cityId]);
 
   const filteredCentres = useMemo(() => {
-    const q = centreQuery.trim().toLowerCase();
+    const q = centreQ.toLowerCase();
     if (!q) return centresInCity;
     return centresInCity.filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
         (c.code ?? '').toLowerCase().includes(q),
     );
-  }, [centresInCity, centreQuery]);
+  }, [centresInCity, centreQ]);
 
   const setValue = (key: string, v: string) => setValues((prev) => ({ ...prev, [key]: v }));
 
@@ -182,7 +205,8 @@ export default function JoinStudentPage() {
       setReg(created);
       setPhase('done');
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Submit failed');
+      // Bilingual copy keyed off error.code (GST-API-05).
+      setError(apiErrorMessage(e, hi));
     } finally {
       setBusy(false);
     }
@@ -201,7 +225,14 @@ export default function JoinStudentPage() {
     } catch (err) {
       setPhotoPreviewUrl(null);
       setPhotoUrl(null);
-      setError(err instanceof Error ? err.message : 'Upload failed');
+      setError(
+        apiErrorMessage(err, hi, {
+          ERR_VALIDATION_FAILED: {
+            en: 'Upload failed — choose a clear image and try again.',
+            hi: 'अपलोड विफल रहा — साफ़ छवि चुनकर पुनः प्रयास करें।',
+          },
+        }),
+      );
     } finally {
       setBusy(false);
     }
@@ -267,6 +298,34 @@ export default function JoinStudentPage() {
     );
   }
 
+  if (phase === 'error') {
+    return (
+      <div className="container py-16">
+        <Card className="mx-auto max-w-lg space-y-4 p-8">
+          <div className="flex justify-end">
+            <JoinLangToggle />
+          </div>
+          <h1 className="font-display text-2xl text-secondary">
+            {hi ? 'फ़ॉर्म लोड नहीं हो सका' : "Couldn't load the form"}
+          </h1>
+          <p className="text-muted-foreground">
+            {hi
+              ? 'अपना कनेक्शन जाँचें और पुनः प्रयास करें — पंजीकरण अभी भी खुला हो सकता है।'
+              : 'Check your connection and try again — registration may well still be open.'}
+          </p>
+          <div className="flex gap-2">
+            <Button onClick={() => void loadForm()}>
+              {hi ? 'पुनः प्रयास करें' : 'Try again'}
+            </Button>
+            <Button asChild variant="outline">
+              <Link href="/join">{hi ? 'मार्ग चुनें' : 'Choose path'}</Link>
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   if (phase === 'closed') {
     return (
       <div className="container py-16">
@@ -278,7 +337,7 @@ export default function JoinStudentPage() {
             {hi ? 'पंजीकरण बंद है' : 'Registration is closed'}
           </h1>
           <p className="text-muted-foreground">
-            {error ?? (hi ? 'कृपया बाद में पुनः प्रयास करें।' : 'Please check back later.')}
+            {hi ? 'कृपया बाद में पुनः प्रयास करें।' : 'Please check back later.'}
           </p>
           <Button asChild variant="outline">
             <Link href="/join">{hi ? 'मार्ग चुनें' : 'Choose path'}</Link>
@@ -307,9 +366,20 @@ export default function JoinStudentPage() {
           <p className="text-xs text-muted-foreground">
             {hi ? 'इस कोड को सुरक्षित रखें' : 'Keep this code safe'}
           </p>
-          <Button asChild>
-            <Link href="/join">{hi ? 'होम' : 'Done'}</Link>
-          </Button>
+          {/* Carry the code + mobile the family just typed — the CTA used to
+              land them on an empty form to retype both (GST-API-02). */}
+          <div className="flex flex-wrap justify-center gap-2">
+            <Button asChild>
+              <Link
+                href={`/join/student/complete-payment?code=${encodeURIComponent(reg.display_code)}&mobile=${encodeURIComponent(values.parent_mobile ?? '')}`}
+              >
+                {hi ? 'शुल्क भुगतान करें' : 'Complete payment'}
+              </Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link href="/join">{hi ? 'होम' : 'Done'}</Link>
+            </Button>
+          </div>
         </Card>
       </div>
     );

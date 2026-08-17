@@ -8,6 +8,9 @@ import { Label } from '@/components/ui/label';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { ageGroupFromDob, formatAgeGroup } from '@workspace/api-zod';
 import { toast } from '@/components/ui/toast-jp';
+import { Textarea } from '@/components/ui/textarea';
+import { AdminLoadMore } from '@/components/admin/AdminPageShell';
+import { useAdminList } from '@/hooks/useAdminList';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
 } from '@/components/ui/dialog';
@@ -55,48 +58,113 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
-function StudentRowActions({
+/**
+ * Designed deactivation dialog (SAN-ERR-02, SAN-DSN-02): the old
+ * `window.prompt` reason was unstyled, and until the server fix it was also
+ * silently discarded. Deactivation is Q11 — the student stays on record and
+ * can be reactivated any time.
+ */
+function DeactivateStudentDialog({
   id,
-  status,
+  name,
   onChanged,
 }: {
   id: string;
-  status: string;
+  name: string;
   onChanged: () => void;
 }) {
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [reason, setReason] = useState('');
+  const trimmed = reason.trim();
 
-  async function toggle() {
-    if (busy) return;
-    const action = status === 'active' ? 'deactivate' : 'reactivate';
-    const reason = status === 'active' ? window.prompt('Reason for deactivation:') : undefined;
-    if (status === 'active' && !reason) return;
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!trimmed || busy) return;
     setBusy(true);
     try {
       await apiPost(`/v1/admin/students/${id}/status`, {
-        action,
-        ...(reason ? { reason } : {}),
+        action: 'deactivate',
+        reason: trimmed,
       });
-      toast.success(`Student ${action}d successfully.`);
+      toast.success('Student deactivated.', 'They stay on record and can be reactivated any time.');
+      setOpen(false);
+      setReason('');
       onChanged();
     } catch (err) {
-      toast.error(
-        `Could not ${action} student.`,
-        err instanceof ApiError ? err.message : undefined,
-      );
+      toast.error('Could not deactivate student.', err instanceof ApiError ? err.message : undefined);
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <Button
-      size="sm"
-      variant={status === 'active' ? 'secondary' : 'ghost'}
-      disabled={busy}
-      onClick={toggle}
-    >
-      {status === 'active' ? 'Deactivate' : 'Reactivate'}
+    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setReason(''); }}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="secondary">Deactivate</Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Deactivate {name}</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <p className="text-sm text-muted-foreground">
+            The student is removed from active rosters and leaderboards but stays on record —
+            you can reactivate them at any time.
+          </p>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Reason * (kept in the audit trail)</Label>
+            <Textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={2}
+              maxLength={300}
+              placeholder="e.g. Family moved to another city"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" variant="secondary" disabled={busy || !trimmed}>
+              {busy ? 'Deactivating…' : 'Deactivate'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function StudentRowActions({
+  id,
+  name,
+  status,
+  onChanged,
+}: {
+  id: string;
+  name: string;
+  status: string;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function reactivate() {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await apiPost(`/v1/admin/students/${id}/status`, { action: 'reactivate' });
+      toast.success('Student reactivated.');
+      onChanged();
+    } catch (err) {
+      toast.error('Could not reactivate student.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (status === 'active') {
+    return <DeactivateStudentDialog id={id} name={name} onChanged={onChanged} />;
+  }
+  return (
+    <Button size="sm" variant="ghost" disabled={busy} onClick={reactivate}>
+      Reactivate
     </Button>
   );
 }
@@ -313,27 +381,34 @@ function AddStudentDialog({ onAdded }: { onAdded: () => void }) {
   );
 }
 
+const STUDENT_STATUS_FILTERS = [
+  { value: 'all', label: 'All' },
+  { value: 'active', label: 'Active' },
+  { value: 'inactive', label: 'Inactive' },
+] as const;
+
 export default function StudentsPage() {
-  const [items, setItems] = useState<AdminStudentRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Server search + status filter + cursor paging (SAN-API-07): the page used
+  // to show a fixed first 100 with no way to find a deactivated student.
+  const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
-  async function load() {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await apiGet<{ items: AdminStudentRow[] }>(
-        '/v1/admin/students?limit=100',
-      );
-      setItems(res?.items ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load students.');
-    } finally {
-      setLoading(false);
-    }
-  }
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    return () => window.clearTimeout(t);
+  }, [query]);
 
-  useEffect(() => { void load(); }, []);
+  const listUrl = (() => {
+    const params = new URLSearchParams({ limit: '100' });
+    if (debouncedQuery) params.set('q', debouncedQuery);
+    if (statusFilter !== 'all') params.set('status', statusFilter);
+    return `/v1/admin/students?${params.toString()}`;
+  })();
+
+  const { items, loading, loadingMore, error, reload, hasMore, loadMore } =
+    useAdminList<AdminStudentRow>(listUrl);
+  const load = () => void reload();
 
   return (
     <div className="space-y-6">
@@ -346,6 +421,33 @@ export default function StudentsPage() {
         </div>
         <AddStudentDialog onAdded={load} />
       </header>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search by name or student code…"
+          className="h-9 w-64"
+        />
+        {STUDENT_STATUS_FILTERS.map((f) => {
+          const active = statusFilter === f.value;
+          return (
+            <button
+              key={f.value}
+              type="button"
+              onClick={() => setStatusFilter(f.value)}
+              className={[
+                'rounded-full border px-3 py-1 text-xs font-medium transition-colors',
+                active
+                  ? 'border-primary bg-primary text-primary-foreground'
+                  : 'border-border bg-card text-foreground hover:bg-muted',
+              ].join(' ')}
+            >
+              {f.label}
+            </button>
+          );
+        })}
+      </div>
 
       {error ? (
         <Card className="border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
@@ -404,13 +506,21 @@ export default function StudentsPage() {
                       <StatusPill status={s.status} />
                     </td>
                     <td className="px-4 py-3">
-                      <StudentRowActions id={s.id} status={s.status} onChanged={load} />
+                      <StudentRowActions
+                        id={s.id}
+                        name={s.full_name ?? s.student_code}
+                        status={s.status}
+                        onChanged={load}
+                      />
                     </td>
                   </tr>
                 ))
               )}
             </tbody>
           </table>
+        </div>
+        <div className="border-t border-border bg-muted/30 px-4 py-2">
+          <AdminLoadMore hasMore={hasMore} loadingMore={loadingMore} onLoadMore={() => void loadMore()} />
         </div>
       </Card>
     </div>

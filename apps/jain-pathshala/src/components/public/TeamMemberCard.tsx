@@ -78,54 +78,6 @@ function Portrait({
           fetchPriority={priority ? "high" : "auto"}
           decoding="async"
           className="h-full w-full object-cover object-top"
-          onLoad={() => {
-            // #region agent log
-            fetch("http://127.0.0.1:7744/ingest/33975112-0421-4ef6-a79e-c48c452c7ec5", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0083e4" },
-              body: JSON.stringify({
-                sessionId: "0083e4",
-                runId: "post-fix",
-                hypothesisId: "B",
-                location: "TeamMemberCard.tsx:Portrait",
-                message: "portrait load ok",
-                data: {
-                  kind: src.includes("/uploads/")
-                    ? "upload"
-                    : src.includes("/portraits/")
-                      ? "dummy"
-                      : "other",
-                  hasSig: /[?&]sig=/.test(src),
-                },
-                timestamp: Date.now(),
-              }),
-            }).catch(() => {});
-            // #endregion
-          }}
-          onError={() => {
-            // #region agent log
-            fetch("http://127.0.0.1:7744/ingest/33975112-0421-4ef6-a79e-c48c452c7ec5", {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "0083e4" },
-              body: JSON.stringify({
-                sessionId: "0083e4",
-                runId: "post-fix",
-                hypothesisId: "B",
-                location: "TeamMemberCard.tsx:Portrait",
-                message: "portrait load fail",
-                data: {
-                  kind: src.includes("/uploads/")
-                    ? "upload"
-                    : src.includes("/portraits/")
-                      ? "dummy"
-                      : "other",
-                  hasSig: /[?&]sig=/.test(src),
-                },
-                timestamp: Date.now(),
-              }),
-            }).catch(() => {});
-            // #endregion
-          }}
         />
       ) : (
         <div

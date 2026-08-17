@@ -450,13 +450,20 @@ export const staffingMeSchema = z.object({
 });
 export type StaffingMe = z.infer<typeof staffingMeSchema>;
 
+/**
+ * Rejection reasons reach the PARENT — bounds shared by mobile, web and the
+ * server so a one-character "x" can never be sent to a family (SAN-API-03).
+ */
+export const REJECT_REASON_MIN = 10;
+export const REJECT_REASON_MAX = 300;
+
 export const enrolmentActionSchema = z.object({
-  reason: z.string().optional(),
+  reason: z.string().max(REJECT_REASON_MAX).optional(),
 });
 
 export const studentStatusActionSchema = z.object({
   action: z.enum(["deactivate", "reactivate"]),
-  reason: z.string().optional(),
+  reason: z.string().max(REJECT_REASON_MAX).optional(),
 });
 
 /* ------------------------------------------------------------------ */

@@ -3,6 +3,7 @@ import { Link, useParams } from 'wouter';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useLocale } from '@/lib/locale-context';
+import { GuestError } from '@/components/public/GuestLoadState';
 
 interface ShivirDetail {
   id: string;
@@ -33,27 +34,49 @@ export default function ShivirDetailPage() {
   const [shivir, setShivir] = useState<ShivirDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!shivirId) { setLoading(false); setNotFound(true); return; }
+    setLoading(true);
+    setNotFound(false);
+    setLoadError(false);
     fetch(`/v1/public/shivirs/${shivirId}`, { headers: { Accept: 'application/json' } })
       .then((r) => {
+        // 404 means "this shivir doesn't exist"; anything else failing means "we
+        // couldn't ask" — conflating the two told guests real shivirs were gone
+        // (GST-ERR-02).
         if (r.status === 404) { setNotFound(true); return null; }
-        return r.ok ? r.json() : null;
+        if (!r.ok) { setLoadError(true); return null; }
+        return r.json();
       })
       .then((json: { data?: ShivirDetail | null } | null) => {
         if (!json) return;
         setShivir(json.data ?? null);
         if (!json.data) setNotFound(true);
       })
-      .catch(() => setNotFound(true))
+      .catch(() => setLoadError(true))
       .finally(() => setLoading(false));
-  }, [shivirId]);
+  }, [shivirId, reloadKey]);
 
   if (loading) {
     return (
       <section className="container py-12">
-        <div className="text-muted-foreground">Loading…</div>
+        <div className="text-muted-foreground">{hi ? 'लोड हो रहा है…' : 'Loading…'}</div>
+      </section>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <section className="container py-12">
+        <GuestError
+          hi={hi}
+          what="this shivir"
+          whatHi="यह शिविर"
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
       </section>
     );
   }

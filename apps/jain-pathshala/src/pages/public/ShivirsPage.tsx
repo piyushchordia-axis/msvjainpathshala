@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'wouter';
 import { Card } from '@/components/ui/card';
 import { useLocale } from '@/lib/locale-context';
+import { GuestError, GuestLoading } from '@/components/public/GuestLoadState';
 
 interface ShivirRow {
   id: string;
@@ -25,18 +26,31 @@ export default function ShivirsPage() {
   const hi = locale === 'hi';
   const [items, setItems] = useState<ShivirRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
 
-  useEffect(() => {
+  // A failed load used to render "No upcoming shivirs right now." (GST-ERR-01).
+  const load = useCallback(() => {
+    setLoading(true);
+    setError(false);
     fetch('/v1/public/shivirs', { headers: { Accept: 'application/json' } })
-      .then((r) => (r.ok ? r.json() : { data: { items: [] } }))
+      .then((r) => {
+        if (!r.ok) throw new Error(`shivirs ${r.status}`);
+        return r.json();
+      })
       .then((json: { data?: { items?: ShivirRow[] } }) => setItems(json.data?.items ?? []))
-      .catch(() => {})
+      .catch(() => setError(true))
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    load();
+  }, [load]);
+
   return (
     <section className="container py-12 md:py-16">
-      <p className="text-sm font-medium uppercase tracking-[0.18em] text-primary">Shivirs</p>
+      <p className="text-sm font-medium uppercase tracking-[0.18em] text-primary">
+        {hi ? 'शिविर' : 'Shivirs'}
+      </p>
       <h1 className="mt-3 font-display text-4xl text-secondary md:text-5xl">
         {hi ? 'आगामी शिविर' : 'Upcoming Shivirs'}
       </h1>
@@ -47,7 +61,9 @@ export default function ShivirsPage() {
       </p>
 
       {loading ? (
-        <div className="mt-10 text-muted-foreground">Loading…</div>
+        <GuestLoading hi={hi} />
+      ) : error ? (
+        <GuestError hi={hi} what="shivirs" whatHi="शिविर" onRetry={load} />
       ) : items.length === 0 ? (
         <Card className="mt-10 p-6 text-muted-foreground">
           {hi ? 'अभी कोई आगामी शिविर नहीं है।' : 'No upcoming shivirs right now.'}

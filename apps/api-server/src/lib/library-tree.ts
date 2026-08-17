@@ -255,3 +255,33 @@ export async function buildLibrarySection(
     items: loose,
   };
 }
+
+/**
+ * One published item — the deep-link unit (GST-PRF-01). Returns null when the
+ * item or its section is missing/unpublished, or when `guestOnly` and the
+ * section is login-gated: a guest deep link to gated content reads as
+ * not-found, never as a content leak.
+ */
+export async function buildLibraryItem(
+  itemId: string,
+  opts: BuildLibraryTreeOpts,
+): Promise<LibraryItemDto | null> {
+  const [row] = await db
+    .select({ item: library_items, section: library_sections })
+    .from(library_items)
+    .innerJoin(library_sections, eq(library_sections.id, library_items.section_id))
+    .where(
+      and(
+        eq(library_items.id, itemId),
+        isNull(library_items.deleted_at),
+        eq(library_items.is_published, true),
+        isNull(library_sections.deleted_at),
+        eq(library_sections.is_published, true),
+      ),
+    )
+    .limit(1);
+
+  if (!row) return null;
+  if (opts.guestOnly && row.section.requires_login) return null;
+  return mapItem(row.item);
+}

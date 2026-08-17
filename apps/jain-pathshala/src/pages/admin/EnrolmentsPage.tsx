@@ -10,6 +10,10 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
 } from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Textarea } from '@/components/ui/textarea';
+import { AdminLoadMore } from '@/components/admin/AdminPageShell';
+import { useAdminList } from '@/hooks/useAdminList';
+import { REJECT_REASON_MIN, REJECT_REASON_MAX } from '@workspace/api-zod';
 import {
   Command,
   CommandEmpty,
@@ -66,20 +70,100 @@ function fmtShort(iso: string | null): string {
 
 interface DecideActionsProps { id: string; status: EnrolmentStatus; onChanged: () => void; }
 
+const REJECT_PRESETS = [
+  'Batch is full for this age group this term.',
+  'The requested batch does not match this age group.',
+  'Documents are incomplete — please re-apply with the missing details.',
+];
+
+/**
+ * Designed reject dialog with the shared 10–300 bounds (SAN-API-03,
+ * SAN-DSN-02): the old `window.prompt` accepted "x" and sent it to the
+ * parent.
+ */
+function RejectEnrolmentDialog({ id, onChanged }: { id: string; onChanged: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [reason, setReason] = useState('');
+
+  const trimmed = reason.trim();
+  const valid = trimmed.length >= REJECT_REASON_MIN && trimmed.length <= REJECT_REASON_MAX;
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!valid || busy) return;
+    setBusy(true);
+    try {
+      await apiPost(`/v1/admin/enrolments/${id}/reject`, { reason: trimmed });
+      toast.success('Enrolment rejected.');
+      setOpen(false);
+      setReason('');
+      onChanged();
+    } catch (err) {
+      toast.error('Could not reject.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setReason(''); }}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="secondary">Reject</Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Reject enrolment</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">
+              Reason * (at least {REJECT_REASON_MIN} characters — the parent will read it)
+            </Label>
+            <Textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={3}
+              maxLength={REJECT_REASON_MAX}
+              placeholder="Why is this enrolment being rejected?"
+            />
+            <p className={`text-xs ${valid || trimmed.length === 0 ? 'text-muted-foreground' : 'text-destructive'}`}>
+              {trimmed.length}/{REJECT_REASON_MAX}
+              {trimmed.length > 0 && trimmed.length < REJECT_REASON_MIN
+                ? ` — at least ${REJECT_REASON_MIN} characters`
+                : ''}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {REJECT_PRESETS.map((p) => (
+              <button
+                key={p}
+                type="button"
+                className="rounded-full border border-border bg-card px-2.5 py-1 text-xs text-muted-foreground hover:border-primary/40"
+                onClick={() => setReason(p)}
+              >
+                {p.slice(0, 34)}…
+              </button>
+            ))}
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" variant="secondary" disabled={busy || !valid}>
+              {busy ? 'Rejecting…' : 'Reject'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function DecideActions({ id, status, onChanged }: DecideActionsProps) {
   const [busy, setBusy] = useState<string | null>(null);
 
-  async function act(action: 'approve' | 'waitlist' | 'reject') {
+  async function act(action: 'approve' | 'waitlist') {
     if (busy) return;
-    let body: Record<string, string> = {};
-    if (action === 'reject') {
-      const reason = window.prompt('Rejection reason (required):');
-      if (!reason) return;
-      body = { reason };
-    }
     setBusy(action);
     try {
-      await apiPost(`/v1/admin/enrolments/${id}/${action}`, body);
+      await apiPost(`/v1/admin/enrolments/${id}/${action}`, {});
       toast.success(`Enrolment ${action}ed.`);
       onChanged();
     } catch (err) {
@@ -102,9 +186,7 @@ function DecideActions({ id, status, onChanged }: DecideActionsProps) {
           {busy === 'waitlist' ? '…' : 'Waitlist'}
         </Button>
       ) : null}
-      <Button size="sm" variant="secondary" onClick={() => act('reject')} disabled={!!busy}>
-        {busy === 'reject' ? '…' : 'Reject'}
-      </Button>
+      <RejectEnrolmentDialog id={id} onChanged={onChanged} />
     </div>
   );
 }
@@ -120,21 +202,42 @@ function studentLabel(s: StudentOption): string {
   return `${s.full_name ?? '—'} · ${s.student_code}`;
 }
 
+/**
+ * Server-searched student picker (SAN-API-04): the old version client-filtered
+ * one default page, so a student late in the alphabet showed "No matching
+ * student" even though they exist.
+ */
 function StudentSearchSelect({
-  students,
   value,
+  selected,
   onChange,
   disabled,
-  loading,
 }: {
-  students: StudentOption[];
   value: string;
-  onChange: (id: string) => void;
+  selected: StudentOption | null;
+  onChange: (student: StudentOption) => void;
   disabled?: boolean;
-  loading?: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const selected = useMemo(() => students.find((s) => s.id === value) ?? null, [students, value]);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<StudentOption[]>([]);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    const q = query.trim();
+    const t = window.setTimeout(() => {
+      const url = q
+        ? `/v1/admin/students?limit=20&q=${encodeURIComponent(q)}`
+        : '/v1/admin/students?limit=20';
+      setSearching(true);
+      apiGet<{ items: StudentOption[] }>(url)
+        .then((r) => setResults(r?.items ?? []))
+        .catch(() => setResults([]))
+        .finally(() => setSearching(false));
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [open, query]);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -144,15 +247,11 @@ function StudentSearchSelect({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          disabled={disabled || loading}
+          disabled={disabled}
           className="h-9 w-full justify-between font-normal"
         >
           <span className="truncate text-left">
-            {loading
-              ? 'Loading…'
-              : selected
-                ? studentLabel(selected)
-                : 'Search student…'}
+            {selected ? studentLabel(selected) : 'Search student…'}
           </span>
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
@@ -161,37 +260,38 @@ function StudentSearchSelect({
         className="z-[100] w-[var(--radix-popover-trigger-width)] p-0"
         align="start"
       >
-        <Command>
-          <CommandInput placeholder="Search by name or student code…" />
+        <Command shouldFilter={false}>
+          <CommandInput
+            placeholder="Search by name or student code…"
+            value={query}
+            onValueChange={setQuery}
+          />
           <CommandList>
-            <CommandEmpty>No matching student.</CommandEmpty>
+            <CommandEmpty>{searching ? 'Searching…' : 'No matching student.'}</CommandEmpty>
             <CommandGroup>
-              {students.map((s) => {
-                const label = studentLabel(s);
-                return (
-                  <CommandItem
-                    key={s.id}
-                    value={`${label} ${s.student_code}`}
-                    onSelect={() => {
-                      onChange(s.id);
-                      setOpen(false);
-                    }}
-                  >
-                    <Check
-                      className={cn(
-                        'mr-2 h-4 w-4',
-                        value === s.id ? 'opacity-100' : 'opacity-0',
-                      )}
-                    />
-                    <span className="truncate">
-                      <span className="font-medium">{s.full_name ?? '—'}</span>
-                      <span className="ml-1 font-mono text-xs text-muted-foreground">
-                        {s.student_code}
-                      </span>
+              {results.map((s) => (
+                <CommandItem
+                  key={s.id}
+                  value={s.id}
+                  onSelect={() => {
+                    onChange(s);
+                    setOpen(false);
+                  }}
+                >
+                  <Check
+                    className={cn(
+                      'mr-2 h-4 w-4',
+                      value === s.id ? 'opacity-100' : 'opacity-0',
+                    )}
+                  />
+                  <span className="truncate">
+                    <span className="font-medium">{s.full_name ?? '—'}</span>
+                    <span className="ml-1 font-mono text-xs text-muted-foreground">
+                      {s.student_code}
                     </span>
-                  </CommandItem>
-                );
-              })}
+                  </span>
+                </CommandItem>
+              ))}
             </CommandGroup>
           </CommandList>
         </Command>
@@ -279,39 +379,34 @@ function AddEnrolmentDialog({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [loadingOpts, setLoadingOpts] = useState(false);
-  const [students, setStudents] = useState<StudentOption[]>([]);
   const [batches, setBatches] = useState<BatchOption[]>([]);
-  const [studentId, setStudentId] = useState('');
+  const [student, setStudent] = useState<StudentOption | null>(null);
   const [batchId, setBatchId] = useState('');
   const [approveNow, setApproveNow] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setLoadingOpts(true);
-    Promise.all([
-      apiGet<{ items: StudentOption[] }>('/v1/admin/students'),
-      apiGet<{ items: BatchOption[] }>('/v1/admin/batches'),
-    ])
-      .then(([s, b]) => {
-        setStudents(s?.items ?? []);
+    apiGet<{ items: BatchOption[] }>('/v1/admin/batches')
+      .then((b) => {
         // Only active batches can accept enrolments.
         setBatches((b?.items ?? []).filter((x) => x.status === 'active'));
       })
-      .catch((err) => toast.error('Could not load students or batches.', err instanceof ApiError ? err.message : undefined))
+      .catch((err) => toast.error('Could not load batches.', err instanceof ApiError ? err.message : undefined))
       .finally(() => setLoadingOpts(false));
   }, [open]);
 
   function reset() {
-    setStudentId(''); setBatchId(''); setApproveNow(false);
+    setStudent(null); setBatchId(''); setApproveNow(false);
   }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!studentId || !batchId) return;
+    if (!student || !batchId) return;
     setBusy(true);
     try {
       await apiPost('/v1/enrolments', {
-        student_id: studentId,
+        student_id: student.id,
         requested_batch_id: batchId,
         ...(approveNow ? { auto_approve: true } : {}),
       });
@@ -337,15 +432,10 @@ function AddEnrolmentDialog({ onAdded }: { onAdded: () => void }) {
           <div className="space-y-1">
             <Label className="text-xs font-medium">Student *</Label>
             <StudentSearchSelect
-              students={students}
-              value={studentId}
-              onChange={setStudentId}
-              loading={loadingOpts}
-              disabled={loadingOpts}
+              value={student?.id ?? ''}
+              selected={student}
+              onChange={setStudent}
             />
-            {!loadingOpts && students.length === 0 ? (
-              <p className="text-xs text-muted-foreground">No students in your scope.</p>
-            ) : null}
           </div>
           <div className="space-y-1">
             <Label className="text-xs font-medium">Batch *</Label>
@@ -371,7 +461,7 @@ function AddEnrolmentDialog({ onAdded }: { onAdded: () => void }) {
           </label>
           <div className="flex justify-end gap-2 pt-2">
             <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
-            <Button type="submit" disabled={busy || !studentId || !batchId}>
+            <Button type="submit" disabled={busy || !student || !batchId}>
               {busy ? 'Saving…' : approveNow ? 'Enrol & approve' : 'Create request'}
             </Button>
           </div>
@@ -386,25 +476,14 @@ export default function EnrolmentsPage() {
   const params = new URLSearchParams(search);
   const statusFilter = (params.get('status') as EnrolmentStatus | null) ?? 'all';
 
-  const [items, setItems] = useState<EnrolmentRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  async function load() {
-    setLoading(true);
-    setError(null);
-    try {
-      const qs = statusFilter !== 'all' ? `?status=${statusFilter}` : '';
-      const res = await apiGet<{ items: EnrolmentRow[] }>(`/v1/admin/enrolments${qs}`);
-      setItems(res?.items ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load enrolments.');
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => { void load(); }, [statusFilter]);
+  // Cursor-paged (SAN-PRF-03): the list used to end silently at the limit.
+  const listUrl =
+    statusFilter !== 'all'
+      ? `/v1/admin/enrolments?limit=100&status=${statusFilter}`
+      : '/v1/admin/enrolments?limit=100';
+  const { items, loading, loadingMore, error, reload, hasMore, loadMore } =
+    useAdminList<EnrolmentRow>(listUrl);
+  const load = () => void reload();
 
   return (
     <div className="space-y-6">
@@ -487,6 +566,7 @@ export default function EnrolmentsPage() {
         {items.length > 0 ? (
           <div className="flex items-center justify-between border-t border-border bg-muted/30 px-4 py-2 text-xs text-muted-foreground">
             <span>Showing {items.length} result{items.length !== 1 ? 's' : ''}.</span>
+            <AdminLoadMore hasMore={hasMore} loadingMore={loadingMore} onLoadMore={() => void loadMore()} />
           </div>
         ) : null}
       </Card>

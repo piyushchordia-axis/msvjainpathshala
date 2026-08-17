@@ -1,102 +1,21 @@
-import { useMemo, useState } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
-import { Pressable, Text, TextInput, View } from "react-native";
-import { bodyFamily, fonts } from "@/constants/typography";
+import { Pressable, View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
-import { useAuth } from "@/contexts/AuthContext";
-import { ApiError, apiPost } from "@/lib/api";
-import type { OtpSendResponse, OtpVerifyResponse } from "@/lib/auth";
-import { routeForRole } from "@/lib/roles";
 import { AppHeader } from "@/components/AppHeader";
 import { GuestQuickActions } from "@/components/QuickActions";
 import { Body, Button, Card, Row, Screen, Title } from "@/components/ui";
 
-function deviceId(): string {
-  return `mobile-${Date.now().toString()}-${Math.random().toString(36).slice(2, 11)}`;
-}
-
 /**
- * Pre-login landing. Phone + OTP sign-in is inline on this screen; guests can
- * still open Centres / Shivirs / Library / Notices from the bottom tabs.
+ * Pre-login landing. Sign-in lives in the dedicated /auth flow — this screen
+ * used to carry its own copy of the OTP form (same endpoint, second
+ * implementation), which is exactly how the two drift apart (GST-API-09).
  */
 export default function GuestHomeScreen() {
   const c = useColors();
   const router = useRouter();
   const { hi } = useLocale();
-  const { signIn } = useAuth();
-
-  const [digits, setDigits] = useState("");
-  const [otp, setOtp] = useState("");
-  const [otpToken, setOtpToken] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const e164 = useMemo(() => `+91${digits}`, [digits]);
-  const phoneValid = digits.length === 10;
-  const otpValid = otp.length === 6;
-  const awaitingOtp = !!otpToken;
-
-  const sendOtp = async () => {
-    if (!phoneValid || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await apiPost<OtpSendResponse>(
-        "/api/auth/login",
-        { phase: "send", phone: e164 },
-      );
-      setOtpToken(res.otp_token);
-      setOtp("");
-    } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : hi
-              ? "ओटीपी नहीं भेजा जा सका। पुनः प्रयास करें।"
-              : "Could not send OTP. Try again.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const verifyOtp = async () => {
-    if (!otpValid || !otpToken || busy) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await apiPost<OtpVerifyResponse>("/api/auth/login", {
-        phase: "verify",
-        otp_token: otpToken,
-        code: otp,
-        device_id: deviceId(),
-      });
-      await signIn(res.user, res.tokens);
-      router.replace(routeForRole(res.user.role));
-    } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : hi
-              ? "अमान्य ओटीपी। कृपया पुनः प्रयास करें।"
-              : "Invalid OTP. Please try again.",
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const changeNumber = () => {
-    setOtpToken(null);
-    setOtp("");
-    setError(null);
-  };
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
@@ -143,161 +62,19 @@ export default function GuestHomeScreen() {
 
         <Card>
           <Title style={{ fontSize: 20 }}>
-            {awaitingOtp
-              ? hi
-                ? "ओटीपी दर्ज करें"
-                : "Enter OTP"
-              : hi
-                ? "अपने खाते में साइन इन करें"
-                : "Sign in to your account"}
+            {hi ? "अपने खाते में साइन इन करें" : "Sign in to your account"}
           </Title>
-          {awaitingOtp ? (
-            <Body muted style={{ marginTop: 6 }}>
-              {hi
-                ? `हमने ${e164} पर 6-अंकीय कोड भेजा।`
-                : `We sent a 6-digit code to ${e164}.`}
-            </Body>
-          ) : null}
-
-          {error ? (
-            <View
-              style={{
-                marginTop: 12,
-                backgroundColor: c.errorSoft,
-                borderRadius: 8,
-                paddingHorizontal: 12,
-                paddingVertical: 10,
-              }}
-            >
-              <Text style={{ fontFamily: bodyFamily(hi), color: c.errorText, fontSize: 13 }}>
-                {error}
-              </Text>
-            </View>
-          ) : null}
-
-          {!awaitingOtp ? (
-            <View style={{ marginTop: 16, gap: 12 }}>
-              <Text
-                style={{
-                  fontFamily: bodyFamily(hi, "semibold"),
-                  fontSize: 13,
-                  color: c.foreground,
-                }}
-              >
-                {hi ? "मोबाइल नंबर" : "Mobile number"}
-              </Text>
-              <View
-                style={{
-                  flexDirection: "row",
-                  alignItems: "center",
-                  borderWidth: 1,
-                  borderColor: c.input,
-                  borderRadius: c.radius,
-                  overflow: "hidden",
-                }}
-              >
-                <View
-                  style={{
-                    paddingHorizontal: 12,
-                    paddingVertical: 12,
-                    backgroundColor: c.muted,
-                  }}
-                >
-                  <Text style={{ fontFamily: fonts.monoMedium, color: c.mutedForeground }}>
-                    +91
-                  </Text>
-                </View>
-                <TextInput
-                  value={digits}
-                  onChangeText={(t) => setDigits(t.replace(/\D/g, "").slice(0, 10))}
-                  placeholder="98765 43210"
-                  placeholderTextColor={c.inkDim}
-                  keyboardType="number-pad"
-                  style={{
-                    flex: 1,
-                    paddingHorizontal: 12,
-                    paddingVertical: 12,
-                    fontFamily: fonts.mono,
-                    fontSize: 16,
-                    color: c.foreground,
-                  }}
-                />
-              </View>
-              <Button
-                label={
-                  busy
-                    ? hi
-                      ? "भेजा जा रहा…"
-                      : "Sending…"
-                    : hi
-                      ? "ओटीपी भेजें"
-                      : "Send OTP"
-                }
-                onPress={sendOtp}
-                disabled={!phoneValid}
-                loading={busy}
-              />
-            </View>
-          ) : (
-            <View style={{ marginTop: 16, gap: 12 }}>
-              <Text
-                style={{
-                  fontFamily: bodyFamily(hi, "semibold"),
-                  fontSize: 13,
-                  color: c.foreground,
-                }}
-              >
-                {hi ? "एक बार का कोड" : "One-time code"}
-              </Text>
-              <TextInput
-                value={otp}
-                onChangeText={(t) => setOtp(t.replace(/\D/g, "").slice(0, 6))}
-                placeholder="123456"
-                placeholderTextColor={c.inkDim}
-                keyboardType="number-pad"
-                autoFocus
-                style={{
-                  borderWidth: 1,
-                  borderColor: c.input,
-                  borderRadius: c.radius,
-                  paddingHorizontal: 14,
-                  paddingVertical: 12,
-                  fontFamily: fonts.mono,
-                  fontSize: 20,
-                  letterSpacing: 6,
-                  color: c.foreground,
-                }}
-              />
-              <Button
-                label={
-                  busy
-                    ? hi
-                      ? "जाँच हो रही…"
-                      : "Verifying…"
-                    : hi
-                      ? "साइन इन"
-                      : "Sign in"
-                }
-                icon="log-in-outline"
-                onPress={verifyOtp}
-                disabled={!otpValid}
-                loading={busy}
-              />
-              <Pressable
-                onPress={changeNumber}
-                style={{ paddingVertical: 6, alignItems: "center" }}
-              >
-                <Text
-                  style={{
-                    fontFamily: bodyFamily(hi, "medium"),
-                    color: c.mutedForeground,
-                  }}
-                >
-                  ← {hi ? "नंबर बदलें" : "Change number"}
-                </Text>
-              </Pressable>
-            </View>
-          )}
+          <Body muted style={{ marginTop: 6 }}>
+            {hi
+              ? "मोबाइल नंबर और ओटीपी से — कोई पासवर्ड नहीं।"
+              : "With your mobile number and an OTP — no password."}
+          </Body>
+          <Button
+            label={hi ? "साइन इन करें" : "Sign in"}
+            icon="log-in-outline"
+            onPress={() => router.push("/auth/phone")}
+            style={{ marginTop: 16 }}
+          />
         </Card>
 
         <Title style={{ fontSize: 16, marginTop: 4, marginLeft: 2 }}>

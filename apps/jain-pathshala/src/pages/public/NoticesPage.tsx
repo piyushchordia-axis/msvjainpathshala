@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { useLocale } from '@/lib/locale-context';
+import { GuestError, GuestLoading } from '@/components/public/GuestLoadState';
 
 interface NoticeItem {
   id: string;
@@ -28,8 +29,12 @@ export default function NoticesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
+  const [reloadKey, setReloadKey] = useState(0);
+
   useEffect(() => {
     let active = true;
+    setLoading(true);
+    setError(false);
     fetch('/v1/notices/public?limit=50', { headers: { Accept: 'application/json' } })
       .then((r) => {
         if (!r.ok) throw new Error('http');
@@ -47,7 +52,7 @@ export default function NoticesPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [reloadKey]);
 
   return (
     <section className="container py-12 md:py-16">
@@ -64,11 +69,14 @@ export default function NoticesPage() {
       </p>
 
       {loading ? (
-        <div className="mt-10 text-muted-foreground">Loading…</div>
+        <GuestLoading hi={hi} />
       ) : error ? (
-        <Card className="mt-10 border-destructive/40 bg-destructive/5 p-6 text-sm text-destructive">
-          {hi ? 'सूचनाएँ लोड नहीं हो सकीं।' : 'Could not load notices. Please try again later.'}
-        </Card>
+        <GuestError
+          hi={hi}
+          what="notices"
+          whatHi="सूचनाएँ"
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
       ) : (
         <div className="mt-10 grid gap-4">
           {items.length === 0 ? (

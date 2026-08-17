@@ -89,21 +89,76 @@ describe("join registrations", () => {
     );
     const id = create.body.data.id as string;
     const code = create.body.data.display_code as string;
+    const screenshot = "http://localhost:8080/uploads/join-registration/pay-proof.png";
 
-    const pay = await request(app).patch(`/v1/join/registrations/${id}/payment`).send({
+    // Payment PATCH is throttled and mobile-authorised (guest re-review #1):
+    // the registration UUID leaks through create/lookup, so alone it must not
+    // authorise a write, and the response must not dump the row's PII.
+    const noMobile = await request(app).patch(`/v1/join/registrations/${id}/payment`).send({
+      kind: "shikshak",
+      payment_screenshot_url: screenshot,
+      has_paid: "yes",
+    });
+    expect(noMobile.status).toBe(422);
+
+    const wrongMobilePay = await request(app).patch(`/v1/join/registrations/${id}/payment`).send({
+      kind: "shikshak",
+      payment_screenshot_url: screenshot,
+      has_paid: "yes",
+      mobile: "1112223334",
+    });
+    expect(wrongMobilePay.status).toBe(404);
+
+    const externalUrl = await request(app).patch(`/v1/join/registrations/${id}/payment`).send({
       kind: "shikshak",
       payment_screenshot_url: "https://example.com/pay.png",
       has_paid: "yes",
+      mobile: "9876500011",
+    });
+    expect(externalUrl.status).toBe(422);
+
+    const pay = await request(app).patch(`/v1/join/registrations/${id}/payment`).send({
+      kind: "shikshak",
+      payment_screenshot_url: screenshot,
+      has_paid: "yes",
+      mobile: "9876500011",
     });
     expect(pay.status).toBe(200);
     expect(pay.body.data.has_paid).toBe("yes");
+    // Minimal projection only — the old handler returned the entire row.
+    expect(Object.keys(pay.body.data).sort()).toEqual(["display_code", "has_paid", "id"]);
+    expect(pay.body.data).not.toHaveProperty("whatsapp_contact");
+    expect(pay.body.data).not.toHaveProperty("address");
+
+    // Idempotent: a replay does not error and stays minimal.
+    const replay = await request(app).patch(`/v1/join/registrations/${id}/payment`).send({
+      kind: "shikshak",
+      payment_screenshot_url: screenshot,
+      has_paid: "yes",
+      mobile: "9876500011",
+    });
+    expect(replay.status).toBe(200);
+    expect(replay.body.data.has_paid).toBe("yes");
+
+    // Code alone is refused — sequential codes were a name-enumeration oracle;
+    // the registered mobile is the required shared secret (GST-API-11).
+    const codeOnly = await request(app).get(
+      `/v1/join/registrations/lookup?kind=shikshak&display_code=${encodeURIComponent(code)}`,
+    );
+    expect(codeOnly.status).toBe(422);
 
     const lookup = await request(app).get(
-      `/v1/join/registrations/lookup?kind=shikshak&display_code=${encodeURIComponent(code)}`,
+      `/v1/join/registrations/lookup?kind=shikshak&mobile=9876500011&display_code=${encodeURIComponent(code)}`,
     );
     expect(lookup.status).toBe(200);
     expect(lookup.body.data.items[0].display_code).toBe(code);
     expect(lookup.body.data.items[0].has_paid).toBe("yes");
+
+    // A valid code paired with the wrong mobile must not disclose the record.
+    const wrongMobile = await request(app).get(
+      `/v1/join/registrations/lookup?kind=shikshak&mobile=1112223334&display_code=${encodeURIComponent(code)}`,
+    );
+    expect(wrongMobile.status).toBe(404);
   });
 
   it("creates sanchalak with PATHSHALA-SAN code", async () => {
@@ -156,6 +211,18 @@ describe("join registrations", () => {
     expect(stats.status).toBe(200);
     expect(stats.body.data.total).toBeGreaterThanOrEqual(1);
     expect(typeof stats.body.data.pending).toBe("number");
+
+    // Student payment PATCH matches parent_mobile and never echoes it back.
+    const regId = create.body.data.id as string;
+    const pay = await request(app).patch(`/v1/join/registrations/${regId}/payment`).send({
+      kind: "student",
+      payment_screenshot_url: "http://localhost:8080/uploads/join-registration/stu-pay.png",
+      has_paid: "yes",
+      mobile: "9876500022",
+    });
+    expect(pay.status).toBe(200);
+    expect(Object.keys(pay.body.data).sort()).toEqual(["display_code", "has_paid", "id"]);
+    expect(pay.body.data).not.toHaveProperty("parent_mobile");
 
     await request(app)
       .put("/v1/join/settings/registration_open?kind=student")

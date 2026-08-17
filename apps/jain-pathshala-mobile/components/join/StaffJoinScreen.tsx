@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Image, Pressable, TextInput, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
-import { useRouter, type Href } from "expo-router";
+import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
-import { ApiError, apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/api-error-copy";
+import { mergeById, usePickerSearch } from "@/lib/picker-search";
 import { joinUpload, safeImageMime, safeImageUploadName } from "@/lib/join-upload";
 import {
   STAFF_SECTIONS,
@@ -29,7 +31,7 @@ export function StaffJoinScreen({ kind }: { kind: "shikshak" | "sanchalak" }) {
   const c = useColors();
   const { hi } = useLocale();
   const router = useRouter();
-  const [phase, setPhase] = useState<"loading" | "closed" | "form" | "done">("loading");
+  const [phase, setPhase] = useState<"loading" | "error" | "closed" | "form" | "done">("loading");
   const [sectionIdx, setSectionIdx] = useState(0);
   const [allFields, setAllFields] = useState<JoinField[]>([]);
   const [centres, setCentres] = useState<Centre[]>([]);
@@ -43,23 +45,27 @@ export function StaffJoinScreen({ kind }: { kind: "shikshak" | "sanchalak" }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const [s, f, centresRes] = await Promise.all([
-          apiGet<{ registration_open: boolean }>(`/v1/join/settings?kind=${kind}`),
-          apiGet<{ items: JoinField[] }>(`/v1/join/form-fields?kind=${kind}`),
-          apiGet<{ items: Centre[] }>("/v1/public/centres"),
-        ]);
-        setAllFields(f.items);
-        setCentres(centresRes.items.filter((x) => !!x.code));
-        setPhase(s.registration_open ? "form" : "closed");
-      } catch (e) {
-        setError(e instanceof ApiError ? e.message : "Failed to load");
-        setPhase("closed");
-      }
-    })();
+  const loadForm = useCallback(async () => {
+    setPhase("loading");
+    try {
+      const [s, f, centresRes] = await Promise.all([
+        apiGet<{ registration_open: boolean }>(`/v1/join/settings?kind=${kind}`),
+        apiGet<{ items: JoinField[] }>(`/v1/join/form-fields?kind=${kind}`),
+        apiGet<{ items: Centre[] }>("/v1/public/centres"),
+      ]);
+      setAllFields(f.items);
+      setCentres(centresRes.items.filter((x) => !!x.code));
+      // 'closed' only when the server actually says so — a load failure used to
+      // masquerade as "registration is closed" (GST-API-01).
+      setPhase(s.registration_open ? "form" : "closed");
+    } catch {
+      setPhase("error");
+    }
   }, [kind]);
+
+  useEffect(() => {
+    void loadForm();
+  }, [loadForm]);
 
   const photo = useMemo(() => photoField(allFields), [allFields]);
   const section = STAFF_SECTIONS[sectionIdx]!;
@@ -67,16 +73,24 @@ export function StaffJoinScreen({ kind }: { kind: "shikshak" | "sanchalak" }) {
     () => fieldsForSection(allFields, section).filter((f) => f.field_key !== "role"),
     [allFields, section],
   );
+  // Server-side ?q= merge — beyond the clamped first page a centre was
+  // unpickable however the applicant spelled it (GST-PRF-03).
+  const centreQ = centreQuery.trim();
+  const centreExtra = usePickerSearch<Centre>(
+    centreQ.length >= 2 ? `/v1/public/centres?q=${encodeURIComponent(centreQ)}` : null,
+  );
+
   const filteredCentres = useMemo(() => {
-    const q = centreQuery.trim().toLowerCase();
-    if (!q) return centres;
-    return centres.filter(
+    const q = centreQ.toLowerCase();
+    const pool = mergeById(centres, centreExtra.filter((x) => !!x.code));
+    if (!q) return pool;
+    return pool.filter(
       (centre) =>
         centre.name.toLowerCase().includes(q) ||
         (centre.code ?? "").toLowerCase().includes(q) ||
         (centre.city_name ?? "").toLowerCase().includes(q),
     );
-  }, [centres, centreQuery]);
+  }, [centres, centreExtra, centreQ]);
 
   const inputStyle = {
     borderWidth: 1,
@@ -123,7 +137,13 @@ export function StaffJoinScreen({ kind }: { kind: "shikshak" | "sanchalak" }) {
     } catch (e) {
       setPhotoPreviewUri(null);
       setPhotoUrl(null);
-      setError(e instanceof ApiError ? e.message : "Upload failed — choose a clear image and try again.");
+      // Bilingual copy keyed off error.code (GST-API-05).
+      setError(apiErrorMessage(e, hi, {
+        ERR_VALIDATION_FAILED: {
+          en: "Upload failed — choose a clear image and try again.",
+          hi: "अपलोड विफल रहा — साफ़ छवि चुनकर पुनः प्रयास करें।",
+        },
+      }));
     } finally {
       setBusy(false);
     }
@@ -185,7 +205,8 @@ export function StaffJoinScreen({ kind }: { kind: "shikshak" | "sanchalak" }) {
       setCode(created.display_code);
       setPhase("done");
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Submit failed");
+      // Bilingual copy keyed off error.code (GST-API-05).
+      setError(apiErrorMessage(e, hi));
     } finally {
       setBusy(false);
     }
@@ -259,11 +280,37 @@ export function StaffJoinScreen({ kind }: { kind: "shikshak" | "sanchalak" }) {
     );
   }
 
+  if (phase === "error") {
+    return (
+      <Screen>
+        <Title>{hi ? "फ़ॉर्म लोड नहीं हो सका" : "Couldn't load the form"}</Title>
+        <Body muted style={{ marginTop: 8 }}>
+          {hi
+            ? "अपना कनेक्शन जाँचें और पुनः प्रयास करें — पंजीकरण अभी भी खुला हो सकता है।"
+            : "Check your connection and try again — registration may well still be open."}
+        </Body>
+        <Button
+          label={hi ? "पुनः प्रयास करें" : "Try again"}
+          style={{ marginTop: 16 }}
+          onPress={() => void loadForm()}
+        />
+        <Button
+          label={hi ? "मार्ग चुनें" : "Choose path"}
+          variant="outline"
+          style={{ marginTop: 10 }}
+          onPress={() => router.replace("/join")}
+        />
+      </Screen>
+    );
+  }
+
   if (phase === "closed") {
     return (
       <Screen>
         <Title>{hi ? "पंजीकरण बंद है" : "Registration is closed"}</Title>
-        {error ? <Body style={{ color: c.destructive, marginTop: 8 }}>{error}</Body> : null}
+        <Body muted style={{ marginTop: 8 }}>
+          {hi ? "कृपया बाद में पुनः प्रयास करें।" : "Please check back later."}
+        </Body>
         <Button
           label={hi ? "मार्ग चुनें" : "Choose path"}
           variant="outline"
@@ -292,7 +339,15 @@ export function StaffJoinScreen({ kind }: { kind: "shikshak" | "sanchalak" }) {
           variant="outline"
           style={{ marginTop: 10 }}
           onPress={() =>
-            router.push(`/join/complete-payment?kind=${kind}` as Href)
+            // Carry the code + mobile the applicant just typed (GST-API-02).
+            router.push({
+              pathname: "/join/complete-payment",
+              params: {
+                kind,
+                code: code ?? "",
+                mobile: values.whatsapp_contact ?? "",
+              },
+            })
           }
         />
       </Screen>

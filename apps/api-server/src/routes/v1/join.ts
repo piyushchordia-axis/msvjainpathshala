@@ -22,6 +22,8 @@ import {
 } from "@workspace/db";
 import { and, asc, count, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { ok, fail } from "../../lib/envelope";
+import { rateLimit } from "../../lib/ratelimit";
+import { uploadKeyFromUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { auditFromReq } from "../../lib/audit";
 import { clampLimit } from "../../lib/route-helpers";
@@ -256,6 +258,12 @@ const staffCreateSchema = z.object({
 });
 
 router.post("/registrations", async (req: Request, res: Response) => {
+  // Unauthenticated write; a loop here fills the sanchalak's approval queue and
+  // allocates display codes. Ten an hour covers a large family on one connection.
+  if (await rateLimit(`join:reg:ip:${req.ip ?? "unknown"}`, 10, 3600)) {
+    fail(res, 429, "ERR_RATE_LIMITED", "Too many registrations just now — please try again later.");
+    return;
+  }
   const kindRaw = String(req.body?.kind ?? "");
   if (!isJoinKind(kindRaw)) {
     fail(res, 422, "ERR_VALIDATION_FAILED", "Body kind must be student, shikshak, or sanchalak.");
@@ -434,6 +442,12 @@ router.post("/registrations", async (req: Request, res: Response) => {
 
 /* ---------- Public: lookup ---------- */
 router.get("/registrations/lookup", async (req: Request, res: Response) => {
+  // Display codes are sequential (MUM-STU-00042) and this echoes the registrant's
+  // real name — unthrottled, it is a name-enumeration oracle.
+  if (await rateLimit(`join:lookup:ip:${req.ip ?? "unknown"}`, 15, 600)) {
+    fail(res, 429, "ERR_RATE_LIMITED", "Too many lookups just now — wait a few minutes and try again.");
+    return;
+  }
   const kind = parseKind(req);
   if (!kind) {
     fail(res, 422, "ERR_VALIDATION_FAILED", "Query kind must be student, shikshak, or sanchalak.");
@@ -441,34 +455,32 @@ router.get("/registrations/lookup", async (req: Request, res: Response) => {
   }
   const displayCode = str(req.query.display_code)?.toUpperCase() ?? null;
   const mobile = str(req.query.mobile) ?? null;
-  if (!displayCode && !mobile) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Provide display_code or mobile.");
+  // Mobile is REQUIRED: display codes are sequential, so a code alone was a
+  // name+phone oracle. The registered mobile is the shared secret; a code can
+  // only narrow (AND) a mobile match, never substitute for it (GST-API-11).
+  if (!mobile) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Provide the mobile number used to register.");
     return;
   }
 
   if (kind === "student") {
-    const conds = [];
+    const conds = [
+      or(
+        eq(join_student_registrations.parent_mobile, mobile),
+        eq(join_student_registrations.mobile, mobile),
+      )!,
+    ];
     if (displayCode) conds.push(eq(join_student_registrations.display_code, displayCode));
-    if (mobile) {
-      conds.push(
-        or(
-          eq(join_student_registrations.parent_mobile, mobile),
-          eq(join_student_registrations.mobile, mobile),
-        )!,
-      );
-    }
     const items = await db
       .select({
         id: join_student_registrations.id,
         display_code: join_student_registrations.display_code,
         name: join_student_registrations.name,
-        mobile: join_student_registrations.mobile,
-        parent_mobile: join_student_registrations.parent_mobile,
         has_paid: join_student_registrations.has_paid,
         father_name: join_student_registrations.father_name,
       })
       .from(join_student_registrations)
-      .where(or(...conds))
+      .where(and(...conds))
       .limit(20);
     if (items.length === 0) {
       fail(res, 404, "ERR_NOT_FOUND", "No registration found.");
@@ -479,19 +491,17 @@ router.get("/registrations/lookup", async (req: Request, res: Response) => {
   }
 
   const table = kind === "shikshak" ? join_shikshak_registrations : join_sanchalak_registrations;
-  const conds = [];
+  const conds = [eq(table.whatsapp_contact, mobile)];
   if (displayCode) conds.push(eq(table.display_code, displayCode));
-  if (mobile) conds.push(eq(table.whatsapp_contact, mobile));
   const items = await db
     .select({
       id: table.id,
       display_code: table.display_code,
       name: table.name,
-      mobile: table.whatsapp_contact,
       has_paid: table.has_paid,
     })
     .from(table)
-    .where(or(...conds))
+    .where(and(...conds))
     .limit(20);
   if (items.length === 0) {
     fail(res, 404, "ERR_NOT_FOUND", "No registration found.");
@@ -503,11 +513,26 @@ router.get("/registrations/lookup", async (req: Request, res: Response) => {
 /* ---------- Public: payment patch ---------- */
 const paymentSchema = z.object({
   kind: z.enum(["student", "shikshak", "sanchalak"]),
-  payment_screenshot_url: z.string().min(1),
+  payment_screenshot_url: z.string().min(1).max(2000),
   has_paid: z.enum(["yes", "no"]).optional().default("yes"),
+  mobile: z.string().min(8).max(20),
 });
 
+/* The screenshot must be one of OUR join uploads — an arbitrary string here
+   would let anyone attach an external URL to someone else's registration. */
+function isJoinUploadUrl(url: string): boolean {
+  const key = uploadKeyFromUrl(url);
+  return !!key && key.startsWith("join-registration/");
+}
+
 router.patch("/registrations/:id/payment", async (req: Request, res: Response) => {
+  // The registration UUID leaks through create/lookup responses — alone it
+  // must not authorise a write. The registered mobile is the shared secret,
+  // exactly as on lookup, and the endpoint is throttled like its siblings.
+  if (await rateLimit(`join:payment:ip:${req.ip ?? "unknown"}`, 10, 3600)) {
+    fail(res, 429, "ERR_RATE_LIMITED", "Too many payment updates just now — wait a few minutes and try again.");
+    return;
+  }
   const id = String(req.params.id);
   if (!UUID_RE.test(id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Registration not found.");
@@ -518,41 +543,71 @@ router.patch("/registrations/:id/payment", async (req: Request, res: Response) =
     fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid payment payload.", parsed.error.flatten());
     return;
   }
-  const { kind, payment_screenshot_url, has_paid } = parsed.data;
+  const { kind, payment_screenshot_url, has_paid, mobile } = parsed.data;
+
+  if (!isJoinUploadUrl(payment_screenshot_url)) {
+    fail(
+      res,
+      422,
+      "ERR_VALIDATION_FAILED",
+      "That screenshot link is not an upload from this form — upload the screenshot here first, then submit.",
+    );
+    return;
+  }
 
   if (kind === "student") {
-    const [row] = await db
-      .update(join_student_registrations)
-      .set({
-        payment_screenshot_url,
-        has_paid,
-        updated_at: new Date(),
+    const [existing] = await db
+      .select({
+        id: join_student_registrations.id,
+        display_code: join_student_registrations.display_code,
+        has_paid: join_student_registrations.has_paid,
+        parent_mobile: join_student_registrations.parent_mobile,
+        mobile: join_student_registrations.mobile,
       })
+      .from(join_student_registrations)
       .where(eq(join_student_registrations.id, id))
-      .returning();
-    if (!row) {
+      .limit(1);
+    // Wrong mobile reads exactly like an unknown id — never confirm existence.
+    if (!existing || (existing.parent_mobile !== mobile && existing.mobile !== mobile)) {
       fail(res, 404, "ERR_NOT_FOUND", "Registration not found.");
       return;
     }
-    ok(res, row);
+    if (existing.has_paid === "yes") {
+      ok(res, { id: existing.id, display_code: existing.display_code, has_paid: "yes" });
+      return;
+    }
+    await db
+      .update(join_student_registrations)
+      .set({ payment_screenshot_url, has_paid, updated_at: new Date() })
+      .where(eq(join_student_registrations.id, id));
+    ok(res, { id: existing.id, display_code: existing.display_code, has_paid });
     return;
   }
 
   const table = kind === "shikshak" ? join_shikshak_registrations : join_sanchalak_registrations;
-  const [row] = await db
-    .update(table)
-    .set({
-      payment_screenshot_url,
-      has_paid,
-      updated_at: new Date(),
+  const [existing] = await db
+    .select({
+      id: table.id,
+      display_code: table.display_code,
+      has_paid: table.has_paid,
+      whatsapp_contact: table.whatsapp_contact,
     })
+    .from(table)
     .where(eq(table.id, id))
-    .returning();
-  if (!row) {
+    .limit(1);
+  if (!existing || existing.whatsapp_contact !== mobile) {
     fail(res, 404, "ERR_NOT_FOUND", "Registration not found.");
     return;
   }
-  ok(res, row);
+  if (existing.has_paid === "yes") {
+    ok(res, { id: existing.id, display_code: existing.display_code, has_paid: "yes" });
+    return;
+  }
+  await db
+    .update(table)
+    .set({ payment_screenshot_url, has_paid, updated_at: new Date() })
+    .where(eq(table.id, id));
+  ok(res, { id: existing.id, display_code: existing.display_code, has_paid });
 });
 
 /* ---------- Public: upload (join-registration folder only) ---------- */
@@ -577,6 +632,13 @@ async function safeUnlink(filePath: string | undefined): Promise<void> {
 }
 
 router.post("/uploads", uploadMultipart.single("file"), async (req: Request, res: Response) => {
+  // Unauthenticated multipart writing to object storage — direct, unbounded
+  // spend without a cap. Registrations need a photo + a payment screenshot, so
+  // the budget stays comfortable for real families.
+  if (await rateLimit(`join:upload:ip:${req.ip ?? "unknown"}`, 30, 3600)) {
+    fail(res, 429, "ERR_RATE_LIMITED", "Too many uploads just now — please try again later.");
+    return;
+  }
   const tempPath = req.file?.path;
   try {
     const file = req.file;

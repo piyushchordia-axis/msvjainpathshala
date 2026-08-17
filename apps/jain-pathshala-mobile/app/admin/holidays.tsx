@@ -9,7 +9,7 @@ import { ApiError } from "@/lib/api";
 import {
   useAdminCentres,
   useCentreHolidays,
-  useCreateCentreHoliday,
+  useCreateCentreHolidayRange,
   useDeleteCentreHoliday,
   usePatchCentreHoliday,
   type CentreHolidayRow,
@@ -54,7 +54,7 @@ export default function HolidaysScreen() {
   );
   const [selectedCentreId, pickCentre] = usePersistedCentreId(centres, CENTRE_KEY);
   const holidaysQ = useCentreHolidays(selectedCentreId);
-  const createMut = useCreateCentreHoliday();
+  const rangeMut = useCreateCentreHolidayRange();
   const patchMut = usePatchCentreHoliday();
   const deleteMut = useDeleteCentreHoliday();
 
@@ -124,37 +124,37 @@ export default function HolidaysScreen() {
           onPress: () => {
             void (async () => {
               setSaving(true);
-              let okCount = 0;
-              let failCount = 0;
-              for (const holiday_date of dates) {
-                try {
-                  await createMut.mutateAsync({
-                    centreId: selectedCentreId,
-                    holiday_date,
-                    reason: reason.trim() || undefined,
-                  });
-                  okCount += 1;
-                } catch {
-                  failCount += 1;
-                }
-              }
-              setSaving(false);
-              setStartDate(null);
-              setEndDate(null);
-              setReason("");
-              setPicking("start");
-              if (failCount === 0) {
+              try {
+                // One ranged call with per-date results (SAN-PRF-01) — a
+                // 20-day break used to be 20 serial requests with a vague
+                // partial-failure story.
+                const res = await rangeMut.mutateAsync({
+                  centreId: selectedCentreId,
+                  start_date: startDate,
+                  end_date: end,
+                  reason: reason.trim() || undefined,
+                });
+                const created = res.results.filter((r) => r.status === "created").length;
+                const existing = res.results.length - created;
+                setStartDate(null);
+                setEndDate(null);
+                setReason("");
+                setPicking("start");
                 Alert.alert(
                   hi ? "हो गया" : "Done",
-                  hi ? `${okCount} अवकाश दिन जोड़े गए।` : `Added ${okCount} holiday day(s).`,
-                );
-              } else {
-                Alert.alert(
-                  hi ? "आंशिक सफलता" : "Partial success",
                   hi
-                    ? `${okCount} जोड़े, ${failCount} विफल (शायद पहले से मौजूद)।`
-                    : `${okCount} added, ${failCount} failed (may already exist).`,
+                    ? `${created} अवकाश दिन जोड़े गए${existing ? `, ${existing} पहले से मौजूद थे` : ""}।`
+                    : `Added ${created} holiday day(s)${existing ? `, ${existing} already existed` : ""}.`,
                 );
+              } catch {
+                Alert.alert(
+                  hi ? "जोड़ नहीं सके" : "Could not add",
+                  hi
+                    ? "अवकाश सहेजे नहीं गए — कनेक्शन जाँचें और पुनः प्रयास करें।"
+                    : "The holidays were not saved — check your connection and try again.",
+                );
+              } finally {
+                setSaving(false);
               }
             })();
           },
@@ -301,7 +301,7 @@ export default function HolidaysScreen() {
             <Button
               label={hi ? "जोड़ें" : "Add holiday"}
               onPress={() => void addRange()}
-              loading={saving || createMut.isPending}
+              loading={saving || rangeMut.isPending}
               disabled={!startDate}
             />
           </Card>

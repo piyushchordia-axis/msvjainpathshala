@@ -54,11 +54,12 @@ export async function resolveOwnedUpload(opts: {
   label?: string;
 }): Promise<ResolveOwnedUploadOk | ResolveOwnedUploadFail> {
   const label = opts.label ?? "upload";
+  const folder = opts.folderPrefix.replace(/\/$/, "");
   const key = uploadKeyFromUrl(opts.url);
   if (!key || !key.startsWith(opts.folderPrefix)) {
     return {
       ok: false,
-      message: `That ${label} link is not a file you uploaded here — upload the file first, then submit.`,
+      message: `That ${label} link is not a file you uploaded here (${folder} uploads only) — upload the file first, then submit.`,
     };
   }
 
@@ -81,9 +82,12 @@ export async function resolveOwnedUpload(opts: {
   const kind = kindFromContentType(row.content_type, key);
   if (!kind || !opts.allowedKinds.includes(kind)) {
     const allowed = opts.allowedKinds.join(" or ");
+    // Name the offending type ("a video") so the parent knows WHICH file to
+    // swap, not just that something was wrong.
+    const what = kind ? `A ${kind} file` : "That file type";
     return {
       ok: false,
-      message: `That file type cannot be used for ${label} — upload an ${allowed} instead.`,
+      message: `${what} cannot be used for ${label} — upload an ${allowed} instead.`,
     };
   }
 

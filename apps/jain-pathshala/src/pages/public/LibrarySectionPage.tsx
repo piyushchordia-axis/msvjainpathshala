@@ -6,8 +6,8 @@ import { Button } from '@/components/ui/button';
 import { LibraryTextSheet } from '@/components/library/LibraryTextSheet';
 import { useLocale } from '@/lib/locale-context';
 import { useAuth } from '@/lib/auth-context';
-import { apiGet } from '@/lib/api-client';
 import { safeHref } from '@/lib/safe-url';
+import { fetchLibrarySection } from '@/lib/library-cache';
 import { toast } from '@/components/ui/toast-jp';
 
 function pick(hi: boolean, en: string | null | undefined, hiVal: string | null | undefined, gu?: string | null) {
@@ -154,22 +154,15 @@ export default function LibrarySectionPage() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    const load = authed
-      ? apiGet<{ sections: LibrarySectionDto[] }>('/v1/library')
-      : fetch('/v1/public/library', { headers: { Accept: 'application/json' } })
-          .then((r) => (r.ok ? r.json() : { data: { sections: [] } }))
-          .then((json: { data?: { sections?: LibrarySectionDto[] } }) => ({
-            sections: json.data?.sections ?? [],
-          }));
-
-    Promise.resolve(load)
-      .then((res) => {
+    // Scoped fetch (GST-PRF-01): a warm index visit serves this from the tree
+    // cache; a cold deep-link downloads ONE section, not the whole corpus.
+    fetchLibrarySection(authed, sectionId)
+      .then((found) => {
         if (cancelled) return;
-        const found = (res.sections ?? []).find((s) => s.id === sectionId) ?? null;
         setSection(found);
       })
-      .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : 'Could not load section.');
+      .catch(() => {
+        if (!cancelled) setError('load');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -197,7 +190,13 @@ export default function LibrarySectionPage() {
     return (
       <section className="container py-12">
         <p className="text-muted-foreground">
-          {error ?? (hi ? 'यह खंड उपलब्ध नहीं है।' : 'That section is not available.')}
+          {error
+            ? hi
+              ? 'खंड लोड नहीं हो सका — अपना कनेक्शन जाँचें और पुनः प्रयास करें।'
+              : "Couldn't load this section — check your connection and try again."
+            : hi
+              ? 'यह खंड उपलब्ध नहीं है।'
+              : 'That section is not available.'}
         </p>
         <Link href="/library" className="mt-4 inline-block text-primary">
           ← {hi ? 'पुस्तकालय' : 'Library'}

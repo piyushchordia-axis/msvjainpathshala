@@ -26,6 +26,18 @@ import { cn } from '@/lib/utils';
 interface ExamOption {
   id: string;
   title_en: string;
+  city_name?: string;
+  window_start?: string;
+}
+
+/** Same-named exams were indistinguishable in the picker (CTY-DSN-06). */
+function examOptionLabel(e: ExamOption): string {
+  const parts = [e.title_en];
+  if (e.city_name) parts.push(e.city_name);
+  if (e.window_start) {
+    parts.push(new Date(e.window_start).toLocaleDateString('en-GB'));
+  }
+  return parts.join(' · ');
 }
 
 interface AttemptListRow {
@@ -302,7 +314,7 @@ export default function ExamGradingPage() {
               <SelectContent>
                 {exams.map((e) => (
                   <SelectItem key={e.id} value={e.id}>
-                    {e.title_en}
+                    {examOptionLabel(e)}
                   </SelectItem>
                 ))}
               </SelectContent>

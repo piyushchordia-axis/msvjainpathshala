@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { AGE_GROUPS, formatAgeGroup, formatAgeGroups } from '@workspace/api-zod';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
+import { useScopedGeography } from '@/hooks/useScopedGeography';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow } from '@/components/admin/AdminPageShell';
 import { Button } from '@/components/ui/button';
@@ -84,18 +85,15 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-interface CityOption { id: string; name: string; state_name: string; }
 
 function AddCompetitionDialog({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [cities, setCities] = useState<CityOption[]>([]);
+  // Scope-filtered + cached — the raw national list let a city_admin fill the
+  // whole form before a 403 (CTY-API-05).
+  const geo = useScopedGeography(open);
+  const cities = geo.cities;
   const [cityId, setCityId] = useState('');
-
-  useEffect(() => {
-    if (!open) return;
-    void apiGet<{ cities: CityOption[] }>('/v1/admin/geography').then((r) => setCities(r?.cities ?? []));
-  }, [open]);
   const [nameEn, setNameEn] = useState('');
   const [nameHi, setNameHi] = useState('');
   const [category, setCategory] = useState('general');

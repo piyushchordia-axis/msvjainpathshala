@@ -95,27 +95,27 @@ jobs:
     name: API tests
     runs-on: ubuntu-latest
 
-    # The api-server `test` script hard-codes its connection string
-    # (DATABASE_URL=postgres://sumit@localhost:5432/jainpathshala vitest run),
-    # so the Postgres service, the schema push, and the seed must all target
-    # that same role/database for the suite to find its data.
+    # Same jp credentials as local Docker. CI maps the service to host :5432;
+    # local docker-compose maps jp-postgres to :5434. setup.ts falls back to
+    # :5434 only when DATABASE_URL is unset, so this env wins in CI.
     services:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: sumit
+          POSTGRES_USER: jp
+          POSTGRES_PASSWORD: jp_dev_pwd
           POSTGRES_DB: jainpathshala
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U sumit -d jainpathshala"
+          --health-cmd "pg_isready -U jp -d jainpathshala"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
 
     env:
-      DATABASE_URL: postgres://sumit@localhost:5432/jainpathshala
+      DATABASE_URL: postgres://jp:jp_dev_pwd@localhost:5432/jainpathshala
       JP_AUTH_SECRET: jp-ci-test-secret-not-for-production
       NODE_ENV: test
 

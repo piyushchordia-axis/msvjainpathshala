@@ -106,6 +106,9 @@ export const GUEST_BROWSE_ACTIONS: QuickAction[] = [
   { href: "/guest/shivirs", icon: "bonfire-outline", en: "Shivirs", hi: "शिविर", accent: "shivirs" },
   { href: "/guest/library", icon: "library-outline", en: "Library", hi: "पुस्तकालय", accent: "library" },
   { href: "/guest/notices", icon: "megaphone-outline", en: "Notices", hi: "सूचनाएँ", accent: "notices" },
+  // The public course catalogue was reachable on web but had no guest entry
+  // point in the app (GST-API-12).
+  { href: "/courses", icon: "book-outline", en: "Courses", hi: "पाठ्यक्रम", accent: "courses" },
 ];
 
 /** Signed-in homes — shared stack routes, not the guest tab navigator. */

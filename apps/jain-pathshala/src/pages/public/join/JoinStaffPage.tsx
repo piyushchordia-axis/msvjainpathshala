@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'wouter';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -9,7 +9,9 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { useLocale } from '@/lib/locale-context';
-import { ApiError, apiGet, apiPost } from '@/lib/api-client';
+import { apiGet, apiPost } from '@/lib/api-client';
+import { apiErrorMessage } from '@/lib/api-error-copy';
+import { mergeById, usePickerSearch } from '@/lib/picker-search';
 import {
   STAFF_SECTIONS,
   fieldLabel,
@@ -28,7 +30,7 @@ import { JoinLangToggle, usePreferJoinHindi } from './JoinLangToggle';
 export default function JoinStaffPage({ kind }: { kind: 'shikshak' | 'sanchalak' }) {
   usePreferJoinHindi();
   const hi = useLocale() === 'hi';
-  const [phase, setPhase] = useState<'loading' | 'closed' | 'form' | 'done'>('loading');
+  const [phase, setPhase] = useState<'loading' | 'error' | 'closed' | 'form' | 'done'>('loading');
   const [sectionIdx, setSectionIdx] = useState(0);
   const [allFields, setAllFields] = useState<JoinField[]>([]);
   const [centres, setCentres] = useState<CentreOption[]>([]);
@@ -41,23 +43,27 @@ export default function JoinStaffPage({ kind }: { kind: 'shikshak' | 'sanchalak'
   const [error, setError] = useState<string | null>(null);
   const [displayCode, setDisplayCode] = useState<string | null>(null);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const [s, f, c] = await Promise.all([
-          apiGet<JoinSettings>(`/v1/join/settings?kind=${kind}`),
-          apiGet<{ items: JoinField[] }>(`/v1/join/form-fields?kind=${kind}`),
-          apiGet<{ items: CentreOption[] }>('/v1/public/centres'),
-        ]);
-        setAllFields(f.items);
-        setCentres(c.items.filter((x) => !!x.code));
-        setPhase(s.registration_open ? 'form' : 'closed');
-      } catch (e) {
-        setError(e instanceof ApiError ? e.message : 'Failed to load');
-        setPhase('closed');
-      }
-    })();
+  const loadForm = useCallback(async () => {
+    setPhase('loading');
+    try {
+      const [s, f, c] = await Promise.all([
+        apiGet<JoinSettings>(`/v1/join/settings?kind=${kind}`),
+        apiGet<{ items: JoinField[] }>(`/v1/join/form-fields?kind=${kind}`),
+        apiGet<{ items: CentreOption[] }>('/v1/public/centres'),
+      ]);
+      setAllFields(f.items);
+      setCentres(c.items.filter((x) => !!x.code));
+      // 'closed' only when the server actually says so — a load failure used to
+      // masquerade as "registration is closed" (GST-API-01).
+      setPhase(s.registration_open ? 'form' : 'closed');
+    } catch {
+      setPhase('error');
+    }
   }, [kind]);
+
+  useEffect(() => {
+    void loadForm();
+  }, [loadForm]);
 
   const photo = useMemo(() => photoField(allFields), [allFields]);
   const section = STAFF_SECTIONS[sectionIdx]!;
@@ -65,16 +71,24 @@ export default function JoinStaffPage({ kind }: { kind: 'shikshak' | 'sanchalak'
     () => fieldsForSection(allFields, section).filter((f) => f.field_key !== 'role'),
     [allFields, section],
   );
+  // Server-side ?q= merge — beyond the clamped first page a centre was
+  // unpickable however the applicant spelled it (GST-PRF-03).
+  const centreQ = centreQuery.trim();
+  const centreExtra = usePickerSearch<CentreOption>(
+    centreQ.length >= 2 ? `/v1/public/centres?q=${encodeURIComponent(centreQ)}` : null,
+  );
+
   const filteredCentres = useMemo(() => {
-    const q = centreQuery.trim().toLowerCase();
-    if (!q) return centres;
-    return centres.filter(
+    const q = centreQ.toLowerCase();
+    const pool = mergeById(centres, centreExtra.filter((x) => !!x.code));
+    if (!q) return pool;
+    return pool.filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
         (c.code ?? '').toLowerCase().includes(q) ||
         c.city_name.toLowerCase().includes(q),
     );
-  }, [centres, centreQuery]);
+  }, [centres, centreExtra, centreQ]);
 
   const setValue = (key: string, v: string) => setValues((prev) => ({ ...prev, [key]: v }));
 
@@ -143,7 +157,8 @@ export default function JoinStaffPage({ kind }: { kind: 'shikshak' | 'sanchalak'
       setDisplayCode(created.display_code);
       setPhase('done');
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : 'Submit failed');
+      // Bilingual copy keyed off error.code (GST-API-05).
+      setError(apiErrorMessage(e, hi));
     } finally {
       setBusy(false);
     }
@@ -223,6 +238,32 @@ export default function JoinStaffPage({ kind }: { kind: 'shikshak' | 'sanchalak'
     );
   }
 
+  if (phase === 'error') {
+    return (
+      <div className="container py-16">
+        <Card className="mx-auto max-w-lg space-y-4 p-8">
+          <div className="flex justify-end">
+            <JoinLangToggle />
+          </div>
+          <h1 className="font-display text-2xl text-secondary">
+            {hi ? 'फ़ॉर्म लोड नहीं हो सका' : "Couldn't load the form"}
+          </h1>
+          <p className="text-muted-foreground">
+            {hi
+              ? 'अपना कनेक्शन जाँचें और पुनः प्रयास करें — पंजीकरण अभी भी खुला हो सकता है।'
+              : 'Check your connection and try again — registration may well still be open.'}
+          </p>
+          <div className="flex gap-2">
+            <Button onClick={() => void loadForm()}>{hi ? 'पुनः प्रयास करें' : 'Try again'}</Button>
+            <Button asChild variant="outline">
+              <Link href="/join">{hi ? 'मार्ग चुनें' : 'Choose path'}</Link>
+            </Button>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   if (phase === 'closed') {
     return (
       <div className="container py-16">
@@ -233,7 +274,9 @@ export default function JoinStaffPage({ kind }: { kind: 'shikshak' | 'sanchalak'
           <h1 className="font-display text-2xl text-secondary">
             {hi ? 'पंजीकरण बंद है' : 'Registration is closed'}
           </h1>
-          <p className="text-muted-foreground">{error}</p>
+          <p className="text-muted-foreground">
+            {hi ? 'कृपया बाद में पुनः प्रयास करें।' : 'Please check back later.'}
+          </p>
           <Button asChild variant="outline">
             <Link href="/join">{hi ? 'मार्ग चुनें' : 'Choose path'}</Link>
           </Button>
@@ -261,7 +304,10 @@ export default function JoinStaffPage({ kind }: { kind: 'shikshak' | 'sanchalak'
               <Link href="/join">{hi ? 'होम' : 'Done'}</Link>
             </Button>
             <Button asChild variant="outline">
-              <Link href={`/join/${kind}/complete-payment`}>
+              {/* Carry the code + mobile the applicant just typed (GST-API-02). */}
+              <Link
+                href={`/join/${kind}/complete-payment?code=${encodeURIComponent(displayCode ?? '')}&mobile=${encodeURIComponent(values.whatsapp_contact ?? '')}`}
+              >
                 {hi ? 'भुगतान पूरा करें' : 'Complete payment'}
               </Link>
             </Button>
@@ -366,7 +412,14 @@ export default function JoinStaffPage({ kind }: { kind: 'shikshak' | 'sanchalak'
                       const up = await uploadJoinFile(file);
                       setPhotoUrl(up.url);
                     } catch (err) {
-                      setError(err instanceof Error ? err.message : 'Upload failed');
+                      setError(
+        apiErrorMessage(err, hi, {
+          ERR_VALIDATION_FAILED: {
+            en: 'Upload failed — choose a clear image and try again.',
+            hi: 'अपलोड विफल रहा — साफ़ छवि चुनकर पुनः प्रयास करें।',
+          },
+        }),
+      );
                     } finally {
                       setBusy(false);
                     }

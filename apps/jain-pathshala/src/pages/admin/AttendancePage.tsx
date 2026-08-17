@@ -5,6 +5,7 @@ import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow } from '@/components/admin/AdminPageShell';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogClose,
 } from '@/components/ui/dialog';
@@ -253,6 +254,122 @@ function statusBadgeClass(status: SessionRow['status']): string {
   }
 }
 
+interface AbsenceAlertRow {
+  student_id: string;
+  student_name: string | null;
+  batch_name: string | null;
+  consecutive_absent_count: number;
+  last_attended_date: string | null;
+  parent_phone: string | null;
+}
+
+interface AttendanceAlerts {
+  consecutive_absences: AbsenceAlertRow[];
+  unmarked_sessions: Array<{ id: string; batch_name?: string | null; scheduled_date: string }>;
+  gps_flagged_sessions: Array<{ id: string; batch_name?: string | null; scheduled_date: string }>;
+  not_checked_in_sessions: Array<{ id: string; batch_name?: string | null; scheduled_date: string }>;
+}
+
+/**
+ * AT27 alert groups above the log (SAN-API-10): mobile has this monitor;
+ * the web page only showed a flat session table, so a sanchalak at a desk
+ * never saw the children who have missed three classes in a row.
+ */
+function AttendanceAlertsPanel({ centreId }: { centreId: string }) {
+  const [alerts, setAlerts] = useState<AttendanceAlerts | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!centreId) return;
+    let cancelled = false;
+    setFailed(false);
+    apiGet<AttendanceAlerts>(`/v1/admin/attendance/alerts?centre_id=${encodeURIComponent(centreId)}`)
+      .then((r) => {
+        if (!cancelled) setAlerts(r ?? null);
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [centreId]);
+
+  if (failed) {
+    return (
+      <Card className="border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
+        Couldn't load the attendance alerts for this centre — the log below may still work.
+      </Card>
+    );
+  }
+  if (!alerts) return null;
+
+  const groups: Array<{ title: string; rows: Array<{ key: string; primary: string; secondary?: string }> }> = [
+    {
+      title: `Consecutive absences (${alerts.consecutive_absences.length})`,
+      rows: alerts.consecutive_absences.map((a) => ({
+        key: a.student_id,
+        primary: `${a.student_name ?? 'Student'} — absent ${a.consecutive_absent_count} in a row${a.batch_name ? ` · ${a.batch_name}` : ''}`,
+        secondary: [
+          a.last_attended_date ? `last attended ${new Date(a.last_attended_date).toLocaleDateString('en-GB')}` : null,
+          a.parent_phone ? `call ${a.parent_phone}` : null,
+        ]
+          .filter(Boolean)
+          .join(' · '),
+      })),
+    },
+    {
+      title: `Unmarked sessions today (${alerts.unmarked_sessions.length})`,
+      rows: alerts.unmarked_sessions.map((s) => ({
+        key: s.id,
+        primary: `${s.batch_name ?? 'Batch'} — no attendance submitted`,
+      })),
+    },
+    {
+      title: `GPS-flagged sessions (${alerts.gps_flagged_sessions.length})`,
+      rows: alerts.gps_flagged_sessions.map((s) => ({
+        key: s.id,
+        primary: `${s.batch_name ?? 'Batch'} — check-in outside the centre radius`,
+      })),
+    },
+    {
+      title: `Not checked in (${alerts.not_checked_in_sessions.length})`,
+      rows: alerts.not_checked_in_sessions.map((s) => ({
+        key: s.id,
+        primary: `${s.batch_name ?? 'Batch'} — marked without a check-in (informational)`,
+      })),
+    },
+  ];
+
+  const nonEmpty = groups.filter((g) => g.rows.length > 0);
+  if (nonEmpty.length === 0) return null;
+
+  return (
+    <div className="grid gap-3 md:grid-cols-2">
+      {nonEmpty.map((g) => (
+        <Card key={g.title} className="p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            {g.title}
+          </p>
+          <ul className="mt-2 space-y-2">
+            {g.rows.slice(0, 6).map((r) => (
+              <li key={r.key} className="text-sm">
+                <span className="font-medium">{r.primary}</span>
+                {r.secondary ? (
+                  <span className="block text-xs text-muted-foreground">{r.secondary}</span>
+                ) : null}
+              </li>
+            ))}
+            {g.rows.length > 6 ? (
+              <li className="text-xs text-muted-foreground">+ {g.rows.length - 6} more</li>
+            ) : null}
+          </ul>
+        </Card>
+      ))}
+    </div>
+  );
+}
+
 export default function AttendancePage() {
   const [centres, setCentres] = useState<CentreOption[]>([]);
   const [centreId, setCentreId] = useState('');
@@ -289,7 +406,7 @@ export default function AttendancePage() {
   return (
     <AdminPageShell
       title="Attendance"
-      subtitle="Centre attendance log from materialised sessions (AT7). Mark via frozen POST /v1/sessions/:id/attendance."
+      subtitle="Who came to class, centre by centre — with the children who need a follow-up call at the top."
       actions={
         <Select value={centreId} onValueChange={setCentreId}>
           <SelectTrigger className="w-56"><SelectValue placeholder="Select centre" /></SelectTrigger>
@@ -302,6 +419,7 @@ export default function AttendancePage() {
       }
     >
       {error ? <AdminError message={error} /> : null}
+      {centreId ? <AttendanceAlertsPanel centreId={centreId} /> : null}
       <AdminTable
         columns={['Date', 'Batch', 'Centre', 'Status', 'Present / Total', 'GPS', 'Actions']}
         loading={loading}

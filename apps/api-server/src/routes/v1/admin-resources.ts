@@ -34,7 +34,7 @@ import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { isValidCitySlug, slugifyCityName } from "@jp/shared/city-slug";
-import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
+import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState, inBatchWriteScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { awardPunya } from "../../lib/punya";
@@ -1413,11 +1413,17 @@ router.patch("/cities/:id", async (req: Request, res: Response) => {
   }
 });
 
-/* GET /v1/admin/settings */
-router.get("/settings", async (_req: Request, res: Response) => {
-  const rows = await db.select().from(settings).orderBy(asc(settings.key));
-  ok(res, { items: rows.map((r) => ({ ...r, updated_at: r.updated_at.toISOString() })) });
-});
+/* GET /v1/admin/settings — platform configuration is state_admin+ read
+   (nav min), super_admin write (XC-API-01: previously any admin-panel role
+   could read every setting). */
+router.get(
+  "/settings",
+  requireRole("super_admin", "state_admin"),
+  async (_req: Request, res: Response) => {
+    const rows = await db.select().from(settings).orderBy(asc(settings.key));
+    ok(res, { items: rows.map((r) => ({ ...r, updated_at: r.updated_at.toISOString() })) });
+  },
+);
 
 const patchSettingSchema = z.object({
   key: z.string().min(1).max(128),

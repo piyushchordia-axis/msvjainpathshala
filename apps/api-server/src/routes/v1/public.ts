@@ -10,17 +10,47 @@ import {
   course_sections,
   course_subsections,
 } from "@workspace/db";
-import { and, asc, eq, gte, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, gte, ilike, isNull, ne, or, sql } from "drizzle-orm";
 import { ok, fail } from "../../lib/envelope";
-import { buildLibraryTree, buildLibrarySection } from "../../lib/library-tree";
+import { clampLimit } from "../../lib/route-helpers";
+import { buildLibraryTree, buildLibrarySection, buildLibraryItem } from "../../lib/library-tree";
 import { buildLibraryManifest } from "../../lib/library-manifest";
 
 const router: IRouter = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/* GET /v1/public/cities — catalogue for join / registration pickers */
-router.get("/cities", async (_req: Request, res: Response) => {
+/** Non-negative integer offset for the public list routes; anything else → 0. */
+function parseOffset(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.floor(n);
+}
+
+/**
+ * The clamps used to truncate silently — centre 201 simply never appeared,
+ * with no empty-vs-truncated signal. Every list here now fetches limit+1 and
+ * reports { count, has_more, next_offset } so clients can page.
+ */
+function pageMeta(rows: unknown[], limit: number, offset: number) {
+  const hasMore = rows.length > limit;
+  return {
+    page: rows.slice(0, limit),
+    meta: {
+      count: Math.min(rows.length, limit),
+      has_more: hasMore,
+      next_offset: hasMore ? offset + limit : null,
+    },
+  };
+}
+
+/* GET /v1/public/cities?q=&limit=&offset= — catalogue for join / registration pickers */
+router.get("/cities", async (req: Request, res: Response) => {
+  // Unauthenticated and previously unbounded: the join form downloaded and
+  // mounted the whole national catalogue before its first field was usable.
+  const limit = clampLimit(req.query.limit, 300, 500);
+  const offset = parseOffset(req.query.offset);
+  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
   const rows = await db
     .select({
       id: cities.id,
@@ -31,12 +61,24 @@ router.get("/cities", async (_req: Request, res: Response) => {
     })
     .from(cities)
     .innerJoin(states, eq(states.id, cities.state_id))
-    .orderBy(asc(states.name), asc(cities.name));
-  ok(res, { items: rows }, { count: rows.length });
+    .where(q ? or(ilike(cities.name, `%${q}%`), ilike(cities.code, `%${q}%`)) : undefined)
+    .orderBy(asc(states.name), asc(cities.name))
+    .offset(offset)
+    .limit(limit + 1);
+  const { page, meta } = pageMeta(rows, limit, offset);
+  ok(res, { items: page }, meta);
 });
 
-/* GET /v1/public/centres */
-router.get("/centres", async (_req: Request, res: Response) => {
+/* GET /v1/public/centres?q=&limit=&offset=&city_id= */
+router.get("/centres", async (req: Request, res: Response) => {
+  // Response size grew linearly with the network, pre-auth, with no back-pressure.
+  const limit = clampLimit(req.query.limit, 200, 500);
+  const offset = parseOffset(req.query.offset);
+  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  const cityId =
+    typeof req.query.city_id === "string" && UUID_RE.test(req.query.city_id)
+      ? req.query.city_id
+      : null;
   const rows = await db
     .select({
       id: centres.id,
@@ -52,11 +94,27 @@ router.get("/centres", async (_req: Request, res: Response) => {
     .innerJoin(cities, eq(cities.id, centres.city_id))
     .innerJoin(states, eq(states.id, centres.state_id))
     .leftJoin(batches, and(eq(batches.centre_id, centres.id), eq(batches.status, "active")))
-    .where(eq(centres.status, "active"))
+    .where(
+      and(
+        eq(centres.status, "active"),
+        cityId ? eq(centres.city_id, cityId) : undefined,
+        q
+          ? or(
+              ilike(centres.name, `%${q}%`),
+              ilike(centres.code, `%${q}%`),
+              ilike(centres.locality, `%${q}%`),
+              ilike(cities.name, `%${q}%`),
+            )
+          : undefined,
+      ),
+    )
     .groupBy(centres.id, cities.name, states.name)
-    .orderBy(asc(states.name), asc(cities.name), asc(centres.name));
+    .orderBy(asc(states.name), asc(cities.name), asc(centres.name))
+    .offset(offset)
+    .limit(limit + 1);
 
-  ok(res, { items: rows }, { count: rows.length });
+  const { page, meta } = pageMeta(rows, limit, offset);
+  ok(res, { items: page }, meta);
 });
 
 /* GET /v1/public/centres/:id */
@@ -107,7 +165,10 @@ router.get("/centres/:id", async (req: Request, res: Response) => {
 });
 
 /* GET /v1/public/shivirs */
-router.get("/shivirs", async (_req: Request, res: Response) => {
+router.get("/shivirs", async (req: Request, res: Response) => {
+  // Previously unbounded — the only public list with no cap at all.
+  const limit = clampLimit(req.query.limit, 100, 300);
+  const offset = parseOffset(req.query.offset);
   const today = new Date().toISOString().slice(0, 10);
   const rows = await db
     .select({
@@ -122,9 +183,12 @@ router.get("/shivirs", async (_req: Request, res: Response) => {
     .from(shivir_events)
     .innerJoin(cities, eq(cities.id, shivir_events.city_id))
     .where(and(eq(shivir_events.is_published, true), gte(shivir_events.end_date, today)))
-    .orderBy(asc(shivir_events.start_date));
+    .orderBy(asc(shivir_events.start_date), asc(shivir_events.id))
+    .offset(offset)
+    .limit(limit + 1);
 
-  ok(res, { items: rows }, { count: rows.length });
+  const { page, meta } = pageMeta(rows, limit, offset);
+  ok(res, { items: page }, meta);
 });
 
 /* GET /v1/public/shivirs/:id */
@@ -169,6 +233,10 @@ router.get("/library/manifest", async (_req: Request, res: Response) => {
 /* GET /v1/public/library/sections/:id — one published section (gated = shell). */
 router.get("/library/sections/:id", async (req: Request, res: Response) => {
   const id = String(req.params.id);
+  if (!UUID_RE.test(id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "That library section could not be found.");
+    return;
+  }
   const section = await buildLibrarySection(id, { guestOnly: true });
   if (!section) {
     fail(res, 404, "ERR_NOT_FOUND", "That library section could not be found.");
@@ -177,14 +245,32 @@ router.get("/library/sections/:id", async (req: Request, res: Response) => {
   ok(res, { section });
 });
 
+/* GET /v1/public/library/items/:id — one published item, the deep-link unit
+   (GST-PRF-01: a cold-open of one text must not download the whole corpus). */
+router.get("/library/items/:id", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  if (!UUID_RE.test(id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "That text could not be found.");
+    return;
+  }
+  const item = await buildLibraryItem(id, { guestOnly: true });
+  if (!item) {
+    fail(res, 404, "ERR_NOT_FOUND", "That text could not be found.");
+    return;
+  }
+  ok(res, { item });
+});
+
 /* GET /v1/public/library — published tree for guests (gated sections as shells). */
 router.get("/library", async (_req: Request, res: Response) => {
   const sections = await buildLibraryTree({ guestOnly: true });
   ok(res, { sections }, { count: sections.length });
 });
 
-/* GET /v1/public/courses — active catalogue (read-only, no progress). */
-router.get("/courses", async (_req: Request, res: Response) => {
+/* GET /v1/public/courses?limit=&offset= — active standard catalogue (read-only). */
+router.get("/courses", async (req: Request, res: Response) => {
+  const limit = clampLimit(req.query.limit, 100, 200);
+  const offset = parseOffset(req.query.offset);
   const rows = await db
     .select({
       id: courses.id,
@@ -195,9 +281,15 @@ router.get("/courses", async (_req: Request, res: Response) => {
       punya_points: courses.punya_points,
     })
     .from(courses)
-    .where(and(eq(courses.status, "active"), isNull(courses.deleted_at)))
-    .orderBy(asc(courses.name_en));
-  ok(res, { items: rows }, { count: rows.length });
+    // MSV-track curricula are programme-internal (admission is admin discretion,
+    // Q1/Q2) — the guest catalogue is the standard track only. Previously every
+    // active course of any kind was listed publicly, uncapped.
+    .where(and(eq(courses.status, "active"), isNull(courses.deleted_at), ne(courses.kind, "msv")))
+    .orderBy(asc(courses.name_en), asc(courses.id))
+    .offset(offset)
+    .limit(limit + 1);
+  const { page, meta } = pageMeta(rows, limit, offset);
+  ok(res, { items: page }, meta);
 });
 
 /* GET /v1/public/courses/:id/tree — outline with all nodes not_started. */
@@ -210,7 +302,16 @@ router.get("/courses/:id/tree", async (req: Request, res: Response) => {
   const [course] = await db
     .select()
     .from(courses)
-    .where(and(eq(courses.id, id), eq(courses.status, "active"), isNull(courses.deleted_at)))
+    // MSV curricula are programme-internal (Q2) — hidden from the list above,
+    // they must not remain readable by id through this route either.
+    .where(
+      and(
+        eq(courses.id, id),
+        eq(courses.status, "active"),
+        isNull(courses.deleted_at),
+        ne(courses.kind, "msv"),
+      ),
+    )
     .limit(1);
   if (!course) {
     fail(res, 404, "ERR_NOT_FOUND", "Course not found.");

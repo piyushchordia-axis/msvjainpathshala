@@ -14,7 +14,7 @@ import {
   service_requests,
   punya_balances,
 } from "@workspace/db";
-import { and, asc, count, desc, eq, gte, gt, ilike, inArray, isNull, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, gt, ilike, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import {
   enrolmentActionSchema,
@@ -638,6 +638,18 @@ router.post("/students/:id/status", async (req: Request, res: Response) => {
       deactivated_at: body.action === "deactivate" ? new Date() : null,
     })
     .where(eq(students.id, student.id));
+  // The reason the admin typed was silently discarded and the action never
+  // audited (SAN-ERR-02) — a Q11 deactivation with no trail of why.
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "student",
+    entityId: student.id,
+    summary:
+      body.action === "deactivate"
+        ? `Deactivated student ${student.student_code}${body.reason ? ` — ${body.reason.trim()}` : ""}`
+        : `Reactivated student ${student.student_code}`,
+    metadata: { action: body.action, reason: body.reason?.trim() || null },
+  });
   ok(res, { id: student.id, status: nextStatus });
 });
 
@@ -781,6 +793,19 @@ router.post("/batches/:id/:action", async (req: Request, res: Response) => {
 });
 
 /* GET /v1/admin/enrolments?status=&limit= */
+function decodeEnrolmentCursor(raw: unknown): { ts: Date; id: string } | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const [tsIso, id] = Buffer.from(raw, "base64url").toString("utf8").split("|");
+    if (!tsIso || !id || !UUID_RE.test(id)) return null;
+    const ts = new Date(tsIso);
+    if (!Number.isFinite(ts.getTime())) return null;
+    return { ts, id };
+  } catch {
+    return null;
+  }
+}
+
 router.get("/enrolments", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
   const limit = clampLimit(req.query.limit, 100, 500);
@@ -795,6 +820,14 @@ router.get("/enrolments", async (req: Request, res: Response) => {
     statusFilter = eq(enrolments.status, parsed.data);
   }
   const centreFilter = scopedCentreFilter(scope, enrolments.requested_centre_id);
+  // Keyset cursor (SAN-PRF-03) — the list used to end silently at the limit.
+  const cursor = decodeEnrolmentCursor(req.query.cursor);
+  const cursorFilter = cursor
+    ? or(
+        lt(enrolments.created_at, cursor.ts),
+        and(eq(enrolments.created_at, cursor.ts), lt(enrolments.id, cursor.id)),
+      )
+    : undefined;
 
   const reqCentre = centres;
   const reqBatch = batches;
@@ -815,16 +848,30 @@ router.get("/enrolments", async (req: Request, res: Response) => {
     .innerJoin(students, eq(students.id, enrolments.student_id))
     .innerJoin(reqCentre, eq(reqCentre.id, enrolments.requested_centre_id))
     .innerJoin(reqBatch, eq(reqBatch.id, enrolments.requested_batch_id))
-    .where(and(statusFilter, isNull(students.deleted_at), centreFilter))
-    .orderBy(desc(enrolments.created_at))
-    .limit(limit);
+    .where(and(statusFilter, isNull(students.deleted_at), centreFilter, cursorFilter))
+    .orderBy(desc(enrolments.created_at), desc(enrolments.id))
+    .limit(limit + 1);
 
-  const items = rows.map((r) => ({
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  const items = page.map((r) => ({
     ...r,
     created_at: r.created_at.toISOString(),
     decided_at: r.decided_at ? r.decided_at.toISOString() : null,
   }));
-  ok(res, { items }, { count: items.length });
+  ok(
+    res,
+    { items },
+    {
+      count: items.length,
+      has_more: hasMore,
+      next_cursor:
+        hasMore && last
+          ? Buffer.from(`${last.created_at.toISOString()}|${last.id}`, "utf8").toString("base64url")
+          : null,
+    },
+  );
 });
 
 /* POST /v1/admin/enrolments/:id/:action  (approve|waitlist|reject) */
@@ -847,9 +894,21 @@ router.post("/enrolments/:id/:action", async (req: Request, res: Response) => {
     fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid body.");
     return;
   }
-  if (nextStatus === "rejected" && !body.reason) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "A reason is required to reject.");
-    return;
+  if (nextStatus === "rejected") {
+    const reason = body.reason?.trim() ?? "";
+    // The reason is shown to the parent — a 1-character "x" reaching a family
+    // is worse than no rejection at all (SAN-API-03). Same bounds as the
+    // mobile dialog (REJECT_REASON_MIN/MAX).
+    if (reason.length < 10) {
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        "Write a reason of at least 10 characters — the parent will read it.",
+      );
+      return;
+    }
+    body = { ...body, reason };
   }
 
   const enrolmentId = String(req.params.id);

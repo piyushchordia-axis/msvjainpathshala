@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useSearch } from 'wouter';
+import { Link, useSearch } from 'wouter';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,8 +9,18 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { useLocale } from '@/lib/locale-context';
+import { messageForCode } from '@/lib/api-error-copy';
+import { GuestError, GuestLoading } from '@/components/public/GuestLoadState';
 
 const VALID_KINDS = ['student', 'parent', 'shikshak', 'sanchalak', 'city_admin'];
+
+const KIND_LABELS: Record<string, { en: string; hi: string }> = {
+  student: { en: 'Student', hi: 'विद्यार्थी' },
+  parent: { en: 'Parent', hi: 'अभिभावक' },
+  shikshak: { en: 'Shikshak', hi: 'शिक्षक' },
+  sanchalak: { en: 'Sanchalak', hi: 'संचालक' },
+  city_admin: { en: 'City admin', hi: 'सिटी एडमिन' },
+};
 
 interface FieldOption { value: string; label_en: string; label_hi?: string | null }
 interface FieldDef {
@@ -41,6 +51,8 @@ export default function RegisterPage() {
   const [config, setConfig] = useState<FormConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
@@ -58,17 +70,22 @@ export default function RegisterPage() {
     setErrorMsg(null);
     setMissing([]);
     setValues({});
+    setLoadError(false);
     fetch(`/v1/registration/forms/${kind}`, { headers: { Accept: 'application/json' } })
       .then((r) => {
+        // Only a real 404 means "no form for this category". A 5xx or a dead
+        // network used to render the same card, telling guests the programme
+        // doesn't take registrations (GST-ERR-02).
         if (r.status === 404) { setNotFound(true); return null; }
-        return r.ok ? r.json() : null;
+        if (!r.ok) { setLoadError(true); return null; }
+        return r.json();
       })
       .then((json: { data?: FormConfig } | null) => {
         if (json?.data) setConfig(json.data);
       })
-      .catch(() => setNotFound(true))
+      .catch(() => setLoadError(true))
       .finally(() => setLoading(false));
-  }, [kind]);
+  }, [kind, reloadKey]);
 
   function setField(key: string, v: string) {
     setValues((prev) => ({ ...prev, [key]: v }));
@@ -119,14 +136,16 @@ export default function RegisterPage() {
         return;
       }
       const json = (await res.json().catch(() => null)) as
-        | { error?: { message?: string; details?: { missing?: string[] } } }
+        | { error?: { code?: string; message?: string; details?: { missing?: string[] } } }
         | null;
       if (res.status === 422 && json?.error?.details?.missing) {
         setMissing(json.error.details.missing);
+        setErrorMsg(hi ? 'कृपया सभी आवश्यक फ़ील्ड भरें।' : 'Please fill all required fields.');
+        return;
       }
-      setErrorMsg(
-        json?.error?.message ?? (hi ? 'जमा करने में त्रुटि हुई।' : 'Could not submit the form.'),
-      );
+      // Bilingual copy keyed off error.code — the raw server message is
+      // English-only, which stranded Hindi visitors mid-error (GST-API-05).
+      setErrorMsg(messageForCode(json?.error?.code, hi, json?.error?.message));
     } catch {
       setErrorMsg(hi ? 'नेटवर्क त्रुटि। पुनः प्रयास करें।' : 'Network error. Please try again.');
     } finally {
@@ -140,8 +159,38 @@ export default function RegisterPage() {
         {hi ? 'पंजीकरण' : 'Registration'}
       </p>
 
+      {/* The server supports five form kinds, but every link in the app pointed
+          at bare /register (= student) — the other four were unreachable dead
+          capability (GST-API-06). */}
+      <div className="mt-6 flex flex-wrap gap-2">
+        {VALID_KINDS.map((k) => {
+          const active = k === kind;
+          return (
+            <Link
+              key={k}
+              href={`/register?kind=${k}`}
+              className={
+                active
+                  ? 'rounded-full border border-primary bg-primary px-3 py-1.5 text-sm text-primary-foreground'
+                  : 'rounded-full border border-border bg-card px-3 py-1.5 text-sm text-secondary hover:border-primary/40'
+              }
+              aria-current={active ? 'page' : undefined}
+            >
+              {KIND_LABELS[k] ? (hi ? KIND_LABELS[k].hi : KIND_LABELS[k].en) : k}
+            </Link>
+          );
+        })}
+      </div>
+
       {loading ? (
-        <div className="mt-10 text-muted-foreground">Loading…</div>
+        <GuestLoading hi={hi} />
+      ) : loadError ? (
+        <GuestError
+          hi={hi}
+          what="the registration form"
+          whatHi="पंजीकरण फ़ॉर्म"
+          onRetry={() => setReloadKey((n) => n + 1)}
+        />
       ) : notFound || !config ? (
         <Card className="mt-10 p-6 text-muted-foreground">
           {hi

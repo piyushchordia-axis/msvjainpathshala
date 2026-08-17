@@ -874,19 +874,89 @@ function AddPunyaConfigDialog({ onAdded }: { onAdded: () => void }) {
   );
 }
 
+/**
+ * Inline row editor (CTY-API-09) — configs were create-only, so a mis-entered
+ * point value could never be corrected or switched off.
+ */
+function PunyaConfigRowView({ c, onSaved }: { c: PunyaConfigRow; onSaved: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [points, setPoints] = useState(String(c.points));
+  const [busy, setBusy] = useState(false);
+
+  async function save(next: { points?: number; is_active?: boolean }) {
+    setBusy(true);
+    try {
+      await apiPatch(`/v1/admin/punya/configs/${c.id}`, next);
+      toast.success('Punya config updated.');
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      toast.error('Could not update the config.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <tr className="hover:bg-muted/30">
+      <td className="px-4 py-3 font-mono text-xs">{c.feature_key}</td>
+      <td className="px-4 py-3">
+        {editing ? (
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              min={0}
+              max={10000}
+              value={points}
+              onChange={(e) => setPoints(e.target.value)}
+              className="h-8 w-24"
+            />
+            <Button size="sm" disabled={busy} onClick={() => void save({ points: Number(points) })}>
+              Save
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                setPoints(String(c.points));
+                setEditing(false);
+              }}
+            >
+              Cancel
+            </Button>
+          </div>
+        ) : (
+          c.points
+        )}
+      </td>
+      <td className="px-4 py-3">
+        <Switch
+          checked={c.is_active}
+          disabled={busy}
+          onCheckedChange={(v) => void save({ is_active: v })}
+        />
+      </td>
+      <td className="px-4 py-3">
+        {!editing ? (
+          <Button size="sm" variant="ghost" onClick={() => setEditing(true)}>
+            Edit
+          </Button>
+        ) : null}
+      </td>
+    </tr>
+  );
+}
+
 export function PunyaConfigsPage() {
   const { items, loading, error, reload } = useAdminList<PunyaConfigRow>('/v1/admin/punya/configs');
   return (
     <AdminPageShell title="Punya configs" subtitle="Point values per feature key." actions={<AddPunyaConfigDialog onAdded={reload} />}>
       {error ? <AdminError message={error} /> : null}
-      <AdminTable columns={['Feature', 'Points', 'Active']} loading={loading} empty="" colSpan={3}>
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={3} message="No configs." /> : null}
+      <AdminTable columns={['Feature', 'Points', 'Active', 'Actions']} loading={loading} empty="" colSpan={4}>
+        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={4} message="No configs." /> : null}
         {items.map((c) => (
-          <tr key={c.id} className="hover:bg-muted/30">
-            <td className="px-4 py-3 font-mono text-xs">{c.feature_key}</td>
-            <td className="px-4 py-3">{c.points}</td>
-            <td className="px-4 py-3">{c.is_active ? 'Yes' : 'No'}</td>
-          </tr>
+          <PunyaConfigRowView key={c.id} c={c} onSaved={reload} />
         ))}
       </AdminTable>
     </AdminPageShell>
@@ -951,29 +1021,73 @@ export function PunyaAuditPage() {
 
 interface AwardStudentOption { id: string; full_name: string | null; student_code: string; }
 
+interface AwardLimitInfo {
+  max_points_per_award: number | null;
+  max_points_per_day: number | null;
+  points_awarded_today: number;
+  remaining_today: number | null;
+}
+
 export function PunyaAwardPage() {
   const [students, setStudents] = useState<AwardStudentOption[]>([]);
-  const [studentId, setStudentId] = useState('');
+  const [studentQuery, setStudentQuery] = useState('');
+  const [selected, setSelected] = useState<AwardStudentOption | null>(null);
   const [points, setPoints] = useState('10');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  // Role cap + remaining-today up front (SAN-API-08) — the server used to
+  // reject over-cap awards only after the whole form was submitted.
+  const [limitInfo, setLimitInfo] = useState<AwardLimitInfo | null>(null);
+  const [awardKey, setAwardKey] = useState(() => crypto.randomUUID());
 
   useEffect(() => {
-    void apiGet<{ items: AwardStudentOption[] }>('/v1/admin/students?limit=500').then((r) => setStudents(r?.items ?? []));
+    void apiGet<AwardLimitInfo>('/v1/admin/punya/award-limit')
+      .then((r) => setLimitInfo(r ?? null))
+      .catch(() => setLimitInfo(null));
   }, []);
+
+  const maxAllowed = (() => {
+    if (!limitInfo) return 500;
+    const caps = [limitInfo.max_points_per_award, limitInfo.remaining_today].filter(
+      (v): v is number => typeof v === 'number',
+    );
+    return caps.length ? Math.min(500, ...caps) : 500;
+  })();
+
+  // Server-side ?q= search — the old 500-row <Select> could not reach a
+  // student beyond the first page, so they could never be awarded
+  // (CTY-PRF-02).
+  useEffect(() => {
+    const q = studentQuery.trim();
+    const t = window.setTimeout(() => {
+      const url = q
+        ? `/v1/admin/students?limit=20&q=${encodeURIComponent(q)}`
+        : '/v1/admin/students?limit=20';
+      void apiGet<{ items: AwardStudentOption[] }>(url).then((r) => setStudents(r?.items ?? []));
+    }, 300);
+    return () => window.clearTimeout(t);
+  }, [studentQuery]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!studentId.trim()) return;
+    if (!selected) return;
     setBusy(true);
     try {
       const res = await apiPost<{ total_points: number; tier: string }>('/v1/admin/punya/award', {
-        student_id: studentId.trim(),
+        student_id: selected.id,
         points: Number(points),
         note: note.trim() || undefined,
+        // De-dupe token: a double-clicked submit or retried request must not
+        // award twice (SAN-API-08).
+        idempotency_key: `manual:${awardKey}`,
       });
       toast.success(`Awarded ${points} Punya. New total: ${res.total_points} (${res.tier}).`);
       setNote('');
+      setAwardKey(crypto.randomUUID());
+      // Refresh remaining-today after a successful award.
+      void apiGet<AwardLimitInfo>('/v1/admin/punya/award-limit')
+        .then((r) => setLimitInfo(r ?? null))
+        .catch(() => {});
     } catch (err) {
       toast.error('Award failed.', err instanceof ApiError ? err.message : undefined);
     } finally {
@@ -986,19 +1100,50 @@ export function PunyaAwardPage() {
       <Card className="max-w-md p-6">
         <form className="space-y-4" onSubmit={submit}>
           <div>
-            <Label htmlFor="student_id">Student</Label>
-            <Select value={studentId} onValueChange={setStudentId}>
-              <SelectTrigger id="student_id" className="mt-1">
-                <SelectValue placeholder="Select a student" />
-              </SelectTrigger>
-              <SelectContent>
-                {students.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>
-                    {(s.full_name ?? 'Unnamed')} — {s.student_code}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="student_search">Student</Label>
+            {selected ? (
+              <div className="mt-1 flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
+                <span>
+                  {selected.full_name ?? 'Unnamed'} — {selected.student_code}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setSelected(null)}
+                >
+                  Change
+                </Button>
+              </div>
+            ) : (
+              <>
+                <Input
+                  id="student_search"
+                  value={studentQuery}
+                  onChange={(e) => setStudentQuery(e.target.value)}
+                  placeholder="Search by name or student code"
+                  className="mt-1"
+                />
+                <div className="mt-2 max-h-56 space-y-1 overflow-y-auto">
+                  {students.map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      className="flex w-full items-center justify-between rounded-md border border-border bg-card px-3 py-2 text-left text-sm hover:border-primary/40"
+                      onClick={() => setSelected(s)}
+                    >
+                      <span>{s.full_name ?? 'Unnamed'}</span>
+                      <span className="font-mono text-xs text-muted-foreground">{s.student_code}</span>
+                    </button>
+                  ))}
+                  {students.length === 0 ? (
+                    <p className="px-1 py-2 text-xs text-muted-foreground">
+                      No students match — try a name or code.
+                    </p>
+                  ) : null}
+                </div>
+              </>
+            )}
           </div>
           <div>
             <Label htmlFor="points">Points</Label>
@@ -1006,17 +1151,32 @@ export function PunyaAwardPage() {
               id="points"
               type="number"
               min={1}
-              max={500}
+              max={maxAllowed}
               value={points}
               onChange={(e) => setPoints(e.target.value)}
               className="mt-1"
             />
+            {limitInfo ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {limitInfo.max_points_per_award != null
+                  ? `Up to ${limitInfo.max_points_per_award} per award. `
+                  : ''}
+                {limitInfo.remaining_today != null
+                  ? `${limitInfo.remaining_today} of ${limitInfo.max_points_per_day} left today.`
+                  : 'No daily cap for your role.'}
+              </p>
+            ) : null}
+            {Number(points) > maxAllowed ? (
+              <p className="mt-1 text-xs text-destructive">
+                Over your cap — enter {maxAllowed} or less.
+              </p>
+            ) : null}
           </div>
           <div>
             <Label htmlFor="note">Note (optional)</Label>
             <Input id="note" value={note} onChange={(e) => setNote(e.target.value)} className="mt-1" />
           </div>
-          <Button type="submit" disabled={busy}>
+          <Button type="submit" disabled={busy || !selected || Number(points) > maxAllowed || Number(points) < 1}>
             {busy ? 'Awarding…' : 'Award Punya'}
           </Button>
         </form>
@@ -1265,7 +1425,7 @@ export function HolidaysPage() {
   return (
     <AdminPageShell
       title="Holiday calendar"
-      subtitle="AT30 — admin holidays nested under centre; public GET /v1/centres/:id/holidays is published-only."
+      subtitle="Centre holidays — published dates also appear to families on the centre's public page."
       actions={
         <div className="flex items-center gap-2">
           <Select value={centreId} onValueChange={setCentreId}>
@@ -1848,7 +2008,13 @@ export function GeographyPage() {
   return (
     <AdminPageShell
       title="Geography"
-      subtitle="States and cities in the network."
+      subtitle={
+        canEdit
+          ? 'States and cities in the network.'
+          : // Buttons were simply absent with no explanation — a state_admin
+            // could not tell broken from restricted (STA-DSN-01).
+            'States and cities in the network. Read-only for your role — only the national (super) admin can add or edit geography.'
+      }
       actions={canEdit ? (
         <div className="flex gap-2">
           <AddStateDialog onAdded={reload} />
@@ -1902,9 +2068,19 @@ interface SettingRow {
 }
 
 export function SettingsPage() {
+  const { user } = useAuth();
   const { items, loading, error } = useAdminList<SettingRow>('/v1/admin/settings');
+  const canEdit = user?.role === 'super_admin';
   return (
-    <AdminPageShell title="Settings" subtitle="Platform configuration keys.">
+    <AdminPageShell
+      title="Settings"
+      subtitle={
+        canEdit
+          ? 'Platform configuration keys.'
+          : // STA-DSN-01 — name the restriction instead of silently hiding it.
+            'Platform configuration keys. Read-only for your role — only the national (super) admin can change settings.'
+      }
+    >
       {error ? <AdminError message={error} /> : null}
       <AdminTable columns={['Key', 'Value', 'Updated']} loading={loading} empty="" colSpan={3}>
         {items.length === 0 && !loading ? <AdminEmptyRow colSpan={3} message="No settings." /> : null}

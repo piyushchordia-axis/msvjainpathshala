@@ -23,7 +23,7 @@ import {
 import { and, asc, eq, inArray, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
-import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
+import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope } from "../../lib/scope";
 import { awardPunya } from "../../lib/punya";
 import { auditFromReq } from "../../lib/audit";
@@ -120,7 +120,7 @@ const createSchema = z.object({
 });
 
 /* POST /v1/competitions — create (status 'draft' default) */
-router.post("/", requireAdminPanel, async (req: Request, res: Response) => {
+router.post("/", requireAdminPanel, requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   let body: z.infer<typeof createSchema>;
   try {
     body = createSchema.parse(req.body);
@@ -287,7 +287,7 @@ const statusSchema = z.object({
 });
 
 /* POST /v1/competitions/:id/status — forward-only lifecycle transition */
-router.post("/:id/status", requireAdminPanel, async (req: Request, res: Response) => {
+router.post("/:id/status", requireAdminPanel, requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   let body: z.infer<typeof statusSchema>;
   try {
     body = statusSchema.parse(req.body);
@@ -341,7 +341,7 @@ const resultsSchema = z.object({
 });
 
 /* POST /v1/competitions/:id/results — record result rank/note per registration */
-router.post("/:id/results", requireAdminPanel, async (req: Request, res: Response) => {
+router.post("/:id/results", requireAdminPanel, requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   let body: z.infer<typeof resultsSchema>;
   try {
     body = resultsSchema.parse(req.body);
@@ -400,7 +400,7 @@ router.post("/:id/results", requireAdminPanel, async (req: Request, res: Respons
 });
 
 /* POST /v1/competitions/:id/publish-results — idempotent: award Punya + lock */
-router.post("/:id/publish-results", requireAdminPanel, async (req: Request, res: Response) => {
+router.post("/:id/publish-results", requireAdminPanel, requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   const cityIds = await cityScopeForUser(req.authUser!);
   const id = String(req.params.id);
   const [comp] = await db

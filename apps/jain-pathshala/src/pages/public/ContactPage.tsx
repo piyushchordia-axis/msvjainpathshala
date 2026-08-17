@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useLocale } from '@/lib/locale-context';
+import { messageForCode } from '@/lib/api-error-copy';
 
 export default function ContactPage() {
   const locale = useLocale();
@@ -44,8 +45,11 @@ export default function ContactPage() {
         setSubmitted(true);
         return;
       }
-      const json = (await res.json().catch(() => null)) as { error?: { message?: string } } | null;
-      setErrorMsg(json?.error?.message ?? (hi ? 'संदेश भेजने में त्रुटि हुई।' : 'Could not send your message.'));
+      const json = (await res.json().catch(() => null)) as
+        | { error?: { code?: string; message?: string } }
+        | null;
+      // Bilingual copy keyed off error.code (GST-API-05).
+      setErrorMsg(messageForCode(json?.error?.code, hi, json?.error?.message));
     } catch {
       setErrorMsg(hi ? 'नेटवर्क त्रुटि। पुनः प्रयास करें।' : 'Network error. Please try again.');
     } finally {

@@ -49,10 +49,13 @@ const PATHS: Array<{
 export default function JoinLandingPage() {
   usePreferJoinHindi();
   const hi = useLocale() === 'hi';
-  const [openMap, setOpenMap] = useState<Record<JoinKind, boolean>>({
-    student: true,
-    shikshak: true,
-    sanchalak: true,
+  // null = unknown (loading or unreachable). Defaulting to true made the cards
+  // flash "Open" then flip; coercing failures to false made an outage read as
+  // "all three paths are permanently closed" (GST-API-10).
+  const [openMap, setOpenMap] = useState<Record<JoinKind, boolean | null>>({
+    student: null,
+    shikshak: null,
+    sanchalak: null,
   });
 
   useEffect(() => {
@@ -62,11 +65,11 @@ export default function JoinLandingPage() {
           const s = await apiGet<JoinSettings>(`/v1/join/settings?kind=${p.kind}`);
           return [p.kind, s.registration_open] as const;
         } catch {
-          return [p.kind, false] as const;
+          return [p.kind, null] as const;
         }
       }),
     ).then((rows) => {
-      setOpenMap(Object.fromEntries(rows) as Record<JoinKind, boolean>);
+      setOpenMap(Object.fromEntries(rows) as Record<JoinKind, boolean | null>);
     });
   }, []);
 
@@ -103,17 +106,21 @@ export default function JoinLandingPage() {
             const Icon = p.icon;
             const body = (
               <Card
-                className={`h-full p-6 transition ${open ? 'hover:border-primary' : 'opacity-70'}`}
+                className={`h-full p-6 transition ${open === false ? 'opacity-70' : 'hover:border-primary'}`}
               >
                 <div className="flex items-start justify-between gap-3">
                   <Icon className="h-8 w-8 text-primary" />
-                  <span
-                    className={`rounded-md px-2 py-0.5 text-xs font-medium ${
-                      open ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
-                    }`}
-                  >
-                    {open ? (hi ? 'खुला' : 'Open') : (hi ? 'बंद' : 'Closed')}
-                  </span>
+                  {open === null ? (
+                    <span className="h-5 w-12 animate-pulse rounded-md bg-muted" aria-hidden />
+                  ) : (
+                    <span
+                      className={`rounded-md px-2 py-0.5 text-xs font-medium ${
+                        open ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'
+                      }`}
+                    >
+                      {open ? (hi ? 'खुला' : 'Open') : (hi ? 'बंद' : 'Closed')}
+                    </span>
+                  )}
                 </div>
                 <div className="mt-4 font-display text-xl text-secondary">
                   {hi ? p.title_hi : p.title_en}
@@ -121,7 +128,7 @@ export default function JoinLandingPage() {
                 <p className="mt-2 text-sm text-muted-foreground">
                   {hi ? p.sub_hi : p.sub_en}
                 </p>
-                {!open && (
+                {open === false && (
                   <p className="mt-4 flex items-center gap-1 text-xs text-muted-foreground">
                     <Lock className="h-3 w-3" />
                     {hi ? 'पंजीकरण बंद है' : 'Registration is closed'}
@@ -129,7 +136,10 @@ export default function JoinLandingPage() {
                 )}
               </Card>
             );
-            return open ? (
+            // Unknown status stays clickable — the form page re-checks and shows
+            // the honest closed/error state itself. Only a confirmed "closed"
+            // loses the link.
+            return open !== false ? (
               <Link key={p.kind} href={p.href}>
                 {body}
               </Link>
@@ -138,7 +148,14 @@ export default function JoinLandingPage() {
             );
           })}
         </div>
-        <div className="mt-10">
+        {/* Registered families come back to pay — give them the way in (GST-API-02). */}
+        <p className="mt-8 text-sm text-muted-foreground">
+          {hi ? 'पहले से पंजीकृत हैं? ' : 'Already registered? '}
+          <Link href="/join/student/complete-payment" className="text-primary underline-offset-2 hover:underline">
+            {hi ? 'शुल्क भुगतान करें' : 'Complete your payment'}
+          </Link>
+        </p>
+        <div className="mt-6">
           <Button asChild variant="outline">
             <Link href="/">{hi ? 'मुखपृष्ठ पर लौटें' : 'Back to home'}</Link>
           </Button>

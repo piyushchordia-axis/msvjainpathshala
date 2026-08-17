@@ -5,8 +5,9 @@ import { Linking, View } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { apiGet } from "@/lib/api";
+import { useCentreHolidaysPublic } from "@/lib/queries";
 import type { BatchItem, CentreDetail } from "@/lib/types";
-import { formatTimeRange } from "@/lib/format";
+import { formatDate, formatTimeRange } from "@/lib/format";
 import { formatAgeGroups } from "@workspace/api-zod";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 import { ActivityThemed } from "@/contexts/ActivityThemeContext";
@@ -34,6 +35,13 @@ export default function CentreDetailScreen() {
     queryFn: () => apiGet<CentreDetailResponse>(`/v1/public/centres/${id}`),
     enabled: !!id,
   });
+  // Published holidays (AT30) — the endpoint and hook existed with no guest
+  // surface rendering them (GST-API-07). Optional: failure omits the block.
+  const holidaysQ = useCentreHolidaysPublic(id);
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const holidays = (holidaysQ.data?.items ?? [])
+    .filter((h) => h.holiday_date >= todayIso)
+    .slice(0, 8);
 
   if (isLoading) {
     return (
@@ -107,10 +115,35 @@ export default function CentreDetailScreen() {
         ))
       )}
 
+      {holidays.length > 0 ? (
+        <>
+          <Title style={{ fontSize: 18, marginTop: 6 }}>
+            {hi ? "आगामी छुट्टियाँ" : "Upcoming holidays"}
+          </Title>
+          <Card>
+            <View style={{ gap: 10 }}>
+              {holidays.map((h) => (
+                <Row key={h.id} style={{ justifyContent: "space-between", gap: 10 }}>
+                  <Body style={{ fontSize: 14 }}>{formatDate(h.holiday_date)}</Body>
+                  {h.reason ? (
+                    <Body muted style={{ fontSize: 13, flexShrink: 1 }}>{h.reason}</Body>
+                  ) : null}
+                </Row>
+              ))}
+            </View>
+          </Card>
+        </>
+      ) : null}
+
+      {/* Routes to the real in-app enquiry form with this centre as context —
+          this used to dial the phone (or open a mailto stub), so the enquiry
+          never reached the admin inbox. The phone stays reachable above. */}
       <Button
         label={hi ? "प्रवेश के लिए पूछताछ करें" : "Enquire about admission"}
         icon="create-outline"
-        onPress={() => (centre.contact_phone ? Linking.openURL(`tel:${centre.contact_phone}`) : router.push("/info/enquire"))}
+        onPress={() =>
+          router.push({ pathname: "/enquire", params: { subject: centre.name } })
+        }
         style={{ marginTop: 6 }}
       />
     </Screen>

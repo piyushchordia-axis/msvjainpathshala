@@ -21,6 +21,7 @@ import {
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
+import { rateLimit } from "../../lib/ratelimit";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { auditFromReq } from "../../lib/audit";
 import { resolveAdminScope, cityIdsForState } from "../../lib/scope";
@@ -201,6 +202,11 @@ const submitResponseSchema = z.object({
 
 /* POST /v1/registration/forms/:kind/responses — submit a response (PUBLIC) */
 router.post("/forms/:kind/responses", async (req: Request, res: Response) => {
+  // Unauthenticated write into the admin review queue.
+  if (await rateLimit(`registration:resp:ip:${req.ip ?? "unknown"}`, 10, 3600)) {
+    fail(res, 429, "ERR_RATE_LIMITED", "Too many submissions just now — please try again later.");
+    return;
+  }
   const kind = String(req.params.kind);
   if (!isFormKind(kind)) {
     fail(res, 404, "ERR_NOT_FOUND", "Form not found.");

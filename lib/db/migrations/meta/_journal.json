@@ -477,6 +477,20 @@
       "when": 1791542400000,
       "tag": "0067_homework_bilingual",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "7",
+      "when": 1791628800000,
+      "tag": "0068_niyam_submission_media",
+      "breakpoints": true
+    },
+    {
+      "idx": 69,
+      "version": "7",
+      "when": 1791628800001,
+      "tag": "0069_schema_drift_repair",
+      "breakpoints": true
     }
   ]
 }

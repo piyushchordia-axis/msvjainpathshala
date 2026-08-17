@@ -19,6 +19,20 @@ interface ExamOption {
   id: string;
   exam_id?: string;
   title_en: string;
+  city_name?: string;
+  window_start?: string;
+  total_marks?: number;
+  question_marks_total?: number;
+}
+
+/** Same-named exams were indistinguishable in the picker (CTY-DSN-06). */
+function examOptionLabel(e: ExamOption): string {
+  const parts = [e.title_en];
+  if (e.city_name) parts.push(e.city_name);
+  if (e.window_start) {
+    parts.push(new Date(e.window_start).toLocaleDateString('en-GB'));
+  }
+  return parts.join(' · ');
 }
 
 interface QuestionOption {
@@ -310,6 +324,14 @@ export default function ExamBuilderPage() {
     void loadQuestions(id);
   }
 
+  const selectedExam = exams.find((e) => e.id === examId) ?? null;
+  // Running paper total vs declared total (CTY-API-07b) — the builder never
+  // showed the sum, so a 20-mark paper declared out of 100 looked finished.
+  const questionSum = questions.reduce((acc, q) => acc + (q.marks ?? 0), 0);
+  const declaredTotal = selectedExam?.total_marks;
+  const marksMismatch =
+    declaredTotal !== undefined && !loading && questionSum !== declaredTotal;
+
   return (
     <AdminPageShell
       title="Exam builder"
@@ -324,10 +346,18 @@ export default function ExamBuilderPage() {
           <Select value={examId} onValueChange={onSelect}>
             <SelectTrigger><SelectValue placeholder="Select an exam" /></SelectTrigger>
             <SelectContent>
-              {exams.map((e) => <SelectItem key={e.id} value={e.id}>{e.title_en}</SelectItem>)}
+              {exams.map((e) => <SelectItem key={e.id} value={e.id}>{examOptionLabel(e)}</SelectItem>)}
             </SelectContent>
           </Select>
         </div>
+        {examId && declaredTotal !== undefined ? (
+          <p className={`mt-3 text-sm ${marksMismatch ? 'font-medium text-destructive' : 'text-muted-foreground'}`}>
+            Question marks: {questionSum} / declared total: {declaredTotal}
+            {marksMismatch
+              ? ' — results cannot be released until these match. Add questions or edit the exam total.'
+              : ' — matches.'}
+          </p>
+        ) : null}
       </Card>
 
       {!examId ? (

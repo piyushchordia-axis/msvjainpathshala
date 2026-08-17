@@ -23,5 +23,16 @@ export function shouldPersistQueryKey(queryKey: readonly unknown[]): boolean {
   if (root === "library") {
     return true;
   }
+  // Public browse surfaces (centres, shivirs, notices, holidays, settings) —
+  // a guest reopening the app offline used to get blank screens because none
+  // of these survived a relaunch (GST-ERR-03). Gallery stays memory-only:
+  // consent (Q6) is resolved at query time, and a disk copy would keep a
+  // family's photo visible after they opt out until the next fetch.
+  if (root === "public") {
+    return segment !== "gallery";
+  }
+  if (root === "team") {
+    return true;
+  }
   return false;
 }

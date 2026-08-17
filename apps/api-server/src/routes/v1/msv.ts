@@ -16,7 +16,7 @@ import { and, desc, eq, inArray, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
-import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
+import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import {
@@ -310,8 +310,15 @@ const approveSchema = z.object({
   note: z.string().max(1000).optional(),
 });
 
-/* POST /v1/msv/:id/approve — approve an application */
-router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Response) => {
+/* POST /v1/msv/:id/approve — approve an application.
+   Q1 makes MSV admission pure ADMIN discretion — the nav minimum is
+   city_admin, and requireAdminPanel alone let a shikshak typing the URL
+   decide admissions (XC-API-01). */
+router.post(
+  "/:id/approve",
+  requireAdminPanel,
+  requireRole("super_admin", "state_admin", "city_admin"),
+  async (req: Request, res: Response) => {
   let body: z.infer<typeof approveSchema>;
   try {
     body = approveSchema.parse(req.body ?? {});
@@ -397,8 +404,13 @@ const rejectSchema = z.object({
   reason: z.string().max(1000).optional(),
 });
 
-/* POST /v1/msv/:id/reject — reject an application */
-router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response) => {
+/* POST /v1/msv/:id/reject — reject an application (city_admin+, same
+   rationale as approve). */
+router.post(
+  "/:id/reject",
+  requireAdminPanel,
+  requireRole("super_admin", "state_admin", "city_admin"),
+  async (req: Request, res: Response) => {
   let body: z.infer<typeof rejectSchema>;
   try {
     body = rejectSchema.parse(req.body ?? {});

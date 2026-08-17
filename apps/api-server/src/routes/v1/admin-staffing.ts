@@ -663,6 +663,158 @@ router.post("/batches/:id/shikshaks", async (req: Request, res: Response) => {
   ok(res, { id: assignmentId, user_id: target.id, batch_id: batch.id, is_primary: makePrimary });
 });
 
+/* PUT /v1/admin/centres/:id/shikshaks/:userId/batches — atomic reconcile
+   (SAN-PRF-02): the web editor issued up to N removes + M adds + a primary
+   call serially, leaving partial state whenever one failed mid-way. */
+router.put("/centres/:id/shikshaks/:userId/batches", async (req: Request, res: Response) => {
+  if (!isSanchalakPlus(req.authUser!.role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "You cannot assign shikshaks to batches.");
+    return;
+  }
+  const bodySchema = z.object({
+    batch_ids: z.array(z.string().uuid()).max(100),
+    primary_batch_id: z.string().uuid().optional(),
+  });
+  let body: z.infer<typeof bodySchema>;
+  try {
+    body = bodySchema.parse(req.body);
+  } catch {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "batch_ids must be a list of batch UUIDs.");
+    return;
+  }
+  if (body.primary_batch_id && !body.batch_ids.includes(body.primary_batch_id)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "primary_batch_id must be one of batch_ids.");
+    return;
+  }
+
+  const centre = await loadCentreInScope(req, String(req.params.id));
+  if (!centre) {
+    fail(res, 404, "ERR_NOT_FOUND", "Centre not found in your scope.");
+    return;
+  }
+  const userId = String(req.params.userId);
+  if (!UUID_RE.test(userId)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Shikshak not found.");
+    return;
+  }
+  const target = await userWithRole(userId, "shikshak");
+  if (!target) {
+    fail(res, 422, "ERR_WRONG_ROLE", "User must be an active shikshak.");
+    return;
+  }
+  const [tagged] = await db
+    .select({ id: shikshak_centre_assignments.id })
+    .from(shikshak_centre_assignments)
+    .where(
+      and(
+        eq(shikshak_centre_assignments.user_id, target.id),
+        eq(shikshak_centre_assignments.centre_id, centre.id),
+        eq(shikshak_centre_assignments.is_active, true),
+      ),
+    )
+    .limit(1);
+  if (!tagged) {
+    fail(res, 422, "ERR_NOT_CENTRE_TAGGED", "Shikshak must be tagged to this centre first.");
+    return;
+  }
+
+  // Every requested batch must be a live batch OF THIS CENTRE.
+  const centreBatchRows = await db
+    .select({ id: batches.id })
+    .from(batches)
+    .where(and(eq(batches.centre_id, centre.id), isNull(batches.deleted_at)));
+  const centreBatchIds = new Set(centreBatchRows.map((b) => b.id));
+  for (const id of body.batch_ids) {
+    if (!centreBatchIds.has(id)) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "All batch_ids must belong to this centre.");
+      return;
+    }
+  }
+
+  const nextIds = new Set(body.batch_ids);
+  const result = await db.transaction(async (tx) => {
+    const current = await tx
+      .select({
+        id: shikshak_batch_assignments.id,
+        batch_id: shikshak_batch_assignments.batch_id,
+        is_active: shikshak_batch_assignments.is_active,
+      })
+      .from(shikshak_batch_assignments)
+      .where(
+        and(
+          eq(shikshak_batch_assignments.user_id, target.id),
+          inArray(shikshak_batch_assignments.batch_id, [...centreBatchIds]),
+        ),
+      );
+    const byBatch = new Map(current.map((c) => [c.batch_id, c]));
+
+    let removed = 0;
+    for (const c of current) {
+      if (c.is_active && !nextIds.has(c.batch_id)) {
+        await tx
+          .update(shikshak_batch_assignments)
+          .set({ is_active: false, is_primary: false, deactivated_at: new Date(), updated_at: new Date() })
+          .where(eq(shikshak_batch_assignments.id, c.id));
+        removed += 1;
+      }
+    }
+
+    let assigned = 0;
+    for (const batchId of nextIds) {
+      const makePrimary = batchId === body.primary_batch_id;
+      if (makePrimary) {
+        // Demote whichever assignment currently holds primary on that batch.
+        await tx
+          .update(shikshak_batch_assignments)
+          .set({ is_primary: false, updated_at: new Date() })
+          .where(
+            and(
+              eq(shikshak_batch_assignments.batch_id, batchId),
+              eq(shikshak_batch_assignments.is_active, true),
+              eq(shikshak_batch_assignments.is_primary, true),
+            ),
+          );
+      }
+      const existing = byBatch.get(batchId);
+      if (existing) {
+        await tx
+          .update(shikshak_batch_assignments)
+          .set({
+            is_active: true,
+            is_primary: makePrimary,
+            deactivated_at: null,
+            assigned_by: req.authUser!.id,
+            updated_at: new Date(),
+          })
+          .where(eq(shikshak_batch_assignments.id, existing.id));
+      } else {
+        await tx.insert(shikshak_batch_assignments).values({
+          user_id: target.id,
+          batch_id: batchId,
+          is_primary: makePrimary,
+          assigned_by: req.authUser!.id,
+        });
+      }
+      assigned += 1;
+    }
+    return { assigned, removed };
+  });
+
+  await auditFromReq(req, {
+    action: "assign",
+    entityKind: "shikshak_batch_assignment",
+    entityId: target.id,
+    summary: `Set ${target.full_name}'s batches at ${centre.name}: ${result.assigned} assigned, ${result.removed} removed.`,
+    metadata: {
+      user_id: target.id,
+      centre_id: centre.id,
+      batch_ids: body.batch_ids,
+      primary_batch_id: body.primary_batch_id ?? null,
+    },
+  });
+  ok(res, { user_id: target.id, centre_id: centre.id, ...result });
+});
+
 /* POST /v1/admin/batches/:id/shikshaks/:userId/remove */
 router.post("/batches/:id/shikshaks/:userId/remove", async (req: Request, res: Response) => {
   if (!isSanchalakPlus(req.authUser!.role)) {

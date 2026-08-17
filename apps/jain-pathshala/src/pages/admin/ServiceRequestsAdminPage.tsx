@@ -4,7 +4,7 @@ import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { useLocale } from '@/lib/locale-context';
 import { useAdminList } from '@/hooks/useAdminList';
 import { toast } from '@/components/ui/toast-jp';
-import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow } from '@/components/admin/AdminPageShell';
+import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow, AdminLoadMore } from '@/components/admin/AdminPageShell';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
@@ -234,7 +234,8 @@ function ThreadDialog({
 
 export default function ServiceRequestsAdminPage() {
   const locale = useLocale();
-  const { items, loading, error, reload } = useAdminList<RequestRow>('/v1/service-requests?limit=100');
+  const { items, loading, loadingMore, error, reload, hasMore, loadMore } =
+    useAdminList<RequestRow>('/v1/service-requests?limit=100');
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState<RequestRow | null>(null);
 
@@ -262,6 +263,9 @@ export default function ServiceRequestsAdminPage() {
         loading={loading}
         empty=""
         colSpan={7}
+        footer={
+          <AdminLoadMore hasMore={hasMore} loadingMore={loadingMore} onLoadMore={() => void loadMore()} />
+        }
       >
         {items.length === 0 && !loading ? (
           <AdminEmptyRow colSpan={7} message={tr(locale, 'empty')} />

@@ -28,8 +28,10 @@ export default function GuestMoreScreen() {
     { label: hi ? "मेघ संस्कार वाटिका" : "Megh Sanskar Vatika", sub: hi ? "हमारी कहानी" : "Our story", icon: "leaf-outline", href: "/info/msv" },
     { label: hi ? "हमारे बारे में" : "About", sub: hi ? "पाठशाला के बारे में" : "About the Pathshala", icon: "information-circle-outline", href: "/info/about" },
     { label: hi ? "संपर्क करें" : "Contact", sub: hi ? "टीम से बात करें" : "Talk to the team", icon: "call-outline", href: "/info/contact" },
-    { label: hi ? "दान करें" : "Donate", sub: hi ? "जैन शिक्षा का समर्थन करें" : "Support Jain education", icon: "heart-outline", href: "/info/donate" },
-    { label: hi ? "पूछताछ" : "Enquire", sub: hi ? "प्रवेश के लिए पूछें" : "Ask about admission", icon: "create-outline", href: "/info/enquire" },
+    // Real in-app forms now — these were static cards whose only action was a
+    // mailto: link, so nothing ever reached the admin inbox (GST-API-03).
+    { label: hi ? "दान करें" : "Donate", sub: hi ? "जैन शिक्षा का समर्थन करें" : "Support Jain education", icon: "heart-outline", href: "/donate" },
+    { label: hi ? "पूछताछ" : "Enquire", sub: hi ? "प्रवेश के लिए पूछें" : "Ask about admission", icon: "create-outline", href: "/enquire" },
   ];
 
   const renderRow = (row: LinkRow) => (

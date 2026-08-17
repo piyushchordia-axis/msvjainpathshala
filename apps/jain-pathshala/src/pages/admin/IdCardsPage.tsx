@@ -33,29 +33,28 @@ interface BulkGenerateResult {
 }
 
 export default function IdCardsPage() {
-  const { items, loading, loadingMore, error, reload, hasMore, loadMore } =
-    useAdminList<AdminStudentRow>('/v1/admin/students?limit=500');
   const [query, setQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
+
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    return () => window.clearTimeout(t);
+  }, [query]);
+
+  // Search runs server-side (?q= with cursor paging) — client filtering over
+  // one capped page meant a student beyond it could never be found
+  // (CTY-PRF-02).
+  const listUrl = debouncedQuery
+    ? `/v1/admin/students?limit=100&q=${encodeURIComponent(debouncedQuery)}`
+    : '/v1/admin/students?limit=100';
+  const { items, loading, loadingMore, error, reload, hasMore, loadMore } =
+    useAdminList<AdminStudentRow>(listUrl);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [card, setCard] = useState<GeneratedCard | null>(null);
 
-  useEffect(() => {
-    const t = window.setTimeout(() => setDebouncedQuery(query), 150);
-    return () => window.clearTimeout(t);
-  }, [query]);
-
-  const filtered = useMemo(() => {
-    const q = debouncedQuery.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(
-      (s) =>
-        (s.full_name ?? '').toLowerCase().includes(q) ||
-        s.student_code.toLowerCase().includes(q),
-    );
-  }, [items, debouncedQuery]);
+  const filtered = items;
 
   const selected = useMemo(
     () => items.find((s) => s.id === selectedId) ?? null,

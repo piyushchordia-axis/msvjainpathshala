@@ -152,8 +152,17 @@ describe("homework proof upload queue", () => {
     expect(pending[0]!.state).toBe("failed");
     expect(pending[0]!.uri).toBe("file:///tmp/offline.jpg");
 
-    // Reconnect — drain again without re-picking.
-    const drained = await drainMediaUploads({ upload, enqueueHomework, drainSync });
+    // Reconnect — drain again without re-picking. The failed attempt set
+    // next_attempt_at (NEW-4 backoff: 5s ± jitter on attempt 1), and the drain
+    // honours it exactly like drainQueues does, so step past it first.
+    vi.useFakeTimers();
+    let drained: Awaited<ReturnType<typeof drainMediaUploads>>;
+    try {
+      vi.advanceTimersByTime(10_000);
+      drained = await drainMediaUploads({ upload, enqueueHomework, drainSync });
+    } finally {
+      vi.useRealTimers();
+    }
     expect(drained.uploaded).toBe(1);
     expect(drained.attached).toBe(1);
     expect(enqueueHomework).toHaveBeenCalledWith(

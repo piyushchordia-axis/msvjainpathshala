@@ -1,4 +1,5 @@
-import { Switch, Route } from "wouter";
+import { Switch, Route, useLocation } from "wouter";
+import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
 import { PublicLayout } from "@/pages/public/PublicLayout";
 import HomePage from "@/pages/public/HomePage";
 import CentresPage from "@/pages/public/CentresPage";
@@ -36,8 +37,11 @@ import NotFound from "@/pages/not-found";
 
 /** Public marketing shell — lazy-loaded separately from admin (PERF #20). */
 export default function PublicRoutes() {
+  const [location] = useLocation();
   return (
     <PublicLayout>
+      {/* One render-time throw used to blank the whole SPA (XC-WEB-01). */}
+      <RouteErrorBoundary resetKey={location}>
       <Switch>
         <Route path="/" component={HomePage} />
         <Route path="/join" component={JoinLandingPage} />
@@ -74,6 +78,7 @@ export default function PublicRoutes() {
         <Route path="/my-requests" component={MyServiceRequestsPage} />
         <Route component={NotFound} />
       </Switch>
+      </RouteErrorBoundary>
     </PublicLayout>
   );
 }

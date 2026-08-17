@@ -130,8 +130,13 @@ export function inBatchWriteScope(
   batchId: string | null | undefined,
   centreId: string | null | undefined,
 ): boolean {
-  if (!batchId) return false;
+  // Centre-wide roles (sanchalak+) resolve FIRST: a newly-approved student
+  // with no batch yet must still be decidable by their centre head — the
+  // null-batch guard used to run before this fallback, stranding exactly the
+  // submissions Q12's safety net exists for (SAN-API-01). A shikshak
+  // (explicit batchIds) stays batch-bound: no batch → no write.
   if (scope.batchIds === null) return inCentreScope(scope, centreId);
+  if (!batchId) return false;
   return scope.batchIds.includes(batchId);
 }
 

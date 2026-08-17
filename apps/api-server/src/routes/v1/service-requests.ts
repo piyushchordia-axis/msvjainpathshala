@@ -13,7 +13,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, service_requests, service_request_messages, students, centres, users } from "@workspace/db";
 import { SERVICE_REQUEST_STATUSES } from "@workspace/db/enums";
-import { and, asc, desc, eq, inArray, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import { alias, type PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
@@ -125,6 +125,19 @@ router.get("/mine", async (req: Request, res: Response) => {
 
 /* GET /v1/service-requests — admin list in scope (must be ABOVE /:id) */
 const statusQuerySchema = z.enum(["submitted", "in_review", "resolved"]).optional();
+function decodeRequestCursor(raw: unknown): { ts: Date; id: string } | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const [tsIso, id] = Buffer.from(raw, "base64url").toString("utf8").split("|");
+    if (!tsIso || !id) return null;
+    const ts = new Date(tsIso);
+    if (!Number.isFinite(ts.getTime())) return null;
+    return { ts, id };
+  } catch {
+    return null;
+  }
+}
+
 router.get("/", requireAdminPanel, async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
   const limit = clampLimit(req.query.limit, 100, 300);
@@ -137,6 +150,14 @@ router.get("/", requireAdminPanel, async (req: Request, res: Response) => {
   const centreFilter = scopedCentreFilter(scope, service_requests.centre_id);
   const statusFilter = parsedStatus.data
     ? eq(service_requests.status, parsedStatus.data)
+    : undefined;
+  // Keyset cursor (SAN-PRF-03): the list used to end silently at the limit.
+  const cursor = decodeRequestCursor(req.query.cursor);
+  const cursorFilter = cursor
+    ? or(
+        lt(service_requests.created_at, cursor.ts),
+        and(eq(service_requests.created_at, cursor.ts), lt(service_requests.id, cursor.id)),
+      )
     : undefined;
 
   const assignee = alias(users, "assignee");
@@ -160,16 +181,30 @@ router.get("/", requireAdminPanel, async (req: Request, res: Response) => {
     .leftJoin(students, eq(students.id, service_requests.student_id))
     .leftJoin(centres, eq(centres.id, service_requests.centre_id))
     .leftJoin(assignee, eq(assignee.id, service_requests.assigned_to))
-    .where(and(centreFilter, statusFilter))
-    .orderBy(desc(service_requests.created_at))
-    .limit(limit);
-  const items = rows.map((r) => ({
+    .where(and(centreFilter, statusFilter, cursorFilter))
+    .orderBy(desc(service_requests.created_at), desc(service_requests.id))
+    .limit(limit + 1);
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  const items = page.map((r) => ({
     ...r,
     last_response_at: r.last_response_at ? r.last_response_at.toISOString() : null,
     resolved_at: r.resolved_at ? r.resolved_at.toISOString() : null,
     created_at: r.created_at.toISOString(),
   }));
-  ok(res, { items }, { count: items.length });
+  ok(
+    res,
+    { items },
+    {
+      count: items.length,
+      has_more: hasMore,
+      next_cursor:
+        hasMore && last
+          ? Buffer.from(`${last.created_at.toISOString()}|${last.id}`, "utf8").toString("base64url")
+          : null,
+    },
+  );
 });
 
 type AccessibleRow = {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "expo-router";
 import {
   Alert,
   FlatList,
@@ -412,6 +413,7 @@ function AddStudentModal({ open, onClose }: { open: boolean; onClose: () => void
 
 export default function StudentsScreen() {
   const c = useColors();
+  const router = useRouter();
   const { hi } = useLocale();
   const [status, setStatus] = useState("");
   const [qInput, setQInput] = useState("");
@@ -464,7 +466,11 @@ export default function StudentsScreen() {
     ({ item: s }) => {
       const place = [s.batch_name, s.centre_name].filter(Boolean).join(" · ");
       return (
-        <Card>
+        // Tappable row → student detail, where Award Punya and the full
+        // profile live — the card used to offer only Deactivate (SAN-API-09).
+        <Pressable onPress={() => router.push(`/student-detail/${s.id}`)}>
+          {({ pressed }) => (
+        <Card style={{ opacity: pressed ? 0.85 : 1 }}>
           <Row style={{ justifyContent: "space-between" }}>
             <View style={{ flex: 1, paddingRight: 8 }}>
               <Title style={{ fontSize: 17 }}>{s.full_name ?? s.student_code}</Title>
@@ -491,25 +497,35 @@ export default function StudentsScreen() {
             ) : null}
             {s.msv_status && s.msv_status !== "none" ? <Pill label={`MSV: ${s.msv_status}`} /> : null}
           </Row>
-          <Button
-            label={
-              s.status === "active"
-                ? hi
-                  ? "निष्क्रिय करें"
-                  : "Deactivate"
-                : hi
-                  ? "पुनः सक्रिय करें"
-                  : "Reactivate"
-            }
-            variant={s.status === "active" ? "outline" : "secondary"}
-            onPress={() => confirm(s)}
-            loading={mutate.isPending && mutate.variables?.id === s.id}
-            style={{ marginTop: 12 }}
-          />
+          <Row style={{ gap: 8, marginTop: 12 }}>
+            <Button
+              label={hi ? "विवरण और पुण्य" : "Details & Punya"}
+              variant="secondary"
+              onPress={() => router.push(`/student-detail/${s.id}`)}
+              style={{ flex: 1 }}
+            />
+            <Button
+              label={
+                s.status === "active"
+                  ? hi
+                    ? "निष्क्रिय करें"
+                    : "Deactivate"
+                  : hi
+                    ? "पुनः सक्रिय करें"
+                    : "Reactivate"
+              }
+              variant={s.status === "active" ? "outline" : "secondary"}
+              onPress={() => confirm(s)}
+              loading={mutate.isPending && mutate.variables?.id === s.id}
+              style={{ flex: 1 }}
+            />
+          </Row>
         </Card>
+          )}
+        </Pressable>
       );
     },
-    [confirm, hi, mutate.isPending, mutate.variables?.id],
+    [confirm, hi, mutate.isPending, mutate.variables?.id, router],
   );
 
   const keyExtractor = useCallback((item: AdminStudentRow) => item.id, []);

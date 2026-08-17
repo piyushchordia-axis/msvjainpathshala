@@ -130,13 +130,33 @@ export function roleSatisfies(actor: Role, min: Role): boolean {
   return (ROLE_PRECEDENCE[actor] ?? 0) >= (ROLE_PRECEDENCE[min] ?? 0);
 }
 
+/** Single source for "may this role open this nav destination" (XC-API-01). */
+export function navItemAllows(role: Role, item: NavItem): boolean {
+  if (item.gate === 'featureMedia') return canFeatureMedia(role);
+  if (item.gate === 'administerExams') return canAdministerExams(role);
+  return roleSatisfies(role, item.min);
+}
+
+/**
+ * Longest-prefix nav match for a location, so `/admin/centres/:id` inherits
+ * the `/admin/centres` requirement. Null for paths the nav does not model —
+ * callers must treat that as "no extra restriction", never as a denial.
+ */
+export function findNavItemForPath(path: string): NavItem | null {
+  let best: NavItem | null = null;
+  for (const group of ADMIN_NAV) {
+    for (const item of group.items) {
+      if (path === item.href || path.startsWith(`${item.href}/`)) {
+        if (!best || item.href.length > best.href.length) best = item;
+      }
+    }
+  }
+  return best;
+}
+
 export function filterNavForRole(role: Role): NavGroup[] {
   return ADMIN_NAV.map((group) => ({
     heading: group.heading,
-    items: group.items.filter((i) => {
-      if (i.gate === 'featureMedia') return canFeatureMedia(role);
-      if (i.gate === 'administerExams') return canAdministerExams(role);
-      return roleSatisfies(role, i.min);
-    }),
+    items: group.items.filter((i) => navItemAllows(role, i)),
   })).filter((g) => g.items.length > 0);
 }

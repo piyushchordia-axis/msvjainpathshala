@@ -6,6 +6,7 @@ import { CourseFolderCard } from '@/components/public/CourseFolderCard';
 import { useLocale } from '@/lib/locale-context';
 import { useAuth } from '@/lib/auth-context';
 import { apiGet } from '@/lib/api-client';
+import { GuestError, GuestLoading } from '@/components/public/GuestLoadState';
 
 interface CourseListRow {
   id: string;
@@ -48,7 +49,35 @@ export default function CoursesPage() {
 
   const [items, setItems] = useState<CourseListRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [guestHasMore, setGuestHasMore] = useState(false);
+  const [guestNextOffset, setGuestNextOffset] = useState<number | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  async function loadMoreGuest() {
+    if (guestNextOffset == null || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const r = await fetch(`/v1/public/courses?limit=200&offset=${guestNextOffset}`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!r.ok) throw new Error(`courses ${r.status}`);
+      const json = (await r.json()) as {
+        data?: { items?: CourseListRow[] };
+        meta?: { has_more?: boolean; next_offset?: number | null };
+      };
+      setItems((prev) => [...prev, ...(json.data?.items ?? [])]);
+      setGuestHasMore(json.meta?.has_more === true);
+      setGuestNextOffset(
+        typeof json.meta?.next_offset === 'number' ? json.meta.next_offset : null,
+      );
+    } catch {
+      // Leave the loaded pages in place; the button stays for a retry.
+    } finally {
+      setLoadingMore(false);
+    }
+  }
   const [studentId, setStudentId] = useState<string | null>(null);
   const [children, setChildren] = useState<ChildOption[]>([]);
   // Matched by course_id, not title: a renamed course used to lose its badge,
@@ -58,7 +87,7 @@ export default function CoursesPage() {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    setError(null);
+    setError(false);
 
     const load = authed
       ? // Scope to the selected child. Without student_id the server falls back to
@@ -67,22 +96,35 @@ export default function CoursesPage() {
         apiGet<{ items: CourseListRow[] }>(
           studentId ? `/v1/courses?student_id=${encodeURIComponent(studentId)}` : '/v1/courses',
         )
-      : fetch('/v1/public/courses', { headers: { Accept: 'application/json' } })
+      : fetch('/v1/public/courses?limit=200', { headers: { Accept: 'application/json' } })
           .then(async (r) => {
-            if (!r.ok) throw new Error(`Courses request failed (${r.status})`);
+            if (!r.ok) throw new Error(`courses ${r.status}`);
             return r.json();
           })
-          .then((json: { data?: { items?: CourseListRow[] } }) => ({
-            items: json.data?.items ?? [],
-          }));
+          .then(
+            (json: {
+              data?: { items?: CourseListRow[] };
+              meta?: { has_more?: boolean; next_offset?: number | null };
+            }) => {
+              if (!cancelled) {
+                setGuestHasMore(json.meta?.has_more === true);
+                setGuestNextOffset(
+                  typeof json.meta?.next_offset === 'number' ? json.meta.next_offset : null,
+                );
+              }
+              return { items: json.data?.items ?? [] };
+            },
+          );
 
     Promise.resolve(load)
       .then((res) => {
         if (!cancelled) setItems(res.items ?? []);
       })
-      .catch((err) => {
+      .catch(() => {
+        // Raw "Courses request failed (502)" told a Hindi guest nothing
+        // actionable (GST-DSN-03) — the shared error card owns the copy now.
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Could not load courses.');
+          setError(true);
           setItems([]);
         }
       })
@@ -93,7 +135,7 @@ export default function CoursesPage() {
     return () => {
       cancelled = true;
     };
-  }, [authed, studentId]);
+  }, [authed, studentId, reloadKey]);
 
   useEffect(() => {
     if (!authed) {
@@ -199,11 +241,14 @@ export default function CoursesPage() {
       ) : null}
 
       {error ? (
-        <Card className="mt-10 border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
-          {error}
-        </Card>
+        <GuestError
+          hi={hi}
+          what="courses"
+          whatHi="पाठ्यक्रम"
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
       ) : loading ? (
-        <div className="mt-10 text-muted-foreground">{hi ? 'लोड हो रहा है…' : 'Loading…'}</div>
+        <GuestLoading hi={hi} />
       ) : items.length === 0 ? (
         <Card className="mt-10 p-6 text-muted-foreground">
           {hi ? 'अभी कोई सक्रिय पाठ्यक्रम नहीं।' : 'No active courses yet.'}
@@ -234,6 +279,25 @@ export default function CoursesPage() {
           })}
         </ul>
       )}
+
+      {!authed && guestHasMore ? (
+        <div className="mt-8 flex justify-center">
+          <button
+            type="button"
+            disabled={loadingMore}
+            onClick={() => void loadMoreGuest()}
+            className="rounded-md border border-border bg-card px-4 py-2 text-sm font-medium text-secondary hover:border-primary/40 disabled:opacity-60"
+          >
+            {loadingMore
+              ? hi
+                ? 'लोड हो रहा है…'
+                : 'Loading…'
+              : hi
+                ? 'और पाठ्यक्रम देखें'
+                : 'Load more courses'}
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }

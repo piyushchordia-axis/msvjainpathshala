@@ -1,6 +1,10 @@
-import { lazy, Suspense } from "react";
-import { Switch, Route } from "wouter";
+import { lazy, Suspense, type ReactNode } from "react";
+import { Switch, Route, useLocation } from "wouter";
 import { AdminLayout } from "@/pages/admin/AdminLayout";
+import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
+import { findNavItemForPath, navItemAllows } from "@/components/admin/sidebar-nav";
+import { useAuth } from "@/lib/auth-context";
+import type { Role } from "@/lib/auth";
 import NotFound from "@/pages/not-found";
 
 const DashboardPage = lazy(() => import("@/pages/admin/DashboardPage"));
@@ -84,10 +88,40 @@ function AdminPageFallback() {
   );
 }
 
+/**
+ * Route-level authorization from ADMIN_NAV (XC-API-01): the layout only
+ * checked "may open the admin panel", so 34/48 routes rendered for any
+ * shikshak who typed the URL. A named restriction card, never a silent
+ * redirect (CTY-DSN-04).
+ */
+function AdminRouteGuard({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  const [location] = useLocation();
+  const item = findNavItemForPath(location);
+  if (user && item && !navItemAllows(user.role as Role, item)) {
+    return (
+      <div className="mx-auto max-w-md py-16">
+        <div className="rounded-lg border border-border bg-card p-8">
+          <h1 className="font-display text-xl text-secondary">Restricted page</h1>
+          <p className="mt-3 text-sm text-muted-foreground">
+            “{item.label}” needs the {item.min.replace(/_/g, " ")} role or higher — your account
+            is {user.role.replace(/_/g, " ")}. If you need something from this page, ask your{" "}
+            {item.min.replace(/_/g, " ")}.
+          </p>
+        </div>
+      </div>
+    );
+  }
+  return <>{children}</>;
+}
+
 /** Admin shell — each page is a separate chunk (PERF #20). */
 export default function AdminRoutes() {
+  const [location] = useLocation();
   return (
     <AdminLayout>
+      <RouteErrorBoundary resetKey={location}>
+      <AdminRouteGuard>
       <Suspense fallback={<AdminPageFallback />}>
         <Switch>
           <Route path="/admin" component={DashboardPage} />
@@ -141,6 +175,8 @@ export default function AdminRoutes() {
           <Route component={NotFound} />
         </Switch>
       </Suspense>
+      </AdminRouteGuard>
+      </RouteErrorBoundary>
     </AdminLayout>
   );
 }

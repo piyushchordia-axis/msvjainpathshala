@@ -18,6 +18,8 @@ import { db, donations, donation_campaigns } from "@workspace/db";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
+import { rateLimit } from "../../lib/ratelimit";
+import { clampLimit } from "../../lib/route-helpers";
 import { payments } from "../../lib/payments";
 import { auditFromReq } from "../../lib/audit";
 import { storage } from "../../lib/storage";
@@ -49,8 +51,9 @@ function financialYearFor(d: Date): string {
   return `${startYear}-${endShort}`;
 }
 
-/* GET /v1/donations/campaigns — public campaigns only */
-router.get("/campaigns", async (_req: Request, res: Response) => {
+/* GET /v1/donations/campaigns?limit= — public campaigns only */
+router.get("/campaigns", async (req: Request, res: Response) => {
+  const limit = clampLimit(req.query.limit, 50, 100);
   const rows = await db
     .select({
       id: donation_campaigns.id,
@@ -62,7 +65,8 @@ router.get("/campaigns", async (_req: Request, res: Response) => {
     })
     .from(donation_campaigns)
     .where(eq(donation_campaigns.is_public, true))
-    .orderBy(desc(donation_campaigns.created_at));
+    .orderBy(desc(donation_campaigns.created_at))
+    .limit(limit);
   const items = rows.map((r) => ({ ...r, created_at: r.created_at.toISOString() }));
   ok(res, { items }, { count: items.length });
 });
@@ -78,6 +82,12 @@ const createOrderSchema = z.object({
 });
 
 router.post("/order", async (req: Request, res: Response) => {
+  // Unauthenticated order creation against the payment provider. Generous —
+  // failed payments are retried — but not unbounded.
+  if (await rateLimit(`donation:order:ip:${req.ip ?? "unknown"}`, 20, 3600)) {
+    fail(res, 429, "ERR_RATE_LIMITED", "Too many attempts just now — please try again later.");
+    return;
+  }
   let body: z.infer<typeof createOrderSchema>;
   try {
     body = createOrderSchema.parse(req.body);

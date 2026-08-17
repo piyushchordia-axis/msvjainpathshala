@@ -919,6 +919,28 @@ describe("online exams", () => {
     expect(patchOk.body.data.pass_mark).toBe(20);
     expect(patchOk.body.data.max_attempts).toBe(3);
 
+    // Release refuses while the paper (question marks) disagrees with the
+    // declared total (CTY-API-07b) — author a matching paper first.
+    const releaseBlocked = await request(app)
+      .post(`/v1/admin/exams/${examId}/release-results`)
+      .set(auth(admin.token))
+      .send({});
+    expect(releaseBlocked.status).toBe(409);
+
+    const paper = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({
+        question_en: "Which is a Jain principle?",
+        question_type: "single_choice",
+        marks: 50,
+        options: [
+          { option_en: "Ahimsa", is_correct: true },
+          { option_en: "Himsa", is_correct: false },
+        ],
+      });
+    expect(paper.status).toBe(200);
+
     const release = await request(app)
       .post(`/v1/admin/exams/${examId}/release-results`)
       .set(auth(admin.token))

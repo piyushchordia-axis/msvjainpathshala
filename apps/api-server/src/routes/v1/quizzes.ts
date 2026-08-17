@@ -15,7 +15,7 @@
  * re-calling submit never double-awards.
  */
 import { ok, fail } from "../../lib/envelope";
-import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
+import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope } from "../../lib/scope";
 import { awardPunya, reversePunya } from "../../lib/punya";
 import {
@@ -548,7 +548,7 @@ const createQuestionSchema = z.object({
 });
 
 /* POST /v1/quizzes/questions — add a question to the bank (admin panel) */
-router.post("/questions", async (req: Request, res: Response) => {
+router.post("/questions", requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   if (!canAccessAdminPanel(req.authUser?.role)) {
     fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
     return;
@@ -668,7 +668,7 @@ const patchQuestionSchema = z.object({
 });
 
 /* PATCH /v1/quizzes/questions/:id — edit bank question (blocked when attempts exist) */
-router.patch("/questions/:id", requireAdminPanel, async (req: Request, res: Response) => {
+router.patch("/questions/:id", requireAdminPanel, requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   const id = String(req.params.id);
   let body: z.infer<typeof patchQuestionSchema>;
   try {
@@ -739,7 +739,7 @@ router.patch("/questions/:id", requireAdminPanel, async (req: Request, res: Resp
 });
 
 /* DELETE /v1/quizzes/questions/:id — soft-delete (is_active = false) */
-router.delete("/questions/:id", requireAdminPanel, async (req: Request, res: Response) => {
+router.delete("/questions/:id", requireAdminPanel, requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   const id = String(req.params.id);
   const [existing] = await db.select().from(questions).where(eq(questions.id, id)).limit(1);
   if (!existing) {
@@ -791,7 +791,7 @@ const createEventSchema = z
   .refine((b) => new Date(b.end_at) > new Date(b.start_at), { message: "end_at must be after start_at" });
 
 /* POST /v1/quizzes/events — create an event + its question links (admin panel) */
-router.post("/events", async (req: Request, res: Response) => {
+router.post("/events", requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   if (!canAccessAdminPanel(req.authUser?.role)) {
     fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
     return;
@@ -1015,6 +1015,7 @@ router.get("/events/:id/attempts", requireAdminPanel, async (req: Request, res: 
 router.post(
   "/events/:id/attempts/:attemptId/reset",
   requireAdminPanel,
+  requireRole("super_admin", "state_admin", "city_admin"),
   async (req: Request, res: Response) => {
     const eventId = String(req.params.id);
     const attemptId = String(req.params.attemptId);
@@ -1081,7 +1082,7 @@ router.post(
 );
 
 /* DELETE /v1/quizzes/events/:id — delete event; force reverses awards when attempts exist */
-router.delete("/events/:id", requireAdminPanel, async (req: Request, res: Response) => {
+router.delete("/events/:id", requireAdminPanel, requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   const eventId = String(req.params.id);
   const force =
     (req.body && typeof req.body === "object" && (req.body as { force?: unknown }).force === true) ||
@@ -1655,7 +1656,7 @@ router.get("/push", requireAdminPanel, async (req: Request, res: Response) => {
 });
 
 /* POST /v1/quizzes/push — admin starts a live push quiz for selected targets */
-router.post("/push", async (req: Request, res: Response) => {
+router.post("/push", requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   if (!canAccessAdminPanel(req.authUser?.role)) {
     fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
     return;

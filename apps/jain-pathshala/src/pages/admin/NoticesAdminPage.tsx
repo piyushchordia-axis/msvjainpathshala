@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { Plus, Megaphone, Pencil, Trash2, Loader2 } from 'lucide-react';
 import { apiGet, apiPost, del, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
+import { useAuth } from '@/lib/auth-context';
+import { useScopedGeography } from '@/hooks/useScopedGeography';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow, AdminLoadMore } from '@/components/admin/AdminPageShell';
 import { Button } from '@/components/ui/button';
@@ -56,6 +58,24 @@ const AUDIENCE_LABEL: Record<Audience, string> = {
   msv: 'MSV members',
 };
 
+/**
+ * Audiences a role can actually publish to (SAN-API-02): the dialog offered
+ * everything and defaulted to National, so a sanchalak composed a full notice
+ * and only then got a 403.
+ */
+function audiencesForRole(role: string | undefined): Audience[] {
+  if (role === 'super_admin') return ['national', 'state', 'city', 'centre', 'batch', 'msv'];
+  if (role === 'state_admin') return ['state', 'city', 'centre', 'batch', 'msv'];
+  if (role === 'city_admin') return ['city', 'centre', 'batch', 'msv'];
+  // sanchalak / shikshak publish to their centre or a batch.
+  return ['centre', 'batch'];
+}
+
+function defaultAudienceForRole(role: string | undefined): Audience {
+  const allowed = audiencesForRole(role);
+  return allowed.includes('national') ? 'national' : allowed[0]!;
+}
+
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className="space-y-1"><Label className="text-xs font-medium">{label}</Label>{children}</div>;
 }
@@ -103,10 +123,10 @@ interface FormState {
   ends_on: string;
 }
 
-function emptyForm(): FormState {
+function emptyForm(audience: Audience = 'national'): FormState {
   return {
     title_en: '', title_hi: '', content_en: '', content_hi: '',
-    audience: 'national', state_id: '', city_id: '', centre_id: '', batch_id: '',
+    audience, state_id: '', city_id: '', centre_id: '', batch_id: '',
     is_public: true, pinned: false, is_critical: false, ends_on: '',
   };
 }
@@ -163,9 +183,13 @@ function NoticeForm({
   initial?: NoticeRow;
   onSaved: () => void;
 }) {
+  const { user } = useAuth();
+  const allowedAudiences = audiencesForRole(user?.role);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState<FormState>(initial ? formFromRow(initial) : emptyForm());
+  const [form, setForm] = useState<FormState>(
+    initial ? formFromRow(initial) : emptyForm(defaultAudienceForRole(user?.role)),
+  );
   const [translateAvailable, setTranslateAvailable] = useState(false);
   const [translating, setTranslating] = useState<'title' | 'content' | null>(null);
   const [titleHiSuggested, setTitleHiSuggested] = useState(false);
@@ -174,20 +198,20 @@ function NoticeForm({
   // Targeting option sources, loaded lazily when the dialog opens.
   const [centres, setCentres] = useState<CentreOption[]>([]);
   const [batches, setBatches] = useState<BatchOption[]>([]);
-  const [states, setStates] = useState<StateOption[]>([]);
-  const [cities, setCities] = useState<CityOption[]>([]);
+  // Scope-filtered + cached — the raw national list offered every city in
+  // India and re-fetched per open (CTY-API-05/PRF-01).
+  const geo = useScopedGeography(open);
+  const states = geo.states;
+  const cities = geo.cities;
 
   useEffect(() => {
     if (!open) return;
-    setForm(initial ? formFromRow(initial) : emptyForm());
+    setForm(initial ? formFromRow(initial) : emptyForm(defaultAudienceForRole(user?.role)));
     setTitleHiSuggested(false);
     setContentHiSuggested(false);
     setTranslating(null);
     void apiGet<{ items: CentreOption[] }>('/v1/admin/centres').then((r) => setCentres(r?.items ?? [])).catch(() => {});
     void apiGet<{ items: BatchOption[] }>('/v1/admin/batches').then((r) => setBatches(r?.items ?? [])).catch(() => {});
-    void apiGet<{ states: StateOption[]; cities: CityOption[] }>('/v1/admin/geography')
-      .then((r) => { setStates(r?.states ?? []); setCities(r?.cities ?? []); })
-      .catch(() => {});
     void apiGet<{ available: boolean }>('/v1/translate')
       .then((r) => setTranslateAvailable(r?.available === true))
       .catch(() => setTranslateAvailable(false));
@@ -269,7 +293,7 @@ function NoticeForm({
             <Select value={form.audience} onValueChange={(v) => set('audience', v as Audience)}>
               <SelectTrigger><SelectValue /></SelectTrigger>
               <SelectContent>
-                {(Object.keys(AUDIENCE_LABEL) as Audience[]).map((a) => (
+                {allowedAudiences.map((a) => (
                   <SelectItem key={a} value={a}>{AUDIENCE_LABEL[a]}</SelectItem>
                 ))}
               </SelectContent>

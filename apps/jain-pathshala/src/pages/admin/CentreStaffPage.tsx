@@ -4,7 +4,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { apiGet, apiPost, ApiError } from '@/lib/api-client';
+import { apiGet, apiPost, apiPut, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
 import { useAuth } from '@/lib/auth-context';
 import type { Role } from '@/lib/auth';
@@ -70,6 +70,7 @@ export default function CentreStaffPage() {
   const [pickShik, setPickShik] = useState<PickUser[]>([]);
   const [centreBatches, setCentreBatches] = useState<CentreBatch[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [centreName, setCentreName] = useState('Centre');
   const [busy, setBusy] = useState(false);
 
@@ -94,6 +95,7 @@ export default function CentreStaffPage() {
   async function reload() {
     if (!centreId) return;
     setLoading(true);
+    setLoadError(false);
     try {
       const [sanc, shik, centres, batches] = await Promise.all([
         canManageSanchalaks
@@ -109,6 +111,8 @@ export default function CentreStaffPage() {
       if (c) setCentreName(c.name);
       setCentreBatches((batches?.items ?? []).filter((b) => b.centre_id === centreId));
     } catch (err) {
+      // A failed load must not render as "no staff" (SAN-ERR-03).
+      setLoadError(true);
       toast.error('Could not load staffing.', err instanceof ApiError ? err.message : undefined);
     } finally {
       setLoading(false);
@@ -280,24 +284,16 @@ export default function CentreStaffPage() {
     if (!centreId || busy) return;
     setBusy(true);
     try {
-      const current = shikshaks.find((s) => s.user_id === userId);
-      const currentIds = new Set((current?.batches ?? []).map((b) => b.batch_id));
-      const nextIds = new Set(editBatchIds);
-
-      for (const id of currentIds) {
-        if (!nextIds.has(id)) {
-          await apiPost(`/v1/admin/batches/${id}/shikshaks/${userId}/remove`, {});
-        }
-      }
-      for (const id of nextIds) {
-        await apiPost(`/v1/admin/batches/${id}/shikshaks`, {
-          user_id: userId,
-          is_primary: id === editPrimaryId || (editPrimaryId === '' && editBatchIds[0] === id),
-        });
-      }
-      if (editPrimaryId && nextIds.has(editPrimaryId)) {
-        await apiPost(`/v1/admin/batches/${editPrimaryId}/primary`, { user_id: userId });
-      }
+      // One atomic reconcile (SAN-PRF-02) — the old serial remove/add/primary
+      // loop left partial assignments whenever a mid-flight call failed.
+      const primary =
+        editPrimaryId && editBatchIds.includes(editPrimaryId)
+          ? editPrimaryId
+          : editBatchIds[0];
+      await apiPut(`/v1/admin/centres/${centreId}/shikshaks/${userId}/batches`, {
+        batch_ids: editBatchIds,
+        ...(primary ? { primary_batch_id: primary } : {}),
+      });
       toast.success('Batch assignments updated.');
       setEditingUserId(null);
       await reload();
@@ -326,6 +322,15 @@ export default function CentreStaffPage() {
 
       {loading ? (
         <p className="text-sm text-muted-foreground">Loading…</p>
+      ) : loadError ? (
+        <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
+          <p className="text-sm font-medium text-destructive">
+            Couldn't load this centre's staffing — the lists below are unavailable, not empty.
+          </p>
+          <Button size="sm" variant="outline" className="mt-3" onClick={() => void reload()}>
+            Try again
+          </Button>
+        </div>
       ) : (
         <div className="grid gap-6 lg:grid-cols-2">
           {canManageSanchalaks ? (

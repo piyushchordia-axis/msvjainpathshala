@@ -1,7 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { useLocale } from '@/lib/locale-context';
+import { GuestError, GuestLoading } from '@/components/public/GuestLoadState';
 
 interface CentreRow {
   id: string;
@@ -12,19 +15,79 @@ interface CentreRow {
   batch_count: number;
 }
 
+interface CentresMeta {
+  has_more?: boolean;
+  next_offset?: number | null;
+}
+
+const PAGE_SIZE = 200;
+
 export default function CentresPage() {
   const locale = useLocale();
   const hi = locale === 'hi';
   const [items, setItems] = useState<CentreRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [error, setError] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [nextOffset, setNextOffset] = useState<number | null>(null);
+  // Debounced server-side search — the directory was capped at one page, so
+  // centre 201 was unreachable with no signal (re-review finding 2).
+  const [query, setQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const seq = useRef(0);
 
   useEffect(() => {
-    fetch('/v1/public/centres', { headers: { Accept: 'application/json' } })
-      .then((r) => r.ok ? r.json() : { data: { items: [] } })
-      .then((json: { data?: { items?: CentreRow[] } }) => setItems(json.data?.items ?? []))
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+    const t = window.setTimeout(() => setDebouncedQuery(query.trim()), 300);
+    return () => window.clearTimeout(t);
+  }, [query]);
+
+  const fetchPage = useCallback(
+    (offset: number, mode: 'replace' | 'append') => {
+      const mySeq = ++seq.current;
+      if (mode === 'replace') {
+        setLoading(true);
+        setError(false);
+      } else {
+        setLoadingMore(true);
+      }
+      const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+      if (offset > 0) params.set('offset', String(offset));
+      if (debouncedQuery) params.set('q', debouncedQuery);
+      fetch(`/v1/public/centres?${params.toString()}`, {
+        headers: { Accept: 'application/json' },
+      })
+        .then((r) => {
+          if (!r.ok) throw new Error(`centres ${r.status}`);
+          return r.json();
+        })
+        .then((json: { data?: { items?: CentreRow[] }; meta?: CentresMeta }) => {
+          if (seq.current !== mySeq) return;
+          const page = json.data?.items ?? [];
+          setItems((prev) => (mode === 'append' ? [...prev, ...page] : page));
+          setHasMore(json.meta?.has_more === true);
+          setNextOffset(
+            typeof json.meta?.next_offset === 'number' ? json.meta.next_offset : null,
+          );
+        })
+        .catch(() => {
+          if (seq.current !== mySeq) return;
+          // An API failure must not render "No centres listed yet."
+          // (GST-ERR-01).
+          if (mode === 'replace') setError(true);
+        })
+        .finally(() => {
+          if (seq.current !== mySeq) return;
+          setLoading(false);
+          setLoadingMore(false);
+        });
+    },
+    [debouncedQuery],
+  );
+
+  useEffect(() => {
+    fetchPage(0, 'replace');
+  }, [fetchPage]);
 
   const byState = new Map<string, Map<string, CentreRow[]>>();
   for (const c of items) {
@@ -48,11 +111,26 @@ export default function CentresPage() {
           : 'Active centres across the Megh Sanskar Vatika network, by state and city.'}
       </p>
 
+      <Input
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        placeholder={hi ? 'नाम, इलाक़ा या शहर खोजें…' : 'Search by name, locality or city…'}
+        className="mt-8 max-w-sm"
+      />
+
       {loading ? (
-        <div className="mt-10 text-muted-foreground">Loading…</div>
+        <GuestLoading hi={hi} />
+      ) : error ? (
+        <GuestError hi={hi} what="centres" whatHi="केंद्र" onRetry={() => fetchPage(0, 'replace')} />
       ) : items.length === 0 ? (
         <Card className="mt-10 p-6 text-muted-foreground">
-          {hi ? 'अभी कोई केंद्र सूचीबद्ध नहीं है।' : 'No centres listed yet.'}
+          {debouncedQuery
+            ? hi
+              ? 'इस खोज से कोई केंद्र नहीं मिला — कुछ और आज़माएँ।'
+              : 'No centres match that search — try something else.'
+            : hi
+              ? 'अभी कोई केंद्र सूचीबद्ध नहीं है।'
+              : 'No centres listed yet.'}
         </Card>
       ) : (
         <div className="mt-10 space-y-10">
@@ -79,6 +157,23 @@ export default function CentresPage() {
               ))}
             </div>
           ))}
+          {hasMore && nextOffset != null ? (
+            <div className="flex justify-center">
+              <Button
+                variant="outline"
+                disabled={loadingMore}
+                onClick={() => fetchPage(nextOffset, 'append')}
+              >
+                {loadingMore
+                  ? hi
+                    ? 'लोड हो रहा है…'
+                    : 'Loading…'
+                  : hi
+                    ? 'और केंद्र देखें'
+                    : 'Load more centres'}
+              </Button>
+            </div>
+          ) : null}
         </div>
       )}
     </section>

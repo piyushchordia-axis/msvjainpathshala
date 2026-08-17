@@ -4,14 +4,14 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Alert, Pressable, TextInput, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ionicons } from "@expo/vector-icons";
 import { t, type Locale } from "@workspace/i18n";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
-import { apiGet, apiPost, ApiError } from "@/lib/api";
+import { apiGet, apiGetEnvelope, apiPost, ApiError } from "@/lib/api";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
@@ -402,13 +402,25 @@ export default function AdminServiceRequestsScreen() {
     void loadViewed().then(setViewed);
   }, [selectedId]);
 
-  const list = useQuery({
+  // Cursor-paged (SAN-PRF-03): the flat limit=200 fetch ended silently — a
+  // busy city's older requests were unreachable.
+  const list = useInfiniteQuery({
     queryKey: ["admin", "service-requests"],
-    queryFn: () => apiGet<{ items: ListRow[] }>("/v1/service-requests?limit=200"),
+    queryFn: ({ pageParam }) =>
+      apiGetEnvelope<{ items: ListRow[] }>(
+        pageParam
+          ? `/v1/service-requests?limit=100&cursor=${encodeURIComponent(String(pageParam))}`
+          : "/v1/service-requests?limit=100",
+      ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => {
+      const next = lastPage.meta?.next_cursor;
+      return typeof next === "string" && next.length > 0 ? next : null;
+    },
   });
 
   const items = useMemo(() => {
-    const all = list.data?.items ?? [];
+    const all = (list.data?.pages ?? []).flatMap((p) => p.data.items ?? []);
     const me = user?.id;
     if (filter === "open") {
       return all.filter((r) => r.status === "submitted" || r.status === "in_review");
@@ -417,7 +429,7 @@ export default function AdminServiceRequestsScreen() {
       return all.filter((r) => !!me && r.assigned_to === me);
     }
     return all.filter((r) => r.status === "resolved");
-  }, [list.data?.items, filter, user?.id]);
+  }, [list.data?.pages, filter, user?.id]);
 
   if (selectedId) {
     return (
@@ -538,6 +550,23 @@ export default function AdminServiceRequestsScreen() {
             );
           })
         )}
+        {!list.isLoading && !list.isError && list.hasNextPage ? (
+          <Button
+            label={
+              list.isFetchingNextPage
+                ? hi
+                  ? "लोड हो रहा है…"
+                  : "Loading…"
+                : hi
+                  ? "और देखें"
+                  : "Load more"
+            }
+            variant="outline"
+            onPress={() => void list.fetchNextPage()}
+            loading={list.isFetchingNextPage}
+            style={{ marginTop: 4 }}
+          />
+        ) : null}
       </Screen>
     </ActivityThemed>
   );

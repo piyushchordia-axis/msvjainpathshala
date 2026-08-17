@@ -19,8 +19,20 @@ describe("query persist allow-list", () => {
     expect(shouldPersistQueryKey(["library", "member"])).toBe(true);
   });
 
+  it("persists public browse keys for offline relaunch (GST-ERR-03)", () => {
+    expect(shouldPersistQueryKey(["public", "centres"])).toBe(true);
+    expect(shouldPersistQueryKey(["public", "shivirs"])).toBe(true);
+    expect(shouldPersistQueryKey(["public", "notices"])).toBe(true);
+    expect(shouldPersistQueryKey(["public", "centre-holidays", "c-1"])).toBe(true);
+    expect(shouldPersistQueryKey(["team", "national"])).toBe(true);
+  });
+
+  it("keeps the public gallery memory-only (Q6 consent is query-time)", () => {
+    expect(shouldPersistQueryKey(["public", "gallery", "wall", 60])).toBe(false);
+    expect(shouldPersistQueryKey(["public", "gallery", "home", 10])).toBe(false);
+  });
+
   it("does not persist unrelated queries", () => {
-    expect(shouldPersistQueryKey(["public", "centres"])).toBe(false);
     expect(shouldPersistQueryKey(["me", "punya", "student-1"])).toBe(false);
     expect(shouldPersistQueryKey(["me", "notifications"])).toBe(false);
   });

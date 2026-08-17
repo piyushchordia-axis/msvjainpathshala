@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, Redirect } from "wouter";
 import { Card } from "@/components/ui/card";
 import { useLocale } from "@/lib/locale-context";
+import { GuestError } from "@/components/public/GuestLoadState";
 import { TEAM_PUBLIC_CITY_SLUG } from "@jp/shared/constants";
 import {
   TeamMemberCard,
@@ -87,10 +88,12 @@ function NationalTeamPage() {
   const [data, setData] = useState<TeamPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setError(false);
     fetch("/v1/team", { headers: { Accept: "application/json" } })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("team fetch failed"))))
       .then((json: { data?: TeamPayload }) => {
@@ -105,7 +108,7 @@ function NationalTeamPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadKey]);
 
   const jsonLd = useMemo(() => {
     if (!data) return null;
@@ -158,11 +161,12 @@ function NationalTeamPage() {
           {hi ? "लोड हो रहा है…" : "Loading…"}
         </div>
       ) : error ? (
-        <Card className="mt-10 p-6 text-muted-foreground" style={{ lineHeight: "22px" }}>
-          {hi
-            ? "टीम अभी लोड नहीं हो सकी — थोड़ी देर बाद फिर कोशिश करें।"
-            : "The Team page could not load — try again in a moment."}
-        </Card>
+        <GuestError
+          hi={hi}
+          what="the team"
+          whatHi="टीम"
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
       ) : !data || (data.categories.length === 0 && data.cities.length === 0) ? (
         <Card className="mt-10 p-6 text-muted-foreground" style={{ lineHeight: "22px" }}>
           {hi ? "अभी कोई टीम सदस्य प्रकाशित नहीं है।" : "No Team members are published yet."}

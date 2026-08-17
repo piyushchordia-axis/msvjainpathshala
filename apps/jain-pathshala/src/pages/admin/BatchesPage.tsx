@@ -4,7 +4,7 @@ import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { apiGet, apiPost, ApiError } from '@/lib/api-client';
+import { apiGet, apiPost, apiPatch, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
@@ -40,6 +40,114 @@ function formatTime(start: string, end: string): string {
   const e = trim(end);
   if (!s && !e) return '—';
   return `${s}–${e}`;
+}
+
+/**
+ * Timetable editor (SAN-API-06) — PATCH /v1/admin/batches/:id/timetable is
+ * the only path that rematerialises future sessions and notifies parents
+ * (AT9). It existed with no client caller; the only workaround was
+ * deactivate-and-recreate, which orphans history.
+ */
+function EditTimetableDialog({
+  batch,
+  onChanged,
+}: {
+  batch: AdminBatchRow;
+  onChanged: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [days, setDays] = useState<number[]>(batch.day_of_week ?? []);
+  const [startTime, setStartTime] = useState((batch.start_time ?? '').slice(0, 5));
+  const [endTime, setEndTime] = useState((batch.end_time ?? '').slice(0, 5));
+
+  useEffect(() => {
+    if (!open) return;
+    setDays(batch.day_of_week ?? []);
+    setStartTime((batch.start_time ?? '').slice(0, 5));
+    setEndTime((batch.end_time ?? '').slice(0, 5));
+  }, [open, batch]);
+
+  function toggleDay(d: number) {
+    setDays((prev) => (prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d]));
+  }
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (days.length === 0 || !startTime || !endTime) return;
+    setBusy(true);
+    try {
+      await apiPatch<{ batch_id: string }>(`/v1/admin/batches/${batch.id}/timetable`, {
+        day_of_week: [...days].sort((a, b) => a - b),
+        start_time: startTime,
+        end_time: endTime,
+      });
+      toast.success(
+        'Timetable updated.',
+        'Future sessions were rebuilt on the new schedule and affected parents will be notified.',
+      );
+      setOpen(false);
+      onChanged();
+    } catch (err) {
+      toast.error('Could not update the timetable.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="outline">Timetable</Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-sm">
+        <DialogHeader>
+          <DialogTitle>Timetable — {batch.name}</DialogTitle>
+        </DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">Days of week *</Label>
+            <div className="flex flex-wrap gap-2 pt-1">
+              {DAY_NAMES.slice(1).map((d, i) => {
+                const day = i + 1;
+                const active = days.includes(day);
+                return (
+                  <button
+                    key={day}
+                    type="button"
+                    onClick={() => toggleDay(day)}
+                    className={`rounded px-2 py-1 text-xs font-medium border transition-colors ${active ? 'bg-primary text-primary-foreground border-primary' : 'border-input bg-background hover:bg-muted'}`}
+                  >
+                    {d}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs font-medium">Start time *</Label>
+              <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} required />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs font-medium">End time *</Label>
+              <Input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} required />
+            </div>
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Saving rebuilds the batch's future scheduled sessions (marked sessions are kept) and
+            notifies affected parents.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" disabled={busy || days.length === 0 || !startTime || !endTime}>
+              {busy ? 'Saving…' : 'Save timetable'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
 }
 
 function BatchRowActions({
@@ -215,6 +323,7 @@ function BatchRowActions({
           </div>
         </DialogContent>
       </Dialog>
+      <EditTimetableDialog batch={batch} onChanged={onChanged} />
       <Button size="sm" variant={batch.status === 'active' ? 'secondary' : 'ghost'} disabled={busy} onClick={toggle}>
         {batch.status === 'active' ? 'Deactivate' : 'Activate'}
       </Button>

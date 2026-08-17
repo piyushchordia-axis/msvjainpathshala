@@ -117,10 +117,25 @@ export const qk = {
 
 /* ---------------------------------------------------------------- public --- */
 
-export function useCentres() {
-  return useQuery({
-    queryKey: qk.centres,
-    queryFn: () => apiGet<List<CentreRow>>("/v1/public/centres"),
+/**
+ * Offset-paged directory (re-review finding 2): the flat fetch was clamped
+ * server-side, so centre 201 silently never appeared. `q` searches
+ * name/code/locality/city server-side.
+ */
+export function useCentres(q = "") {
+  return useInfiniteQuery({
+    queryKey: [...qk.centres, q],
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ limit: "200" });
+      if (pageParam) params.set("offset", String(pageParam));
+      if (q) params.set("q", q);
+      return apiGetEnvelope<List<CentreRow>>(`/v1/public/centres?${params.toString()}`);
+    },
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => {
+      const next = lastPage.meta?.next_offset;
+      return typeof next === "number" ? next : null;
+    },
   });
 }
 
@@ -135,10 +150,19 @@ export function useCentre(id?: string) {
   });
 }
 
+/** Offset-paged like useCentres — the shivir list was entirely unbounded. */
 export function useShivirs() {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: qk.shivirs,
-    queryFn: () => apiGet<List<ShivirRow>>("/v1/public/shivirs"),
+    queryFn: ({ pageParam }) =>
+      apiGetEnvelope<List<ShivirRow>>(
+        pageParam ? `/v1/public/shivirs?limit=100&offset=${pageParam}` : "/v1/public/shivirs?limit=100",
+      ),
+    initialPageParam: 0,
+    getNextPageParam: (lastPage) => {
+      const next = lastPage.meta?.next_offset;
+      return typeof next === "number" ? next : null;
+    },
   });
 }
 
@@ -1072,13 +1096,21 @@ export function useBulkApproveNiyams() {
   });
 }
 
+/** Cursor-paged (SAN-PRF-03): the flat fetch ended silently at the limit. */
 export function useAdminEnrolments(status?: string, enabled = true) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: qk.adminEnrolments(status),
-    queryFn: () =>
-      apiGet<List<EnrolmentRow>>(
-        `/v1/admin/enrolments${status ? `?status=${status}` : ""}`,
-      ),
+    queryFn: ({ pageParam }) => {
+      const params = new URLSearchParams({ limit: "100" });
+      if (status) params.set("status", status);
+      if (pageParam) params.set("cursor", String(pageParam));
+      return apiGetEnvelope<List<EnrolmentRow>>(`/v1/admin/enrolments?${params.toString()}`);
+    },
+    initialPageParam: null as string | null,
+    getNextPageParam: (lastPage) => {
+      const next = lastPage.meta?.next_cursor;
+      return typeof next === "string" && next.length > 0 ? next : null;
+    },
     enabled,
   });
 }
@@ -1458,6 +1490,39 @@ export function useCreateCentreHoliday() {
         reason: reason || undefined,
         is_published: true,
       }),
+    onSuccess: (_d, v) => {
+      qc.invalidateQueries({ queryKey: qk.adminCentreHolidays(v.centreId) });
+    },
+  });
+}
+
+/**
+ * One ranged call with per-date results (SAN-PRF-01) — replaces the 20 serial
+ * single-date requests a long break used to need.
+ */
+export function useCreateCentreHolidayRange() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      centreId,
+      start_date,
+      end_date,
+      reason,
+    }: {
+      centreId: string;
+      start_date: string;
+      end_date: string;
+      reason?: string;
+    }) =>
+      apiPost<{ results: Array<{ holiday_date: string; status: "created" | "already_exists" }> }>(
+        `/v1/admin/centres/${centreId}/holidays/range`,
+        {
+          start_date,
+          end_date,
+          reason: reason || undefined,
+          is_published: true,
+        },
+      ),
     onSuccess: (_d, v) => {
       qc.invalidateQueries({ queryKey: qk.adminCentreHolidays(v.centreId) });
     },
@@ -2343,7 +2408,9 @@ export function useCoursesCatalogue(studentId?: string, enabled = true) {
 export function usePublicCoursesCatalogue(enabled = true) {
   return useQuery({
     queryKey: qk.courses("public"),
-    queryFn: () => apiGet<List<CourseListRow>>("/v1/public/courses"),
+    // Explicit server max — curricula counts are far below 200; the web
+    // directory pages past it if the network ever grows that large.
+    queryFn: () => apiGet<List<CourseListRow>>("/v1/public/courses?limit=200"),
     enabled,
   });
 }

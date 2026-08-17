@@ -38,7 +38,7 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { OfflineSyncLoop } from "@/components/OfflineSyncLoop";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { persistOptions, queryClient } from "@/lib/query-client";
-import { LocaleProvider } from "@/contexts/LocaleContext";
+import { LocaleProvider, useLocale } from "@/contexts/LocaleContext";
 import { SessionViewProvider } from "@/contexts/SessionViewContext";
 import { API_BASE } from "@/lib/api";
 import { isExpoGo } from "@/lib/expo-go";
@@ -61,10 +61,13 @@ function routeForNotificationData(data: unknown): Href {
 }
 
 function RootLayoutNav() {
+  // Inside LocaleProvider — shared headers were English-only for a Hindi
+  // guest even with the app set to हिन्दी (GST-DSN-01).
+  const { hi } = useLocale();
   return (
     <Stack
       screenOptions={{
-        headerBackTitle: "Back",
+        headerBackTitle: hi ? "वापस" : "Back",
         headerStyle: { backgroundColor: colors.light.background },
         headerTintColor: colors.light.secondary,
         headerTitleStyle: { fontFamily: fonts.display, color: colors.light.secondary },
@@ -83,43 +86,69 @@ function RootLayoutNav() {
       <Stack.Screen name="admin" options={{ headerShown: false }} />
 
       {/* Shared detail screens (pushed from any persona) */}
-      <Stack.Screen name="centres" options={{ title: "Centres" }} />
-      <Stack.Screen name="team/index" options={{ title: "Team" }} />
-      <Stack.Screen name="team/[citySlug]" options={{ title: "Team" }} />
-      <Stack.Screen name="shivirs" options={{ title: "Shivirs" }} />
-      <Stack.Screen name="notices" options={{ title: "Notices" }} />
-      <Stack.Screen name="centre/[id]" options={{ title: "Centre" }} />
-      <Stack.Screen name="shivir/[id]" options={{ title: "Shivir" }} />
-      <Stack.Screen name="shivir-scan/[id]" options={{ title: "Scan attendance" }} />
-      <Stack.Screen name="attendance/[id]" options={{ title: "Mark attendance" }} />
+      <Stack.Screen name="centres" options={{ title: hi ? "केंद्र" : "Centres" }} />
+      <Stack.Screen name="team/index" options={{ title: hi ? "टीम" : "Team" }} />
+      <Stack.Screen name="team/[citySlug]" options={{ title: hi ? "टीम" : "Team" }} />
+      <Stack.Screen name="shivirs" options={{ title: hi ? "शिविर" : "Shivirs" }} />
+      <Stack.Screen name="notices" options={{ title: hi ? "सूचनाएँ" : "Notices" }} />
+      <Stack.Screen name="centre/[id]" options={{ title: hi ? "केंद्र" : "Centre" }} />
+      <Stack.Screen name="shivir/[id]" options={{ title: hi ? "शिविर" : "Shivir" }} />
+      <Stack.Screen
+        name="shivir-scan/[id]"
+        options={{ title: hi ? "उपस्थिति स्कैन" : "Scan attendance" }}
+      />
+      <Stack.Screen
+        name="attendance/[id]"
+        options={{ title: hi ? "उपस्थिति दर्ज करें" : "Mark attendance" }}
+      />
       <Stack.Screen name="info/[slug]" options={{ title: "" }} />
-      <Stack.Screen name="gallery" options={{ title: "Punya Wall" }} />
+      <Stack.Screen name="gallery" options={{ title: hi ? "पुण्य गैलरी" : "Punya Wall" }} />
       {/* Wave 4 — new student/parent flows */}
-      <Stack.Screen name="notifications" options={{ title: "Inbox" }} />
-      <Stack.Screen name="niyam-submit" options={{ title: "Submit Niyam" }} />
-      <Stack.Screen name="niyam-submissions" options={{ title: "All submissions" }} />
-      <Stack.Screen name="homework" options={{ title: "Homework" }} />
-      <Stack.Screen name="homework-assignment/[id]" options={{ title: "Review homework" }} />
-      <Stack.Screen name="courses" options={{ headerShown: false, title: "Courses" }} />
-      <Stack.Screen name="course/[id]" options={{ headerShown: false, title: "Course" }} />
-      <Stack.Screen name="certificates" options={{ title: "Certificates" }} />
-      <Stack.Screen name="msv" options={{ title: "MSV programme" }} />
-      <Stack.Screen name="student-detail/[id]" options={{ title: "Student" }} />
-      <Stack.Screen name="my-attendance" options={{ title: "Attendance" }} />
-      <Stack.Screen name="quizzes" options={{ title: "Quizzes" }} />
-      <Stack.Screen name="competitions" options={{ title: "Competitions" }} />
-      <Stack.Screen name="idcard" options={{ title: "ID Card" }} />
+      <Stack.Screen name="notifications" options={{ title: hi ? "इनबॉक्स" : "Inbox" }} />
+      <Stack.Screen name="niyam-submit" options={{ title: hi ? "नियम भेजें" : "Submit Niyam" }} />
+      <Stack.Screen
+        name="niyam-submissions"
+        options={{ title: hi ? "सभी प्रविष्टियाँ" : "All submissions" }}
+      />
+      <Stack.Screen name="homework" options={{ title: hi ? "गृहकार्य" : "Homework" }} />
+      <Stack.Screen
+        name="homework-assignment/[id]"
+        options={{ title: hi ? "गृहकार्य समीक्षा" : "Review homework" }}
+      />
+      <Stack.Screen
+        name="courses"
+        options={{ headerShown: false, title: hi ? "पाठ्यक्रम" : "Courses" }}
+      />
+      <Stack.Screen
+        name="course/[id]"
+        options={{ headerShown: false, title: hi ? "पाठ्यक्रम" : "Course" }}
+      />
+      <Stack.Screen name="certificates" options={{ title: hi ? "प्रमाणपत्र" : "Certificates" }} />
+      <Stack.Screen name="msv" options={{ title: hi ? "MSV कार्यक्रम" : "MSV programme" }} />
+      <Stack.Screen name="enquire" options={{ headerShown: false }} />
+      <Stack.Screen name="donate" options={{ headerShown: false }} />
+      <Stack.Screen name="student-detail/[id]" options={{ title: hi ? "विद्यार्थी" : "Student" }} />
+      <Stack.Screen name="my-attendance" options={{ title: hi ? "उपस्थिति" : "Attendance" }} />
+      <Stack.Screen name="quizzes" options={{ title: hi ? "प्रश्नोत्तरी" : "Quizzes" }} />
+      <Stack.Screen
+        name="competitions"
+        options={{ title: hi ? "प्रतियोगिताएँ" : "Competitions" }}
+      />
+      <Stack.Screen name="idcard" options={{ title: hi ? "आईडी कार्ड" : "ID Card" }} />
       {/* Phase 2 — new flows */}
-      <Stack.Screen name="exams" options={{ title: "Exams" }} />
-      <Stack.Screen name="service-requests" options={{ title: "My requests" }} />
-      <Stack.Screen name="service-request/[id]" options={{ title: "Request" }} />
-      <Stack.Screen name="library/index" options={{ title: "Library" }} />
-      <Stack.Screen name="library/[sectionId]" options={{ title: "Library" }} />
-      <Stack.Screen name="library/item/[itemId]" options={{ title: "Text" }} />
-      <Stack.Screen name="library/downloads" options={{ title: "Downloads" }} />
-      <Stack.Screen name="library/bookmarks" options={{ title: "Bookmarks" }} />
-      <Stack.Screen name="panchang/index" options={{ title: "Panchang" }} />
-      <Stack.Screen name="panchang/[date]" options={{ title: "Day" }} />
+      <Stack.Screen name="exams" options={{ title: hi ? "परीक्षाएँ" : "Exams" }} />
+      <Stack.Screen
+        name="service-requests"
+        options={{ title: hi ? "मेरे अनुरोध" : "My requests" }}
+      />
+      <Stack.Screen name="service-request/[id]" options={{ title: hi ? "अनुरोध" : "Request" }} />
+      <Stack.Screen name="library/index" options={{ title: hi ? "पुस्तकालय" : "Library" }} />
+      <Stack.Screen name="library/[sectionId]" options={{ title: hi ? "पुस्तकालय" : "Library" }} />
+      <Stack.Screen name="library/item/[itemId]" options={{ title: hi ? "पाठ" : "Text" }} />
+      <Stack.Screen name="library/downloads" options={{ title: hi ? "डाउनलोड" : "Downloads" }} />
+      <Stack.Screen name="library/bookmarks" options={{ title: hi ? "बुकमार्क" : "Bookmarks" }} />
+      <Stack.Screen name="panchang/index" options={{ title: hi ? "पंचांग" : "Panchang" }} />
+      <Stack.Screen name="panchang/[date]" options={{ title: hi ? "दिन" : "Day" }} />
     </Stack>
   );
 }

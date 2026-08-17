@@ -195,6 +195,7 @@ export function JoinApprovalsScreen({ initialKind }: { initialKind?: JoinKind })
         ) : error ? (
           <StateView
             status="error"
+            emptyText=""
             errorText={error}
             onRetry={() => void load()}
             retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}

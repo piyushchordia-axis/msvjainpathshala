@@ -227,7 +227,7 @@ export default function DonatePage() {
             {hi ? 'धन्यवाद!' : 'Thank you!'}
           </h2>
           {testMode ? (
-            <p className="mt-2 inline-block rounded bg-amber-100 px-2 py-1 text-xs font-medium uppercase tracking-wide text-amber-800">
+            <p className="mt-2 inline-block rounded bg-accent px-2 py-1 text-xs font-medium text-accent-foreground">
               {hi ? 'परीक्षण मोड' : 'Test mode'}
             </p>
           ) : null}
@@ -340,10 +340,12 @@ export default function DonatePage() {
                   : 'Donate now'}
             </Button>
 
+            {/* 80G is a toggle (Q3, default off) — "all donations are eligible"
+                could promise a certificate the platform will not issue. */}
             <p className="text-xs text-muted-foreground">
               {hi
-                ? 'सभी दान आयकर अधिनियम की धारा 80G के अंतर्गत कर-छूट के लिए पात्र हैं। रसीद ईमेल/फ़ोन पर भेजी जाएगी।'
-                : 'All donations are eligible for tax exemption under Section 80G of the Income Tax Act. A receipt will be issued.'}
+                ? 'जहाँ लागू हो, दान आयकर अधिनियम की धारा 80G के अंतर्गत कर-छूट के लिए पात्र हैं। आपकी रसीद ईमेल या फ़ोन पर भेजी जाएगी।'
+                : 'Where applicable, donations are eligible for tax exemption under Section 80G of the Income Tax Act. Your receipt will be sent to your email or phone.'}
             </p>
           </form>
         </Card>

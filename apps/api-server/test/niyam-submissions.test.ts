@@ -973,13 +973,16 @@ describe("niyam-submissions", () => {
   it("21st submission in an hour returns 429 ERR_RATE_LIMITED", async () => {
     process.env.JP_TEST_RATE_LIMIT = "1";
     resetMemoryRateLimitsForTests();
-    const minKey = `niyam:submit:min:${parent.user.id}`;
+    // Keys are per (user, student) — PAR-API-11 stopped a 4-child parent
+    // sharing one budget — so the hourly cap is exercised with a real child.
+    const niyamId = await createNiyam(`rate-${Date.now()}`, { approval_mode: "auto" });
+    const minKey = `niyam:submit:min:${parent.user.id}:${child0}`;
     try {
       for (let i = 0; i < 20; i++) {
         const r = await request(app)
           .post("/v1/niyam-submissions")
           .set(auth(parent.token))
-          .send({});
+          .send({ niyam_id: niyamId, student_id: child0, submission_date: todayIst() });
         expect(r.status).not.toBe(429);
         // Clear the 5/min bucket so this test exercises the hourly cap specifically.
         clearMemoryRateLimitKeyForTests(minKey);
@@ -987,7 +990,7 @@ describe("niyam-submissions", () => {
       const blocked = await request(app)
         .post("/v1/niyam-submissions")
         .set(auth(parent.token))
-        .send({});
+        .send({ niyam_id: niyamId, student_id: child0, submission_date: todayIst() });
       expect(blocked.status).toBe(429);
       expect(blocked.body.error.code).toBe("ERR_RATE_LIMITED");
     } finally {

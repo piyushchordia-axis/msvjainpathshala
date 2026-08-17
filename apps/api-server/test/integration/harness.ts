@@ -50,7 +50,23 @@ async function applyMigrations(client: pg.Client): Promise<void> {
   for (const entry of journal.entries) {
     const sqlPath = path.join(migrationsDir, `${entry.tag}.sql`);
     const sql = fs.readFileSync(sqlPath, "utf8");
-    const parts = sql.split("--> statement-breakpoint").map((s) => s.trim()).filter(Boolean);
+    // CREATE INDEX CONCURRENTLY cannot run inside a transaction block, and
+    // such files (0036) carry no breakpoints — split on ";" and apply with
+    // autocommit. Every integration suite failed at startHarness otherwise.
+    const concurrent = /\bCONCURRENTLY\b/i.test(sql);
+    const parts = (concurrent ? sql.split(/;\s*\n/) : sql.split("--> statement-breakpoint"))
+      .map((s) => s.trim())
+      .filter((s) => s && !/^(--.*\n?)+$/.test(s));
+    if (concurrent) {
+      for (const stmt of parts) {
+        try {
+          await client.query(stmt);
+        } catch (e) {
+          throw new Error(`Migration ${entry.tag} failed: ${(e as Error).message}`);
+        }
+      }
+      continue;
+    }
     await client.query("BEGIN");
     try {
       for (const stmt of parts) {

@@ -1,5 +1,7 @@
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
+import { FlatList, RefreshControl, View, type ListRenderItem } from "react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { ActivityThemed } from "@/contexts/ActivityThemeContext";
@@ -49,6 +51,7 @@ function NoticesListBody({
 }: {
   tabBarInset?: boolean;
 }) {
+  const c = useColors();
   const { hi } = useLocale();
   const { user } = useAuth();
   const qc = useQueryClient();
@@ -74,56 +77,85 @@ function NoticesListBody({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isMember, memberFeed.data]);
 
+  type NoticeItem = (typeof items)[number];
+
+  // FlatList so a 50-notice feed virtualises instead of mounting every card
+  // in one ScrollView (GST-PRF-02).
+  const renderItem = useCallback<ListRenderItem<NoticeItem>>(
+    ({ item: notice }) => {
+      const title = hi && notice.title_hi ? notice.title_hi : notice.title_en;
+      const content = hi && notice.content_hi ? notice.content_hi : notice.content_en;
+      const isFeed = (n: NoticeItem): n is FeedNotice => "audience" in n;
+      const unread = isFeed(notice) && !notice.read_at;
+      const internal = isFeed(notice) && !notice.is_public;
+      return (
+        <Card>
+          <Row style={{ gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+            {unread ? <Pill tone="info" label={hi ? "नया" : "New"} /> : null}
+            {notice.is_critical ? (
+              <Pill tone="error" label={hi ? "महत्वपूर्ण" : "Important"} />
+            ) : null}
+            {notice.pinned ? <Pill tone="warning" label={hi ? "पिन किया" : "Pinned"} /> : null}
+            {internal ? <Pill tone="neutral" label={hi ? "आंतरिक" : "Internal"} /> : null}
+          </Row>
+          <Title style={{ fontSize: 18 }}>{title}</Title>
+          {content ? (
+            <Body muted style={{ marginTop: 6, lineHeight: 22 }}>
+              {content}
+            </Body>
+          ) : null}
+          <Body muted style={{ marginTop: 10, fontSize: 12 }}>
+            {formatDate(notice.created_at)}
+          </Body>
+        </Card>
+      );
+    },
+    [hi],
+  );
+
   return (
-    <Screen
-      refreshing={isRefetching}
-      onRefresh={refetch}
-      contentStyle={{ paddingBottom: tabBarInset ? 110 : undefined }}
-    >
+    <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0, paddingBottom: 0 }}>
       {isLoading ? (
-        <StateView status="loading" emptyText="" />
+        <View style={{ paddingHorizontal: 18, paddingTop: 8 }}>
+          <StateView status="loading" emptyText="" />
+        </View>
       ) : isError ? (
-        <StateView
-          status="error"
-          emptyText=""
-          errorText={hi ? "घोषणाएँ लोड नहीं हो सकीं।" : "Could not load notices."}
-          onRetry={refetch}
-          retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
-        />
-      ) : items.length === 0 ? (
-        <StateView
-          status="empty"
-          emptyText={hi ? "अभी कोई घोषणा नहीं है।" : "No notices right now."}
-        />
+        <View style={{ paddingHorizontal: 18, paddingTop: 8 }}>
+          <StateView
+            status="error"
+            emptyText=""
+            errorText={hi ? "घोषणाएँ लोड नहीं हो सकीं।" : "Could not load notices."}
+            onRetry={refetch}
+            retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
+          />
+        </View>
       ) : (
-        items.map((notice) => {
-          const title = hi && notice.title_hi ? notice.title_hi : notice.title_en;
-          const content = hi && notice.content_hi ? notice.content_hi : notice.content_en;
-          const isFeed = (n: typeof notice): n is FeedNotice => "audience" in n;
-          const unread = isFeed(notice) && !notice.read_at;
-          const internal = isFeed(notice) && !notice.is_public;
-          return (
-            <Card key={notice.id}>
-              <Row style={{ gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
-                {unread ? <Pill tone="info" label={hi ? "नया" : "New"} /> : null}
-                {notice.is_critical ? (
-                  <Pill tone="error" label={hi ? "महत्वपूर्ण" : "Important"} />
-                ) : null}
-                {notice.pinned ? <Pill tone="warning" label={hi ? "पिन किया" : "Pinned"} /> : null}
-                {internal ? <Pill tone="neutral" label={hi ? "आंतरिक" : "Internal"} /> : null}
-              </Row>
-              <Title style={{ fontSize: 18 }}>{title}</Title>
-              {content ? (
-                <Body muted style={{ marginTop: 6, lineHeight: 22 }}>
-                  {content}
-                </Body>
-              ) : null}
-              <Body muted style={{ marginTop: 10, fontSize: 12 }}>
-                {formatDate(notice.created_at)}
-              </Body>
-            </Card>
-          );
-        })
+        <FlatList
+          data={items}
+          keyExtractor={(notice) => notice.id}
+          renderItem={renderItem}
+          ListEmptyComponent={
+            <StateView
+              status="empty"
+              emptyText={hi ? "अभी कोई घोषणा नहीं है।" : "No notices right now."}
+            />
+          }
+          contentContainerStyle={{
+            paddingHorizontal: 18,
+            paddingTop: 8,
+            paddingBottom: tabBarInset ? 110 : 40,
+            gap: 14,
+          }}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefetching}
+              onRefresh={refetch}
+              tintColor={c.primary}
+              colors={[c.primary]}
+            />
+          }
+          showsVerticalScrollIndicator={false}
+        />
       )}
     </Screen>
   );

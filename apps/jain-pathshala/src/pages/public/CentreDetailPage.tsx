@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'wouter';
 import { Card } from '@/components/ui/card';
 import { useLocale } from '@/lib/locale-context';
+import { GuestError } from '@/components/public/GuestLoadState';
 import { formatAgeGroups } from '@workspace/api-zod';
 import {
   TeamMemberCard,
@@ -39,6 +40,12 @@ type CentreTeamCategory = {
   members: TeamCardModel[];
 };
 
+interface HolidayRow {
+  id: string;
+  holiday_date: string;
+  reason: string | null;
+}
+
 const DAY = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 function hhmm(t: string): string {
@@ -58,8 +65,11 @@ export default function CentreDetailPage() {
   const [centre, setCentre] = useState<CentreDetail | null>(null);
   const [batches, setBatches] = useState<BatchRow[]>([]);
   const [teamCategories, setTeamCategories] = useState<CentreTeamCategory[]>([]);
+  const [holidays, setHolidays] = useState<HolidayRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!centreId) {
@@ -71,12 +81,17 @@ export default function CentreDetailPage() {
     let cancelled = false;
     setLoading(true);
     setNotFound(false);
+    setLoadError(false);
 
     Promise.all([
       fetch(`/v1/public/centres/${centreId}`, { headers: { Accept: 'application/json' } }),
       fetch(`/v1/team/centres/${centreId}`, { headers: { Accept: 'application/json' } }),
+      // Published holidays (AT30) — optional, failure omits the block.
+      fetch(`/v1/centres/${centreId}/holidays`, { headers: { Accept: 'application/json' } }).catch(
+        () => null,
+      ),
     ])
-      .then(async ([centreRes, teamRes]) => {
+      .then(async ([centreRes, teamRes, holidaysRes]) => {
         if (centreRes.status === 404) {
           if (!cancelled) setNotFound(true);
           return;
@@ -95,6 +110,18 @@ export default function CentreDetailPage() {
         setCentre(centreJson.data.centre);
         setBatches(centreJson.data.batches ?? []);
 
+        if (holidaysRes?.ok) {
+          const holidaysJson = (await holidaysRes.json().catch(() => null)) as {
+            data?: { items?: HolidayRow[] };
+          } | null;
+          const today = new Date().toISOString().slice(0, 10);
+          setHolidays(
+            (holidaysJson?.data?.items ?? []).filter((h) => h.holiday_date >= today).slice(0, 8),
+          );
+        } else {
+          setHolidays([]);
+        }
+
         // Team is optional — 404 / failure omits the block, does not fail the page.
         if (!teamRes.ok) {
           setTeamCategories([]);
@@ -109,7 +136,10 @@ export default function CentreDetailPage() {
         );
       })
       .catch(() => {
-        if (!cancelled) setNotFound(true);
+        // Transport failure is NOT "not found": telling a family the centre
+        // doesn't exist because their connection dropped misinforms them about
+        // the network itself (GST-ERR-02).
+        if (!cancelled) setLoadError(true);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -118,12 +148,28 @@ export default function CentreDetailPage() {
     return () => {
       cancelled = true;
     };
-  }, [centreId]);
+  }, [centreId, reloadKey]);
 
   if (loading) {
     return (
       <section className="container py-12">
-        <div className="text-muted-foreground">Loading…</div>
+        <div className="text-muted-foreground">{hi ? 'लोड हो रहा है…' : 'Loading…'}</div>
+      </section>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <section className="container py-12">
+        <Link href="/centres" className="text-sm font-medium text-primary hover:underline">
+          ← {hi ? 'सभी केंद्र' : 'All centres'}
+        </Link>
+        <GuestError
+          hi={hi}
+          what="this centre"
+          whatHi="यह केंद्र"
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
       </section>
     );
   }
@@ -184,6 +230,29 @@ export default function CentreDetailPage() {
           ))}
         </div>
       )}
+
+      {holidays.length > 0 ? (
+        <>
+          <h2 className="mt-10 font-display text-2xl text-secondary">
+            {hi ? 'आगामी छुट्टियाँ' : 'Upcoming holidays'}
+          </h2>
+          <Card className="mt-4 divide-y divide-border p-0">
+            {holidays.map((h) => (
+              <div key={h.id} className="flex items-center justify-between gap-4 px-5 py-3">
+                <span className="text-sm font-medium text-secondary">
+                  {new Date(`${h.holiday_date}T00:00:00`).toLocaleDateString(
+                    hi ? 'hi-IN' : 'en-IN',
+                    { day: 'numeric', month: 'long', year: 'numeric' },
+                  )}
+                </span>
+                {h.reason ? (
+                  <span className="text-sm text-muted-foreground">{h.reason}</span>
+                ) : null}
+              </div>
+            ))}
+          </Card>
+        </>
+      ) : null}
 
       {teamCategories.length > 0 ? (
         <div className="mt-12 space-y-10">

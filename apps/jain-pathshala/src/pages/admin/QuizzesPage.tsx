@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2, Check, X, ChevronLeft } from 'lucide-react';
 import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-context';
+import { useScopedGeography } from '@/hooks/useScopedGeography';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminError } from '@/components/admin/AdminPageShell';
 import { Card } from '@/components/ui/card';
@@ -201,39 +202,55 @@ function QuizScopeTargets({
 
 function useQuizTargetOptions(open: boolean) {
   const { user } = useAuth();
-  const [states, setStates] = useState<GeoState[]>([]);
-  const [cities, setCities] = useState<GeoCity[]>([]);
+  // Cached + scope-filtered geography (CTY-API-05/PRF-01).
+  const geo = useScopedGeography(open);
   const [centres, setCentres] = useState<CentreOpt[]>([]);
   const [batches, setBatches] = useState<BatchOpt[]>([]);
+  const [listError, setListError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     if (!open) return;
+    let cancelled = false;
+    setListError(false);
     void Promise.all([
-      apiGet<{ states: GeoState[]; cities: GeoCity[] }>('/v1/admin/geography'),
       apiGet<{ items: CentreOpt[] }>('/v1/admin/centres'),
       apiGet<{ items: BatchOpt[] }>('/v1/admin/batches'),
-    ]).then(([geo, c, b]) => {
-      let stateList = geo?.states ?? [];
-      let cityList = geo?.cities ?? [];
-      if (user?.role === 'state_admin' && user.state_id) {
-        stateList = stateList.filter((s) => s.id === user.state_id);
-        cityList = cityList.filter((c) => c.state_id === user.state_id);
-      }
-      if (user?.role === 'city_admin' && user.city_id) {
-        cityList = cityList.filter((c) => c.id === user.city_id);
-        const sid = cityList[0]?.state_id;
-        stateList = sid ? stateList.filter((s) => s.id === sid) : [];
-      }
-      setStates(stateList);
-      setCities(cityList);
-      setCentres(c?.items ?? []);
-      setBatches(b?.items ?? []);
-    }).catch(() => {
-      /* pickers stay empty; API will still enforce access */
-    });
-  }, [open, user?.role, user?.state_id, user?.city_id]);
+    ])
+      .then(([c, b]) => {
+        if (cancelled) return;
+        setCentres(c?.items ?? []);
+        setBatches(b?.items ?? []);
+      })
+      .catch(() => {
+        // Empty pickers used to read as "empty scope" — a load failure must
+        // say so and offer a retry (CTY-ERR-03).
+        if (!cancelled) setListError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, reloadKey]);
 
-  return { states, cities, centres, batches, user };
+  const error = geo.error || listError;
+  const retry = () => {
+    setReloadKey((k) => k + 1);
+    geo.retry();
+  };
+
+  return { states: geo.states, cities: geo.cities, centres, batches, user, error, retry };
+}
+
+/** Inline load-failure strip for target pickers (CTY-ERR-03). */
+function TargetLoadError({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div className="flex items-center justify-between rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+      <span>Couldn't load the target options — this is a load failure, not an empty scope.</span>
+      <Button type="button" size="sm" variant="outline" onClick={onRetry}>
+        Retry
+      </Button>
+    </div>
+  );
 }
 
 function targetsPayload(scope: QuizScope, selected: Set<string>) {

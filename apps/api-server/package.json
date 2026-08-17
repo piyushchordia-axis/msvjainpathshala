@@ -10,8 +10,8 @@
     "start": "node --enable-source-maps ./dist/index.mjs",
     "start:worker": "node --enable-source-maps ./dist/worker.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "DATABASE_URL=postgres://sumit@localhost:5432/jainpathshala vitest run",
-    "test:watch": "DATABASE_URL=postgres://sumit@localhost:5432/jainpathshala vitest",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "ingest:bhaktamar": "tsx ./scripts/ingest-bhaktamar.ts",
     "ingest:istavan": "tsx ./scripts/ingest-istavan.ts"

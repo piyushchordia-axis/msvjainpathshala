@@ -25,7 +25,6 @@ import {
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
-import { canAdministerExams } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState } from "../../lib/scope";
@@ -158,6 +157,14 @@ router.get("/exams", async (req: Request, res: Response) => {
     .select({
       id: online_exams.id,
       title_en: online_exams.title_en,
+      // title_hi/descriptions/max_attempts were omitted here while the edit
+      // dialog read them — opening "Edit exam" crashed on undefined.trim()
+      // and white-screened the panel (CTY-ERR-01).
+      title_hi: online_exams.title_hi,
+      description_en: online_exams.description_en,
+      description_hi: online_exams.description_hi,
+      max_attempts: online_exams.max_attempts,
+      city_id: online_exams.city_id,
       city_name: cities.name,
       window_start: online_exams.window_start,
       window_end: online_exams.window_end,
@@ -176,26 +183,44 @@ router.get("/exams", async (req: Request, res: Response) => {
     .orderBy(desc(online_exams.window_start))
     .limit(limit);
 
-  const showOtp = canAdministerExams(req.authUser!.role);
-  const items = rows.map((r) => {
-    const requires_otp = !!(r.exam_otp_hash || (r.exam_otp && r.exam_otp.length > 0));
-    const base = {
-      id: r.id,
-      title_en: r.title_en,
-      city_name: r.city_name,
-      window_start: r.window_start.toISOString(),
-      window_end: r.window_end.toISOString(),
-      results_released: r.results_released,
-      total_marks: r.total_marks,
-      pass_mark: r.pass_mark,
-      attempt_count: r.attempt_count,
-    };
-    if (showOtp) {
-      // Plaintext only for legacy rows; hashed codes are never readable again.
-      return { ...base, exam_otp: r.exam_otp, requires_otp };
-    }
-    return { ...base, requires_otp };
-  });
+  // Per-exam question-marks sums (CTY-API-07b) — separate aggregate so the
+  // attempts join above cannot multiply it.
+  const sumsByExam = new Map<string, number>();
+  if (rows.length > 0) {
+    const sums = await db
+      .select({
+        exam_id: exam_questions.exam_id,
+        marks_sum: sql<number>`coalesce(sum(${exam_questions.marks}), 0)::int`,
+      })
+      .from(exam_questions)
+      .where(inArray(exam_questions.exam_id, rows.map((r) => r.id)))
+      .groupBy(exam_questions.exam_id);
+    for (const s of sums) sumsByExam.set(s.exam_id, s.marks_sum);
+  }
+
+  // CTY-DSN-05: plaintext codes are never listable — legacy `exam_otp` is no
+  // longer echoed even to exam administrators; the code is shown exactly once
+  // at create/regenerate time.
+  const items = rows.map((r) => ({
+    id: r.id,
+    title_en: r.title_en,
+    title_hi: r.title_hi,
+    description_en: r.description_en,
+    description_hi: r.description_hi,
+    city_id: r.city_id,
+    city_name: r.city_name,
+    window_start: r.window_start.toISOString(),
+    window_end: r.window_end.toISOString(),
+    results_released: r.results_released,
+    total_marks: r.total_marks,
+    pass_mark: r.pass_mark,
+    max_attempts: r.max_attempts,
+    attempt_count: r.attempt_count,
+    // Running question-marks sum so the client can surface a mismatch
+    // against total_marks before release (CTY-API-07b).
+    question_marks_total: sumsByExam.get(r.id) ?? 0,
+    requires_otp: !!(r.exam_otp_hash || (r.exam_otp && r.exam_otp.length > 0)),
+  }));
   ok(res, { items }, { count: items.length });
 });
 
@@ -215,8 +240,174 @@ router.post(
       fail(res, 404, "ERR_NOT_FOUND", "Exam not found.");
       return;
     }
+
+    // CTY-API-07b: an exam declared out of 100 whose questions total 20 fails
+    // the whole cohort — results must not release while the paper and the
+    // declared total disagree.
+    const [qSum] = await db
+      .select({ marks_sum: sql<number>`coalesce(sum(${exam_questions.marks}), 0)::int` })
+      .from(exam_questions)
+      .where(eq(exam_questions.exam_id, id));
+    const questionTotal = qSum?.marks_sum ?? 0;
+    if (questionTotal !== exam.total_marks) {
+      fail(
+        res,
+        409,
+        "ERR_CONFLICT",
+        `Question marks add up to ${questionTotal}, but the exam is declared out of ${exam.total_marks} — fix the questions or the total, then release.`,
+      );
+      return;
+    }
+
     await db.update(online_exams).set({ results_released: true }).where(eq(online_exams.id, id));
     ok(res, { id, results_released: true });
+  },
+);
+
+const patchExamSchema = z
+  .object({
+    title_en: z.string().min(1).max(300).optional(),
+    title_hi: z.string().min(1).max(300).optional(),
+    description_en: z.string().max(2000).nullable().optional(),
+    description_hi: z.string().max(2000).nullable().optional(),
+    window_start: z.string().datetime().optional(),
+    window_end: z.string().datetime().optional(),
+    total_marks: z.coerce.number().int().min(1).optional(),
+    pass_mark: z.coerce.number().int().min(0).optional(),
+    max_attempts: z.coerce.number().int().min(1).max(10).optional(),
+    completion_points: z.coerce.number().int().min(0).nullable().optional(),
+    top_score_points: z.coerce.number().int().min(0).nullable().optional(),
+  })
+  .strict();
+
+/* PATCH /v1/admin/exams/:id — the edit dialog PATCHed a route that did not
+   exist, so no exam was ever editable (CTY-API-01). */
+router.patch(
+  "/exams/:id",
+  requireRole("super_admin", "state_admin", "city_admin"),
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    if (!isUuid(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Exam not found.");
+      return;
+    }
+    let body: z.infer<typeof patchExamSchema>;
+    try {
+      body = patchExamSchema.parse(req.body);
+    } catch (err) {
+      const msg =
+        err instanceof z.ZodError ? (err.issues[0]?.message ?? "Invalid exam data.") : "Invalid exam data.";
+      fail(res, 422, "ERR_VALIDATION_FAILED", msg);
+      return;
+    }
+
+    const cityIds = await cityIdsForUser(req.authUser!);
+    const [exam] = await db.select().from(online_exams).where(eq(online_exams.id, id)).limit(1);
+    if (!exam || (cityIds !== null && !cityIds.includes(exam.city_id))) {
+      fail(res, 404, "ERR_NOT_FOUND", "Exam not found.");
+      return;
+    }
+
+    // Marks lock after release — server-enforced, not just a disabled input.
+    if (exam.results_released && (body.total_marks !== undefined || body.pass_mark !== undefined)) {
+      fail(
+        res,
+        409,
+        "ERR_RESULTS_PUBLISHED",
+        "Total marks and pass mark are locked after results are released.",
+      );
+      return;
+    }
+
+    const nextStart = body.window_start ? new Date(body.window_start) : exam.window_start;
+    const nextEnd = body.window_end ? new Date(body.window_end) : exam.window_end;
+    if (nextStart.getTime() >= nextEnd.getTime()) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "The exam must end after it starts — check the window dates.");
+      return;
+    }
+    const nextTotal = body.total_marks ?? exam.total_marks;
+    const nextPass = body.pass_mark ?? exam.pass_mark;
+    if (nextPass > nextTotal) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Pass mark cannot be higher than total marks.");
+      return;
+    }
+
+    const [row] = await db
+      .update(online_exams)
+      .set({
+        ...(body.title_en !== undefined ? { title_en: body.title_en } : {}),
+        ...(body.title_hi !== undefined ? { title_hi: body.title_hi } : {}),
+        ...(body.description_en !== undefined ? { description_en: body.description_en } : {}),
+        ...(body.description_hi !== undefined ? { description_hi: body.description_hi } : {}),
+        ...(body.window_start !== undefined ? { window_start: nextStart } : {}),
+        ...(body.window_end !== undefined ? { window_end: nextEnd } : {}),
+        ...(body.total_marks !== undefined ? { total_marks: body.total_marks } : {}),
+        ...(body.pass_mark !== undefined ? { pass_mark: body.pass_mark } : {}),
+        ...(body.max_attempts !== undefined ? { max_attempts: body.max_attempts } : {}),
+        ...(body.completion_points !== undefined ? { completion_points: body.completion_points } : {}),
+        ...(body.top_score_points !== undefined ? { top_score_points: body.top_score_points } : {}),
+        updated_at: new Date(),
+      })
+      .where(eq(online_exams.id, id))
+      .returning({
+        id: online_exams.id,
+        title_en: online_exams.title_en,
+        title_hi: online_exams.title_hi,
+        description_en: online_exams.description_en,
+        description_hi: online_exams.description_hi,
+        window_start: online_exams.window_start,
+        window_end: online_exams.window_end,
+        total_marks: online_exams.total_marks,
+        pass_mark: online_exams.pass_mark,
+        max_attempts: online_exams.max_attempts,
+        results_released: online_exams.results_released,
+      });
+    await auditFromReq(req, {
+      action: "update",
+      entityKind: "online_exam",
+      entityId: id,
+      summary: `Updated exam "${exam.title_en}".`,
+      metadata: { fields: Object.keys(body) },
+    });
+    ok(res, {
+      ...row!,
+      window_start: row!.window_start.toISOString(),
+      window_end: row!.window_end.toISOString(),
+    });
+  },
+);
+
+/* POST /v1/admin/exams/:id/access-code — regenerate; plaintext returned once
+   (CTY-API-07). The old flow showed the code in a 4-second toast and it was
+   unrecoverable afterwards. */
+router.post(
+  "/exams/:id/access-code",
+  requireRole("super_admin", "state_admin", "city_admin"),
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    if (!isUuid(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Exam not found.");
+      return;
+    }
+    const cityIds = await cityIdsForUser(req.authUser!);
+    const [exam] = await db.select().from(online_exams).where(eq(online_exams.id, id)).limit(1);
+    if (!exam || (cityIds !== null && !cityIds.includes(exam.city_id))) {
+      fail(res, 404, "ERR_NOT_FOUND", "Exam not found.");
+      return;
+    }
+    const plaintext = generateExamAccessCode();
+    const hash = await hashOtpCode(plaintext);
+    await db
+      .update(online_exams)
+      .set({ exam_otp: null, exam_otp_hash: hash, updated_at: new Date() })
+      .where(eq(online_exams.id, id));
+    await auditFromReq(req, {
+      action: "update",
+      entityKind: "online_exam",
+      entityId: id,
+      summary: `Regenerated the access code for exam "${exam.title_en}".`,
+    });
+    ok(res, { id, exam_otp: plaintext });
   },
 );
 /* GET /v1/admin/exams/:id/attempts */
@@ -255,8 +446,12 @@ router.get("/exams/:id/attempts", async (req: Request, res: Response) => {
   ok(res, { items }, { count: items.length });
 });
 
-/* GET /v1/admin/donations/campaigns */
-router.get("/donations/campaigns", async (req: Request, res: Response) => {
+/* GET /v1/admin/donations/campaigns — donor data is city_admin+ (XC-API-01):
+   a shikshak typing the URL used to receive the full donor list. */
+router.get(
+  "/donations/campaigns",
+  requireRole("super_admin", "state_admin", "city_admin"),
+  async (req: Request, res: Response) => {
   const cityIds = await cityIdsForUser(req.authUser!);
   const rows = await db
     .select({
@@ -285,8 +480,12 @@ router.get("/donations/campaigns", async (req: Request, res: Response) => {
   ok(res, { items: rows }, { count: rows.length });
 });
 
-/* GET /v1/admin/donations */
-router.get("/donations", async (req: Request, res: Response) => {
+/* GET /v1/admin/donations — donor PII; city_admin+ only, matching
+   canViewDonations (XC-API-01). */
+router.get(
+  "/donations",
+  requireRole("super_admin", "state_admin", "city_admin"),
+  async (req: Request, res: Response) => {
   const cityIds = await cityIdsForUser(req.authUser!);
   const limit = clampLimit(req.query.limit, 100, 500);
   const rows = await db
@@ -381,6 +580,9 @@ const createExamSchema = z
     total_marks: z.coerce.number().int().min(1).default(100),
     pass_mark: z.coerce.number().int().min(0).default(40),
     max_attempts: z.coerce.number().int().min(1).default(1),
+    // SPEC §5.14 per-exam Punya overrides — NULL means punya config (AT21).
+    completion_points: z.coerce.number().int().min(0).nullable().optional(),
+    top_score_points: z.coerce.number().int().min(0).nullable().optional(),
     exam_otp: z.string().max(20).optional(),
   })
   .superRefine((data, ctx) => {
@@ -433,6 +635,8 @@ router.post("/exams", requireRole("super_admin", "state_admin", "city_admin"), a
     total_marks: body.total_marks,
     pass_mark: body.pass_mark,
     max_attempts: body.max_attempts,
+    completion_points: body.completion_points ?? null,
+    top_score_points: body.top_score_points ?? null,
     exam_otp: null,
     exam_otp_hash: examOtpHash,
   }).returning({ id: online_exams.id, title_en: online_exams.title_en });
@@ -682,6 +886,67 @@ router.post("/punya/configs", requireRole("super_admin", "state_admin", "city_ad
   ok(res, row);
 });
 
+const patchPunyaConfigSchema = z
+  .object({
+    points: z.coerce.number().int().min(0).max(10000).optional(),
+    is_active: z.boolean().optional(),
+  })
+  .strict();
+
+/* PATCH /v1/admin/punya/configs/:id — configs were create-only, so a
+   mis-entered point value could never be corrected (CTY-API-09). feature_key
+   and city scope stay immutable: changing what a config MEANS is a new
+   config, not an edit. */
+router.patch(
+  "/punya/configs/:id",
+  requireRole("super_admin", "state_admin", "city_admin"),
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    if (!isUuid(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Punya config not found.");
+      return;
+    }
+    let body: z.infer<typeof patchPunyaConfigSchema>;
+    try {
+      body = patchPunyaConfigSchema.parse(req.body);
+    } catch {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid punya config data.");
+      return;
+    }
+    if (body.points === undefined && body.is_active === undefined) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Provide points and/or is_active to update.");
+      return;
+    }
+    const [row] = await db
+      .update(punya_configs)
+      .set({
+        ...(body.points !== undefined ? { points: body.points } : {}),
+        ...(body.is_active !== undefined ? { is_active: body.is_active } : {}),
+        updated_at: new Date(),
+      })
+      .where(eq(punya_configs.id, id))
+      .returning({ id: punya_configs.id, feature_key: punya_configs.feature_key });
+    if (!row) {
+      fail(res, 404, "ERR_NOT_FOUND", "Punya config not found.");
+      return;
+    }
+    // Point values are AT21-cached — a stale cache would keep awarding the
+    // old value after the correction.
+    const { clearAttendancePointsCache } = await import("../../lib/attendance-points");
+    const { clearHomeworkPointsCache } = await import("../../lib/homework-points");
+    clearAttendancePointsCache();
+    clearHomeworkPointsCache();
+    await auditFromReq(req, {
+      action: "update",
+      entityKind: "punya_config",
+      entityId: id,
+      summary: `Updated punya config "${row.feature_key}".`,
+      metadata: { fields: Object.keys(body) },
+    });
+    ok(res, row);
+  },
+);
+
 const createCentreHolidaySchema = z.object({
   holiday_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   reason: z.string().max(500).optional(),
@@ -732,6 +997,98 @@ router.post(
     });
 
     ok(res, row);
+  },
+);
+
+const createCentreHolidayRangeSchema = z
+  .object({
+    start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    reason: z.string().max(500).optional(),
+    is_published: z.boolean().optional(),
+  })
+  .refine((b) => b.end_date >= b.start_date, {
+    message: "end_date must be on or after start_date.",
+  });
+
+/* POST /v1/admin/centres/:id/holidays/range — one ranged call with per-date
+   results (SAN-PRF-01): the mobile app issued 20 serial single-date requests
+   for a 20-day break, with a vague partial-failure story. */
+router.post(
+  "/centres/:id/holidays/range",
+  requireRole("super_admin", "state_admin", "city_admin", "sanchalak"),
+  async (req: Request, res: Response) => {
+    const centreId = String(req.params.id);
+    let body: z.infer<typeof createCentreHolidayRangeSchema>;
+    try {
+      body = createCentreHolidayRangeSchema.parse(req.body);
+    } catch (err) {
+      const msg =
+        err instanceof z.ZodError ? (err.issues[0]?.message ?? "Invalid range.") : "Invalid range.";
+      fail(res, 422, "ERR_VALIDATION_FAILED", msg);
+      return;
+    }
+    const scope = await resolveAdminScope(req.authUser!);
+    if (scope.centreIds !== null && !scope.centreIds.includes(centreId)) {
+      fail(res, 403, "ERR_FORBIDDEN", "Centre not in your scope.");
+      return;
+    }
+
+    // Enumerate the calendar days (inclusive); cap so a typo'd year cannot
+    // create thousands of rows.
+    const dates: string[] = [];
+    const cursor = new Date(`${body.start_date}T00:00:00Z`);
+    const end = new Date(`${body.end_date}T00:00:00Z`);
+    while (cursor.getTime() <= end.getTime() && dates.length <= 92) {
+      dates.push(cursor.toISOString().slice(0, 10));
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+    if (dates.length > 92) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "A holiday range can cover at most 92 days.");
+      return;
+    }
+
+    const existing = await db
+      .select({ holiday_date: centre_holidays.holiday_date })
+      .from(centre_holidays)
+      .where(
+        and(
+          eq(centre_holidays.centre_id, centreId),
+          inArray(centre_holidays.holiday_date, dates),
+        ),
+      );
+    const existingDates = new Set(existing.map((e) => String(e.holiday_date)));
+
+    const toCreate = dates.filter((d) => !existingDates.has(d));
+    const results = dates.map((d) => ({
+      holiday_date: d,
+      status: existingDates.has(d) ? ("already_exists" as const) : ("created" as const),
+    }));
+
+    if (toCreate.length > 0) {
+      await db.insert(centre_holidays).values(
+        toCreate.map((d) => ({
+          centre_id: centreId,
+          holiday_date: d,
+          reason: body.reason ?? null,
+          is_published: body.is_published ?? true,
+        })),
+      );
+      // AT10 — future scheduled sessions with no marks inside the range are
+      // removed; marked sessions stay.
+      const { applyHolidayToSessions } = await import("../../services/session-materialise");
+      await applyHolidayToSessions(centreId, body.start_date, body.end_date);
+    }
+
+    await auditFromReq(req, {
+      action: "create",
+      entityKind: "centre_holiday",
+      entityId: centreId,
+      summary: `Holiday range ${body.start_date} → ${body.end_date} (${toCreate.length} new day(s)).`,
+      metadata: { centre_id: centreId, start_date: body.start_date, end_date: body.end_date },
+    });
+
+    ok(res, { results }, { created: toCreate.length, already_exists: existingDates.size });
   },
 );
 

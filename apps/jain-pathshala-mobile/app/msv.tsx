@@ -112,9 +112,9 @@ export default function MsvScreen() {
   const active = activeStudentId ? items.find((i) => i.id === activeStudentId) ?? null : null;
   const shown = active ? [active] : items;
 
+  // No dedicated MSV accent token exists; MSV approval enrols the student
+  // into the MSV curriculum, so it sits in the courses domain.
   return (
-    {/* No dedicated MSV accent token exists; MSV approval enrols the student
-        into the MSV curriculum, so it sits in the courses domain. */}
     <ActivityThemed accent="courses">
       <View style={{ flex: 1, backgroundColor: c.background }}>
         <AppHeader
@@ -129,6 +129,7 @@ export default function MsvScreen() {
           ) : mine.isError ? (
             <StateView
               status="error"
+              emptyText=""
               errorText={hi ? "जानकारी लोड नहीं हो सकी।" : "Could not load MSV details."}
               onRetry={() => void mine.refetch()}
               retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}

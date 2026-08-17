@@ -8,6 +8,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { REJECT_REASON_MIN, REJECT_REASON_MAX } from "@workspace/api-zod";
 import { fonts, bodyFamily } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
@@ -25,9 +26,6 @@ const FILTERS = [
   { key: "approved", en: "Approved", hi: "स्वीकृत" },
   { key: "rejected", en: "Rejected", hi: "अस्वीकृत" },
 ];
-
-const REJECT_REASON_MIN = 10;
-const REJECT_REASON_MAX = 300;
 
 const REJECT_PRESETS = [
   {
@@ -180,10 +178,19 @@ export default function EnrolmentsScreen() {
   const { hi } = useLocale();
   const [filter, setFilter] = useState("");
   const [rejectId, setRejectId] = useState<string | null>(null);
-  const { data, isLoading, isError, refetch, isRefetching } = useAdminEnrolments(filter || undefined);
+  const {
+    data,
+    isLoading,
+    isError,
+    refetch,
+    isRefetching,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  } = useAdminEnrolments(filter || undefined);
   const mutate = useEnrolmentAction();
 
-  const items = data?.items ?? [];
+  const items = (data?.pages ?? []).flatMap((p) => p.data.items ?? []);
 
   const run = (id: string, action: "approve" | "waitlist", reason?: string) =>
     mutate.mutate(
@@ -312,6 +319,17 @@ export default function EnrolmentsScreen() {
             );
           })
         )}
+        {!isLoading && !isError && hasNextPage ? (
+          <Button
+            label={
+              isFetchingNextPage ? (hi ? "लोड हो रहा है…" : "Loading…") : hi ? "और देखें" : "Load more"
+            }
+            variant="outline"
+            onPress={() => void fetchNextPage()}
+            loading={isFetchingNextPage}
+            style={{ marginTop: 4 }}
+          />
+        ) : null}
       </Screen>
 
       <RejectSheet

@@ -14,6 +14,7 @@ import { db, enquiries } from "@workspace/db";
 import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
+import { rateLimit } from "../../lib/ratelimit";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { auditFromReq } from "../../lib/audit";
 import { clampLimit } from "../../lib/route-helpers";
@@ -43,6 +44,12 @@ const createEnquirySchema = z.object({
 
 /* POST /v1/enquiries — PUBLIC: submit a contact/enquire/donate message */
 router.post("/", async (req: Request, res: Response) => {
+  // Unauthenticated write with no cap — one script could flood the admin inbox.
+  // Generous enough for a family sending a follow-up, hostile to loops.
+  if (await rateLimit(`enquiry:ip:${req.ip ?? "unknown"}`, 10, 3600)) {
+    fail(res, 429, "ERR_RATE_LIMITED", "Too many messages just now — please try again later.");
+    return;
+  }
   let body: z.infer<typeof createEnquirySchema>;
   try {
     body = createEnquirySchema.parse(req.body);

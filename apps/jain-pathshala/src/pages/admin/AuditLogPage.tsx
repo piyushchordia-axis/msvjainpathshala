@@ -1,6 +1,11 @@
-import { useEffect, useState } from 'react';
-import { apiGet, ApiError } from '@/lib/api-client';
-import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow } from '@/components/admin/AdminPageShell';
+import { useEffect, useMemo, useState } from 'react';
+import { apiGet } from '@/lib/api-client';
+import { useAuth } from '@/lib/auth-context';
+import { useAdminList } from '@/hooks/useAdminList';
+import {
+  AdminPageShell, AdminTable, AdminError, AdminEmptyRow, AdminLoadMore,
+} from '@/components/admin/AdminPageShell';
+import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -23,15 +28,35 @@ interface AuditRow {
 const ALL = '__all__';
 
 export default function AuditLogPage() {
+  const { user } = useAuth();
+  // The endpoint is state_admin+ — below that, name the restriction instead
+  // of rendering a bare 403 card that reads as "broken" (STA-API-01).
+  const restricted = user ? !['super_admin', 'state_admin'].includes(user.role) : false;
+
+  if (restricted) {
+    return (
+      <AdminPageShell
+        title="Audit log"
+        subtitle="Append-only trail of sensitive actions across the organisation."
+      >
+        <Card className="p-6 text-sm text-muted-foreground">
+          The audit log is restricted to state and national admins. Your role
+          ({user?.role.replace(/_/g, ' ')}) does not include it — ask your state admin if you
+          need an entry checked.
+        </Card>
+      </AdminPageShell>
+    );
+  }
+
+  return <AuditLogContent />;
+}
+
+function AuditLogContent() {
   const [actions, setActions] = useState<string[]>([]);
   const [action, setAction] = useState<string>(ALL);
   const [entityKind, setEntityKind] = useState('');
   // Debounced value actually used to build the query.
   const [entityKindQuery, setEntityKindQuery] = useState('');
-
-  const [items, setItems] = useState<AuditRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   // Load the action enum once for the filter dropdown.
   useEffect(() => {
@@ -46,18 +71,17 @@ export default function AuditLogPage() {
     return () => clearTimeout(t);
   }, [entityKind]);
 
-  // Reload the list whenever a filter changes.
-  useEffect(() => {
-    const params = new URLSearchParams({ limit: '200' });
+  // Cursor-paged list (STA-API-01) — the old hard limit:200 fetch meant
+  // nothing beyond the newest 200 entries was ever visible.
+  const listUrl = useMemo(() => {
+    const params = new URLSearchParams({ limit: '100' });
     if (action !== ALL) params.set('action', action);
     if (entityKindQuery) params.set('entity_kind', entityKindQuery);
-    setLoading(true);
-    setError(null);
-    void apiGet<{ items: AuditRow[] }>(`/v1/audit-logs?${params.toString()}`)
-      .then((r) => setItems(r?.items ?? []))
-      .catch((e) => setError(e instanceof ApiError ? e.message : 'Failed to load audit logs.'))
-      .finally(() => setLoading(false));
+    return `/v1/audit-logs?${params.toString()}`;
   }, [action, entityKindQuery]);
+
+  const { items, loading, loadingMore, error, hasMore, loadMore } =
+    useAdminList<AuditRow>(listUrl);
 
   return (
     <AdminPageShell
@@ -94,6 +118,9 @@ export default function AuditLogPage() {
         loading={loading}
         empty=""
         colSpan={7}
+        footer={
+          <AdminLoadMore hasMore={hasMore} loadingMore={loadingMore} onLoadMore={() => void loadMore()} />
+        }
       >
         {items.length === 0 && !loading ? (
           <AdminEmptyRow colSpan={7} message="No audit entries match these filters." />

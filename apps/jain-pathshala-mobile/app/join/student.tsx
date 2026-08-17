@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Image, Pressable, TextInput, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
-import { ApiError, apiGet, apiPost } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/api-error-copy";
+import { mergeById, usePickerSearch } from "@/lib/picker-search";
 import { joinUpload, safeImageMime, safeImageUploadName } from "@/lib/join-upload";
 import {
   STUDENT_SECTIONS,
@@ -20,7 +22,9 @@ import { Body, Button, Card, Screen, Title } from "@/components/ui";
 
 type City = { id: string; name: string; code: string; state_name?: string };
 type Centre = { id: string; name: string; code: string | null; city_id: string };
-type Phase = "loading" | "closed" | "form" | "done";
+// 'error' is distinct from 'closed': a dead network must never read as
+// "registration has closed" (GST-API-01).
+type Phase = "loading" | "error" | "closed" | "form" | "done";
 
 export default function JoinStudentScreen() {
   const c = useColors();
@@ -42,25 +46,29 @@ export default function JoinStudentScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const [s, f, citiesRes, centresRes] = await Promise.all([
-          apiGet<{ registration_open: boolean }>("/v1/join/settings?kind=student"),
-          apiGet<{ items: JoinField[] }>("/v1/join/form-fields?kind=student"),
-          apiGet<{ items: City[] }>("/v1/public/cities"),
-          apiGet<{ items: Centre[] }>("/v1/public/centres"),
-        ]);
-        setAllFields(f.items);
-        setCities(citiesRes.items);
-        setCentres(centresRes.items.filter((x) => !!x.code));
-        setPhase(s.registration_open ? "form" : "closed");
-      } catch (e) {
-        setError(e instanceof ApiError ? e.message : "Failed to load");
-        setPhase("closed");
-      }
-    })();
+  const loadForm = useCallback(async () => {
+    setPhase("loading");
+    try {
+      const [s, f, citiesRes, centresRes] = await Promise.all([
+        apiGet<{ registration_open: boolean }>("/v1/join/settings?kind=student"),
+        apiGet<{ items: JoinField[] }>("/v1/join/form-fields?kind=student"),
+        apiGet<{ items: City[] }>("/v1/public/cities"),
+        apiGet<{ items: Centre[] }>("/v1/public/centres"),
+      ]);
+      setAllFields(f.items);
+      setCities(citiesRes.items);
+      setCentres(centresRes.items.filter((x) => !!x.code));
+      // 'closed' only when the server actually says so — a load failure used to
+      // masquerade as "registration is closed" (GST-API-01).
+      setPhase(s.registration_open ? "form" : "closed");
+    } catch {
+      setPhase("error");
+    }
   }, []);
+
+  useEffect(() => {
+    void loadForm();
+  }, [loadForm]);
 
   const photo = useMemo(() => photoField(allFields), [allFields]);
   const section = STUDENT_SECTIONS[sectionIdx]!;
@@ -68,31 +76,46 @@ export default function JoinStudentScreen() {
     () => fieldsForSection(allFields, section),
     [allFields, section],
   );
+  // Server-side ?q= merge — beyond the clamped first page a centre was
+  // unpickable however the guest spelled it (GST-PRF-03).
+  const cityQ = cityQuery.trim();
+  const cityExtra = usePickerSearch<City>(
+    cityQ.length >= 2 ? `/v1/public/cities?q=${encodeURIComponent(cityQ)}` : null,
+  );
+  const centreQ = centreQuery.trim();
+  const centreExtra = usePickerSearch<Centre>(
+    cityId && centreQ.length >= 2
+      ? `/v1/public/centres?city_id=${encodeURIComponent(cityId)}&q=${encodeURIComponent(centreQ)}`
+      : null,
+  );
+
   const filteredCities = useMemo(() => {
-    const q = cityQuery.trim().toLowerCase();
-    if (!q) return cities;
-    return cities.filter(
+    const q = cityQ.toLowerCase();
+    const pool = mergeById(cities, cityExtra);
+    if (!q) return pool;
+    return pool.filter(
       (city) =>
         city.name.toLowerCase().includes(q) ||
         city.code.toLowerCase().includes(q) ||
         (city.state_name ?? "").toLowerCase().includes(q),
     );
-  }, [cities, cityQuery]);
+  }, [cities, cityExtra, cityQ]);
 
-  const centresInCity = useMemo(
-    () => (cityId ? centres.filter((c) => c.city_id === cityId) : []),
-    [centres, cityId],
-  );
+  const centresInCity = useMemo(() => {
+    if (!cityId) return [];
+    const pool = mergeById(centres, centreExtra.filter((x) => !!x.code));
+    return pool.filter((c) => c.city_id === cityId);
+  }, [centres, centreExtra, cityId]);
 
   const filteredCentres = useMemo(() => {
-    const q = centreQuery.trim().toLowerCase();
+    const q = centreQ.toLowerCase();
     if (!q) return centresInCity;
     return centresInCity.filter(
       (c) =>
         c.name.toLowerCase().includes(q) ||
         (c.code ?? "").toLowerCase().includes(q),
     );
-  }, [centresInCity, centreQuery]);
+  }, [centresInCity, centreQ]);
 
   const inputStyle = {
     borderWidth: 1,
@@ -139,7 +162,13 @@ export default function JoinStudentScreen() {
     } catch (e) {
       setPhotoPreviewUri(null);
       setPhotoUrl(null);
-      setError(e instanceof ApiError ? e.message : "Upload failed — choose a clear image and try again.");
+      // Bilingual copy keyed off error.code (GST-API-05).
+      setError(apiErrorMessage(e, hi, {
+        ERR_VALIDATION_FAILED: {
+          en: "Upload failed — choose a clear image and try again.",
+          hi: "अपलोड विफल रहा — साफ़ छवि चुनकर पुनः प्रयास करें।",
+        },
+      }));
     } finally {
       setBusy(false);
     }
@@ -211,7 +240,8 @@ export default function JoinStudentScreen() {
       setReg(created);
       setPhase("done");
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Submit failed");
+      // Bilingual copy keyed off error.code (GST-API-05).
+      setError(apiErrorMessage(e, hi));
     } finally {
       setBusy(false);
     }
@@ -285,11 +315,37 @@ export default function JoinStudentScreen() {
     );
   }
 
+  if (phase === "error") {
+    return (
+      <Screen>
+        <Title>{hi ? "फ़ॉर्म लोड नहीं हो सका" : "Couldn't load the form"}</Title>
+        <Body muted style={{ marginTop: 8 }}>
+          {hi
+            ? "अपना कनेक्शन जाँचें और पुनः प्रयास करें — पंजीकरण अभी भी खुला हो सकता है।"
+            : "Check your connection and try again — registration may well still be open."}
+        </Body>
+        <Button
+          label={hi ? "पुनः प्रयास करें" : "Try again"}
+          style={{ marginTop: 16 }}
+          onPress={() => void loadForm()}
+        />
+        <Button
+          label={hi ? "मार्ग चुनें" : "Choose path"}
+          variant="outline"
+          style={{ marginTop: 10 }}
+          onPress={() => router.replace("/join")}
+        />
+      </Screen>
+    );
+  }
+
   if (phase === "closed") {
     return (
       <Screen>
         <Title>{hi ? "पंजीकरण बंद है" : "Registration is closed"}</Title>
-        {error ? <Body style={{ color: c.destructive, marginTop: 8 }}>{error}</Body> : null}
+        <Body muted style={{ marginTop: 8 }}>
+          {hi ? "कृपया बाद में पुनः प्रयास करें।" : "Please check back later."}
+        </Body>
         <Button
           label={hi ? "मार्ग चुनें" : "Choose path"}
           variant="outline"
@@ -315,9 +371,26 @@ export default function JoinStudentScreen() {
         <Body muted style={{ marginTop: 8 }}>
           {hi ? "इस कोड को सुरक्षित रखें" : "Keep this code safe"}
         </Body>
+        {/* Carry the code + mobile the family just typed (GST-API-02) — and
+            push, not replace, so the code screen stays reachable. */}
+        <Button
+          label={hi ? "शुल्क भुगतान करें" : "Complete payment"}
+          style={{ marginTop: 20 }}
+          onPress={() =>
+            router.push({
+              pathname: "/join/complete-payment",
+              params: {
+                kind: "student",
+                code: reg.display_code,
+                mobile: values.parent_mobile ?? "",
+              },
+            })
+          }
+        />
         <Button
           label={hi ? "होम" : "Done"}
-          style={{ marginTop: 20 }}
+          variant="outline"
+          style={{ marginTop: 10 }}
           onPress={() => router.replace("/guest/home")}
         />
       </Screen>

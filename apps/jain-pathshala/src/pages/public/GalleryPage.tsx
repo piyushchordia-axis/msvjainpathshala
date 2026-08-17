@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Card } from '@/components/ui/card';
 import { useLocale } from '@/lib/locale-context';
 import { formatAgeGroup } from '@workspace/api-zod';
+import { GuestError, GuestLoading } from '@/components/public/GuestLoadState';
 
 interface GalleryItem {
   id: string;
@@ -24,17 +25,30 @@ export default function GalleryPage() {
   const [items, setItems] = useState<GalleryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError(false);
     fetch('/v1/gallery?limit=60', { headers: { Accept: 'application/json' } })
       .then((r) => {
         if (!r.ok) throw new Error('http');
         return r.json();
       })
-      .then((json: { data?: { items?: GalleryItem[] } }) => setItems(json.data?.items ?? []))
-      .catch(() => setError(true))
-      .finally(() => setLoading(false));
-  }, []);
+      .then((json: { data?: { items?: GalleryItem[] } }) => {
+        if (active) setItems(json.data?.items ?? []);
+      })
+      .catch(() => {
+        if (active) setError(true);
+      })
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [reloadKey]);
 
   return (
     <section className="container py-12 md:py-16">
@@ -51,11 +65,14 @@ export default function GalleryPage() {
       </p>
 
       {loading ? (
-        <div className="mt-10 text-muted-foreground">Loading…</div>
+        <GuestLoading hi={hi} />
       ) : error ? (
-        <Card className="mt-10 border-destructive/40 bg-destructive/5 p-6 text-sm text-destructive">
-          {hi ? 'गैलरी लोड नहीं हो सकी।' : 'Could not load the gallery.'}
-        </Card>
+        <GuestError
+          hi={hi}
+          what="the gallery"
+          whatHi="गैलरी"
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
       ) : (
         <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {items.length === 0 ? (

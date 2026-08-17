@@ -8,7 +8,9 @@ import {
   AdminTable,
 } from '@/components/admin/AdminPageShell';
 import { useAdminList } from '@/hooks/useAdminList';
+import { useScopedGeography } from '@/hooks/useScopedGeography';
 import { apiGet, apiPost, apiPatch, ApiError } from '@/lib/api-client';
+import { describeApiError } from '@/lib/admin-error';
 import { toast } from '@/components/ui/toast-jp';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -21,8 +23,6 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
-
-interface GeoCity { id: string; name: string; state_name?: string; }
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -46,17 +46,53 @@ interface ExamRow {
   title_hi: string;
   description_en: string | null;
   description_hi: string | null;
+  city_id: string;
   city_name: string;
   window_start: string;
   window_end: string;
-  /** Present only for city_admin+; shikshak/sanchalak get requires_otp instead. */
-  exam_otp?: string | null;
+  /** Plaintext codes are never listable (CTY-DSN-05) — only this flag is. */
   requires_otp?: boolean;
   results_released: boolean;
   attempt_count: number;
   max_attempts: number;
   total_marks: number;
   pass_mark: number;
+  /** SUM(question marks) so a paper/total mismatch is visible (CTY-API-07b). */
+  question_marks_total: number;
+}
+
+/**
+ * Persistent access-code panel (CTY-API-07): the code used to appear in a
+ * 4-second toast and was unrecoverable afterwards — it is hashed at rest and
+ * can never be shown again.
+ */
+function AccessCodePanel({ code, context }: { code: string; context: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="rounded-md border border-primary/40 bg-primary/5 p-4">
+      <p className="text-sm font-medium">{context}</p>
+      <div className="mt-2 flex items-center gap-2">
+        <span className="rounded bg-card px-3 py-1.5 font-mono text-lg tracking-widest">{code}</span>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          onClick={() => {
+            void navigator.clipboard?.writeText(code).then(
+              () => setCopied(true),
+              () => setCopied(false),
+            );
+          }}
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </Button>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Save it now — the code is stored hashed and cannot be shown again. You can regenerate a
+        new one from Edit exam if it is lost.
+      </p>
+    </div>
+  );
 }
 
 /** ISO → value for `<input type="datetime-local">` in local time. */
@@ -70,7 +106,10 @@ function toDatetimeLocalValue(iso: string): string {
 function AddExamDialog({ onAdded }: { onAdded: () => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [cities, setCities] = useState<GeoCity[]>([]);
+  // Scope-filtered + cached — the raw national list let a city_admin fill the
+  // whole form before a 403 (CTY-API-05).
+  const geo = useScopedGeography(open);
+  const cities = geo.cities;
   const [title, setTitle] = useState('');
   const [titleHi, setTitleHi] = useState('');
   const [descriptionEn, setDescriptionEn] = useState('');
@@ -83,11 +122,12 @@ function AddExamDialog({ onAdded }: { onAdded: () => void }) {
   const [maxAttempts, setMaxAttempts] = useState('1');
   const [otp, setOtp] = useState('');
   const [fieldError, setFieldError] = useState<string | null>(null);
+  const [createdCode, setCreatedCode] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setFieldError(null);
-    void apiGet<{ cities: GeoCity[] }>('/v1/admin/geography').then((r) => setCities(r?.cities ?? []));
+    setCreatedCode(null);
   }, [open]);
 
   function validateClient(): string | null {
@@ -119,7 +159,7 @@ function AddExamDialog({ onAdded }: { onAdded: () => void }) {
     setFieldError(null);
     setBusy(true);
     try {
-      const res = await apiPost<{ exam_otp: string }>('/v1/admin/exams', {
+      const res = await apiPost<{ exam_otp: string | null }>('/v1/admin/exams', {
         title_en: title.trim(),
         title_hi: titleHi.trim(),
         description_en: descriptionEn.trim() || undefined,
@@ -132,8 +172,6 @@ function AddExamDialog({ onAdded }: { onAdded: () => void }) {
         max_attempts: Number(maxAttempts),
         exam_otp: otp.trim() || undefined,
       });
-      toast.success(res.exam_otp ? `Exam created. OTP: ${res.exam_otp}` : 'Exam created.');
-      setOpen(false);
       setTitle('');
       setTitleHi('');
       setDescriptionEn('');
@@ -147,8 +185,17 @@ function AddExamDialog({ onAdded }: { onAdded: () => void }) {
       setOtp('');
       setFieldError(null);
       onAdded();
+      if (res.exam_otp) {
+        // Keep the dialog open on a persistent code panel (CTY-API-07) — a
+        // 4-second toast was the only sight of an unrecoverable code.
+        setCreatedCode(res.exam_otp);
+      } else {
+        toast.success('Exam created.');
+        setOpen(false);
+      }
     } catch (err) {
-      toast.error('Failed.', err instanceof ApiError ? err.message : undefined);
+      const d = describeApiError(err, 'Could not create the exam');
+      toast.error(d.title, d.detail);
     } finally {
       setBusy(false);
     }
@@ -164,8 +211,18 @@ function AddExamDialog({ onAdded }: { onAdded: () => void }) {
       </DialogTrigger>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Create exam</DialogTitle>
+          <DialogTitle>{createdCode ? 'Exam created' : 'Create exam'}</DialogTitle>
         </DialogHeader>
+        {createdCode ? (
+          <div className="space-y-4 pt-2">
+            <AccessCodePanel code={createdCode} context="Access code for this exam" />
+            <div className="flex justify-end">
+              <Button type="button" onClick={() => setOpen(false)}>
+                Done
+              </Button>
+            </div>
+          </div>
+        ) : (
         <form className="space-y-4 pt-2" onSubmit={submit}>
           <FormRow label="Title (English) *">
             <Input value={title} onChange={(e) => setTitle(e.target.value)} required />
@@ -190,19 +247,28 @@ function AddExamDialog({ onAdded }: { onAdded: () => void }) {
             />
           </FormRow>
           <FormRow label="City *">
-            <Select value={cityId} onValueChange={setCityId}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select city" />
-              </SelectTrigger>
-              <SelectContent>
-                {cities.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                    {c.state_name ? ` (${c.state_name})` : ''}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {geo.error ? (
+              <div className="flex items-center justify-between rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+                <span>Couldn't load cities — this is a load failure, not an empty scope.</span>
+                <Button type="button" size="sm" variant="outline" onClick={geo.retry}>
+                  Retry
+                </Button>
+              </div>
+            ) : (
+              <Select value={cityId} onValueChange={setCityId}>
+                <SelectTrigger>
+                  <SelectValue placeholder={geo.loading ? 'Loading cities…' : 'Select city'} />
+                </SelectTrigger>
+                <SelectContent>
+                  {cities.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                      {c.state_name ? ` (${c.state_name})` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
           </FormRow>
           <div className="grid grid-cols-2 gap-3">
             <FormRow label="Window start *">
@@ -264,7 +330,7 @@ function AddExamDialog({ onAdded }: { onAdded: () => void }) {
               />
             </FormRow>
           </div>
-          <FormRow label="OTP (auto-generated if blank)">
+          <FormRow label="Access code (auto-generated if blank)">
             <Input
               value={otp}
               onChange={(e) => setOtp(e.target.value)}
@@ -287,6 +353,7 @@ function AddExamDialog({ onAdded }: { onAdded: () => void }) {
             </Button>
           </div>
         </form>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -295,31 +362,54 @@ function AddExamDialog({ onAdded }: { onAdded: () => void }) {
 function EditExamDialog({ exam, onSaved }: { exam: ExamRow; onSaved: () => void }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [title, setTitle] = useState(exam.title_en);
-  const [titleHi, setTitleHi] = useState(exam.title_hi);
+  // `?? ''` everywhere: a missing field must degrade to an empty input, never
+  // a render-time crash — undefined.trim() white-screened the whole panel
+  // before the list route returned these columns (CTY-ERR-01).
+  const [title, setTitle] = useState(exam.title_en ?? '');
+  const [titleHi, setTitleHi] = useState(exam.title_hi ?? '');
   const [descriptionEn, setDescriptionEn] = useState(exam.description_en ?? '');
   const [descriptionHi, setDescriptionHi] = useState(exam.description_hi ?? '');
   const [windowStart, setWindowStart] = useState(toDatetimeLocalValue(exam.window_start));
   const [windowEnd, setWindowEnd] = useState(toDatetimeLocalValue(exam.window_end));
-  const [totalMarks, setTotalMarks] = useState(String(exam.total_marks));
-  const [passMark, setPassMark] = useState(String(exam.pass_mark));
-  const [maxAttempts, setMaxAttempts] = useState(String(exam.max_attempts));
+  const [totalMarks, setTotalMarks] = useState(String(exam.total_marks ?? 100));
+  const [passMark, setPassMark] = useState(String(exam.pass_mark ?? 0));
+  const [maxAttempts, setMaxAttempts] = useState(String(exam.max_attempts ?? 1));
   const [fieldError, setFieldError] = useState<string | null>(null);
+  const [regenBusy, setRegenBusy] = useState(false);
+  const [regenCode, setRegenCode] = useState<string | null>(null);
   const marksLocked = exam.results_released;
 
   useEffect(() => {
     if (!open) return;
-    setTitle(exam.title_en);
-    setTitleHi(exam.title_hi);
+    setTitle(exam.title_en ?? '');
+    setTitleHi(exam.title_hi ?? '');
     setDescriptionEn(exam.description_en ?? '');
     setDescriptionHi(exam.description_hi ?? '');
     setWindowStart(toDatetimeLocalValue(exam.window_start));
     setWindowEnd(toDatetimeLocalValue(exam.window_end));
-    setTotalMarks(String(exam.total_marks));
-    setPassMark(String(exam.pass_mark));
-    setMaxAttempts(String(exam.max_attempts));
+    setTotalMarks(String(exam.total_marks ?? 100));
+    setPassMark(String(exam.pass_mark ?? 0));
+    setMaxAttempts(String(exam.max_attempts ?? 1));
     setFieldError(null);
+    setRegenCode(null);
   }, [open, exam]);
+
+  async function regenerateCode() {
+    if (!window.confirm('Generate a new access code? The old code stops working immediately.')) {
+      return;
+    }
+    setRegenBusy(true);
+    try {
+      const res = await apiPost<{ exam_otp: string }>(`/v1/admin/exams/${exam.id}/access-code`, {});
+      setRegenCode(res.exam_otp);
+      onSaved();
+    } catch (err) {
+      const d = describeApiError(err, 'Could not regenerate the code');
+      toast.error(d.title, d.detail);
+    } finally {
+      setRegenBusy(false);
+    }
+  }
 
   function validateClient(): string | null {
     const startMs = new Date(windowStart).getTime();
@@ -368,7 +458,8 @@ function EditExamDialog({ exam, onSaved }: { exam: ExamRow; onSaved: () => void 
       setOpen(false);
       onSaved();
     } catch (err) {
-      toast.error('Failed.', err instanceof ApiError ? err.message : undefined);
+      const d = describeApiError(err, 'Could not update the exam');
+      toast.error(d.title, d.detail);
     } finally {
       setBusy(false);
     }
@@ -475,6 +566,25 @@ function EditExamDialog({ exam, onSaved }: { exam: ExamRow; onSaved: () => void 
               Total marks and pass mark are locked after results are released.
             </p>
           ) : null}
+          {regenCode ? (
+            <AccessCodePanel code={regenCode} context="New access code" />
+          ) : (
+            <div className="flex items-center justify-between rounded-md border border-border px-3 py-2">
+              <span className="text-xs text-muted-foreground">
+                Access code: {exam.requires_otp ? 'required' : 'not required'} — codes are hashed
+                and can only be replaced, never read back.
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={regenBusy}
+                onClick={() => void regenerateCode()}
+              >
+                {regenBusy ? 'Generating…' : 'Regenerate'}
+              </Button>
+            </div>
+          )}
           {fieldError ? <p className="text-sm text-destructive">{fieldError}</p> : null}
           <div className="flex justify-end gap-2 pt-2">
             <DialogClose asChild>
@@ -506,7 +616,8 @@ export function ExamsPage() {
       toast.success('Results released.');
       reload();
     } catch (err) {
-      toast.error('Failed.', err instanceof ApiError ? err.message : undefined);
+      const d = describeApiError(err, 'Could not release results');
+      toast.error(d.title, d.detail);
     } finally {
       setBusy(null);
     }
@@ -515,18 +626,20 @@ export function ExamsPage() {
   return (
     <AdminPageShell
       title="Exams"
-      subtitle="Online exams, OTP codes, and result release."
+      subtitle="Online exams, access codes, and result release."
       actions={<AddExamDialog onAdded={reload} />}
     >
       {error ? <AdminError message={error} /> : null}
       <AdminTable
-        columns={['Exam', 'City', 'Window', 'OTP', 'Attempts', 'Allowed', 'Results', 'Actions']}
+        columns={['Exam', 'City', 'Window', 'Marks', 'Access code', 'Attempts', 'Allowed', 'Results', 'Actions']}
         loading={loading}
         empty=""
-        colSpan={8}
+        colSpan={9}
       >
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={8} message="No exams." /> : null}
-        {items.map((e) => (
+        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={9} message="No exams." /> : null}
+        {items.map((e) => {
+          const marksMismatch = e.question_marks_total !== e.total_marks;
+          return (
           <tr key={e.id} className="hover:bg-muted/30">
             <td className="px-4 py-3 font-medium">{e.title_en}</td>
             <td className="px-4 py-3 text-xs">{e.city_name}</td>
@@ -534,8 +647,20 @@ export function ExamsPage() {
               {new Date(e.window_start).toLocaleDateString('en-GB')} –{' '}
               {new Date(e.window_end).toLocaleDateString('en-GB')}
             </td>
-            <td className="px-4 py-3 font-mono text-xs">
-              {e.exam_otp ? e.exam_otp : e.requires_otp ? 'Set' : '—'}
+            <td className="px-4 py-3 text-xs whitespace-nowrap">
+              {/* SUM(question marks) vs declared total (CTY-API-07b): a paper
+                  worth 20 declared out of 100 fails the whole cohort. */}
+              <span className={marksMismatch && !e.results_released ? 'font-medium text-destructive' : ''}>
+                {e.question_marks_total}/{e.total_marks}
+              </span>
+              {marksMismatch && !e.results_released ? (
+                <span className="ml-1 text-muted-foreground">(questions ≠ total)</span>
+              ) : null}
+            </td>
+            <td className="px-4 py-3 text-xs">
+              {/* Never a retrievable code — "Set" implied it could be read back
+                  (CTY-DSN-05). */}
+              {e.requires_otp ? 'Required' : 'Not required'}
             </td>
             <td className="px-4 py-3">{e.attempt_count}</td>
             <td className="px-4 py-3">{e.max_attempts}</td>
@@ -544,14 +669,24 @@ export function ExamsPage() {
               <div className="flex items-center gap-1">
                 <EditExamDialog exam={e} onSaved={reload} />
                 {!e.results_released ? (
-                  <Button size="sm" disabled={busy === e.id} onClick={() => releaseResults(e.id)}>
+                  <Button
+                    size="sm"
+                    disabled={busy === e.id || marksMismatch}
+                    title={
+                      marksMismatch
+                        ? `Question marks add up to ${e.question_marks_total}, but the exam is declared out of ${e.total_marks} — fix the paper or the total first.`
+                        : undefined
+                    }
+                    onClick={() => releaseResults(e.id)}
+                  >
                     Release
                   </Button>
                 ) : null}
               </div>
             </td>
           </tr>
-        ))}
+          );
+        })}
       </AdminTable>
     </AdminPageShell>
   );

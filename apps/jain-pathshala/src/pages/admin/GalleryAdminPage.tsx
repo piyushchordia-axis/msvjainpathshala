@@ -2,6 +2,8 @@ import { useState } from 'react';
 import { ImagePlus, Trash2, Star, Eye, EyeOff } from 'lucide-react';
 import { apiPost, del, ApiError } from '@/lib/api-client';
 import { useAdminList } from '@/hooks/useAdminList';
+import { useAuth } from '@/lib/auth-context';
+import { canFeatureMedia } from '@workspace/api-zod';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminError, AdminLoadMore, AdminVirtualGrid } from '@/components/admin/AdminPageShell';
 import { Button } from '@/components/ui/button';
@@ -9,6 +11,9 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Card } from '@/components/ui/card';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
+} from '@/components/ui/dialog';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
@@ -81,7 +86,81 @@ function FormRow({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
+/**
+ * Designed takedown dialog (SAN-DSN-02): the old flow was two stacked native
+ * prompts. Removal is permanent, so the confirmation lives in the same dialog
+ * as the reason.
+ */
+function TakedownDialog({
+  item,
+  onRemoved,
+}: {
+  item: AdminGalleryItem;
+  onRemoved: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [reason, setReason] = useState('');
+  const trimmed = reason.trim();
+  const valid = trimmed.length >= 5;
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!valid || busy) return;
+    setBusy(true);
+    try {
+      await del(`/v1/gallery/admin/${item.id}`, { reason: trimmed });
+      toast.success('Item removed.');
+      setOpen(false);
+      setReason('');
+      onRemoved();
+    } catch (err) {
+      toast.error('Could not remove item.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) setReason(''); }}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="destructive">
+          <Trash2 className="mr-1 h-3.5 w-3.5" />
+          Remove
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>Remove from gallery</DialogTitle></DialogHeader>
+        <form className="space-y-4 pt-2" onSubmit={submit}>
+          <p className="text-sm text-muted-foreground">
+            This removes the photo permanently — it cannot be undone.
+          </p>
+          <div className="space-y-1">
+            <Label className="text-xs font-medium">
+              Reason * (saved to the audit log, at least 5 characters)
+            </Label>
+            <Textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              rows={2}
+              maxLength={300}
+              placeholder="Why is this being taken down?"
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+            <Button type="submit" variant="destructive" disabled={busy || !valid}>
+              {busy ? 'Removing…' : 'Remove permanently'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function GalleryAdminPage() {
+  const { user } = useAuth();
   const { items, loading, loadingMore, error, reload, hasMore, loadMore } =
     useAdminList<AdminGalleryItem>('/v1/gallery/admin?limit=200');
   const { items: students } = useAdminList<AdminStudentRow>('/v1/admin/students?limit=500');
@@ -92,9 +171,11 @@ export default function GalleryAdminPage() {
   const [captionHi, setCaptionHi] = useState('');
   const [studentId, setStudentId] = useState<string>('none');
   const [makePublic, setMakePublic] = useState(true);
-  const [makeFeatured, setMakeFeatured] = useState(false);
   const [busy, setBusy] = useState(false);
   const [rowBusy, setRowBusy] = useState<string | null>(null);
+  // Featuring is city_admin+ (canFeatureMedia). Offering the button to a
+  // sanchalak produced a guaranteed 403 toast (SAN-API-05).
+  const canFeature = canFeatureMedia(user?.role);
 
   function onPick(f: File | null) {
     setFile(f);
@@ -110,7 +191,6 @@ export default function GalleryAdminPage() {
     setCaptionHi('');
     setStudentId('none');
     setMakePublic(true);
-    setMakeFeatured(false);
   }
 
   async function create() {
@@ -174,27 +254,6 @@ export default function GalleryAdminPage() {
     }
   }
 
-  async function takedown(item: AdminGalleryItem) {
-    const reason = window.prompt(
-      'Why are you taking this down? (saved to the audit log, at least 5 characters)',
-    );
-    if (reason == null) return;
-    if (reason.trim().length < 5) {
-      toast.error('Write a short reason — at least 5 characters.');
-      return;
-    }
-    if (!window.confirm('Remove this item from the gallery? This cannot be undone.')) return;
-    setRowBusy(item.id);
-    try {
-      await del(`/v1/gallery/admin/${item.id}`, { reason: reason.trim() });
-      toast.success('Item removed.');
-      void reload();
-    } catch (err) {
-      toast.error('Could not remove item.', err instanceof ApiError ? err.message : undefined);
-    } finally {
-      setRowBusy(null);
-    }
-  }
 
   return (
     <AdminPageShell
@@ -269,10 +328,9 @@ export default function GalleryAdminPage() {
               <input type="checkbox" checked={makePublic} onChange={(e) => setMakePublic(e.target.checked)} />
               Public
             </label>
-            <label className="flex items-center gap-2">
-              <input type="checkbox" checked={makeFeatured} onChange={(e) => setMakeFeatured(e.target.checked)} />
-              Featured
-            </label>
+            {/* The old "Featured" checkbox was dead — the create endpoint
+                never auto-features (SAN-DSN-02); featuring happens per item
+                below, city_admin+ only. */}
           </div>
 
           <Button onClick={create} disabled={busy || !file} className="w-full">
@@ -352,24 +410,18 @@ export default function GalleryAdminPage() {
                           {g.is_public ? <EyeOff className="mr-1 h-3.5 w-3.5" /> : <Eye className="mr-1 h-3.5 w-3.5" />}
                           {g.is_public ? 'Hide' : 'Show'}
                         </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          disabled={rowBusy === g.id}
-                          onClick={() => patchFeatured(g, !g.is_featured)}
-                        >
-                          <Star className="mr-1 h-3.5 w-3.5" />
-                          {g.is_featured ? 'Unfeature' : 'Feature'}
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="destructive"
-                          disabled={rowBusy === g.id}
-                          onClick={() => takedown(g)}
-                        >
-                          <Trash2 className="mr-1 h-3.5 w-3.5" />
-                          Remove
-                        </Button>
+                        {canFeature ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={rowBusy === g.id}
+                            onClick={() => patchFeatured(g, !g.is_featured)}
+                          >
+                            <Star className="mr-1 h-3.5 w-3.5" />
+                            {g.is_featured ? 'Unfeature' : 'Feature'}
+                          </Button>
+                        ) : null}
+                        <TakedownDialog item={g} onRemoved={() => void reload()} />
                       </div>
                     </div>
                   </Card>

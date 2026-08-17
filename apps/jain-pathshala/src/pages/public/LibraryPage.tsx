@@ -5,8 +5,9 @@ import type { LibrarySectionDto } from '@workspace/api-zod';
 import { Card } from '@/components/ui/card';
 import { useLocale } from '@/lib/locale-context';
 import { useAuth } from '@/lib/auth-context';
-import { apiGet } from '@/lib/api-client';
 import { safeHref } from '@/lib/safe-url';
+import { fetchLibrarySections } from '@/lib/library-cache';
+import { GuestError, GuestLoading } from '@/components/public/GuestLoadState';
 
 function pickName(hi: boolean, s: LibrarySectionDto): string {
   if (hi) return s.name_hi || s.name_en || s.name_gu || '';
@@ -32,38 +33,26 @@ export default function LibraryPage() {
   const [sections, setSections] = useState<LibrarySectionDto[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
 
-    const load = authed
-      ? apiGet<{ sections: LibrarySectionDto[] }>('/v1/library')
-      : fetch('/v1/public/library', { headers: { Accept: 'application/json' } })
-          .then(async (r) => {
-            if (!r.ok) {
-              throw new Error(`Library request failed (${r.status})`);
-            }
-            return r.json();
-          })
-          .then((json: { data?: { sections?: LibrarySectionDto[] } }) => ({
-            sections: json.data?.sections ?? [],
-          }));
-
-    Promise.resolve(load)
-      .then((res) => {
+    // Shared session cache — the tree carries every item's full text, and each
+    // library page used to re-download the whole corpus (GST-PRF-01).
+    fetchLibrarySections(authed, { force: reloadKey > 0 })
+      .then((sections) => {
         if (!cancelled) {
-          setSections(
-            (res?.sections ?? []).filter(
-              (s) => !(authed && s.key === "pathshala_join"),
-            ),
-          );
+          setSections(sections.filter((s) => !(authed && s.key === "pathshala_join")));
         }
       })
-      .catch((err) => {
+      .catch(() => {
+        // Raw "Library request failed (502)" told a Hindi guest nothing they
+        // could act on (GST-DSN-03) — the error card owns the copy now.
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : 'Could not load the library.');
+          setError('load');
           setSections([]);
         }
       })
@@ -74,7 +63,7 @@ export default function LibraryPage() {
     return () => {
       cancelled = true;
     };
-  }, [authed]);
+  }, [authed, reloadKey]);
 
   function openSection(section: LibrarySectionDto) {
     // Panchang is never login-gated.
@@ -120,11 +109,14 @@ export default function LibraryPage() {
       </p>
 
       {error ? (
-        <Card className="mt-10 border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
-          {error}
-        </Card>
+        <GuestError
+          hi={hi}
+          what="the library"
+          whatHi="पुस्तकालय"
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
       ) : loading ? (
-        <div className="mt-10 text-muted-foreground">{hi ? 'लोड हो रहा है…' : 'Loading…'}</div>
+        <GuestLoading hi={hi} />
       ) : sections.length === 0 ? (
         <Card className="mt-10 p-6 text-muted-foreground">
           {hi ? 'अभी कोई खंड नहीं है।' : 'No sections available yet.'}

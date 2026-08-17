@@ -82,12 +82,13 @@ async function insertFixture(): Promise<{
     [publicSectionId, `txt-${SUFFIX}`],
   );
 
-  await pool.query(
+  const gatedItem = await pool.query<{ id: string }>(
     `insert into library_items
        (section_id, item_code, title_en, order_index, text_content_en, is_published, content_version,
         draft_title_en, draft_order_index, draft_text_content_en)
      values ($1, $2, 'Gated only', 0, '<p>Secret</p>', true, 1,
-             'Gated only', 0, '<p>Secret</p>')`,
+             'Gated only', 0, '<p>Secret</p>')
+     returning id`,
     [gatedSectionId, `gated-${SUFFIX}`],
   );
 
@@ -96,6 +97,7 @@ async function insertFixture(): Promise<{
     gatedSectionId,
     subsectionId,
     itemIds: [item1.rows[0]!.id, item2.rows[0]!.id],
+    gatedItemId: gatedItem.rows[0]!.id,
   };
 }
 
@@ -268,6 +270,38 @@ describe("library browsing tree", () => {
       );
       expect(missing.status).toBe(404);
       expect(missing.body.error.code).toBe("ERR_NOT_FOUND");
+
+      // Non-UUID ids 404 without touching the query (hardening).
+      const junk = await request(app).get("/v1/public/library/sections/not-a-uuid");
+      expect(junk.status).toBe(404);
+    } finally {
+      await cleanupFixture(fx);
+    }
+  });
+
+  it("GET item returns the deep-link unit; gated is guest-404 but member-visible", async () => {
+    const fx = await insertFixture();
+    try {
+      // The scoped item endpoint exists so a cold deep-link ships ONE item,
+      // not the whole corpus (GST-PRF-01).
+      const pub = await request(app).get(`/v1/public/library/items/${fx.itemIds[0]}`);
+      expect(pub.status).toBe(200);
+      expect(pub.body.data.item.id).toBe(fx.itemIds[0]);
+      expect(pub.body.data.item.section_id).toBe(fx.publicSectionId);
+
+      // A guest deep link into a login-gated section reads as not-found.
+      const gatedGuest = await request(app).get(`/v1/public/library/items/${fx.gatedItemId}`);
+      expect(gatedGuest.status).toBe(404);
+
+      const { token } = await loginAs("parent");
+      const gatedMember = await request(app)
+        .get(`/v1/library/items/${fx.gatedItemId}`)
+        .set(auth(token));
+      expect(gatedMember.status).toBe(200);
+      expect(gatedMember.body.data.item.id).toBe(fx.gatedItemId);
+
+      const junk = await request(app).get("/v1/public/library/items/not-a-uuid");
+      expect(junk.status).toBe(404);
     } finally {
       await cleanupFixture(fx);
     }

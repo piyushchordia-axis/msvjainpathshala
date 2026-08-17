@@ -1,22 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useParams } from 'wouter';
-import type { LibraryItemDto, LibrarySectionDto } from '@workspace/api-zod';
+import type { LibraryItemDto } from '@workspace/api-zod';
 import { LibraryTextSheet } from '@/components/library/LibraryTextSheet';
 import { useLocale } from '@/lib/locale-context';
 import { useAuth } from '@/lib/auth-context';
-import { apiGet } from '@/lib/api-client';
-
-function findItem(sections: LibrarySectionDto[], itemId: string): LibraryItemDto | null {
-  for (const section of sections) {
-    for (const sub of section.subsections ?? []) {
-      const hit = (sub.items ?? []).find((i) => i.id === itemId);
-      if (hit) return hit;
-    }
-    const loose = (section.items ?? []).find((i) => i.id === itemId);
-    if (loose) return loose;
-  }
-  return null;
-}
+import { fetchLibraryItem } from '@/lib/library-cache';
 
 /**
  * Deep-link host: loads the item and auto-opens the bottom sheet reader.
@@ -35,18 +23,11 @@ export default function LibraryItemPage() {
 
   useEffect(() => {
     let cancelled = false;
-    const load = authed
-      ? apiGet<{ sections: LibrarySectionDto[] }>('/v1/library')
-      : fetch('/v1/public/library', { headers: { Accept: 'application/json' } })
-          .then((r) => (r.ok ? r.json() : { data: { sections: [] } }))
-          .then((json: { data?: { sections?: LibrarySectionDto[] } }) => ({
-            sections: json.data?.sections ?? [],
-          }));
-
-    Promise.resolve(load)
-      .then((res) => {
+    // Scoped fetch (GST-PRF-01): warm-tree hit when arriving from the index;
+    // a cold deep-link downloads ONE item, not the whole corpus.
+    fetchLibraryItem(authed, itemId)
+      .then((found) => {
         if (cancelled) return;
-        const found = findItem(res.sections ?? [], itemId);
         setItem(found);
         setSheetOpen(!!found);
       })
