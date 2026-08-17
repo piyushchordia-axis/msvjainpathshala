@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cd \"e:/Enaa Creations/MSV/msvjainpathshala/apps/jain-pathshala-mobile\" && sed -i 's#\"/auth/phone\"#\"/auth/sign-in\"#g' app/guest/more.tsx app/shivir-scan/\\\\[id\\\\].tsx app/library/\\\\[sectionId\\\\].tsx components/LibraryView.tsx && grep -rn \"auth/phone\\\\|auth/otp\\\\|auth/sign-in\" --include=*.tsx --include=*.ts app components 2>/dev/null)",
+      "Bash(pnpm typecheck *)"
+    ],
+    "additionalDirectories": [
+      "E:\\Enaa Creations\\MSV\\msvjainpathshala\\apps\\jain-pathshala-mobile\\app\\shivir-scan"
+    ]
+  }
+}

@@ -16,8 +16,9 @@ export default function AuthLayout() {
         contentStyle: { backgroundColor: colors.light.background },
       }}
     >
-      <Stack.Screen name="phone" options={{ title: "Sign in" }} />
-      <Stack.Screen name="otp" options={{ title: "Enter code" }} />
+      {/* One screen for both steps — the number locks in place and the code
+          field appears below it, rather than pushing a second screen. */}
+      <Stack.Screen name="sign-in" options={{ title: "Sign in" }} />
     </Stack>
   );
 }

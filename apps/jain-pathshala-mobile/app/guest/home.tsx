@@ -2,20 +2,29 @@ import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { Pressable, View } from "react-native";
 import { useColors } from "@/hooks/useColors";
+import { useAuth } from "@/contexts/AuthContext";
 import { useLocale } from "@/contexts/LocaleContext";
 import { AppHeader } from "@/components/AppHeader";
 import { GuestQuickActions } from "@/components/QuickActions";
+import { OtpSignInForm } from "@/components/OtpSignInForm";
+import { routeForRole } from "@/lib/roles";
 import { Body, Button, Card, Row, Screen, Title } from "@/components/ui";
 
 /**
- * Pre-login landing. Sign-in lives in the dedicated /auth flow — this screen
- * used to carry its own copy of the OTP form (same endpoint, second
- * implementation), which is exactly how the two drift apart (GST-API-09).
+ * Pre-login landing. Sign-in happens right here: enter the number, tap Send
+ * OTP, and the code field opens below a now-locked number — no navigation.
+ *
+ * This screen once carried its OWN copy of the OTP form (same endpoint, second
+ * implementation), which is exactly how two flows drift apart (GST-API-09).
+ * That is now prevented by construction rather than by absence: the fields
+ * below come from the shared <OtpSignInForm>, which app/auth/sign-in.tsx
+ * renders too. Never re-inline an OTP form here.
  */
 export default function GuestHomeScreen() {
   const c = useColors();
   const router = useRouter();
   const { hi } = useLocale();
+  const { user } = useAuth();
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
@@ -60,22 +69,39 @@ export default function GuestHomeScreen() {
           )}
         </Pressable>
 
-        <Card>
-          <Title style={{ fontSize: 20 }}>
-            {hi ? "अपने खाते में साइन इन करें" : "Sign in to your account"}
-          </Title>
-          <Body muted style={{ marginTop: 6 }}>
-            {hi
-              ? "मोबाइल नंबर और ओटीपी से — कोई पासवर्ड नहीं।"
-              : "With your mobile number and an OTP — no password."}
-          </Body>
-          <Button
-            label={hi ? "साइन इन करें" : "Sign in"}
-            icon="log-in-outline"
-            onPress={() => router.push("/auth/phone")}
-            style={{ marginTop: 16 }}
-          />
-        </Card>
+        {/* Back-navigating here while signed in must not offer a second
+            sign-in: signIn() clears the query cache, so it would wipe the
+            live session's data mid-use. */}
+        {user ? (
+          <Card>
+            <Title style={{ fontSize: 20 }}>
+              {hi ? "आप साइन इन हैं" : "You're signed in"}
+            </Title>
+            <Body muted style={{ marginTop: 6 }}>
+              {hi
+                ? `${user.full_name} के रूप में साइन इन हैं।`
+                : `Signed in as ${user.full_name}.`}
+            </Body>
+            <Button
+              label={hi ? "अपने होम पर जाएँ" : "Go to your home"}
+              icon="home-outline"
+              onPress={() => router.replace(routeForRole(user.role))}
+              style={{ marginTop: 16 }}
+            />
+          </Card>
+        ) : (
+          <Card>
+            <Title style={{ fontSize: 20 }}>
+              {hi ? "अपने खाते में साइन इन करें" : "Sign in to your account"}
+            </Title>
+            <Body muted style={{ marginTop: 6 }}>
+              {hi
+                ? "मोबाइल नंबर और ओटीपी से — कोई पासवर्ड नहीं।"
+                : "With your mobile number and an OTP — no password."}
+            </Body>
+            <OtpSignInForm />
+          </Card>
+        )}
 
         <Title style={{ fontSize: 16, marginTop: 4, marginLeft: 2 }}>
           {hi ? "बिना साइन इन देखें" : "Browse without signing in"}

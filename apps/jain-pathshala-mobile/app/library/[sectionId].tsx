@@ -319,7 +319,7 @@ export default function LibrarySectionScreen() {
               icon="log-in-outline"
               onPress={() =>
                 router.push({
-                  pathname: "/auth/phone",
+                  pathname: "/auth/sign-in",
                   params: { returnTo: `/library/${section.id}` },
                 } as never)
               }

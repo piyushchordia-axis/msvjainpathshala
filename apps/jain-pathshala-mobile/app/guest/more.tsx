@@ -80,7 +80,7 @@ export default function GuestMoreScreen() {
           <Button
             label={hi ? "साइन इन" : "Sign in"}
             icon="log-in-outline"
-            onPress={() => router.push("/auth/phone")}
+            onPress={() => router.push("/auth/sign-in")}
             style={{ marginTop: 14 }}
           />
         </Card>

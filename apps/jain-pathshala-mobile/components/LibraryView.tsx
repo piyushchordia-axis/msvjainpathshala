@@ -45,7 +45,7 @@ function openSection(section: LibrarySectionDto, guest: boolean) {
   if (needsLogin) {
     const returnTo = sectionDestination(section);
     router.push({
-      pathname: "/auth/phone",
+      pathname: "/auth/sign-in",
       params: returnTo ? { returnTo } : {},
     } as never);
     return;

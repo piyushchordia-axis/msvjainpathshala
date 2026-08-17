@@ -277,7 +277,7 @@ export default function ShivirScanScreen() {
                 ? "स्कैनर का उपयोग करने के लिए कृपया स्वयंसेवक या व्यवस्थापक के रूप में साइन इन करें।"
                 : "Please sign in as a volunteer or admin to use the scanner."}
             </Body>
-            <Button label={hi ? "साइन इन करें" : "Sign in"} icon="log-in" onPress={() => router.push("/auth/phone")} />
+            <Button label={hi ? "साइन इन करें" : "Sign in"} icon="log-in" onPress={() => router.push("/auth/sign-in")} />
             <Button label={hi ? "वापस जाएँ" : "Go back"} variant="ghost" onPress={() => router.back()} />
           </View>
         </Screen>
