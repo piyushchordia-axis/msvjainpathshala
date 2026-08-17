@@ -17,6 +17,7 @@ import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAdminStudents } from "@/lib/queries";
+import { recordStatusLabel } from "@/lib/status-labels";
 import type { AdminStudentRow } from "@/lib/types";
 import { formatDate } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
@@ -81,7 +82,10 @@ export default function StudentsScreen() {
                 ) : null}
               </View>
               <Row style={{ gap: 6, alignItems: "center" }}>
-                <Pill tone={s.status === "active" ? "success" : "neutral"} label={s.status} />
+                <Pill
+                  tone={s.status === "active" ? "success" : "neutral"}
+                  label={recordStatusLabel(s.status, hi)}
+                />
                 <Ionicons name="chevron-forward" size={18} color={c.mutedForeground} />
               </Row>
             </Row>

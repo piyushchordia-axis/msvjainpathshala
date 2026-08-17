@@ -25,7 +25,7 @@ import { ok, fail } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
 import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
-import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
+import { resolveAdminScope, inBatchWriteScope, inCentreScope as inScope } from "../../lib/scope";
 import { awardPunya, reversePunya } from "../../lib/punya";
 import { auditFromReq, writeAudit } from "../../lib/audit";
 import {
@@ -42,6 +42,7 @@ import { rateLimit } from "../../lib/ratelimit";
 import { registerCron } from "../../lib/scheduler";
 import { logger } from "../../lib/logger";
 import { MIME_BY_EXT } from "../../lib/upload";
+import { resolveSubmissionMedia, type ProofMediaKind } from "../../lib/niyam-media";
 import {
   allowedMediaKinds,
   addCalendarDays,
@@ -74,22 +75,8 @@ function earliestAllowedSubmissionDate(today: string): string {
   return addCalendarDays(today, -SUBMISSION_BACKDATE_DAYS);
 }
 
-type ProofMediaKind = "photo" | "video" | "audio";
-
-type ClientMediaItem = {
-  url: string;
-  /** Ignored — kept on the wire for clients; kind is derived server-side. */
-  kind: ProofMediaKind;
-  mime?: string;
-  size_bytes?: number;
-};
-
-type ResolvedMediaItem = {
-  url: string;
-  kind: ProofMediaKind;
-  mime: string | null;
-  size_bytes: number | null;
-};
+// Media types + resolution moved to lib/niyam-media.ts so the offline
+// /v1/sync/batch handler validates identically (CLAUDE.md offline sync §4).
 
 /** Derive photo/video/audio from stored content_type (or key extension fallback). */
 export function kindFromUploadContentType(
@@ -107,43 +94,6 @@ export function kindFromUploadContentType(
   if (mime.startsWith("video/")) return "video";
   if (mime.startsWith("audio/")) return "audio";
   return null;
-}
-
-/**
- * Resolve each media URL against upload_objects owned by this user.
- * Client-supplied `kind` is ignored — kind comes from stored content_type.
- */
-async function resolveSubmissionMedia(
-  userId: string,
-  items: ClientMediaItem[],
-  allowed: ProofMediaKind[],
-): Promise<{ ok: true; items: ResolvedMediaItem[] } | { ok: false; message: string }> {
-  const { resolveOwnedUpload } = await import("../../lib/owned-upload");
-  const allowedKinds = allowed.map((k) =>
-    k === "photo" ? ("image" as const) : k,
-  );
-  const resolved: ResolvedMediaItem[] = [];
-  for (const item of items) {
-    const r = await resolveOwnedUpload({
-      userId,
-      url: item.url,
-      folderPrefix: "niyam-proof/",
-      allowedKinds,
-      label: "niyam proof",
-    });
-    if (!r.ok) {
-      return { ok: false, message: r.message };
-    }
-    const kind: ProofMediaKind =
-      r.kind === "image" ? "photo" : (r.kind as ProofMediaKind);
-    resolved.push({
-      url: item.url,
-      kind,
-      mime: r.contentType ?? item.mime ?? null,
-      size_bytes: item.size_bytes ?? null,
-    });
-  }
-  return { ok: true, items: resolved };
 }
 
 /**
@@ -392,11 +342,10 @@ const createSubmissionSchema = z.object({
 /* POST /v1/niyam-submissions */
 router.post("/", async (req: Request, res: Response) => {
   const uid = req.authUser!.id;
-  if (await rateLimit(`niyam:submit:hour:${uid}`, 20, 3600)) {
-    fail(res, 429, "ERR_RATE_LIMITED", "Too many requests. Please try again later.");
-    return;
-  }
-  if (await rateLimit(`niyam:submit:min:${uid}`, 5, 60)) {
+  // Coarse per-account ceiling — an abuse guard, deliberately generous enough
+  // that a large family never meets it. The meaningful budget is per-student,
+  // applied after parse below.
+  if (await rateLimit(`niyam:submit:hour:${uid}`, 120, 3600)) {
     fail(res, 429, "ERR_RATE_LIMITED", "Too many requests. Please try again later.");
     return;
   }
@@ -407,6 +356,18 @@ router.post("/", async (req: Request, res: Response) => {
 
   if (!(await ownedStudentId(req, body.student_id))) {
     fail(res, 404, "ERR_NOT_FOUND", "Student not found."); return;
+  }
+
+  // Per-student budget. Keying only on the parent meant a family of four shared
+  // one child's allowance: logging Sunday's niyams for the second child already
+  // hit the limit. Mirrors the (user, student) keying exams.ts already uses.
+  if (await rateLimit(`niyam:submit:min:${uid}:${body.student_id}`, 5, 60)) {
+    fail(res, 429, "ERR_RATE_LIMITED", "Too many submissions just now — wait a minute and try again.");
+    return;
+  }
+  if (await rateLimit(`niyam:submit:hour:${uid}:${body.student_id}`, 20, 3600)) {
+    fail(res, 429, "ERR_RATE_LIMITED", "Too many submissions for this student today. Try again later.");
+    return;
   }
 
   const [studentCtx] = await db
@@ -706,6 +667,30 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
     batchFilter = eq(students.batch_id, batch.id);
   }
 
+  // Deep-linking from a student's dossier used to filter the loaded pages
+  // client-side, so a submission beyond page 1 showed the empty state AND stalled
+  // pagination (the list never rendered, so onEndReached never fired).
+  const studentIdRaw = typeof req.query.student_id === "string" ? req.query.student_id.trim() : "";
+  let studentFilter: ReturnType<typeof eq> | undefined;
+  if (studentIdRaw) {
+    if (!UUID_RE.test(studentIdRaw)) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "student_id must be a UUID.");
+      return;
+    }
+    // Centre scope (not batch): /pending is deliberately centre-wide so a
+    // shikshak can see the whole backlog — only the decide writes are batch-bound.
+    const [student] = await db
+      .select({ id: students.id, centre_id: students.centre_id })
+      .from(students)
+      .where(eq(students.id, studentIdRaw))
+      .limit(1);
+    if (!student || !inScope(scope, student.centre_id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Student not found in your scope.");
+      return;
+    }
+    studentFilter = eq(students.id, student.id);
+  }
+
   let typeFilter: ReturnType<typeof eq> | undefined;
   if (niyamTypeRaw) {
     if (!["daily", "weekly", "monthly"].includes(niyamTypeRaw)) {
@@ -744,6 +729,7 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
         eq(niyam_submissions.status, "pending"),
         centreFilter,
         batchFilter,
+        studentFilter,
         typeFilter,
         cursor ? cursorWhere(cursor) : undefined,
       ),

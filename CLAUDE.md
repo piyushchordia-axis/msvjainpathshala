@@ -130,6 +130,15 @@ Creating or editing MSV-type curricula is restricted to `super_admin` at the **s
 ### Q4 — Student view: 13+ hard gate
 Student view toggle via `POST /v1/auth/switch-view` is blocked if `students.dob` computes to age < 13. This is enforced in the auth service, not the client.
 
+**Shipped reality — two gates, not one (resolved 2026-08-17).** `POST /v1/auth/switch-view` was never built. What shipped instead is a separate `users.role='student'` OTP login, provisioned during join approval when the child registers a distinct mobile number. That mechanism needs its own, lower threshold, so the single inline `13` became two constants in `lib/api-zod/src/contracts.ts`:
+
+| Constant | Value | Gates |
+|---|---|---|
+| `MIN_STUDENT_LOGIN_AGE` | **8** | Being provisioned an independent OTP login (`lib/join-provision.ts`) |
+| `MIN_STUDENT_VIEW_AGE` | **13** | Student-view capability — writing one's own course progress (`courses.ts`, `services/course-access.ts`) |
+
+Holding a login is not the same as being the authoritative writer of your own progress record: an 8-year-old may sign in, a 13-year-old may self-certify. Both are enforced server-side; a missing or unparseable DOB fails both. Under-age children are still enrolled normally — they simply get no independent login and reach the app through their parent. Provisioning must **never throw** on an under-age child: it runs inside the sanchalak/city_admin approval transaction, and failing would reject a legitimate enrolment.
+
 ### Q5 — Niyam rejection: 30-day window only
 A niyam submission can only be rejected within 30 days of submission. After 30 days, the reject button in admin UI is disabled AND the API returns `ERR_NIYAM_REVERSAL_WINDOW_EXPIRED` (409). On rejection: Punya is reversed, streak is recomputed, gallery item (if any) is hidden.
 

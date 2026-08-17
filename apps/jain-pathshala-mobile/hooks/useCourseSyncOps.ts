@@ -9,6 +9,8 @@ import { readQueue } from "@/lib/offline/storage";
 import type { SyncUiState, QueuedOp } from "@/lib/offline/types";
 
 const SYNCED_HOLD_MS = 4000;
+/** Slow cadence while no op is pending — just enough to notice new work. */
+const IDLE_POLL_MS = 15000;
 
 export type CourseSyncOpView = {
   submission_op_id: string;
@@ -28,6 +30,8 @@ export function useCourseSyncOps(opts: {
   const [ops, setOps] = useState<CourseSyncOpView[]>([]);
   const known = useRef(new Map<string, CourseSyncOpView>());
   const heldSynced = useRef(new Map<string, HeldSynced>());
+  /** Drives the poll cadence — fast only while an op is live. */
+  const hasWork = useRef(false);
   const pollMs = opts.pollMs ?? 2000;
 
   const refresh = useCallback(async () => {
@@ -109,19 +113,32 @@ export function useCourseSyncOps(opts: {
       });
     }
 
+    hasWork.current = views.length > 0;
     setOps(views);
   }, [opts.nodeId, opts.studentId]);
 
+  // Poll fast only while something is actually in flight. This ran a fixed 2s
+  // interval reading TWO queues from AsyncStorage for as long as the screen was
+  // mounted — ~1,200 parses over a 20-minute session with an empty queue, on the
+  // same thread as the Guruji's taps.
   useEffect(() => {
-    void refresh();
-    const id = setInterval(() => {
-      void refresh();
-    }, pollMs);
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    const tick = async () => {
+      if (cancelled) return;
+      await refresh();
+      if (cancelled) return;
+      timer = setTimeout(() => void tick(), hasWork.current ? pollMs : IDLE_POLL_MS);
+    };
+
+    void tick();
     const sub = AppState.addEventListener("change", (s) => {
       if (s === "active") void refresh();
     });
     return () => {
-      clearInterval(id);
+      cancelled = true;
+      if (timer) clearTimeout(timer);
       sub.remove();
     };
   }, [refresh, pollMs]);

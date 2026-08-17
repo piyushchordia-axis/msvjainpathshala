@@ -13,8 +13,12 @@ export function shouldPersistQueryKey(queryKey: readonly unknown[]): boolean {
   if (root === "shikshak") {
     return segment === "attendance-session" || segment === "today";
   }
-  if (root === "me" && segment === "attendance") {
-    return true;
+  if (root === "me") {
+    // "today" lives under the "me" root (qk.today), not "shikshak" — the mismatch
+    // meant the session list was dropped on relaunch, so a Guruji reopening the
+    // app offline at a centre saw "No sessions today" and could reach no roster
+    // at all, even though every roster was still cached.
+    return segment === "attendance" || segment === "today";
   }
   if (root === "library") {
     return true;

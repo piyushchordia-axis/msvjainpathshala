@@ -15,7 +15,7 @@ import { BrowseQuickActions, ShikshakQuickActions } from "@/components/QuickActi
 import { SessionCheckIn, type SessionCheckInMode } from "@/components/SessionCheckIn";
 import { SyncOpStatus } from "@/components/SyncOpStatus";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
-import { QUEUE_KEYS } from "@/lib/offline/queue-keys";
+import { QUEUE_KEYS, type QueueKey } from "@/lib/offline/queue-keys";
 import { sessionKey } from "@/lib/offline/drain";
 import { readQueue } from "@/lib/offline/storage";
 import { retryOp } from "@/lib/offline/sync-engine";
@@ -211,10 +211,20 @@ export default function TodayScreen() {
     batchName: string | null;
   } | null>(null);
   const [checkinOps, setCheckinOps] = useState<QueuedOp[]>([]);
+  // Attendance and check-out queues had NO reader anywhere in the app, so a
+  // rejected roster or a failed check-out was invisible: no badge, no retry.
+  const [attendanceOps, setAttendanceOps] = useState<QueuedOp[]>([]);
+  const [checkoutOps, setCheckoutOps] = useState<QueuedOp[]>([]);
 
   const refreshQueue = useCallback(async () => {
-    const ops = await readQueue(QUEUE_KEYS.checkin);
-    setCheckinOps(ops);
+    const [checkin, attendance, checkout] = await Promise.all([
+      readQueue(QUEUE_KEYS.checkin),
+      readQueue(QUEUE_KEYS.attendance),
+      readQueue(QUEUE_KEYS.checkout),
+    ]);
+    setCheckinOps(checkin);
+    setAttendanceOps(attendance);
+    setCheckoutOps(checkout);
   }, []);
 
   useEffect(() => {
@@ -277,11 +287,30 @@ export default function TodayScreen() {
             const batchId = (s as { batch_id?: string }).batch_id ?? "";
             const sessionDate = s.session_date;
             const key = batchId ? sessionKey(batchId, sessionDate) : "";
-            const syncOp =
-              checkinOps.find((op) => {
-                const p = op.payload as { batch_id?: string; session_date?: string };
-                return sessionKey(p.batch_id ?? "", p.session_date ?? "") === key;
-              }) ?? null;
+            const matchesSession = (op: QueuedOp) => {
+              const p = op.payload as { batch_id?: string; session_date?: string };
+              return sessionKey(p.batch_id ?? "", p.session_date ?? "") === key;
+            };
+
+            // Show the op that most needs the Guruji's attention. A conflicted
+            // roster must not hide behind a "queued" check-in badge on the same
+            // card — and check-out/attendance previously had no badge at all.
+            const candidates: Array<{ queue: QueueKey; op: QueuedOp }> = [
+              ...attendanceOps.filter(matchesSession).map((op) => ({ queue: QUEUE_KEYS.attendance, op })),
+              ...checkoutOps.filter(matchesSession).map((op) => ({ queue: QUEUE_KEYS.checkout, op })),
+              ...checkinOps.filter(matchesSession).map((op) => ({ queue: QUEUE_KEYS.checkin, op })),
+            ];
+            const severity: Record<string, number> = {
+              conflict: 0,
+              failed: 1,
+              syncing: 2,
+              queued: 3,
+              synced: 4,
+              duplicate: 5,
+            };
+            candidates.sort((a, b) => (severity[a.op.state] ?? 9) - (severity[b.op.state] ?? 9));
+            const syncEntry = candidates[0] ?? null;
+            const syncOp = syncEntry?.op ?? null;
 
             return (
               <AnimatedMount key={s.id} delay={60 + idx * 40}>
@@ -306,8 +335,10 @@ export default function TodayScreen() {
                     })
                   }
                   onRetrySync={() => {
-                    if (syncOp) {
-                      void retryOp(QUEUE_KEYS.checkin, syncOp.submission_op_id).then(refreshQueue);
+                    if (syncEntry) {
+                      // Retry against the queue the op actually belongs to —
+                      // hardcoding checkin silently no-op'd attendance retries.
+                      void retryOp(syncEntry.queue, syncEntry.op.submission_op_id).then(refreshQueue);
                     }
                   }}
                 />

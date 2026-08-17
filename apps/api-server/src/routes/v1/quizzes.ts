@@ -28,7 +28,7 @@ import {
 } from "../../lib/quiz-points";
 import { quizMatchesStudent, quizMatchesStudentSql } from "../../lib/quiz-scope";
 import { auditFromReq } from "../../lib/audit";
-import { clampLimit } from "../../lib/route-helpers";
+import { clampLimit, ownedStudentsCondition } from "../../lib/route-helpers";
 import {
   db,
   questions,
@@ -91,12 +91,8 @@ async function ownedStudent(req: Request, studentId: string) {
       age_group: students.age_group,
     })
     .from(students)
-    .where(
-      and(
-        eq(students.id, studentId),
-        or(eq(students.parent_id, uid), eq(students.user_id, uid)),
-      ),
-    )
+    // Q11 — shared ownership predicate (excludes soft-deleted and inactive students).
+    .where(and(eq(students.id, studentId), ownedStudentsCondition(uid)))
     .limit(1);
   return row ?? null;
 }
@@ -1366,6 +1362,64 @@ router.post("/events/:id/start", async (req: Request, res: Response) => {
   }
 
   ok(res, { attempt_id: inserted[0]!.id, questions: eventQuestions, resumed: false });
+});
+
+const autosaveAnswersSchema = z.object({
+  student_id: z.string().uuid(),
+  answers: z.record(z.string(), z.array(z.coerce.number().int().min(0))).default({}),
+});
+
+/**
+ * PUT /v1/quizzes/events/attempts/:attemptId/answers — autosave, no grading.
+ *
+ * Answers previously existed only in component state until submit, so an app
+ * kill or an accidental back gesture lost every answer AND consumed the attempt.
+ * Exams already had this; quizzes did not, so the two take-flows behaved
+ * differently for the same student. Deliberately placed between start and
+ * submit so the lifecycle reads in order.
+ */
+router.put("/events/attempts/:attemptId/answers", async (req: Request, res: Response) => {
+  let body: z.infer<typeof autosaveAnswersSchema>;
+  try {
+    body = autosaveAnswersSchema.parse(req.body ?? {});
+  } catch {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid answers payload.");
+    return;
+  }
+
+  const student = await ownedStudent(req, body.student_id);
+  if (!student) {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
+    return;
+  }
+
+  const attemptId = String(req.params.attemptId);
+  const [attempt] = await db
+    .select({
+      id: quiz_attempts.id,
+      student_id: quiz_attempts.student_id,
+      submitted_at: quiz_attempts.submitted_at,
+    })
+    .from(quiz_attempts)
+    .where(eq(quiz_attempts.id, attemptId))
+    .limit(1);
+
+  if (!attempt || attempt.student_id !== student.id) {
+    fail(res, 404, "ERR_NOT_FOUND", "Attempt not found.");
+    return;
+  }
+  if (attempt.submitted_at) {
+    // Terminal, not retryable: a submitted attempt is graded and immutable.
+    fail(res, 409, "ERR_ALREADY_SUBMITTED", "This quiz has already been submitted.");
+    return;
+  }
+
+  await db
+    .update(quiz_attempts)
+    .set({ answers: body.answers, updated_at: new Date() })
+    .where(eq(quiz_attempts.id, attemptId));
+
+  ok(res, { attempt_id: attemptId, saved: true });
 });
 
 const submitEventSchema = z.object({

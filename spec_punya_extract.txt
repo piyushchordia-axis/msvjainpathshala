@@ -1,0 +1,354 @@
+
+#### Attendance percentage
+Canonical SQL function/view only — see CLAUDE.md AT5. Clients never recompute.
+
+### 5.7 Punya
+
+#### `punya_features`
+Feature catalogue: `id, key (e.g. attendance_present, homework_approved, niyam_completion, manual_seva, streak_bonus_4_sessions), default_points int, is_manual boolean, requires_reason boolean, scope (global|city), min_points, max_points`. Super-admin managed. Attendance points resolve here at award time (AT21). **Tier thresholds** (Jigyasu 0–100 … Tirthankar 5001+) live in configuration alongside this catalogue — see CLAUDE.md AT23; do not hardcode alternate bands in this document.
+
+#### `punya_configs`
+City-level overrides: `id, city_id, feature_id, points_override int, min_points, max_points`. Unique `(city_id, feature_id)`.
+
+#### `punya_transactions` **(financial-grade ledger)**
+| Column | Notes |
+|---|---|
+| id | uuid pk |
+| student_id | fk |
+| feature_key | text (denormalised for fast leaderboard queries) |
+| points | int (signed; negative for reversals) |
+| reason | text |
+| awarded_by_user_id | fk (nullable for system) |
+| source_entity_kind | text (e.g. 'attendance', 'niyam_submission', 'manual') |
+| source_entity_id | uuid |
+| reversal_of | uuid (fk → punya_transactions.id, nullable) — for Niyam rejections |
+| is_msv_track | boolean (for parallel MSV leaderboard) |
+| awarded_at | timestamptz |
+| city_id | uuid (denormalised for leaderboards) |
+| centre_id | uuid (denormalised) |
+| batch_id | uuid (denormalised) |
+| idempotency_key | text unique (per-source-entity-id+feature_key) |
+
+Indexes:
+- `idx_punya_student_awarded (student_id, awarded_at desc)`
+- `idx_punya_city_awarded (city_id, awarded_at desc)`
+- `idx_punya_batch_awarded (batch_id, awarded_at desc)`
+- `idx_punya_msv (city_id, is_msv_track, awarded_at desc)`
+- Unique `idempotency_key`
+- Partial `idx_punya_reversal (reversal_of) where reversal_of is not null`
+
+#### `punya_balances` *(maintained projection)*
+`student_id pk, total_points, msv_points, current_tier (tier_enum), tier_reached_at, last_updated_at`. Updated transactionally with every `punya_transactions` insert. NOT a cache — source of truth for "current balance" with insert-time math; reconciled hourly from ledger.
+
+#### Leaderboards
+- Computed by a `leaderboard-refresh.worker` every 60s into Redis sorted sets:
+  - `lb:batch:{batch_id}` (zset of student_id → points)
+  - `lb:centre:{centre_id}`, `lb:city:{city_id}`, `lb:msv:{city_id}`
+- Materialised view `mv_monthly_leaderboard_city` for monthly-reset display, refreshed nightly.
+
+### 5.8 Niyams (Tasks)
+
+#### `niyams`
+`id, title_en, title_hi, description_en, description_hi, type (niyam_type_enum), start_date, end_date (nullable), audience_kind (all|msv_only|age_group|batch|centre|city), audience_filters jsonb, proof_type (proof_type_enum), points_value int, reference_asset_id (nullable), created_by_user_id, city_id, msv_only boolean, deleted_at`. Indexes: `(city_id, start_date)`, `(msv_only)`, `(type)`.
+
+#### `niyam_submissions`
+| Column | |
+|---|---|
+| id | uuid pk |
+| niyam_id | fk |
+| student_id | fk |
+| parent_user_id | fk |
+| proof_asset_id | fk → media_assets |
+| status | niyam_submission_status_enum (auto_approved or rejected) |
+| auto_approved_at | timestamptz default now() |
+| rejected_at | timestamptz nullable |
+| rejected_by_user_id | fk nullable |
+| rejection_reason | text |
+
+===== 6.9 =====
+| POST | `/v1/sync/batch` | jwt | Single offline transport; keyed on `submission_op_id` (AT19). |
+
+### 6.9 Punya
+
+| Method | Route | Roles |
+|---|---|---|
+| GET | `/v1/students/:id/punya/balance` | parent (own), student-view, shikshak (own), sanchalak+ |
+| GET | `/v1/students/:id/punya/transactions` | same as above, paginated |
+| POST | `/v1/admin/punya/manual-award` | shikshak (own batch), sanchalak+, city_admin+ | Body `{ student_id, feature_key, points, reason }`. Validates against feature catalogue min/max. |
+| GET | `/v1/leaderboard?scope=batch&id=…` | jwt scoped | Returns top N + caller's rank. |
+| GET | `/v1/leaderboard?scope=centre&id=…` | jwt scoped |
+| GET | `/v1/leaderboard?scope=city&id=…` | jwt scoped |
+| GET | `/v1/leaderboard?scope=msv&id=…` | jwt scoped |
+| POST | `/v1/admin/punya/features` | super_admin | CRUD feature catalogue |
+| POST | `/v1/admin/punya/configs` | city_admin |
+| POST | `/v1/admin/batches/:id/leaderboard-mode` | city_admin (tier-display toggle for younger ages) |
+
+### 6.10 Niyams
+
+| Method | Route | Roles |
+|---|---|---|
+| POST | `/v1/admin/niyams` | shikshak (batch scope), sanchalak (centre scope), city_admin (city scope) |
+| GET | `/v1/niyams` | parent / student-view → returns active Niyams for student, grouped by daily/weekly/monthly |
+| POST | `/v1/niyams/:id/submissions` | parent / student-view | Body `{ student_id, proof_asset_id, client_op_id }`. **Auto-approves (Q5)**: writes submission, awards Punya transactionally, emits event. |
+| POST | `/v1/admin/niyam-submissions/:id/reject` | shikshak, sanchalak, city_admin | Body `{ reason }`. **Only within 30 days (Q5)**. Reverses Punya transactionally, emits notification. |
+| GET | `/v1/admin/niyam-submissions` | scoped to role |
+| GET | `/v1/students/:id/niyam-streaks` | parent / student-view / shikshak / admins |
+
+### 6.11 Gallery
+
+| Method | Route | Roles |
+|---|---|---|
+| GET | `/v1/gallery?city_id=&featured=true` | any (public reads only featured-and-opted-in items) |
+| POST | `/v1/admin/gallery/:id/feature` | sanchalak+, city_admin+ |
+| POST | `/v1/admin/gallery/:id/unfeature` | same |
+| POST | `/v1/admin/gallery/:id/remove` | same |
+| PATCH | `/v1/profile/gallery-visibility` | parent | Body `{ opt_in: boolean }` (Q6) |
+
+### 6.12 Homework
+
+| Method | Route | Roles |
+|---|---|---|
+| POST | `/v1/admin/homework` | shikshak (own batch) |
+| GET | `/v1/students/:id/homework` | parent / student-view / shikshak / admins |
+| POST | `/v1/homework/:id/mark-done` | parent / student-view | Acknowledgement |
+| POST | `/v1/admin/homework/:id/submissions/:student_id/grade` | shikshak | Body `{ status: 'approved' \| 'starred', feedback_note? }`. Auto-awards Punya on 'approved'. |
+
+### 6.13 Notices
+
+| Method | Route | Roles |
+|---|---|---|
+| POST | `/v1/admin/notices` | shikshak (batch), sanchalak (centre), city_admin+ | Body includes `is_critical`, `send_sms`, `is_public`. |
+| GET | `/v1/notices` | jwt — unified feed for the caller |
+| GET | `/v1/notices/public` | none — for guest + website |
+| POST | `/v1/notices/:id/read` | jwt |
+| PATCH | `/v1/admin/notices/:id/pin` | author or city_admin+ |
+
+### 6.14 Shivirs
+
+| Method | Route | Roles |
+|---|---|---|
+| POST | `/v1/admin/shivirs` | city_admin+ |
+| GET | `/v1/shivirs` | jwt (filtered by msv eligibility) + guest (public only) |
+| POST | `/v1/admin/shivirs/:id/volunteers` | city_admin, sanchalak |
+| POST | `/v1/shivir-scans` | volunteer | Body `{ shivir_session_id, qr_payload, client_op_id, scanned_at }`. Verifies QR signature; resolves student; applies in/out toggle. Idempotent. |
+| GET | `/v1/admin/shivirs/:id/live` | city_admin+, sanchalak, volunteer | WebSocket also: `ws/shivirs/:id` channel. |
+| GET | `/v1/admin/shivirs/:id/export?format=csv\|pdf` | city_admin+ |
+
+### 6.15 Competitions
+
+| Method | Route | Roles |
+
+===== 8.5 =====
+     Emit niyam.rejected event;
+     ```
+6. **Edge case — Niyam ended before submission processed:** allowed; the submission's `submitted_at` is checked against `niyam.end_date`.
+
+### 8.5 Punya Concurrency
+- All Punya writes use `idempotency_key` unique index → safe under retries.
+- `punya_balances` updated via `INSERT ... ON CONFLICT (student_id) DO UPDATE SET total_points = punya_balances.total_points + EXCLUDED.delta`.
+- Leaderboards in Redis updated via `ZINCRBY` after the DB transaction commits (event listener pattern).
+- **Reconciliation job** (nightly): re-aggregates ledger and corrects any drift in `punya_balances`.
+
+### 8.6 Shivir Scan Logic (In/Out vs Present-Only)
+1. Volunteer scans QR → parses signed payload → extracts `student_id`.
+2. Verifies signature against current HMAC secret; if invalid → 400.
+3. Resolves student → checks `shivir_registrations`.
+4. **In/Out mode:**
+   - Look up latest `shivir_attendance_scans` for `(student_id, session_id)`:
+     - None → insert `check_in`.
+     - Last is `check_in` → insert `check_out`.
+     - Last is `check_out` → insert new `check_in` (re-entry — valid for multi-entry sessions).
+5. **Present-Only mode:** insert `present` if no prior scan for same session; else 409.
+6. Push notification to parent emitted immediately.
+7. WebSocket emits to `shivir:{event_id}` channel with delta — admin dashboard updates live.
+8. **Offline:** queue `jp.queue.shivir_scans`; drain per CLAUDE.md Offline sync canonical model.
+
+### 8.7 Notice Critical SMS Fallback
+- City admin posts notice with `is_critical=true, send_sms=true`.
+- Event `notice.created` → `NotificationsListener` builds recipient list.
+- For each recipient: push job → if `send_sms`, also enqueue SMS job (per-recipient).
+- SMS body truncated to 160 chars; English by default unless user `preferred_language='hi'` (Devanagari uses Unicode SMS — fewer chars per segment; we calculate segments).
+- Cost tracking via `sms_logs`.
+
+
+===== 8.16 =====
+- For each active student: three consecutive `'absent'` rows (excused never counts; holidays/cancelled skipped).
+- Notify parent + **Sanchalak** + city_admin (AT27).
+
+### 8.16 Leaderboard Monthly Reset
+- Scheduler runs 1st of month at 00:30 IST.
+- Snapshots current Redis sorted sets to materialised view `mv_monthly_leaderboard_city`.
+- Awards monthly top-student badges + certificates (queued).
+- Resets Redis zsets for `lb:*:monthly:*` keys.
+- Cumulative leaderboards persist.
+
+### 8.17 Concurrency on Singleton-ish Settings
+- `platform_settings` is a single-row table with `id='global'`.
+- Updates wrapped in `SELECT FOR UPDATE` to prevent dirty writes.
+
+---
+
+# 9. REALTIME + QUEUE ARCHITECTURE
+
+### 9.1 BullMQ Queues (single source of truth: `infra/queue/queue-names.ts`)
+
+```ts
+export const QUEUES = {
+  AUTH_SMS_OTP:               'auth.sms.otp',
+  NOTIFICATIONS_PUSH:         'notifications.push',
+  NOTIFICATIONS_SMS:          'notifications.sms',
+  NOTIFICATIONS_EMAIL:        'notifications.email',
+  NOTIFICATIONS_FANOUT:       'notifications.fanout',
+  ATTENDANCE_POST_PROCESS:    'attendance.post_process',
+  PUNYA_LEADERBOARD_REFRESH:  'punya.leaderboard.refresh',
+  PUNYA_TIER_RECOMPUTE:       'punya.tier.recompute',
+  PUNYA_RECONCILE:            'punya.reconcile',
+  NIYAM_STREAK_RECOMPUTE:     'niyam.streak.recompute',
+  GALLERY_VISIBILITY_UPDATE:  'gallery.visibility.update',
+  MEDIA_PROCESSING:           'media.processing',
+  MEDIA_VIRUS_SCAN:           'media.virus_scan',
+  MEDIA_THUMBNAIL:            'media.thumbnail',
+
+===== 13.4 =====
+- 3–6 batches per centre = ~180 batches.
+- Each batch assigned 1 primary shikshak.
+- Mix of age groups; each centre has at least one Bal and one Kishor.
+
+### 13.4 Punya
+- Feature catalogue: 8 default features (attendance_present 10, homework_approved 15, streak_bonus_4_sessions 20, niyam_completion variable, manual_seva 10–50, festival 15, helping_others 10–30, msv_shivir variable).
+- 90 days of synthetic attendance + homework submissions to seed leaderboards and tiers.
+- Seeded punya transactions; some students at each tier (Jigyasu → Tirthankar).
+
+### 13.5 Niyams
+- 20 active niyams across cities (daily/weekly/monthly mix; English + Hindi titles).
+- 6,000 niyam_submissions (auto-approved) spread over 30 days.
+- 30% of parents opted in for Gallery → ~1,800 gallery items.
+- 50 featured gallery items.
+
+### 13.6 Homework
+- 200 homework assignments across batches.
+- 4,000 submissions with various statuses.
+
+### 13.7 Notices
+- 80 notices across scopes: 20 batch, 30 centre, 20 city, 10 MSV.
+- 5 marked critical with `send_sms=true`.
+- 15 marked `is_public=true` (visible on website).
+
+### 13.8 Shivirs
+- 8 Shivirs (3 MSV-only, 5 open).
+- 4 historical (with full scan history) + 4 upcoming.
+- 2 with `in_out` mode, 6 `present_only`.
+
+### 13.9 Competitions
+- 10 competitions: 4 results-published, 3 open, 3 draft.
+
+### 13.10 Curriculum
+- 4 Super Admin master templates (Standard Bal, Standard Kishor, MSV Bal, MSV Kishor).
+- City-level standard curricula assigned to centres.
+- Sample progress for 200 students.
+
+### 13.11 Exams & Quizzes
+- 5 online exams (2 results-released).
+- 200 question bank entries (50% AI-flagged, 50% manual).
+- 6 scheduled quiz events.
+- 30 historical push quizzes.
+
+### 13.12 Library
+- 60 items across content types.
+- Public (15), Student (25), MSV (12), Shikshak (8).
+
+===== 17.3 =====
+  - L2: Redis (60s–1h TTLs).
+- Invalidation: on write, service emits `cache.invalidate { keys[] }` event.
+- Use namespaces: `cache:centres:list:{city_id}`, `cache:leaderboard:{scope}:{id}`, etc.
+
+### 17.3 Leaderboard Optimisation
+- Maintained as Redis sorted sets, updated incrementally on Punya emit.
+- Periodic reconciliation against DB (Section 8.5).
+- Reads: O(log N) for rank lookups + O(K) for top-K — sub-10ms even with millions of entries.
+
+### 17.4 Notification Batching
+- FCM supports `sendMulticast` (500/batch). Notification fanout worker chunks recipients.
+- Per-recipient deliver job retries independent of batch.
+
+### 17.5 Analytics Aggregation Jobs
+- Heavy aggregations run nightly, never on request path.
+- Pre-aggregated values served from materialised views.
+
+### 17.6 Media Optimisation
+- Thumbnails generated once; subsequent reads served via CDN.
+- WebP/AVIF preferred for thumbnails.
+- Library videos use YouTube/Vimeo CDNs (no backend bandwidth — Q7).
+
+### 17.7 Horizontal Scaling
+- API: stateless ECS tasks behind ALB; target tracking on CPU 60% + ALB request-count.
+- Workers: separate service per worker-kind, scales on queue depth (CloudWatch alarms → ECS scaling policies).
+- WebSocket: Socket.IO with Redis adapter; tasks pinned by ALB sticky cookies; clients reconnect across tasks.
+
+### 17.8 Lazy Loading
+- Web: route-level code splitting; admin panels lazy-load heavy charts.
+- Mobile: navigation tabs lazy-mount; PDF preview lazy-imported.
+
+### 17.9 Pagination & Query Limits
+- Default `limit=20`, max `100`.
+- Cursor-based for time-ordered reads (notifications, audit logs, attendance history).
+- Page-based for admin grids.
+
+===== Step16 =====
+### Step 16 — Punya Engine & Leaderboards [Phase 2]
+
+**Dependencies:** Step 13.
+
+**Build:**
+- `punya_features` seeded with the catalogue from BRD Section 7 (attending class 10pts, homework 15pts, streak bonus 20pts, etc).
+- `punya_configs` for city-level overrides (city_admin can adjust point values within bounds set by super_admin).
+- `punya_transactions` ledger (immutable, append-only) with unique `idempotency_key` index — prevents double-award on retried jobs.
+- `punya_balances` projection table, updated by `punya.award` queue processor in the same transaction as the ledger insert.
+- `POST /v1/punya/award` admin endpoint for manual awards (festival, seva, helping others) with mandatory reason and amount within configured bounds.
+- `POST /v1/punya/reverse` for retroactive reversals (used by Niyam rejection in Step 17). Creates a transaction with `reversal_of` FK and negative amount; balance projection updated.
+- Spiritual tier computation: stored on `punya_balances.tier_label` updated on every transaction; tier upgrade emits a domain event → celebration animation push + certificate generation job.
+- Leaderboards: batch / centre / city / MSV — backed by Redis sorted sets (one set per scope per month). Updated incrementally by `punya.leaderboard.refresh` processor.
+- Monthly reset cron at 1st of month 00:05 IST: archives prior-month ZSETs to `leaderboard_snapshots` table and clears.
+- Reconciliation cron nightly 03:00 IST: scans `punya_transactions` and rebuilds `punya_balances` projection from scratch; alerts if drift detected.
+
+**Exit criteria:** Marking a student present awards 10 Punya and updates the balance and batch leaderboard within 2s. A retroactive Niyam rejection (Step 17) cleanly reverses the points. Forcibly corrupting `punya_balances` and running the nightly reconciliation restores correctness and alerts ops.
+
+---
+
+### Step 17 — Niyams Module + Gallery [Phase 2]
+
+**Dependencies:** Steps 11, 16.
+
+**Build:**
+- `niyams` module: CRUD scoped by assigning role (city_admin / sanchalak / shikshak); bilingual fields per Gap B; target audience filtering (all / MSV-only / age-group / batch).
+- `POST /v1/niyams/:id/submissions` accepts photo or video media asset id; submission auto-approved (Q5); Niyam Punya awarded immediately via `punya.award` queue.
+- `niyam_streaks` table updated per-submission; streak badges (7-day, 30-day, 4-week, 3-month per BRD Section 8.5) awarded as one-time badges.
+- `POST /v1/niyams/submissions/:id/reject` (shikshak / sanchalak / city_admin only; within 30 days of submission per Q5); creates Punya reversal transaction, marks submission `rejected_at`, `rejected_by`, `rejection_reason`; pushes notification to parent.
+- Streak recompute on rejection: `niyam.streak.recompute` queue job rolls back streak counters if the rejected day breaks the streak.
+- `gallery_items` table populated automatically when a submission is approved AND the parent's `users.gallery_visibility_opt_in = true` (Q6).
+- Toggling `gallery_visibility_opt_in` immediately hides/shows all of that parent's children's items in the Gallery (handled via a query-time filter, not a backfill).
+- Parent profile settings UI (mobile): blanket Gallery visibility toggle with clear copy on what it means.
+- Gallery UI (web public + mobile): paginated grid scoped to city, filterable by Niyam type and age group; featured items in a top carousel per BRD Section 8.4.
+- Admin actions: feature item, unfeature, remove item (writes audit log with reason).
+
+**Exit criteria:** Parent uploads a niyam photo, Punya is awarded within 3s, the streak counter increments, and (if opted in) the item appears in the city Gallery. A retroactive rejection within 30 days reverses Punya and streak. The same action attempted on day 31 is blocked with a clear error.
+
+---
+
+### Step 18 — Homework, Notices, Competitions [Phase 2]
+
+**Dependencies:** Steps 11, 12, 16.
+
+**Build:**
+- `homework_assignments` + `homework_submissions` per BRD Section 9; lifecycle states `pending` → `starred` → `approved` | `late`. Punya awarded on `approved` per Section 7 of BRD.
+- Shikshak homework UI: bulk-assign to batch or individual students, optional PDF/image attachment, due date.
+- Parent homework UI: list across all children, mark as done, view feedback.
+- `notices` module per Section 12 of this prompt — bilingual content, scope (batch / centre / city / national / MSV-only), pinning, scheduled posting, public flag (for guest visibility), critical flag (triggers SMS).
+- `competitions` module: registration window, eligibility, results entry, Punya award on result declaration.
+- All three modules wire into the notification system from Step 12 (new homework → push, new notice → push + maybe SMS, competition registration confirmation → push).
+
+**Exit criteria:** A shikshak assigns homework to a batch, all parents receive a push within 5s, two parents mark complete, the shikshak approves both, Punya is awarded. A city_admin posts a critical notice; all city parents receive both push and SMS.
+
+---
+
+### Step 19 — Curriculum & Online Exams [Phase 3]

@@ -13,6 +13,9 @@ import type {
   PendingAttendanceOp,
   PendingCheckInOp,
   PendingCheckOutOp,
+  PendingNiyamSubmissionOp,
+  PendingProofMedia,
+  PendingShivirScanOp,
   PendingCourseCertificationOp,
   PendingCourseProgressOp,
   PendingHomeworkSubmissionOp,
@@ -324,6 +327,76 @@ export async function enqueueHomeworkMarkDone(input: {
   return submission_op_id;
 }
 
+/**
+ * Niyam submission — drains via jp.queue.niyam_submissions.
+ *
+ * The queue key, drain slot and server handler all existed; only this producer
+ * was missing, so `useSubmitNiyam` posted directly and a submission made out of
+ * signal was lost outright — along with the proof the parent had just recorded.
+ */
+export async function enqueueNiyamSubmission(input: {
+  niyam_id: string;
+  student_id: string;
+  media?: PendingProofMedia[];
+  notes?: string;
+}): Promise<string> {
+  const submission_op_id = ulid();
+  const client_timestamp = new Date().toISOString();
+  const payload: PendingNiyamSubmissionOp = {
+    submission_op_id,
+    niyam_id: input.niyam_id,
+    student_id: input.student_id,
+    media: input.media,
+    notes: input.notes,
+    client_timestamp,
+  };
+  await enqueueOp(QUEUE_KEYS.niyam_submissions, {
+    submission_op_id,
+    payload,
+    state: "queued",
+    attempts: 0,
+    next_attempt_at: 0,
+    created_at: client_timestamp,
+  });
+  return submission_op_id;
+}
+
+/**
+ * Shivir QR scan — drains via jp.queue.shivir_scans.
+ *
+ * Shivir venues are exactly where signal fails, and AT28 makes these scans the
+ * only record of that session's attendance: a discarded scan is unrecoverable.
+ */
+export async function enqueueShivirScan(input: {
+  shivir_session_id: string;
+  qr_payload: string;
+  qr_signature: string;
+  scan_kind?: "present" | "check_in" | "check_out";
+  scanned_at?: string;
+}): Promise<string> {
+  const submission_op_id = ulid();
+  const client_timestamp = new Date().toISOString();
+  const payload: PendingShivirScanOp = {
+    submission_op_id,
+    shivir_session_id: input.shivir_session_id,
+    qr_payload: input.qr_payload,
+    qr_signature: input.qr_signature,
+    scan_kind: input.scan_kind,
+    // The moment the card was scanned, not the moment it synced.
+    scanned_at: input.scanned_at ?? client_timestamp,
+    client_timestamp,
+  };
+  await enqueueOp(QUEUE_KEYS.shivir_scans, {
+    submission_op_id,
+    payload,
+    state: "queued",
+    attempts: 0,
+    next_attempt_at: 0,
+    created_at: client_timestamp,
+  });
+  return submission_op_id;
+}
+
 /** Manual retry — never silently discard failed ops. */
 export async function retryOp(queue: QueueKey, submissionOpId: string): Promise<void> {
   const queues = await readAllQueues();
@@ -364,6 +437,32 @@ async function requeueOrphanedSyncing(
   }
 }
 
+/**
+ * Server cap is 200 (syncBatchBodySchema); stay under it with headroom so a
+ * single oversized post can never take the whole backlog down with it.
+ */
+export const MAX_OPS_PER_BATCH = 100;
+
+/**
+ * Which HTTP status should drive retry policy for a whole-batch transport failure.
+ *
+ * `ApiError` exposes `statusCode`, not `status` — reading the wrong property
+ * yielded `undefined`, which `shouldRetry` treats as "network", so every 4xx was
+ * retried ten times. Reading it correctly is necessary but NOT sufficient:
+ * `shouldRetry` makes any 4xx terminal, so a 401 (access token expired while the
+ * device was offline, refresh not yet run) would destroy the entire queue on the
+ * first reconnect. An auth failure is transient by nature — the refresh flow
+ * fixes it — so it is reported as retryable, not terminal.
+ */
+export function classifyTransportStatus(err: {
+  status?: number;
+  statusCode?: number;
+}): number | undefined {
+  const status = err.statusCode ?? err.status;
+  if (status === 401 || status === 403) return undefined; // treat as transient — refresh then retry
+  return status;
+}
+
 export async function drainQueues(): Promise<DrainOpResult[]> {
   if (draining) return [];
   draining = true;
@@ -374,7 +473,7 @@ export async function drainQueues(): Promise<DrainOpResult[]> {
     await requeueOrphanedSyncing(queues, dirty);
     if (dirty.size > 0) await flushDirtyQueues(queues, dirty);
 
-    const planned = planDrain(
+    const plannedAll = planDrain(
       Object.fromEntries(
         DRAIN_ORDER.map((k) => [
           k,
@@ -382,6 +481,13 @@ export async function drainQueues(): Promise<DrainOpResult[]> {
         ]),
       ) as Record<QueueKey, QueuedOp[]>,
     );
+
+    // The server caps /v1/sync/batch at 200 ops and answers an oversized body
+    // with a flat 422. planDrain is uncapped, so a device offline for a week
+    // would post its whole backlog and have EVERY op rejected together — and a
+    // 422 is terminal (backoff.shouldRetry). Slice here; planDrain has already
+    // ordered causally, so the remainder drains on the next tick in the same order.
+    const planned = plannedAll.slice(0, MAX_OPS_PER_BATCH);
 
     if (planned.length === 0) return [];
 
@@ -415,8 +521,8 @@ export async function drainQueues(): Promise<DrainOpResult[]> {
       results = res.results ?? [];
     } catch (err) {
       transportFailed = true;
-      const e = err as { status?: number; code?: string; message?: string };
-      httpStatus = e.status;
+      const e = err as { status?: number; statusCode?: number; code?: string; message?: string };
+      httpStatus = classifyTransportStatus(e);
       results = planned.map(({ op }) => ({
         submission_op_id: op.submission_op_id,
         status: "failed" as const,
@@ -454,18 +560,37 @@ export async function drainQueues(): Promise<DrainOpResult[]> {
   }
 }
 
-async function hasPendingSyncWork(): Promise<boolean> {
+/**
+ * Is there any offline work outstanding?
+ *
+ * Used both to pace the sync loop and to decide whether the loop should run at
+ * all. Counts anything not yet delivered — including ops waiting out a backoff
+ * and ops orphaned mid-flight in `syncing` (which requeueOrphanedSyncing will
+ * rescue on the next drain). A narrower "queued and due right now" reading would
+ * report an idle device as having no work and let the loop stop before its
+ * backlog cleared.
+ *
+ * Also counts the media-upload queue, which is not part of DRAIN_ORDER: a parent
+ * with a stranded homework photo has real work pending even though no domain op
+ * exists for it yet.
+ */
+export async function hasPendingSyncWork(): Promise<boolean> {
   const queues = await readAllQueues();
-  return DRAIN_ORDER.some((key) =>
-    (queues[key] ?? []).some(
-      (op) =>
-        op.state === "queued" &&
-        (op.next_attempt_at === 0 || op.next_attempt_at <= Date.now()),
-    ),
+  const domainWork = DRAIN_ORDER.some((key) =>
+    (queues[key] ?? []).some((op) => op.state === "queued" || op.state === "syncing"),
   );
+  if (domainWork) return true;
+
+  try {
+    const { listMediaUploads } = await import("./media-upload-queue");
+    const media = await listMediaUploads();
+    return media.some((m) => m.state === "queued" || m.state === "uploading");
+  } catch {
+    return false;
+  }
 }
 
-/** Start periodic drain (OfflineSyncLoop — shikshak/sanchalak only). */
+/** Start the periodic drain. Callers gate on hasPendingSyncWork, not on role. */
 export function startSyncLoop(): () => void {
   let cancelled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -480,6 +605,14 @@ export function startSyncLoop(): () => void {
   const tick = async () => {
     if (cancelled) return;
     if (appState !== "active") {
+      schedule(IDLE_INTERVAL_MS);
+      return;
+    }
+
+    // Cheap early-out so the loop is affordable for every role, not just the two
+    // that used to be allow-listed (PERF #23). An idle device costs one read per
+    // idle interval instead of a full media resume + drain.
+    if (!(await hasPendingSyncWork())) {
       schedule(IDLE_INTERVAL_MS);
       return;
     }

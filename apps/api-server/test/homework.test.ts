@@ -1151,6 +1151,58 @@ describe("homework", () => {
     expect(row.title).toBe("Edited title");
   });
 
+  it("stores bilingual title/description and returns them on create, patch, and /mine", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const studentId = await firstChildId(parent.token);
+    const batchId = await studentBatchId(studentId);
+
+    const create = await request(app)
+      .post("/v1/homework/assignments")
+      .set(auth(admin.token))
+      .send({
+        batch_id: batchId,
+        title: "Learn Navkar",
+        title_hi: "नवकार याद करें",
+        description: "Recite nine times",
+        description_hi: "नौ बार बोलें",
+        due_date: tomorrow(),
+        target_student_ids: [studentId],
+      });
+    expect(create.status).toBe(200);
+    const assignmentId = create.body.data.id as string;
+
+    const adminList = await request(app)
+      .get("/v1/homework/assignments?limit=200")
+      .set(auth(admin.token));
+    const adminRow = adminList.body.data.items.find((a: { id: string }) => a.id === assignmentId);
+    expect(adminRow?.title).toBe("Learn Navkar");
+    expect(adminRow?.title_hi).toBe("नवकार याद करें");
+    expect(adminRow?.description).toBe("Recite nine times");
+    expect(adminRow?.description_hi).toBe("नौ बार बोलें");
+
+    const mine = await request(app)
+      .get(`/v1/homework/mine?student_id=${studentId}&limit=50`)
+      .set(auth(parent.token));
+    expect(mine.status).toBe(200);
+    const mineRow = mine.body.data.items.find(
+      (r: { assignment_id: string }) => r.assignment_id === assignmentId,
+    );
+    expect(mineRow).toBeTruthy();
+    expect(mineRow.title).toBe("Learn Navkar");
+    expect(mineRow.title_hi).toBe("नवकार याद करें");
+    expect(mineRow.description).toBe("Recite nine times");
+    expect(mineRow.description_hi).toBe("नौ बार बोलें");
+
+    const patch = await request(app)
+      .patch(`/v1/homework/assignments/${assignmentId}`)
+      .set(auth(admin.token))
+      .send({ title_hi: "नवकार मंत्र याद करें", description_hi: null });
+    expect(patch.status).toBe(200);
+    expect(patch.body.data.title_hi).toBe("नवकार मंत्र याद करें");
+    expect(patch.body.data.description_hi).toBeNull();
+  });
+
   it("an out-of-scope shikshak cannot edit", async () => {
     const admin = await loginAs("super_admin");
     const shikshak = await loginAs("shikshak");

@@ -279,20 +279,26 @@ function CurriculumTopicDropdown({
     </View>
   );
 }
-function tomorrowKolkata(): string {
-  // YYYY-MM-DD in Asia/Kolkata — same shape as the API due_date.
+/** YYYY-MM-DD in Asia/Kolkata, `days` from now — same shape as the API due_date. */
+function kolkataDateOffset(days: number): string {
   const fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   });
-  const parts = fmt.formatToParts(new Date(Date.now() + 24 * 60 * 60 * 1000));
+  const parts = fmt.formatToParts(new Date(Date.now() + days * 24 * 60 * 60 * 1000));
   const y = parts.find((p) => p.type === "year")?.value ?? "2026";
   const m = parts.find((p) => p.type === "month")?.value ?? "01";
   const d = parts.find((p) => p.type === "day")?.value ?? "01";
   return `${y}-${m}-${d}`;
 }
+
+function tomorrowKolkata(): string {
+  return kolkataDateOffset(1);
+}
+
+const DUE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function CreateAssignmentModal({
   open,
@@ -312,6 +318,8 @@ function CreateAssignmentModal({
   const create = useCreateHomeworkAssignment();
   const [batchId, setBatchId] = useState("");
   const [title, setTitle] = useState("");
+  const [titleHi, setTitleHi] = useState("");
+  const [descriptionHi, setDescriptionHi] = useState("");
   const [dueDate, setDueDate] = useState(tomorrowKolkata());
   const [description, setDescription] = useState("");
   const [curriculumItemId, setCurriculumItemId] = useState("");
@@ -332,8 +340,10 @@ function CreateAssignmentModal({
   function reset() {
     setBatchId("");
     setTitle("");
+    setTitleHi("");
     setDueDate(tomorrowKolkata());
     setDescription("");
+    setDescriptionHi("");
     setCurriculumItemId("");
     setAttachmentUrl("");
     setAttachmentLabel("");
@@ -404,13 +414,33 @@ function CreateAssignmentModal({
       );
       return;
     }
+    // Catch the natural Indian ordering (10-08-2026) here rather than letting
+    // the server 422 after the whole form is filled.
+    if (!DUE_DATE_RE.test(dueDate.trim())) {
+      Alert.alert(
+        hi ? "तिथि जाँचें" : "Check the date",
+        hi
+          ? "नियत तिथि YYYY-MM-DD में लिखें — जैसे 2026-08-20। ऊपर के बटन भी उपयोग करें।"
+          : "Enter the due date as YYYY-MM-DD — for example 2026-08-20. You can also use the buttons above.",
+      );
+      return;
+    }
+    if (dueDate.trim() < kolkataDateOffset(0)) {
+      Alert.alert(
+        hi ? "तिथि जाँचें" : "Check the date",
+        hi ? "नियत तिथि आज या उसके बाद होनी चाहिए।" : "The due date must be today or later.",
+      );
+      return;
+    }
     if (uploading) return;
     create.mutate(
       {
         batch_id: batchId,
         title: title.trim(),
+        ...(titleHi.trim() ? { title_hi: titleHi.trim() } : {}),
         due_date: dueDate.trim(),
         ...(description.trim() ? { description: description.trim() } : {}),
+        ...(descriptionHi.trim() ? { description_hi: descriptionHi.trim() } : {}),
         ...(attachmentUrl.trim() ? { attachment_url: attachmentUrl.trim() } : {}),
         ...(curriculumItemId ? { curriculum_item_id: curriculumItemId } : {}),
       },
@@ -533,12 +563,28 @@ function CreateAssignmentModal({
 
           <View style={{ gap: 6 }}>
             <Body muted style={{ fontSize: 12 }}>
-              {hi ? "शीर्षक *" : "Title *"}
+              {hi ? "शीर्षक (अंग्रेज़ी) *" : "Title (English) *"}
             </Body>
             <TextInput
               value={title}
               onChangeText={setTitle}
               placeholder={hi ? "उदा. नवकार मंत्र याद करें" : "e.g. Learn the Navkar Mantra"}
+              placeholderTextColor={c.mutedForeground}
+              style={fieldStyle}
+            />
+          </View>
+
+          {/* Optional, never required: a Guruji setting homework at the end of
+              class must not be blocked on translating. Families reading in Hindi
+              see this when present, the English title otherwise. */}
+          <View style={{ gap: 6 }}>
+            <Body muted style={{ fontSize: 12 }}>
+              {hi ? "शीर्षक (हिन्दी)" : "Title (Hindi)"}
+            </Body>
+            <TextInput
+              value={titleHi}
+              onChangeText={setTitleHi}
+              placeholder={hi ? "उदा. नवकार मंत्र याद करें" : "e.g. नवकार मंत्र याद करें"}
               placeholderTextColor={c.mutedForeground}
               style={fieldStyle}
             />
@@ -572,6 +618,30 @@ function CreateAssignmentModal({
             <Body muted style={{ fontSize: 12 }}>
               {hi ? "नियत तिथि (YYYY-MM-DD) *" : "Due date (YYYY-MM-DD) *"}
             </Body>
+            {/* Homework is nearly always due tomorrow or next week — say that in
+                one tap instead of typing an ISO date on a phone keypad. */}
+            <Row style={{ gap: 8, flexWrap: "wrap" }}>
+              {[
+                { label: hi ? "कल" : "Tomorrow", value: kolkataDateOffset(1) },
+                { label: hi ? "3 दिन" : "In 3 days", value: kolkataDateOffset(3) },
+                { label: hi ? "अगला सप्ताह" : "Next week", value: kolkataDateOffset(7) },
+              ].map((q) => (
+                <Pressable
+                  key={q.label}
+                  onPress={() => setDueDate(q.value)}
+                  style={{
+                    borderWidth: 1,
+                    borderColor: dueDate === q.value ? c.primary : c.border,
+                    backgroundColor: dueDate === q.value ? c.accent : c.card,
+                    borderRadius: 999,
+                    paddingVertical: 6,
+                    paddingHorizontal: 12,
+                  }}
+                >
+                  <Body style={{ fontSize: 13 }}>{q.label}</Body>
+                </Pressable>
+              ))}
+            </Row>
             <TextInput
               value={dueDate}
               onChangeText={setDueDate}
@@ -584,7 +654,7 @@ function CreateAssignmentModal({
 
           <View style={{ gap: 6 }}>
             <Body muted style={{ fontSize: 12 }}>
-              {hi ? "निर्देश (वैकल्पिक)" : "Instructions (optional)"}
+              {hi ? "निर्देश — अंग्रेज़ी (वैकल्पिक)" : "Instructions — English (optional)"}
             </Body>
             <TextInput
               value={description}
@@ -592,6 +662,25 @@ function CreateAssignmentModal({
               multiline
               numberOfLines={3}
               placeholder={hi ? "वैकल्पिक निर्देश" : "Optional instructions"}
+              placeholderTextColor={c.mutedForeground}
+              style={{
+                ...fieldStyle,
+                minHeight: 88,
+                textAlignVertical: "top",
+              }}
+            />
+          </View>
+
+          <View style={{ gap: 6 }}>
+            <Body muted style={{ fontSize: 12 }}>
+              {hi ? "निर्देश — हिन्दी (वैकल्पिक)" : "Instructions — Hindi (optional)"}
+            </Body>
+            <TextInput
+              value={descriptionHi}
+              onChangeText={setDescriptionHi}
+              multiline
+              numberOfLines={3}
+              placeholder={hi ? "वैकल्पिक निर्देश" : "वैकल्पिक निर्देश"}
               placeholderTextColor={c.mutedForeground}
               style={{
                 ...fieldStyle,

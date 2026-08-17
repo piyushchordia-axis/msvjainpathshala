@@ -4,23 +4,22 @@
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { lanIp } from "../../../scripts/lan-ip.mjs";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const port = process.env.PORT ?? "8081";
 
-function lanIp() {
-  for (const nets of Object.values(os.networkInterfaces())) {
-    for (const net of nets ?? []) {
-      if (net.family === "IPv4" && !net.internal) return net.address;
-    }
-  }
-  return "127.0.0.1";
+function advertisedHost() {
+  const fromEnv = process.env.REACT_NATIVE_PACKAGER_HOSTNAME?.trim();
+  if (fromEnv) return fromEnv === "127.0.0.1" ? "localhost" : fromEnv;
+  const ip = lanIp();
+  return ip === "127.0.0.1" ? "localhost" : ip;
 }
 
 async function resolveHostUri() {
+  const fallback = `${advertisedHost()}:${port}`;
   try {
     const res = await fetch(`http://localhost:${port}/manifest`, {
       headers: { "expo-platform": "android" },
@@ -31,10 +30,9 @@ async function resolveHostUri() {
     const hostUri = json?.extra?.expoClient?.hostUri;
     if (hostUri) return hostUri;
   } catch (err) {
-    console.warn(`Could not read Metro manifest (${err.message}); using LAN IP.`);
+    console.warn(`Could not read Metro manifest (${err.message}); using ${fallback}.`);
   }
-  const ip = lanIp();
-  return ip === "127.0.0.1" ? `localhost:${port}` : `${ip}:${port}`;
+  return fallback;
 }
 
 const hostUri = await resolveHostUri();
@@ -64,7 +62,7 @@ const html = `<!DOCTYPE html>
 </head>
 <body>
   <h1>Jain Pathshala Mobile</h1>
-  <p>Scan with <strong>Expo Go</strong> (phone on same Wi‑Fi as this PC)</p>
+  <p>Scan with <strong>Expo Go</strong> (phone on the same Wi‑Fi as this PC)</p>
   <div id="qr"></div>
   <code>${expUrl}</code>
   <p>Or in Expo Go: <em>Enter URL manually</em> → paste the URL above.</p>

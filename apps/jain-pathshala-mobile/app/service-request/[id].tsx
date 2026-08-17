@@ -51,10 +51,11 @@ function statusLabel(status: RequestStatus, hi: boolean): string {
   return hi ? "प्रस्तुत" : "Submitted";
 }
 
-function formatStamp(value: string): string {
+/** Locale-aware: every timestamp in the thread was Latin-script even in Hindi. */
+function formatStamp(value: string, hi: boolean): string {
   const d = new Date(value);
   if (Number.isNaN(d.getTime())) return value;
-  return d.toLocaleString("en-GB", {
+  return d.toLocaleString(hi ? "hi-IN" : "en-GB", {
     day: "2-digit",
     month: "short",
     hour: "2-digit",
@@ -162,7 +163,7 @@ export default function ServiceRequestThreadScreen() {
                     {mine ? (hi ? "आप" : "You") : m.author_name ?? (hi ? "टीम" : "Team")}
                   </Body>
                   <Body muted style={{ fontSize: 12 }}>
-                    {formatStamp(m.created_at)}
+                    {formatStamp(m.created_at, hi)}
                   </Body>
                 </Row>
                 <Body style={{ marginTop: 6, fontSize: 14 }}>{m.message}</Body>

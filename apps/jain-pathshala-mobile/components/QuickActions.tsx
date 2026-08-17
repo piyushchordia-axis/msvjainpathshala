@@ -37,6 +37,10 @@ const PARENT_ACTIONS: QuickAction[] = [
   { href: "/quizzes", icon: "help-circle-outline", en: "Quizzes", hi: "प्रश्नोत्तरी", accent: "quizzes" },
   { href: "/exams", icon: "clipboard-outline", en: "Exams", hi: "परीक्षाएँ", accent: "exams" },
   { href: "/competitions", icon: "trophy-outline", en: "Competitions", hi: "प्रतियोगिताएँ", accent: "competitions" },
+  // MSV apply/status had no entry point at all — the endpoints existed but a
+  // parent could not reach them, and a pending or rejected application was
+  // invisible (only an approved badge rendered, on the home screen).
+  { href: "/msv", icon: "school-outline", en: "MSV programme", hi: "MSV कार्यक्रम", accent: "courses" },
 ];
 
 /** Guruji shortcuts — mirrors web admin items that exist on mobile. */
@@ -56,6 +60,10 @@ export const SHIKSHAK_ACTIONS: QuickAction[] = [
   { href: "/shikshak/join-approvals", icon: "person-add-outline", en: "Join approvals", hi: "Join स्वीकृति", accent: "join" },
   { href: "/shikshak/niyams", icon: "sparkles-outline", en: "Niyam catalog", hi: "नियम सूची", accent: "niyam" },
   { href: "/gallery", icon: "images-outline", en: "Punya Wall", hi: "पुण्य दीवार", accent: "punya" },
+  // Notices is a min:shikshak row in the web nav, and the server lets a Guruji
+  // author centre/batch notices — but mobile had no entry point at all, on the
+  // surface this persona actually uses.
+  { href: "/notices", icon: "megaphone-outline", en: "Notices", hi: "सूचनाएँ", accent: "notices" },
   { href: "/shikshak/profile", icon: "person-circle-outline", en: "Profile", hi: "प्रोफ़ाइल", accent: "profile" },
 ];
 

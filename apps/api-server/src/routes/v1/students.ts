@@ -325,6 +325,10 @@ router.get("/:id/certificates", async (req: Request, res: Response) => {
     return {
       id: r.id,
       kind: r.kind,
+      // The stable join key. Clients matched certificates to courses by TITLE
+      // STRING, so renaming a course silently stripped its badge and two courses
+      // sharing a title badged each other.
+      course_id: r.course_id,
       title_en,
       title_hi,
       issued_at: r.issued_at.toISOString(),

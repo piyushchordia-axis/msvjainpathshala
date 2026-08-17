@@ -24,6 +24,10 @@ export function lanIp() {
       if (net.family !== "IPv4" || net.internal) continue;
       const { address } = net;
       if (address.startsWith("169.254.")) continue;
+      // Tailscale / CGNAT (100.64.0.0/10) — never advertise on the Expo QR.
+      const octets = address.split(".").map(Number);
+      const n = ((octets[0] ?? 0) << 8) | (octets[1] ?? 0);
+      if (n >= (100 << 8 | 64) && n <= (100 << 8 | 127)) continue;
 
       let score = ifaceScore;
       if (address.startsWith("192.168.")) score += 0;

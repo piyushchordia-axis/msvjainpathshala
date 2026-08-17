@@ -342,9 +342,11 @@ export default function HomeworkAssignmentScreen() {
     }
     Alert.alert(
       hi ? "सभी स्वीकृत करें?" : "Approve all ready?",
+      // State the notification volume up front — approving in bulk pushes a
+      // message to every one of these families (AT31).
       hi
-        ? `${gradeable.length} प्रस्तुति(याँ) स्वीकृत होंगी।`
-        : `${gradeable.length} submission(s) will be approved.`,
+        ? `${gradeable.length} प्रस्तुति(याँ) स्वीकृत होंगी। ${gradeable.length} परिवारों को सूचना जाएगी।`
+        : `${gradeable.length} submission(s) will be approved. ${gradeable.length} families will be notified.`,
       [
         { text: hi ? "रद्द" : "Cancel", style: "cancel" },
         {
@@ -354,11 +356,19 @@ export default function HomeworkAssignmentScreen() {
               { assignmentId, work_kind: "all" },
               {
                 onSuccess: (res) => {
+                  // skipped/failed were dropped, so a Guruji whose batch had
+                  // rejections believed the queue was clear when it was not.
+                  const { graded, skipped, failed } = res.summary;
+                  const leftover = (skipped ?? 0) + (failed ?? 0);
                   Alert.alert(
                     hi ? "हो गया" : "Done",
-                    hi
-                      ? `${res.summary.graded} स्वीकृत।`
-                      : `${res.summary.graded} approved.`,
+                    leftover > 0
+                      ? hi
+                        ? `${graded} स्वीकृत · ${leftover} नहीं हो सकीं — उन्हें अलग से खोलें।`
+                        : `${graded} approved · ${leftover} could not be graded — open them individually.`
+                      : hi
+                        ? `${graded} स्वीकृत।`
+                        : `${graded} approved.`,
                   );
                   void submissions.refetch();
                   void assignments.refetch();

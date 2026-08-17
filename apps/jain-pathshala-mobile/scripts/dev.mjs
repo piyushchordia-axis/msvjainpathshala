@@ -20,7 +20,8 @@ const apiPort = Number(process.env.API_PORT ?? "8080");
 
 
 
-const packagerHost = process.env.REACT_NATIVE_PACKAGER_HOSTNAME ?? lanIp();
+const packagerHost =
+  process.env.REACT_NATIVE_PACKAGER_HOSTNAME ?? lanIp();
 
 
 
@@ -262,6 +263,8 @@ const expoArgs = [expoCli, "start", "--port", metroPort, "--clear"];
 if (offline) {
   expoArgs.push("--offline");
   console.log("Starting Expo offline (non-interactive shell / EXPO_OFFLINE=1).");
+} else if (packagerHost === "localhost" || packagerHost === "127.0.0.1") {
+  expoArgs.push("--localhost");
 } else {
   expoArgs.push("--lan");
 }

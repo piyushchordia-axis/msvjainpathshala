@@ -470,6 +470,13 @@
       "when": 1791456000000,
       "tag": "0066_centres_order",
       "breakpoints": true
+    },
+    {
+      "idx": 67,
+      "version": "7",
+      "when": 1791542400000,
+      "tag": "0067_homework_bilingual",
+      "breakpoints": true
     }
   ]
 }

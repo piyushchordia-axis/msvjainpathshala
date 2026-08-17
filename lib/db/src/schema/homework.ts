@@ -15,8 +15,16 @@ export const homework_assignments = pgTable(
     batch_id: uuid("batch_id")
       .notNull()
       .references(() => batches.id, { onDelete: "cascade" }),
+    /**
+     * Bilingual per the CLAUDE.md rule that all user-facing content carries
+     * `_en`/`_hi`. `title`/`description` are the original single-language columns
+     * and remain the EN source of truth — existing rows have no Hindi, so clients
+     * fall back to them rather than rendering blank. New authoring writes both.
+     */
     title: text("title").notNull(),
+    title_hi: text("title_hi"),
     description: text("description"),
+    description_hi: text("description_hi"),
     due_date: date("due_date").notNull(),
     attachment_url: text("attachment_url"),
     is_msv: boolean("is_msv").notNull().default(false),

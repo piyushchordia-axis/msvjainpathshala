@@ -2,7 +2,7 @@
  * Shared join approval queue for shikshak / sanchalak / city_admin.
  */
 import { useCallback, useEffect, useState } from "react";
-import { Pressable, ScrollView, View } from "react-native";
+import { Alert, Pressable, ScrollView, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
@@ -12,7 +12,9 @@ import { useAuth } from "@/contexts/AuthContext";
 import { ApiError, apiGet, apiPost } from "@/lib/api";
 import { fonts } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
-import { Body, Button, Card, Row, Title } from "@/components/ui";
+import { Body, Button, Card, Row, StateView, Title } from "@/components/ui";
+import { apiErrorMessage } from "@/lib/api-error-copy";
+import { joinKindLabel, recordStatusLabel } from "@/lib/status-labels";
 
 type JoinKind = "student" | "shikshak" | "sanchalak";
 type StatusFilter = "pending" | "approved" | "rejected";
@@ -55,18 +57,25 @@ export function JoinApprovalsScreen({ initialKind }: { initialKind?: JoinKind })
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState("");
 
+  // A blank list with a bare red string was indistinguishable from "nothing
+  // pending", and switching filters refetched with no spinner at all.
+  const [loading, setLoading] = useState(true);
+
   const load = useCallback(async () => {
     if (!allowed.length) return;
     setError(null);
+    setLoading(true);
     try {
       const list = await apiGet<{ items: RowItem[] }>(
         `/v1/join/registrations?kind=${kind}&status=${status}`,
       );
       setItems(list.items);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Failed to load");
+      setError(apiErrorMessage(e, hi));
+    } finally {
+      setLoading(false);
     }
-  }, [allowed.length, kind, status]);
+  }, [allowed.length, kind, status, hi]);
 
   useEffect(() => {
     void load();
@@ -78,10 +87,24 @@ export function JoinApprovalsScreen({ initialKind }: { initialKind?: JoinKind })
       await apiPost(`/v1/join/registrations/${id}/approve?kind=${kind}`, {});
       await load();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Approve failed");
+      setError(apiErrorMessage(e, hi));
     } finally {
       setBusy(false);
     }
+  };
+
+  /** Approval provisions a real login — confirm before committing. */
+  const confirmApprove = (row: RowItem) => {
+    Alert.alert(
+      hi ? "स्वीकृत करें?" : "Approve?",
+      hi
+        ? `${row.name ?? ""} का पंजीकरण स्वीकृत किया जाएगा और खाता बनाया जाएगा।`
+        : `This approves ${row.name ?? "this registration"} and provisions their account.`,
+      [
+        { text: hi ? "रद्द करें" : "Cancel", style: "cancel" },
+        { text: hi ? "स्वीकृत करें" : "Approve", onPress: () => void approve(row.id) },
+      ],
+    );
   };
 
   const reject = async () => {
@@ -151,7 +174,7 @@ export function JoinApprovalsScreen({ initialKind }: { initialKind?: JoinKind })
           {allowed.map((k) => (
             <Pressable key={k} onPress={() => setKind(k)} style={chip(k === kind)}>
               <Body style={{ color: k === kind ? c.primaryForeground : c.foreground, fontSize: 13 }}>
-                {k}
+                {joinKindLabel(k, hi)}
               </Body>
             </Pressable>
           ))}
@@ -161,13 +184,35 @@ export function JoinApprovalsScreen({ initialKind }: { initialKind?: JoinKind })
           {(["pending", "approved", "rejected"] as const).map((s) => (
             <Pressable key={s} onPress={() => setStatus(s)} style={chip(s === status)}>
               <Body style={{ color: s === status ? c.primaryForeground : c.foreground, fontSize: 13 }}>
-                {s}
+                {recordStatusLabel(s, hi)}
               </Body>
             </Pressable>
           ))}
         </View>
 
-        {error ? <Body style={{ color: c.destructive, marginBottom: 8 }}>{error}</Body> : null}
+        {loading ? (
+          <StateView status="loading" emptyText="" />
+        ) : error ? (
+          <StateView
+            status="error"
+            errorText={error}
+            onRetry={() => void load()}
+            retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
+          />
+        ) : items.length === 0 ? (
+          <StateView
+            status="empty"
+            emptyText={
+              status === "pending"
+                ? hi
+                  ? "कोई पंजीकरण लंबित नहीं है।"
+                  : "No registrations waiting."
+                : hi
+                  ? "यहाँ कुछ नहीं है।"
+                  : "Nothing here."
+            }
+          />
+        ) : null}
 
         {items.map((row) => (
           <Card key={row.id} style={{ padding: 14, marginBottom: 10 }}>
@@ -188,7 +233,7 @@ export function JoinApprovalsScreen({ initialKind }: { initialKind?: JoinKind })
                   label={hi ? "स्वीकृत" : "Approve"}
                   style={{ flex: 1 }}
                   loading={busy}
-                  onPress={() => void approve(row.id)}
+                  onPress={() => confirmApprove(row)}
                 />
                 <Button
                   label={hi ? "अस्वीकृत" : "Reject"}

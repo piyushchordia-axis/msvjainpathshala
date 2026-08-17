@@ -31,6 +31,8 @@ import {
   usePunyaAwardLimit,
   useStudentHomeworkHistory,
 } from "@/lib/queries";
+import { recordStatusLabel, attendanceStatusLabel } from "@/lib/status-labels";
+import { punyaFeatureLabel } from "@/lib/punya-labels";
 import { Body, Button, Card, Numeric, Pill, Row, StateView, Title } from "@/components/ui";
 
 type SectionKey =
@@ -67,14 +69,6 @@ function homeworkTone(status: string): "success" | "warning" | "error" | "info" 
   if (s === "returned" || s === "late") return "warning";
   if (s === "pending") return "neutral";
   return "neutral";
-}
-
-function humanize(key: string): string {
-  return key
-    .split(/[_\s]+/)
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
 }
 
 function relationLabel(relation: string | null | undefined, hi: boolean): string {
@@ -165,7 +159,10 @@ function ContactPanel({ studentId }: { studentId: string }) {
             .join(" · ")}
         </Body>
         <Row style={{ gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-          <Pill tone={row.status === "active" ? "success" : "neutral"} label={row.status} />
+          <Pill
+            tone={row.status === "active" ? "success" : "neutral"}
+            label={recordStatusLabel(row.status, hi)}
+          />
           {row.msv_status && row.msv_status !== "none" ? (
             <Pill label={`MSV: ${row.msv_status}`} />
           ) : null}
@@ -351,7 +348,7 @@ function AttendancePanel({ studentId }: { studentId: string }) {
                 <Body style={{ fontFamily: bodyFamily(hi, "semibold") }}>
                   {formatDate(row.session_date)}
                 </Body>
-                <Pill label={row.status} tone={attendanceTone(row.status)} />
+                <Pill label={attendanceStatusLabel(row.status, hi)} tone={attendanceTone(row.status)} />
               </Row>
               {row.topic ? (
                 <Body muted style={{ marginTop: 2, fontSize: 13 }}>
@@ -422,7 +419,7 @@ function PunyaPanel({ studentId }: { studentId: string }) {
           <Card key={t.id}>
             <Row style={{ justifyContent: "space-between" }}>
               <Body style={{ fontFamily: bodyFamily(hi, "semibold"), flex: 1, paddingRight: 8, lineHeight: 22 }}>
-                {humanize(t.feature_key)}
+                {punyaFeatureLabel(t.feature_key, hi)}
               </Body>
               <Body style={{ color: t.points >= 0 ? c.primary : c.destructive }}>
                 {t.points >= 0 ? `+${t.points}` : t.points}
@@ -801,7 +798,7 @@ function HomeworkPanel({ studentId }: { studentId: string }) {
             <Card>
               <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
                 <Title style={{ fontSize: 16, flex: 1, paddingRight: 8 }}>{r.title}</Title>
-                <Pill label={r.status} tone={homeworkTone(r.status)} />
+                <Pill label={recordStatusLabel(r.status, hi)} tone={homeworkTone(r.status)} />
               </Row>
               <Body muted style={{ fontSize: 12, marginTop: 6 }}>
                 {hi ? "नियत" : "Due"}: {formatDate(r.due_date)}
@@ -879,7 +876,10 @@ function NiyamPanel({ studentId }: { studentId: string }) {
                 <Title style={{ fontSize: 16, flex: 1, paddingRight: 8 }}>
                   {hi ? r.niyam_title_hi || r.niyam_title_en : r.niyam_title_en}
                 </Title>
-                <Pill label={r.status} tone={r.status === "approved" ? "success" : "neutral"} />
+                <Pill
+                  label={recordStatusLabel(r.status, hi)}
+                  tone={r.status === "approved" ? "success" : "neutral"}
+                />
               </Row>
               <Body muted style={{ fontSize: 12, marginTop: 6 }}>
                 {formatDate(r.submission_date)}

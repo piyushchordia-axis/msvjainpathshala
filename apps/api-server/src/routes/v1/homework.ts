@@ -249,7 +249,11 @@ router.get("/batches/:batchId/curriculum-topics", requireAdminPanel, async (req:
 const createAssignmentSchema = z.object({
   batch_id: z.string().uuid(),
   title: z.string().min(1).max(300),
+  // Optional, not required: a Guruji mid-class should never be blocked on
+  // translating. Clients fall back to the EN column when this is absent.
+  title_hi: z.string().max(300).optional(),
   description: z.string().max(5000).optional(),
+  description_hi: z.string().max(5000).optional(),
   due_date: z.string().regex(DUE_DATE_RE),
   attachment_url: httpUrl(1000).optional(),
   is_msv: z.boolean().optional(),
@@ -371,7 +375,9 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
         .values({
           batch_id: batch.id,
           title: body.title,
+          title_hi: body.title_hi ?? null,
           description: body.description ?? null,
+          description_hi: body.description_hi ?? null,
           due_date: body.due_date,
           attachment_url: body.attachment_url ?? null,
           is_msv: isMsv,
@@ -424,7 +430,9 @@ router.post("/assignments", requireAdminPanel, async (req: Request, res: Respons
 const patchAssignmentSchema = z
   .object({
     title: z.string().min(1).max(300).optional(),
+    title_hi: z.string().max(300).nullable().optional(),
     description: z.string().max(5000).nullable().optional(),
+    description_hi: z.string().max(5000).nullable().optional(),
     due_date: z.string().regex(DUE_DATE_RE).optional(),
     attachment_url: httpUrl(1000).nullable().optional(),
     is_msv: z.boolean().optional(),
@@ -454,7 +462,9 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
       batch_id: homework_assignments.batch_id,
       centre_id: batches.centre_id,
       title: homework_assignments.title,
+      title_hi: homework_assignments.title_hi,
       description: homework_assignments.description,
+      description_hi: homework_assignments.description_hi,
       due_date: homework_assignments.due_date,
       attachment_url: homework_assignments.attachment_url,
       is_msv: homework_assignments.is_msv,
@@ -475,7 +485,9 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
   // submitted; lateness is a point-in-time fact captured at submit (AT26).
   const patch: {
     title?: string;
+    title_hi?: string | null;
     description?: string | null;
+    description_hi?: string | null;
     due_date?: string;
     attachment_url?: string | null;
     is_msv?: boolean;
@@ -484,8 +496,14 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
   if (Object.prototype.hasOwnProperty.call(body, "title") && body.title !== undefined) {
     patch.title = body.title;
   }
+  if (Object.prototype.hasOwnProperty.call(body, "title_hi")) {
+    patch.title_hi = body.title_hi ?? null;
+  }
   if (Object.prototype.hasOwnProperty.call(body, "description")) {
     patch.description = body.description ?? null;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "description_hi")) {
+    patch.description_hi = body.description_hi ?? null;
   }
   if (Object.prototype.hasOwnProperty.call(body, "due_date") && body.due_date !== undefined) {
     if (isPastDueDate(body.due_date) && body.allow_past_due_date !== true) {
@@ -568,7 +586,9 @@ router.patch("/assignments/:id", requireAdminPanel, async (req: Request, res: Re
     .returning({
       id: homework_assignments.id,
       title: homework_assignments.title,
+      title_hi: homework_assignments.title_hi,
       description: homework_assignments.description,
+      description_hi: homework_assignments.description_hi,
       due_date: homework_assignments.due_date,
       attachment_url: homework_assignments.attachment_url,
       is_msv: homework_assignments.is_msv,
@@ -616,6 +636,7 @@ router.delete("/assignments/:id", requireAdminPanel, async (req: Request, res: R
     .select({
       id: homework_assignments.id,
       title: homework_assignments.title,
+      title_hi: homework_assignments.title_hi,
       batch_id: homework_assignments.batch_id,
       centre_id: batches.centre_id,
     })
@@ -745,7 +766,9 @@ router.get("/assignments", requireAdminPanel, async (req: Request, res: Response
     .select({
       id: homework_assignments.id,
       title: homework_assignments.title,
+      title_hi: homework_assignments.title_hi,
       description: homework_assignments.description,
+      description_hi: homework_assignments.description_hi,
       due_date: homework_assignments.due_date,
       attachment_url: homework_assignments.attachment_url,
       is_msv: homework_assignments.is_msv,
@@ -1639,6 +1662,7 @@ router.get("/students/:id/submissions", requireAdminPanel, async (req: Request, 
       id: homework_submissions.id,
       assignment_id: homework_assignments.id,
       title: homework_assignments.title,
+      title_hi: homework_assignments.title_hi,
       due_date: homework_assignments.due_date,
       status: homework_submissions.status,
       late: homework_submissions.late,
@@ -1735,7 +1759,9 @@ router.get("/mine", async (req: Request, res: Response) => {
       student_id: homework_submissions.student_id,
       assignment_id: homework_assignments.id,
       title: homework_assignments.title,
+      title_hi: homework_assignments.title_hi,
       description: homework_assignments.description,
+      description_hi: homework_assignments.description_hi,
       due_date: homework_assignments.due_date,
       attachment_url: homework_assignments.attachment_url,
       is_msv: homework_assignments.is_msv,

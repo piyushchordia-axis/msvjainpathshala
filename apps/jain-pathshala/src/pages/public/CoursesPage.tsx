@@ -19,6 +19,8 @@ interface CourseListRow {
 interface CertificateRow {
   id: string;
   kind: string;
+  /** Stable join key — titles change, ids don't. */
+  course_id: string | null;
   title_en: string;
   title_hi: string | null;
   voided_at: string | null;
@@ -48,7 +50,10 @@ export default function CoursesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [studentId, setStudentId] = useState<string | null>(null);
-  const [courseCertTitles, setCourseCertTitles] = useState<Set<string>>(new Set());
+  const [children, setChildren] = useState<ChildOption[]>([]);
+  // Matched by course_id, not title: a renamed course used to lose its badge,
+  // and two courses sharing a title badged each other.
+  const [certifiedCourseIds, setCertifiedCourseIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -56,7 +61,12 @@ export default function CoursesPage() {
     setError(null);
 
     const load = authed
-      ? apiGet<{ items: CourseListRow[] }>('/v1/courses')
+      ? // Scope to the selected child. Without student_id the server falls back to
+        // a union across all children, so a parent with kids in two cities saw a
+        // merged catalogue that matched neither of them.
+        apiGet<{ items: CourseListRow[] }>(
+          studentId ? `/v1/courses?student_id=${encodeURIComponent(studentId)}` : '/v1/courses',
+        )
       : fetch('/v1/public/courses', { headers: { Accept: 'application/json' } })
           .then(async (r) => {
             if (!r.ok) throw new Error(`Courses request failed (${r.status})`);
@@ -83,20 +93,23 @@ export default function CoursesPage() {
     return () => {
       cancelled = true;
     };
-  }, [authed]);
+  }, [authed, studentId]);
 
   useEffect(() => {
     if (!authed) {
       setStudentId(null);
-      setCourseCertTitles(new Set());
+      setChildren([]);
+      setCertifiedCourseIds(new Set());
       return;
     }
     let cancelled = false;
     apiGet<{ items: ChildOption[] }>('/v1/me/children')
       .then((res) => {
         if (cancelled) return;
-        const id = res.items?.[0]?.id ?? null;
-        setStudentId(id);
+        const kids = res.items ?? [];
+        setChildren(kids);
+        // Keep the current selection if it is still one of the parent's children.
+        setStudentId((prev) => (prev && kids.some((k) => k.id === prev) ? prev : kids[0]?.id ?? null));
       })
       .catch(() => {
         if (!cancelled) setStudentId(null);
@@ -108,23 +121,22 @@ export default function CoursesPage() {
 
   useEffect(() => {
     if (!studentId) {
-      setCourseCertTitles(new Set());
+      setCertifiedCourseIds(new Set());
       return;
     }
     let cancelled = false;
     apiGet<{ items: CertificateRow[] }>(`/v1/students/${studentId}/certificates`)
       .then((res) => {
         if (cancelled) return;
-        const titles = new Set<string>();
+        const ids = new Set<string>();
         for (const row of res.items ?? []) {
           if (row.kind !== 'course' || row.voided_at) continue;
-          if (row.title_en) titles.add(row.title_en);
-          if (row.title_hi) titles.add(row.title_hi);
+          if (row.course_id) ids.add(row.course_id);
         }
-        setCourseCertTitles(titles);
+        setCertifiedCourseIds(ids);
       })
       .catch(() => {
-        if (!cancelled) setCourseCertTitles(new Set());
+        if (!cancelled) setCertifiedCourseIds(new Set());
       });
     return () => {
       cancelled = true;
@@ -158,6 +170,34 @@ export default function CoursesPage() {
         ) : null}
       </div>
 
+      {/* Which child's catalogue is this? A parent with children in different
+          cities was silently shown child #1's, with no way to switch. */}
+      {children.length > 1 ? (
+        <div className="mt-8 flex flex-wrap items-center gap-2">
+          <span className="text-sm text-muted-foreground">
+            {hi ? 'बच्चा चुनें' : 'Showing courses for'}
+          </span>
+          {children.map((kid) => {
+            const active = kid.id === studentId;
+            return (
+              <button
+                key={kid.id}
+                type="button"
+                onClick={() => setStudentId(kid.id)}
+                aria-pressed={active}
+                className={
+                  active
+                    ? 'rounded-full border border-primary bg-primary px-3 py-1.5 text-sm text-primary-foreground'
+                    : 'rounded-full border border-border bg-card px-3 py-1.5 text-sm text-secondary hover:border-primary/40'
+                }
+              >
+                {kid.full_name}
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+
       {error ? (
         <Card className="mt-10 border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
           {error}
@@ -173,8 +213,7 @@ export default function CoursesPage() {
           {items.map((course) => {
             const title = pickTitle(hi, course);
             const certified =
-              courseCertTitles.has(course.name_en) ||
-              (!!course.name_hi && courseCertTitles.has(course.name_hi));
+              certifiedCourseIds.has(course.id);
             return (
               <li key={course.id}>
                 <CourseFolderCard

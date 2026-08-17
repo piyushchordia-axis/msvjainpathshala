@@ -20,7 +20,12 @@ import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
-import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
+import {
+  clampLimit,
+  inScope,
+  ownedStudentsCondition,
+  scopedCentreFilter,
+} from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -34,7 +39,8 @@ async function ownedStudentId(req: Request, id: string): Promise<string | null> 
   const [row] = await db
     .select({ id: students.id })
     .from(students)
-    .where(and(eq(students.id, id), or(eq(students.parent_id, uid), eq(students.user_id, uid))))
+    // Q11 — shared ownership predicate (excludes soft-deleted and inactive students).
+    .where(and(eq(students.id, id), ownedStudentsCondition(uid)))
     .limit(1);
   return row?.id ?? null;
 }

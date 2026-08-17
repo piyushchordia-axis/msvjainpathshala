@@ -5,6 +5,7 @@ import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAdminBatches, useMyStaffing } from "@/lib/queries";
+import { recordStatusLabel } from "@/lib/status-labels";
 import { formatTimeRange } from "@/lib/format";
 import { formatAgeGroups } from "@workspace/api-zod";
 import { bodyFamily } from "@/constants/typography";
@@ -133,7 +134,10 @@ export default function BatchesScreen() {
                     {[b.centre_name, formatAgeGroups(b.age_groups, hi ? "hi" : "en")].filter(Boolean).join(" · ") || "—"}
                   </Body>
                 </View>
-                <Pill tone={b.status === "active" ? "success" : "neutral"} label={b.status} />
+                <Pill
+                  tone={b.status === "active" ? "success" : "neutral"}
+                  label={recordStatusLabel(b.status, hi)}
+                />
               </Row>
               {b.shikshak_name ? (
                 <Body muted style={{ fontSize: 13, marginTop: 8 }}>

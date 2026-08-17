@@ -1,10 +1,24 @@
 /**
  * Thin sync wrapper around niyam submission create.
  */
-import { db, niyams, niyam_submissions, students, centres, type User } from "@workspace/db";
+import {
+  db,
+  niyams,
+  niyam_submissions,
+  niyam_submission_media,
+  students,
+  centres,
+  type User,
+} from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { studentCanAccessNiyam } from "../lib/niyam-audience";
-import { periodKey, istCalendarDate } from "../lib/niyam-period";
+import { periodKey, istCalendarDate, allowedMediaKinds } from "../lib/niyam-period";
+import {
+  resolveSubmissionMedia,
+  checkMediaAgainstNiyam,
+  type ClientMediaItem,
+  type ProofMediaKind,
+} from "../lib/niyam-media";
 
 export class NiyamSubmitError extends Error {
   constructor(
@@ -21,7 +35,9 @@ export async function applyNiyamSubmission(opts: {
   actor: User;
   niyamId: string;
   studentId: string;
+  /** @deprecated single-proof wire form — prefer `media`. Treated as media[0]. */
   proofAssetId?: string;
+  media?: ClientMediaItem[];
   notes?: string;
 }): Promise<{ id: string }> {
   const [studentCtx] = await db
@@ -77,6 +93,32 @@ export async function applyNiyamSubmission(opts: {
     throw new NiyamSubmitError(403, "ERR_FORBIDDEN", "This niyam is not available for this student.");
   }
 
+  // Media is validated and ownership-resolved with the SAME helpers as the online
+  // route (CLAUDE.md offline sync §4). Previously this path took an unvalidated
+  // single `proof_asset_id`, so an offline submission could land without the proof
+  // its niyam required, or with a URL the submitter did not own.
+  const clientMedia: ClientMediaItem[] =
+    opts.media && opts.media.length > 0
+      ? opts.media
+      : opts.proofAssetId
+        ? [{ url: opts.proofAssetId, kind: "photo" as ProofMediaKind }]
+        : [];
+
+  const mediaGate = checkMediaAgainstNiyam(
+    { max_uploads: niyam.max_uploads, proof_required: niyam.proof_required },
+    clientMedia.length,
+  );
+  if (!mediaGate.ok) {
+    throw new NiyamSubmitError(422, "ERR_VALIDATION_FAILED", mediaGate.message);
+  }
+
+  const resolvedMedia = clientMedia.length
+    ? await resolveSubmissionMedia(opts.actor.id, clientMedia, allowedMediaKinds(niyam.proof_type))
+    : ({ ok: true, items: [] } as const);
+  if (!resolvedMedia.ok) {
+    throw new NiyamSubmitError(422, "ERR_VALIDATION_FAILED", resolvedMedia.message);
+  }
+
   const submissionDate = istCalendarDate(new Date());
   const pKey = periodKey(
     niyam.niyam_type as "daily" | "weekly" | "monthly",
@@ -84,19 +126,39 @@ export async function applyNiyamSubmission(opts: {
   );
   const status = niyam.approval_mode === "auto" ? "auto_approved" : "pending";
 
-  const [row] = await db
-    .insert(niyam_submissions)
-    .values({
-      niyam_id: opts.niyamId,
-      student_id: opts.studentId,
-      submission_date: submissionDate,
-      period_key: pKey,
-      status,
-      notes: opts.notes ?? null,
-      proof_url: opts.proofAssetId ?? null,
-      submitted_by: opts.actor.id,
-    })
-    .returning({ id: niyam_submissions.id });
+  // Submission + its media commit together: a proof-required niyam must never
+  // end up with a row whose proofs failed to insert.
+  const id = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(niyam_submissions)
+      .values({
+        niyam_id: opts.niyamId,
+        student_id: opts.studentId,
+        submission_date: submissionDate,
+        period_key: pKey,
+        status,
+        notes: opts.notes ?? null,
+        // Legacy single-proof column — keep the first resolved item for readers
+        // that have not moved to niyam_submission_media yet.
+        proof_url: resolvedMedia.items[0]?.url ?? null,
+        submitted_by: opts.actor.id,
+      })
+      .returning({ id: niyam_submissions.id });
 
-  return { id: row!.id };
+    if (resolvedMedia.items.length > 0) {
+      await tx.insert(niyam_submission_media).values(
+        resolvedMedia.items.map((m, i) => ({
+          submission_id: row!.id,
+          url: m.url,
+          kind: m.kind,
+          mime: m.mime,
+          size_bytes: m.size_bytes,
+          ordinal: i,
+        })),
+      );
+    }
+    return row!.id;
+  });
+
+  return { id };
 }

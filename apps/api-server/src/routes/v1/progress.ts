@@ -28,7 +28,7 @@ import { auditFromReq } from "../../lib/audit";
 import { storage, makeKey } from "../../lib/storage";
 import { signUploadUrl } from "../../lib/file-tokens";
 import { PdfBuilder } from "../../lib/pdf";
-import { inScope, scopedCentreFilter } from "../../lib/route-helpers";
+import { inScope, ownedStudentsCondition, scopedCentreFilter } from "../../lib/route-helpers";
 import { getStudentHomeworkCompletionRate } from "../../lib/homework-completion-rate";
 import {
   CourseProgressError,
@@ -516,7 +516,8 @@ router.get("/students/:id/reports", async (req: Request, res: Response) => {
     .select({ id: students.id })
     .from(students)
     .where(
-      and(eq(students.id, id), or(eq(students.parent_id, user.id), eq(students.user_id, user.id))),
+      // Q11 — shared ownership predicate (excludes soft-deleted and inactive students).
+      and(eq(students.id, id), ownedStudentsCondition(user.id)),
     )
     .limit(1);
   const isOwner = Boolean(owned);

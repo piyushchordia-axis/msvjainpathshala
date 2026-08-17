@@ -12,7 +12,8 @@
  * by the API (409) and surfaced as a friendly "already submitted" state.
  */
 import { useState } from "react";
-import { View } from "react-native";
+import { Alert, View } from "react-native";
+import { apiErrorMessage } from "@/lib/api-error-copy";
 import { Ionicons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
@@ -22,6 +23,7 @@ import {
   useAvailableQuizzes,
   useStartQuiz,
   useSubmitQuiz,
+  useAutosaveQuizAnswers,
   useActivePushQuiz,
   useSubmitPushQuiz,
   type QuizEventRow,
@@ -128,6 +130,7 @@ export default function Quizzes() {
 
   const startQuiz = useStartQuiz();
   const submitQuiz = useSubmitQuiz();
+  const autosaveQuiz = useAutosaveQuizAnswers();
   const submitPush = useSubmitPushQuiz();
 
   function beginEvent(quiz: QuizEventRow) {
@@ -147,6 +150,20 @@ export default function Quizzes() {
             initialAnswers: data.answers ?? {},
           });
         },
+        onError: (err) =>
+          Alert.alert(
+            hi ? "प्रश्नोत्तरी शुरू नहीं हुई" : "Couldn't start the quiz",
+            apiErrorMessage(err, hi, {
+              ERR_WINDOW_CLOSED: {
+                en: "This quiz has closed. Ask your Guruji if it will reopen.",
+                hi: "यह प्रश्नोत्तरी बंद हो चुकी है। पुनः खुलने के बारे में गुरुजी से पूछें।",
+              },
+              ERR_ALREADY_SUBMITTED: {
+                en: "You have already completed this quiz.",
+                hi: "आप यह प्रश्नोत्तरी पहले ही पूरी कर चुके हैं।",
+              },
+            }),
+          ),
       },
     );
   }
@@ -182,6 +199,11 @@ export default function Quizzes() {
             });
             setActive(null);
           },
+          onError: (err) =>
+            Alert.alert(
+              hi ? "उत्तर जमा नहीं हुए" : "Couldn't submit your answers",
+              apiErrorMessage(err, hi),
+            ),
         },
       );
     } else {
@@ -200,6 +222,11 @@ export default function Quizzes() {
             });
             setActive(null);
           },
+          onError: (err) =>
+            Alert.alert(
+              hi ? "उत्तर जमा नहीं हुए" : "Couldn't submit your answers",
+              apiErrorMessage(err, hi),
+            ),
         },
       );
     }
@@ -233,6 +260,18 @@ export default function Quizzes() {
             initialAnswers={active.initialAnswers}
             submitting={submitQuiz.isPending || submitPush.isPending}
             onSubmit={submitAnswers}
+            // Only scheduled events have a server-side attempt to save against;
+            // a live push quiz is graded in one shot and has no attempt row.
+            onAutosave={
+              active.kind === "event" && active.attemptId && activeStudentId
+                ? (answers) =>
+                    autosaveQuiz.mutate({
+                      attemptId: active.attemptId!,
+                      student_id: activeStudentId,
+                      answers,
+                    })
+                : undefined
+            }
             onCancel={() => setActive(null)}
           />
         ) : loading ? (

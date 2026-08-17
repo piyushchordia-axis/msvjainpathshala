@@ -1,7 +1,7 @@
 /**
  * Shikshak Niyam review — compact rows, bulk approve, written reject reasons.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
   FlatList,
@@ -196,7 +196,12 @@ function RejectSheet({
   );
 }
 
-function ReviewRow({
+/**
+ * Memoised: selecting one row re-rendered every mounted row (each with an
+ * ExpoImage proof thumbnail), so multi-select on a 90-row queue felt laggy on
+ * mid-range Android. Mirrors AttendanceRosterRow, which was already fixed.
+ */
+function ReviewRowInner({
   row,
   expanded,
   selected,
@@ -367,6 +372,8 @@ function ReviewRow({
   );
 }
 
+const ReviewRow = memo(ReviewRowInner);
+
 export default function NiyamReviewScreen() {
   const c = useColors();
   const { hi } = useLocale();
@@ -415,17 +422,20 @@ export default function NiyamReviewScreen() {
   const list = usePendingNiyamInfinite({
     batchId,
     niyamType,
+    // Narrowed server-side now — see the hook for why client-side filtering
+    // silently hid real rows and stalled pagination.
+    studentId: filterStudentId ?? null,
     enabled: filtersReady,
   });
   const approve = useApproveNiyam();
   const reject = useRejectNiyam();
   const bulk = useBulkApproveNiyams();
 
-  const items = useMemo(() => {
-    const all = list.data?.pages.flatMap((p) => p.items) ?? [];
-    if (!filterStudentId) return all;
-    return all.filter((r) => r.student_id === filterStudentId);
-  }, [list.data?.pages, filterStudentId]);
+  // No client-side narrowing: the server already applied student_id.
+  const items = useMemo(
+    () => list.data?.pages.flatMap((p) => p.items) ?? [],
+    [list.data?.pages],
+  );
   const batchItems = batches.data?.items ?? [];
 
   const rejectRow = rejectId ? items.find((r) => r.id === rejectId) : null;
@@ -467,13 +477,17 @@ export default function NiyamReviewScreen() {
                 const approved = res.results.filter((r) => r.status === "approved").length;
                 const skipped = res.results.filter((r) => r.status === "skipped");
                 const failed = res.results.filter((r) => r.status === "failed");
-                const skippedIds = skipped.map((r) => r.id).join(", ");
+                // Name the children, don't list UUIDs: "0f9c…, 7ab2…" told the
+                // Guruji nothing they could act on.
+                const nameFor = (id: string) =>
+                  items.find((r) => r.id === id)?.student_name ?? id.slice(0, 8);
+                const skippedNames = skipped.map((r) => nameFor(r.id)).join(", ");
                 const msg = hi
                   ? `${approved} स्वीकृत, ${skipped.length} छोड़ी गईं${failed.length ? `, ${failed.length} विफल` : ""}${
-                      skippedIds ? `\n\nछोड़ी गईं: ${skippedIds}` : ""
+                      skippedNames ? `\n\nछोड़ी गईं: ${skippedNames}` : ""
                     }`
                   : `${approved} approved, ${skipped.length} skipped${failed.length ? `, ${failed.length} failed` : ""}${
-                      skippedIds ? `\n\nSkipped: ${skippedIds}` : ""
+                      skippedNames ? `\n\nSkipped: ${skippedNames}` : ""
                     }`;
                 Alert.alert(hi ? "पूर्ण" : "Done", msg);
                 clearSelection();

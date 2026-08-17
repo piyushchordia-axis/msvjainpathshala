@@ -358,8 +358,22 @@ async function handleNiyamSubmission(
     .object({
       niyam_id: z.string().uuid(),
       student_id: z.string().uuid(),
+      /** @deprecated single-proof wire form — prefer media[]. */
       proof_asset_id: z.string().optional(),
-      notes: z.string().optional(),
+      // Mirrors the online route's media[] so an offline submission can carry
+      // every proof the niyam allows (CLAUDE.md offline sync §4).
+      media: z
+        .array(
+          z.object({
+            url: z.string().max(2000),
+            kind: z.enum(["photo", "video", "audio"]),
+            mime: z.string().max(100).optional(),
+            size_bytes: z.number().int().nonnegative().optional(),
+          }),
+        )
+        .max(10)
+        .optional(),
+      notes: z.string().max(500).optional(),
     })
     .parse(payload);
 
@@ -370,6 +384,7 @@ async function handleNiyamSubmission(
       niyamId: p.niyam_id,
       studentId: p.student_id,
       proofAssetId: p.proof_asset_id,
+      media: p.media,
       notes: p.notes,
     });
     return {
@@ -733,6 +748,8 @@ async function executeOp(
       return handleCourseProgress(actor, submissionOpId, payload);
     case "course_certification":
       return handleCourseCertification(actor, submissionOpId, payload);
+    case "acknowledgement":
+      return handleAcknowledgement(actor, submissionOpId, payload, clientTimestamp);
     default:
       return {
         submission_op_id: submissionOpId,

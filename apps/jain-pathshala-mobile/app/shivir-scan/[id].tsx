@@ -75,6 +75,18 @@ function countFor(session: ScanSession, kind: ScanKind): number {
   return session.present;
 }
 
+/**
+ * Sentinel: the scan could not reach the server and has been queued for sync.
+ * Modelled as an error so it flows through the mutation's existing onError path,
+ * but it means "safely saved", not "failed".
+ */
+class OfflineQueuedScan extends Error {
+  constructor() {
+    super("Scan queued offline");
+    this.name = "OfflineQueuedScan";
+  }
+}
+
 export default function ShivirScanScreen() {
   const c = useColors();
   const { hi } = useLocale();
@@ -101,12 +113,33 @@ export default function ShivirScanScreen() {
   const selectedSession = ctx.data?.sessions.find((s) => s.id === sessionId) ?? null;
 
   const scan = useMutation({
-    mutationFn: (vars: { qr_payload: string; qr_signature: string }) =>
-      apiPost<ScanResult>(`/v1/shivir-scanner/sessions/${sessionId}/scan`, {
-        qr_payload: vars.qr_payload,
-        qr_signature: vars.qr_signature,
-        scan_kind: scanKind,
-      }),
+    mutationFn: async (vars: { qr_payload: string; qr_signature: string }): Promise<ScanResult> => {
+      try {
+        return await apiPost<ScanResult>(`/v1/shivir-scanner/sessions/${sessionId}/scan`, {
+          qr_payload: vars.qr_payload,
+          qr_signature: vars.qr_signature,
+          scan_kind: scanKind,
+        });
+      } catch (err) {
+        // Only a transport failure falls back to the queue. A domain rejection
+        // (revoked QR, closed session, wrong scan kind) would fail identically on
+        // replay, so queuing it would just defer a certain failure and lie to the
+        // volunteer in the meantime.
+        const isNetwork = err instanceof ApiError && err.code === "ERR_NETWORK";
+        if (!isNetwork) throw err;
+
+        const { enqueueShivirScan } = await import("@/lib/offline/sync-engine");
+        await enqueueShivirScan({
+          shivir_session_id: sessionId!,
+          qr_payload: vars.qr_payload,
+          qr_signature: vars.qr_signature,
+          scan_kind: scanKind,
+        });
+        // Deliberately NOT drained here: the sync loop owns delivery, so there is
+        // exactly one retry mechanism (CLAUDE.md offline sync §4).
+        throw new OfflineQueuedScan();
+      }
+    },
     onSuccess: (res) => {
       setLiveCount(res.count);
       const name = res.student.full_name || res.student.student_code;
@@ -127,6 +160,23 @@ export default function ShivirScanScreen() {
       }
     },
     onError: (err) => {
+      // Queued offline: the scan is safe, we just cannot name the student or
+      // detect a duplicate until it syncs. Say exactly that rather than
+      // reporting a failure the volunteer would try to "fix" by rescanning.
+      if (err instanceof OfflineQueuedScan) {
+        if (Platform.OS !== "web") {
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }
+        setLiveCount((n) => (typeof n === "number" ? n + 1 : n));
+        setFeedback({
+          tone: "warning",
+          title: hi ? "ऑफ़लाइन सहेजा गया" : "Saved offline",
+          detail: hi
+            ? "नेटवर्क आने पर यह स्कैन अपने आप भेज दिया जाएगा।"
+            : "This scan will be sent automatically when the network returns.",
+        });
+        return;
+      }
       if (Platform.OS !== "web") void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       const code = err instanceof ApiError ? err.code : "";
       const status = err instanceof ApiError ? err.statusCode : 0;

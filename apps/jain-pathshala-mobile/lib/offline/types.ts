@@ -48,16 +48,40 @@ export type PendingShivirScanOp = {
   submission_op_id: string;
   shivir_session_id: string;
   qr_payload: string;
-  qr_signature?: string;
+  /**
+   * Required in practice: the server rejects a scan without a signature as
+   * ERR_VALIDATION_FAILED, which is terminal — so an unsigned queued scan would
+   * be permanently lost rather than retried.
+   */
+  qr_signature: string;
+  /** Defaults to "present" server-side; carried so an offline scan keeps its intent. */
+  scan_kind?: "present" | "check_in" | "check_out";
   scanned_at: string;
   client_timestamp: string;
+};
+
+/** One proof file, matching the online submit route's media[] wire shape. */
+export type PendingProofMedia = {
+  url: string;
+  /** Wire placeholder — the server derives the real kind from upload_objects. */
+  kind: "photo" | "video" | "audio";
+  mime?: string;
+  size_bytes?: number;
 };
 
 export type PendingNiyamSubmissionOp = {
   submission_op_id: string;
   niyam_id: string;
   student_id: string;
+  /** @deprecated single-proof wire form — prefer `media`. Sent as media[0]. */
   proof_asset_id?: string;
+  /**
+   * Every proof the niyam allows (up to max_uploads). A single proof_asset_id
+   * could not represent a multi-proof submission, so offline submissions would
+   * have silently dropped files the parent recorded.
+   */
+  media?: PendingProofMedia[];
+  notes?: string;
   client_timestamp: string;
 };
 

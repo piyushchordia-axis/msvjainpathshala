@@ -1,6 +1,7 @@
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import { Alert, Switch, View } from "react-native";
+import { useQueryClient } from "@tanstack/react-query";
 import { t } from "@workspace/i18n";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
@@ -41,6 +42,8 @@ export default function ParentProfile() {
       : ROLE_LABELS[user.role]?.en ?? user.role
     : "";
 
+  const qc = useQueryClient();
+
   async function setGalleryVisibility(optIn: boolean) {
     if (!user || galleryBusy) return;
     setGalleryBusy(true);
@@ -50,6 +53,10 @@ export default function ParentProfile() {
         user: SessionUser;
       }>("/v1/me/gallery-visibility", { opt_in: optIn });
       await updateUser(res.user);
+      // The toggle's own copy promises photos disappear immediately. Consent is
+      // resolved server-side at query time (Q6), so the only thing standing
+      // between the parent and that promise is our own 5-minute staleTime.
+      await qc.invalidateQueries({ queryKey: ["public", "gallery"] });
     } catch (err) {
       Alert.alert(
         hi ? "सहमति सहेजी नहीं गई" : "Could not save",

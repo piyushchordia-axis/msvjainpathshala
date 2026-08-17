@@ -40,15 +40,27 @@ import { ApiError } from "@/lib/api";
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/** Local calendar date as YYYY-MM-DD, offset by `days`. */
+function isoDateOffset(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() + days);
+  const m = `${d.getMonth() + 1}`.padStart(2, "0");
+  const day = `${d.getDate()}`.padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
 function NotifyLeaveModal({
   open,
   onClose,
   studentId,
+  holidays = [],
   onLeaveSent,
 }: {
   open: boolean;
   onClose: () => void;
   studentId: string;
+  /** Published centre holidays, so we don't ask for a notice nobody can use. */
+  holidays?: Array<{ holiday_date: string; reason?: string | null }>;
   /** Fired after a successful leave notice (parent celebrates on the screen behind). */
   onLeaveSent?: () => void;
 }) {
@@ -58,6 +70,18 @@ function NotifyLeaveModal({
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [reason, setReason] = useState("");
+  const todayIso = isoDateOffset(0);
+
+  /** Typing YYYY-MM-DD on a phone is hostile; these cover the common cases. */
+  const quickPicks: { label: string; start: string; end: string }[] = [
+    { label: hi ? "आज" : "Today", start: todayIso, end: todayIso },
+    { label: hi ? "कल" : "Tomorrow", start: isoDateOffset(1), end: isoDateOffset(1) },
+    {
+      label: hi ? "अगले 3 दिन" : "Next 3 days",
+      start: isoDateOffset(1),
+      end: isoDateOffset(3),
+    },
+  ];
 
   const inputStyle = {
     fontFamily: bodyFamily(hi),
@@ -76,10 +100,42 @@ function NotifyLeaveModal({
       Alert.alert(
         hi ? "तिथि जाँचें" : "Check the dates",
         hi
-          ? "शुरू और समाप्ति तिथि YYYY-MM-DD में लिखें।"
-          : "Enter start and end dates as YYYY-MM-DD.",
+          ? "शुरू और समाप्ति तिथि YYYY-MM-DD में लिखें — जैसे 2026-08-20। नीचे के बटन भी उपयोग करें।"
+          : "Enter start and end dates as YYYY-MM-DD — for example 2026-08-20. You can also use the buttons below.",
       );
       return;
+    }
+    // AT4 pre-notification is inherently forward-looking: a notice for a day
+    // that has already passed can never be consumed by the marking UI.
+    if (startDate < todayIso) {
+      Alert.alert(
+        hi ? "तिथि जाँचें" : "Check the dates",
+        hi
+          ? "अवकाश की सूचना आने वाले दिनों के लिए ही दी जा सकती है।"
+          : "Leave can only be notified for today or a future date.",
+      );
+      return;
+    }
+    // If every day in the range is already a published holiday, the notice can
+    // never be consumed — say so instead of accepting a silent no-op that the
+    // parent later raises a service request about.
+    if (DATE_RE.test(startDate) && DATE_RE.test(endDate) && endDate >= startDate) {
+      const holidaySet = new Set(holidays.map((h) => h.holiday_date));
+      const days: string[] = [];
+      for (const d = new Date(startDate); ; d.setDate(d.getDate() + 1)) {
+        const iso = d.toISOString().slice(0, 10);
+        if (iso > endDate) break;
+        days.push(iso);
+      }
+      if (days.length > 0 && days.every((d) => holidaySet.has(d))) {
+        Alert.alert(
+          hi ? "उन दिनों अवकाश है" : "Those days are already a holiday",
+          hi
+            ? "चुने गए सभी दिन केंद्र के घोषित अवकाश हैं — उस दिन कक्षा नहीं है, इसलिए सूचना की आवश्यकता नहीं।"
+            : "Every day you picked is already a centre holiday, so there is no class to miss — no notice needed.",
+        );
+        return;
+      }
     }
     if (endDate < startDate) {
       Alert.alert(
@@ -157,6 +213,30 @@ function NotifyLeaveModal({
               ? "गुरुजी को पहले से बता दें — उस दिन उपस्थिति में क्षमा के रूप में दिख सकता है।"
               : "Tell Guruji in advance — covered days may show as excused when attendance is marked."}
           </Body>
+          {/* Most leave notices are today / tomorrow / a short block. Typing a
+              full ISO date on a phone keypad is the worst way to say that. */}
+          <Row style={{ gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+            {quickPicks.map((q) => (
+              <Pressable
+                key={q.label}
+                onPress={() => {
+                  setStartDate(q.start);
+                  setEndDate(q.end);
+                }}
+                style={{
+                  borderWidth: 1,
+                  borderColor: startDate === q.start && endDate === q.end ? c.primary : c.border,
+                  backgroundColor:
+                    startDate === q.start && endDate === q.end ? c.accent : c.card,
+                  borderRadius: 999,
+                  paddingVertical: 6,
+                  paddingHorizontal: 12,
+                }}
+              >
+                <Body style={{ fontSize: 13 }}>{q.label}</Body>
+              </Pressable>
+            ))}
+          </Row>
           <Body muted style={{ fontSize: 12, marginBottom: 4, lineHeight: 22 }}>
             {hi ? "शुरू तिथि (YYYY-MM-DD)" : "Start date (YYYY-MM-DD)"}
           </Body>
@@ -377,6 +457,10 @@ export default function MyAttendanceScreen() {
             open={leaveOpen}
             onClose={() => setLeaveOpen(false)}
             studentId={activeStudentId}
+            // The screen behind already knows the centre's published holidays;
+            // the modal used to ignore them, so a parent could file a notice for
+            // days that have no session — which AT4 can never consume.
+            holidays={holidayRows}
             onLeaveSent={() => {
               celebrate({
                 message: hi ? "अवकाश सूचित" : "Leave noted",

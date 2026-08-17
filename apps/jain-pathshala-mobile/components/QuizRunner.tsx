@@ -8,7 +8,7 @@
  * Multi-select is supported: a question is "answered" once one or more options
  * are selected, matching the server's set-equality grading.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useColors } from "@/hooks/useColors";
@@ -23,6 +23,7 @@ export function QuizRunner({
   submitting,
   initialAnswers,
   onSubmit,
+  onAutosave,
   onCancel,
 }: {
   titleEn: string;
@@ -33,6 +34,12 @@ export function QuizRunner({
   initialAnswers?: Record<string, number[]>;
   /** Called with questionId -> selected option indices. */
   onSubmit: (answers: Record<string, number[]>) => void;
+  /**
+   * Debounced persistence of in-progress answers. Without it, answers lived only
+   * here — an app kill mid-quiz lost every one AND consumed the attempt, because
+   * the server had recorded a start with `answers: {}`.
+   */
+  onAutosave?: (answers: Record<string, number[]>) => void;
   onCancel: () => void;
 }) {
   const c = useColors();
@@ -43,7 +50,20 @@ export function QuizRunner({
     () => initialAnswers ?? {},
   );
 
+  // Debounce so a burst of taps is one write, not one per tap.
+  const autosaveRef = useRef(onAutosave);
+  autosaveRef.current = onAutosave;
+  const dirtyRef = useRef(false);
+  useEffect(() => {
+    if (!dirtyRef.current) return;
+    const t = setTimeout(() => {
+      autosaveRef.current?.(answers);
+    }, 1500);
+    return () => clearTimeout(t);
+  }, [answers]);
+
   function toggleOption(questionId: string, optionIndex: number) {
+    dirtyRef.current = true;
     setAnswers((prev) => {
       const current = prev[questionId] ?? [];
       const next = current.includes(optionIndex)

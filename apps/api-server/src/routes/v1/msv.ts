@@ -19,7 +19,12 @@ import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
-import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
+import {
+  clampLimit,
+  inScope,
+  ownedStudentsCondition,
+  scopedCentreFilter,
+} from "../../lib/route-helpers";
 import { allocateMsvCode } from "../../lib/entity-codes";
 
 const router: IRouter = Router();
@@ -32,7 +37,8 @@ async function ownedStudent(req: Request, id: string) {
   const [row] = await db
     .select({ id: students.id, centre_id: students.centre_id, msv_status: students.msv_status })
     .from(students)
-    .where(and(eq(students.id, id), or(eq(students.parent_id, uid), eq(students.user_id, uid))))
+    // Q11 — shared ownership predicate (excludes soft-deleted and inactive students).
+    .where(and(eq(students.id, id), ownedStudentsCondition(uid)))
     .limit(1);
   return row ?? null;
 }
@@ -180,7 +186,8 @@ router.get("/mine", async (req: Request, res: Response) => {
       msv_status: students.msv_status,
     })
     .from(students)
-    .where(or(eq(students.parent_id, uid), eq(students.user_id, uid)))
+    // Q11 — shared ownership predicate (excludes soft-deleted and inactive students).
+    .where(ownedStudentsCondition(uid))
     .orderBy(students.full_name);
 
   const ids = kids.map((k) => k.id);

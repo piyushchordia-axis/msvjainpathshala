@@ -17,6 +17,7 @@ import {
   useCentreShikshaks,
   useCreateAdminBatch,
 } from "@/lib/queries";
+import { recordStatusLabel } from "@/lib/status-labels";
 import { formatTimeRange } from "@/lib/format";
 import { AGE_GROUPS, formatAgeGroup, formatAgeGroups } from "@workspace/api-zod";
 import { AppHeader } from "@/components/AppHeader";
@@ -386,7 +387,7 @@ export default function BatchesScreen() {
                       {[b.centre_name, formatAgeGroups(b.age_groups, hi ? "hi" : "en")].filter(Boolean).join(" · ") || "—"}
                     </Body>
                   </View>
-                  <Pill tone={active ? "success" : "neutral"} label={b.status} />
+                  <Pill tone={active ? "success" : "neutral"} label={recordStatusLabel(b.status, hi)} />
                 </Row>
                 {schedule ? <Body muted style={{ fontSize: 13, marginTop: 8 }}>{schedule}</Body> : null}
                 <Button

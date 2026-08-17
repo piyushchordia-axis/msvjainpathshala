@@ -40,7 +40,7 @@ import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
 import { upsertIdCardArt } from "../../lib/idcard-render";
 import { auditFromReq } from "../../lib/audit";
 import { storage } from "../../lib/storage";
-import { clampLimit, ownedStudentId } from "../../lib/route-helpers";
+import { clampLimit, ownedStudentId, ownedStudentsCondition } from "../../lib/route-helpers";
 import { studentNiyamAccessWhere } from "../../lib/niyam-audience";
 import { toSessionUser } from "../../lib/session-user";
 import { invalidateAuthUserCache } from "../../lib/auth-user-cache";
@@ -192,7 +192,10 @@ router.get("/children", async (req: Request, res: Response) => {
     .leftJoin(centres, eq(centres.id, students.centre_id))
     .leftJoin(batches, eq(batches.id, students.batch_id))
     .leftJoin(punya_balances, eq(punya_balances.student_id, students.id))
-    .where(and(isNull(students.deleted_at), or(eq(students.parent_id, uid), eq(students.user_id, uid))))
+    // Q11 — one ownership predicate everywhere: soft-deleted AND non-active students
+    // are excluded, matching every other child-scoped route. An inactive child that
+    // still appeared here became the ChildSwitcher default and 404'd every screen.
+    .where(ownedStudentsCondition(uid))
     .orderBy(students.full_name);
 
   ok(
@@ -320,7 +323,11 @@ router.get("/students/:id/punya", async (req: Request, res: Response) => {
     .where(eq(punya_balances.student_id, id))
     .limit(1);
 
-  const txns = await db
+  // The ledger was hard-capped at 50 with no cursor and no has_more, so a student
+  // in their second term could not see how the earlier half of their balance was
+  // earned — and the visible rows did not sum to the headline total.
+  const limit = clampLimit(req.query.limit, 50, 200);
+  const rows = await db
     .select({
       id: punya_transactions.id,
       feature_key: punya_transactions.feature_key,
@@ -331,12 +338,16 @@ router.get("/students/:id/punya", async (req: Request, res: Response) => {
     .from(punya_transactions)
     .where(eq(punya_transactions.student_id, id))
     .orderBy(desc(punya_transactions.created_at))
-    .limit(50);
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const txns = hasMore ? rows.slice(0, limit) : rows;
 
   ok(res, {
     total_points: balance?.total_points ?? 0,
     tier: balance?.tier ?? "jigyasu",
     transactions: txns.map((t) => ({ ...t, created_at: t.created_at.toISOString() })),
+    has_more: hasMore,
   });
 });
 
@@ -439,13 +450,8 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
       })
       .from(students)
       .leftJoin(centres, eq(centres.id, students.centre_id))
-      .where(
-        and(
-          eq(students.id, studentId),
-          isNull(students.deleted_at),
-          or(eq(students.parent_id, uid), eq(students.user_id, uid)),
-        ),
-      )
+      // Q11 — shared ownership predicate (excludes soft-deleted and inactive students).
+      .where(and(eq(students.id, studentId), ownedStudentsCondition(uid)))
       .limit(1);
     if (!owned) {
       fail(res, 404, "ERR_NOT_FOUND", "Student not found.");

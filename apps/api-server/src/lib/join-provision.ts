@@ -19,7 +19,7 @@ import {
 } from "@workspace/db";
 import { and, eq, isNull } from "drizzle-orm";
 import { allocateParentCode, allocateStudentCode } from "./entity-codes";
-import type { ErrorCode } from "@workspace/api-zod";
+import { meetsStudentLoginAge, type ErrorCode } from "@workspace/api-zod";
 import { syncTeamMemberForUser } from "./team-members-sync";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -246,9 +246,20 @@ export async function provisionStudentRegistration(
     const student_code = await allocateStudentCode(tx, city.code);
 
     // Optional distinct student phone → OTP login (users.role=student) linked via user_id.
+    //
+    // Age gate (MIN_STUDENT_LOGIN_AGE). A younger child is still enrolled
+    // normally; they simply get no independent login and reach the app through
+    // their parent. We deliberately do NOT throw here: this runs inside the
+    // sanchalak/city_admin approval transaction, so failing would reject a
+    // legitimate under-age enrolment outright.
+    //
+    // Note this is a LOWER bar than MIN_STUDENT_VIEW_AGE (Q4): holding a login is
+    // not the same as being the authoritative writer of your own progress record.
+    const studentDob = dobFromAge(reg.age);
+    const ageEligibleForOwnLogin = meetsStudentLoginAge(studentDob);
     let studentUserId: string | null = null;
     const studentDigits = (reg.mobile ?? "").replace(/\D/g, "");
-    if (studentDigits.length === 10 && studentDigits !== reg.parent_mobile) {
+    if (ageEligibleForOwnLogin && studentDigits.length === 10 && studentDigits !== reg.parent_mobile) {
       const studentPhone = toE164India(studentDigits);
       const existingStudentUser = await findUserByPhone(tx, studentPhone);
       if (existingStudentUser) {
@@ -300,7 +311,8 @@ export async function provisionStudentRegistration(
         student_code,
         full_name: reg.name,
         gender: mapGender(reg.sex),
-        dob: dobFromAge(reg.age),
+        // Same value the Q4 login gate above was evaluated against — one source of truth.
+        dob: studentDob,
         age_group: ageGroupFromAge(reg.age),
         centre_id: reg.centre_id,
         photo_url: reg.photo_url,

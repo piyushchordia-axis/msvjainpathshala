@@ -1,28 +1,23 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { FlatList, Platform, Pressable, RefreshControl, View, type ListRenderItem } from "react-native";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
-import { usePunya } from "@/lib/queries";
+import { usePunya, PUNYA_LEDGER_PAGE } from "@/lib/queries";
 import type { PunyaTransaction } from "@/lib/types";
 import { formatDate } from "@/lib/format";
+import { punyaFeatureLabel } from "@/lib/punya-labels";
 import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { Body, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
-
-function humanize(key: string): string {
-  return key
-    .split(/[_\s]+/)
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-}
 
 export default function StudentPunya() {
   const c = useColors();
   const { hi } = useLocale();
   const { activeStudentId, activeChild, loading, isError, refetch } = useSessionView();
-  const punya = usePunya(activeStudentId ?? undefined);
+  // Grows on "show older", so the whole ledger is reachable.
+  const [limit, setLimit] = useState(PUNYA_LEDGER_PAGE);
+  const punya = usePunya(activeStudentId ?? undefined, { limit });
 
   const summary = punya.data;
   const transactions = summary?.transactions ?? [];
@@ -47,7 +42,7 @@ export default function StudentPunya() {
           }}
         >
           <View style={{ flex: 1, paddingRight: 10 }}>
-            <Body style={{ fontSize: 14 }}>{humanize(item.feature_key)}</Body>
+            <Body style={{ fontSize: 14 }}>{punyaFeatureLabel(item.feature_key, hi)}</Body>
             {item.note ? (
               <Body muted style={{ fontSize: 12, marginTop: 1 }} numberOfLines={2}>
                 {item.note}
@@ -64,7 +59,9 @@ export default function StudentPunya() {
         </Row>
       );
     },
-    [c.border, c.errorText, c.successText, transactions.length],
+    // `hi` matters now that the row label is localised — without it the ledger
+    // would keep rendering the previous language after a switch.
+    [c.border, c.errorText, c.successText, transactions.length, hi],
   );
 
   const keyExtractor = useCallback((item: PunyaTransaction) => item.id, []);
@@ -122,6 +119,26 @@ export default function StudentPunya() {
                     renderItem={renderTransaction}
                     scrollEnabled={false}
                   />
+                  {/* Never present a truncated ledger as complete — the rows
+                      above will not add up to the headline total — and give the
+                      student a way to actually reach the rest. */}
+                  {summary?.has_more ? (
+                    <Pressable
+                      onPress={() => setLimit((n) => n + PUNYA_LEDGER_PAGE)}
+                      disabled={punya.isFetching}
+                      style={{ paddingVertical: 12, alignItems: "center" }}
+                    >
+                      <Body style={{ fontSize: 13, color: c.primary }}>
+                        {punya.isFetching
+                          ? hi
+                            ? "लोड हो रहा है…"
+                            : "Loading…"
+                          : hi
+                            ? `पुराने लेन-देन देखें (${transactions.length} दिख रहे हैं)`
+                            : `Show older entries (${transactions.length} shown)`}
+                      </Body>
+                    </Pressable>
+                  ) : null}
                 </Card>
               )}
             </>

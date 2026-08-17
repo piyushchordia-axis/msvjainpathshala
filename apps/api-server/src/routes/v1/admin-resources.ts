@@ -1101,11 +1101,20 @@ router.get("/attendance/centres/:id/log", async (req: Request, res: Response) =>
     windowDays: fromExplicit || toExplicit ? null : 180,
   });
 
+  // The log is centre-scoped, but MARKING is batch-bound for a shikshak
+  // (inBatchWriteScope). Without this flag the UI showed a Mark button on every
+  // row and the Guruji only discovered the 403 after filling in a whole roster.
+  // Same disabled-not-hidden treatment Q12 already uses for niyam review.
+  const items = result.items.map((s) => ({
+    ...s,
+    can_mark: inBatchWriteScope(scope, (s as { batch_id?: string | null }).batch_id ?? null, centreId),
+  }));
+
   ok(
     res,
-    { items: result.items },
+    { items },
     {
-      count: result.items.length,
+      count: items.length,
       has_more: result.hasMore,
       next_cursor: result.nextCursor,
       window_days: result.windowDays,

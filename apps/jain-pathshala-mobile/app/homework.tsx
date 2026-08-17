@@ -1,5 +1,15 @@
-import { useMemo, useState } from "react";
-import { Alert, Linking, Pressable, Text, TextInput, View } from "react-native";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Alert,
+  FlatList,
+  Linking,
+  Platform,
+  Pressable,
+  RefreshControl,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { Image } from "expo-image";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
@@ -13,6 +23,10 @@ import {
 } from "@/lib/queries";
 import { resolveUploadUrl } from "@/lib/api";
 import { formatDate } from "@/lib/format";
+import { useQueueSyncOps, primarySyncOp } from "@/hooks/useQueueSyncOps";
+import { QUEUE_KEYS } from "@/lib/offline/queue-keys";
+import { retryOp } from "@/lib/offline/sync-engine";
+import { SyncOpStatus } from "@/components/SyncOpStatus";
 import { bodyFamily } from "@/constants/typography";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { HomeworkProofPicker } from "@/components/HomeworkProofPicker";
@@ -314,8 +328,32 @@ function HomeworkCard({
   const status = row.status.toLowerCase();
   const canSubmit = isOpenStatus(status);
   const rowStudentId = row.student_id ?? activeStudentId;
+  // Fall back to EN rather than rendering blank: rows authored before bilingual
+  // support have no Hindi, and an empty card is worse than an English one.
+  const shownTitle = (hi ? row.title_hi : null) ?? row.title;
+  const shownDescription = (hi ? row.description_hi : null) ?? row.description;
+
   const worksheetUri = resolveUploadUrl(row.attachment_url);
   const showWorksheetImage = Boolean(worksheetUri && row.attachment_url && isImageUploadUrl(row.attachment_url));
+
+  // Queued submissions and acknowledgements were invisible once the submit panel
+  // closed: reopening the screen showed "Pending" again, indistinguishable from
+  // never having submitted, and a `failed` op had no retry affordance at all.
+  const { ops: syncOps, refresh: refreshSync } = useQueueSyncOps(
+    [QUEUE_KEYS.homework_submissions, QUEUE_KEYS.acknowledgements],
+    useCallback(
+      (payload: unknown) => {
+        const p = payload as { assignment_id?: string; student_id?: string; entity_id?: string };
+        if (p.assignment_id) {
+          return p.assignment_id === row.assignment_id && p.student_id === rowStudentId;
+        }
+        // Acknowledgements carry only the submission id.
+        return !!p.entity_id && p.entity_id === row.id;
+      },
+      [row.assignment_id, row.id, rowStudentId],
+    ),
+  );
+  const syncOp = primarySyncOp(syncOps);
 
   return (
     <Card>
@@ -326,7 +364,7 @@ function HomeworkCard({
               {row.student_name}
             </Body>
           ) : null}
-          <Title style={{ fontSize: 16 }}>{row.title}</Title>
+          <Title style={{ fontSize: 16 }}>{shownTitle}</Title>
           {(hi ? row.curriculum_topic_hi ?? row.curriculum_topic_en : row.curriculum_topic_en) ? (
             <Body muted style={{ fontSize: 12, marginTop: 2 }}>
               {hi ? row.curriculum_topic_hi ?? row.curriculum_topic_en : row.curriculum_topic_en}
@@ -340,6 +378,22 @@ function HomeworkCard({
         <Pill label={statusLabel(row.status, hi)} tone={statusTone(row.status)} />
       </Row>
 
+      {syncOp ? (
+        <View style={{ marginTop: 10 }}>
+          <SyncOpStatus
+            state={syncOp.state}
+            error={syncOp.error}
+            onRetry={
+              syncOp.state === "failed"
+                ? () => {
+                    void retryOp(syncOp.queue, syncOp.submission_op_id).then(refreshSync);
+                  }
+                : undefined
+            }
+          />
+        </View>
+      ) : null}
+
       {row.late ? (
         <Row style={{ marginTop: 10 }}>
           <Pill label={hi ? "विलंबित" : "Late"} tone="error" />
@@ -352,9 +406,9 @@ function HomeworkCard({
         </Row>
       ) : null}
 
-      {row.description ? (
+      {shownDescription ? (
         <Body muted style={{ marginTop: 10, fontSize: 13 }}>
-          {row.description}
+          {shownDescription}
         </Body>
       ) : null}
 
@@ -485,128 +539,197 @@ export default function HomeworkScreen() {
 
   const visible = tab === "todo" ? todoRows : submittedRows;
 
-  return (
-    <ActivityThemed accent="homework">
-    <Screen
-      refreshing={homework.isRefetching}
-      onRefresh={() => {
-        refetch();
-        homework.refetch();
-      }}
-    >
-      {Celebration}
+  // Nested FlatList with scrollEnabled=false never fired onEndReached. The list
+  // is now the scroller. Client-side todo/submitted filtering can also empty the
+  // first page while older pages still hold matching rows — keep draining.
+  useEffect(() => {
+    if (
+      visible.length === 0 &&
+      homework.hasNextPage &&
+      !homework.isFetchingNextPage &&
+      !homework.isLoading &&
+      !homework.isError
+    ) {
+      void homework.fetchNextPage();
+    }
+  }, [
+    visible.length,
+    homework.hasNextPage,
+    homework.isFetchingNextPage,
+    homework.isLoading,
+    homework.isError,
+    homework.fetchNextPage,
+  ]);
+
+  const onRefresh = useCallback(() => {
+    refetch();
+    void homework.refetch();
+  }, [refetch, homework]);
+
+  const listHeader = (
+    <>
       <Title style={{ fontSize: 22 }}>{hi ? "गृहकार्य" : "Homework"}</Title>
-      <Body muted style={{ marginTop: -4 }}>
+      <Body muted style={{ marginTop: -4, marginBottom: 10 }}>
         {hi
           ? "लंबित कार्य और पहले प्रस्तुत गृहकार्य"
           : "Open work and past submissions"}
       </Body>
-
-      {loading ? (
-        <StateView status="loading" emptyText="" />
-      ) : !activeStudentId || !activeChild ? (
-        <StateView
-          status="empty"
-          emptyText={
-            hi
-              ? "आपकी विद्यार्थी प्रोफ़ाइल अभी तैयार नहीं है।"
-              : "Your student profile isn't ready yet."
-          }
-        />
-      ) : (
-        <>
-          <ChildSwitcher
-            includeAll={children.length > 1}
-            allSelected={allChildren}
-            onSelectAll={() => setAllChildren(true)}
-            onSelectChild={(id) => {
-              setAllChildren(false);
-              setActiveStudentId(id);
-            }}
-          />
-
-          <Row style={{ gap: 8, marginBottom: 14, marginTop: 4 }}>
-            {(
-              [
-                {
-                  key: "todo" as const,
-                  label: hi
-                    ? `करना है (${todoRows.length})`
-                    : `To do (${todoRows.length})`,
-                },
-                {
-                  key: "submitted" as const,
-                  label: hi
-                    ? `प्रस्तुत (${submittedRows.length})`
-                    : `Submitted (${submittedRows.length})`,
-                },
-              ] as const
-            ).map((t) => {
-              const active = tab === t.key;
-              return (
-                <Pressable
-                  key={t.key}
-                  onPress={() => setTab(t.key)}
-                  style={{
-                    backgroundColor: active ? c.primary : c.muted,
-                    borderRadius: 999,
-                    paddingHorizontal: 14,
-                    paddingVertical: 8,
-                  }}
-                >
-                  <Text
-                    style={{
-                      fontFamily: bodyFamily(hi, "semibold"),
-                      fontSize: 13,
-                      color: active ? c.primaryForeground : c.mutedForeground,
-                    }}
-                  >
-                    {t.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </Row>
-
-          {homework.isLoading ? (
-            <StateView status="loading" emptyText="" />
-          ) : homework.isError ? (
-            <StateView
-              status="error"
-              emptyText=""
-              errorText={hi ? "गृहकार्य लोड नहीं हुआ।" : "Could not load homework."}
-              onRetry={homework.refetch}
-              retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
-            />
-          ) : visible.length === 0 ? (
-            <StateView
-              status="empty"
-              emptyText={
-                tab === "todo"
-                  ? hi
-                    ? "अभी कोई लंबित गृहकार्य नहीं है।"
-                    : "No open homework right now."
-                  : hi
-                    ? "अभी कोई प्रस्तुत गृहकार्य नहीं है।"
-                    : "No submitted homework yet."
-              }
-            />
-          ) : (
-            visible.map((row) => (
-              <HomeworkCard
-                key={row.id}
-                row={row}
-                allChildren={allChildren}
-                activeStudentId={activeStudentId}
-                onSubmitted={() => {
-                  celebrate({ message: hi ? "बहुत अच्छा" : "Well done" });
-                  void homework.refetch();
-                  setTab("submitted");
+      <ChildSwitcher
+        includeAll={children.length > 1}
+        allSelected={allChildren}
+        onSelectAll={() => setAllChildren(true)}
+        onSelectChild={(id) => {
+          setAllChildren(false);
+          setActiveStudentId(id);
+        }}
+      />
+      <Row style={{ gap: 8, marginBottom: 14, marginTop: 4 }}>
+        {(
+          [
+            {
+              key: "todo" as const,
+              label: hi
+                ? `करना है (${todoRows.length})`
+                : `To do (${todoRows.length})`,
+            },
+            {
+              key: "submitted" as const,
+              label: hi
+                ? `प्रस्तुत (${submittedRows.length})`
+                : `Submitted (${submittedRows.length})`,
+            },
+          ] as const
+        ).map((t) => {
+          const active = tab === t.key;
+          return (
+            <Pressable
+              key={t.key}
+              onPress={() => setTab(t.key)}
+              style={{
+                backgroundColor: active ? c.primary : c.muted,
+                borderRadius: 999,
+                paddingHorizontal: 14,
+                paddingVertical: 8,
+              }}
+            >
+              <Text
+                style={{
+                  fontFamily: bodyFamily(hi, "semibold"),
+                  fontSize: 13,
+                  color: active ? c.primaryForeground : c.mutedForeground,
                 }}
-              />
-            ))
+              >
+                {t.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </Row>
+    </>
+  );
+
+  return (
+    <ActivityThemed accent="homework">
+    <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0 }}>
+      {Celebration}
+      {loading ? (
+        <View style={{ paddingHorizontal: 18, paddingTop: 8 }}>
+          <StateView status="loading" emptyText="" />
+        </View>
+      ) : !activeStudentId || !activeChild ? (
+        <View style={{ paddingHorizontal: 18, paddingTop: 8 }}>
+          <StateView
+            status="empty"
+            emptyText={
+              hi
+                ? "आपकी विद्यार्थी प्रोफ़ाइल अभी तैयार नहीं है।"
+                : "Your student profile isn't ready yet."
+            }
+          />
+        </View>
+      ) : homework.isLoading && rows.length === 0 ? (
+        <View style={{ paddingHorizontal: 18, paddingTop: 8 }}>
+          {listHeader}
+          <StateView status="loading" emptyText="" />
+        </View>
+      ) : homework.isError && rows.length === 0 ? (
+        <View style={{ paddingHorizontal: 18, paddingTop: 8 }}>
+          {listHeader}
+          <StateView
+            status="error"
+            emptyText=""
+            errorText={hi ? "गृहकार्य लोड नहीं हुआ।" : "Could not load homework."}
+            onRetry={homework.refetch}
+            retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
+          />
+        </View>
+      ) : (
+        <FlatList
+          data={visible}
+          keyExtractor={(row) => row.id}
+          ListHeaderComponent={listHeader}
+          renderItem={({ item }) => (
+            <HomeworkCard
+              row={item}
+              allChildren={allChildren}
+              activeStudentId={activeStudentId}
+              onSubmitted={() => {
+                celebrate({ message: hi ? "बहुत अच्छा" : "Well done" });
+                void homework.refetch();
+                setTab("submitted");
+              }}
+            />
           )}
-        </>
+          ItemSeparatorComponent={() => <View style={{ height: 12 }} />}
+          ListEmptyComponent={
+            homework.isFetchingNextPage ? null : (
+              <StateView
+                status="empty"
+                emptyText={
+                  tab === "todo"
+                    ? hi
+                      ? "अभी कोई लंबित गृहकार्य नहीं है।"
+                      : "No open homework right now."
+                    : hi
+                      ? "अभी कोई प्रस्तुत गृहकार्य नहीं है।"
+                      : "No submitted homework yet."
+                }
+              />
+            )
+          }
+          ListFooterComponent={
+            homework.isFetchingNextPage ? (
+              <Body muted style={{ fontSize: 12, textAlign: "center", paddingVertical: 12 }}>
+                {hi ? "और लोड हो रहा है…" : "Loading more…"}
+              </Body>
+            ) : null
+          }
+          onEndReachedThreshold={0.4}
+          onEndReached={() => {
+            if (homework.hasNextPage && !homework.isFetchingNextPage) {
+              void homework.fetchNextPage();
+            }
+          }}
+          refreshControl={
+            <RefreshControl
+              refreshing={!!homework.isRefetching && !homework.isFetchingNextPage}
+              onRefresh={onRefresh}
+              tintColor={c.primary}
+              colors={[c.primary]}
+            />
+          }
+          contentContainerStyle={{
+            paddingHorizontal: 18,
+            paddingTop: 8,
+            paddingBottom: 40,
+          }}
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          initialNumToRender={6}
+          maxToRenderPerBatch={6}
+          windowSize={7}
+          removeClippedSubviews={Platform.OS !== "web"}
+        />
       )}
     </Screen>
     </ActivityThemed>

@@ -20,9 +20,11 @@ export default function CompetitionsScreen() {
 
   const rows = competitions.data?.items ?? [];
 
-  // Mark competitions registered in this session so the button flips to a
-  // confirmed pill without waiting for a list refetch.
+  // Optimistic flip keyed by (competition, child). Keying on competition alone
+  // meant registering one child marked the competition registered for ALL of
+  // them, so a sibling could never be registered from this screen.
   const [registered, setRegistered] = useState<Record<string, true>>({});
+  const regKey = (competitionId: string, studentId: string) => `${competitionId}:${studentId}`;
 
   function onRegister(id: string) {
     if (!activeStudentId) return;
@@ -30,7 +32,7 @@ export default function CompetitionsScreen() {
       { id, student_id: activeStudentId },
       {
         onSuccess: () => {
-          setRegistered((prev) => ({ ...prev, [id]: true }));
+          setRegistered((prev) => ({ ...prev, [regKey(id, activeStudentId)]: true }));
           Alert.alert(
             hi ? "पंजीकरण सफल" : "Registered",
             hi ? "आपका पंजीकरण हो गया है।" : "You're registered for this competition.",
@@ -112,7 +114,11 @@ export default function CompetitionsScreen() {
               !comp.eligible_student_ids ||
               comp.eligible_student_ids.length === 0 ||
               comp.eligible_student_ids.includes(activeStudentId);
-            const isRegistered = !!registered[comp.id];
+            // Server truth first, optimistic flip second — both per-child.
+            const isRegistered =
+              (!!activeStudentId &&
+                (comp.registered_student_ids ?? []).includes(activeStudentId)) ||
+              (!!activeStudentId && !!registered[regKey(comp.id, activeStudentId)]);
             const pending = register.isPending && register.variables?.id === comp.id;
 
             return (

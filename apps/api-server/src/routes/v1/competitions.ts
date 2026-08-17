@@ -27,7 +27,7 @@ import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope } from "../../lib/scope";
 import { awardPunya } from "../../lib/punya";
 import { auditFromReq } from "../../lib/audit";
-import { clampLimit } from "../../lib/route-helpers";
+import { clampLimit, ownedStudentsCondition } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -85,7 +85,8 @@ async function ownedStudents(uid: string) {
       msv_status: students.msv_status,
     })
     .from(students)
-    .where(sql`(${students.parent_id} = ${uid} OR ${students.user_id} = ${uid})`);
+    // Q11 — shared ownership predicate (excludes soft-deleted and inactive students).
+    .where(ownedStudentsCondition(uid));
 }
 
 /** The city of a centre, or null. */
@@ -545,6 +546,26 @@ router.get("/open", async (req: Request, res: Response) => {
     .where(and(eq(competitions.status, "open"), inArray(competitions.city_id, cityIds)))
     .orderBy(asc(competitions.event_date));
 
+  // Which (competition, child) pairs are already registered. Without this the
+  // client tracked registration in local state keyed only by competition id, so
+  // registering child A showed child B as registered too — and blocked them.
+  const kidIds = kids.map((k) => k.id);
+  const registeredRows = kidIds.length
+    ? await db
+        .select({
+          competition_id: competition_registrations.competition_id,
+          student_id: competition_registrations.student_id,
+        })
+        .from(competition_registrations)
+        .where(inArray(competition_registrations.student_id, kidIds))
+    : [];
+  const registeredByCompetition = new Map<string, string[]>();
+  for (const r of registeredRows) {
+    const list = registeredByCompetition.get(r.competition_id) ?? [];
+    list.push(r.student_id);
+    registeredByCompetition.set(r.competition_id, list);
+  }
+
   // For each competition, list which of the caller's children are eligible.
   const items = rows
     .map((c) => {
@@ -571,6 +592,7 @@ router.get("/open", async (req: Request, res: Response) => {
         participant_points: c.participant_points,
         max_participants: c.max_participants,
         eligible_student_ids: eligibleChildren.map((k) => k.id),
+        registered_student_ids: registeredByCompetition.get(c.id) ?? [],
       };
     })
     .filter((c) => c.eligible_student_ids.length > 0);

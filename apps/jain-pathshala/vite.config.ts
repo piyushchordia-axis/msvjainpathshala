@@ -5,11 +5,14 @@ import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 import { visualizer } from "rollup-plugin-visualizer";
 
-const rawPort = process.env.PORT;
+const fromPort = process.env.PORT;
+const rawPort =
+  process.env.WEB_PORT ??
+  (fromPort && fromPort !== "8080" ? fromPort : "5174");
 
 if (!rawPort) {
   throw new Error(
-    "PORT environment variable is required but was not provided.",
+    "WEB_PORT or PORT environment variable is required but was not provided.",
   );
 }
 

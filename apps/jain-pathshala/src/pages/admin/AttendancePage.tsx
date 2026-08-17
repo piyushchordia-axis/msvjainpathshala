@@ -25,10 +25,14 @@ interface SessionRow {
   centre_name: string;
   present_count: number;
   total_count: number;
+  /** False when the session's batch is outside the caller's write scope. */
+  can_mark?: boolean;
 }
 
 type AttStatus = 'present' | 'absent' | 'late' | 'excused';
 const ATT_STATUSES: AttStatus[] = ['present', 'absent', 'late', 'excused'];
+/** Sentinel for "no observation recorded" — Radix Select cannot hold an empty value. */
+const UNMARKED = '__unmarked__';
 
 interface RosterRow {
   student_id: string;
@@ -73,20 +77,28 @@ function MarkAttendanceDialog({
   const [error, setError] = useState<string | null>(null);
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [statuses, setStatuses] = useState<Record<string, AttStatus>>({});
+  /** Minted once per dialog open so a retry is the same submission (AT16). */
+  const [submissionOpId, setSubmissionOpId] = useState<string>(() => ulid());
 
   useEffect(() => {
     if (!open || !sessionId) return;
     setLoading(true);
     setError(null);
     setDetail(null);
+    setStatuses({});
+    setSubmissionOpId(ulid());
     apiGet<SessionDetail>(
       `/v1/admin/attendance/centres/${centreId}/log?session_id=${encodeURIComponent(sessionId)}`,
     )
       .then((d) => {
         setDetail(d);
+        // AT6 — silence is not absence, and it is not presence either. Only an
+        // already-marked status or a pre-notified absence (AT4) seeds a value;
+        // everyone else stays unmarked until the Guruji actually observes them.
         const init: Record<string, AttStatus> = {};
         for (const r of d.roster) {
-          init[r.student_id] = r.status ?? r.suggested_status ?? 'present';
+          const seeded = r.status ?? r.suggested_status;
+          if (seeded) init[r.student_id] = seeded;
         }
         setStatuses(init);
       })
@@ -94,21 +106,32 @@ function MarkAttendanceDialog({
       .finally(() => setLoading(false));
   }, [open, sessionId, centreId]);
 
+  /** Only students the Guruji actually marked. AT6 — never infer the rest. */
+  const marked = detail
+    ? detail.roster.filter((r) => statuses[r.student_id] !== undefined)
+    : [];
+
   async function submit() {
-    if (!detail || !sessionId) return;
+    if (!detail || !sessionId || marked.length === 0) return;
     setBusy(true);
     try {
       const markedAt = new Date().toISOString();
       await apiPost(`/v1/sessions/${sessionId}/attendance`, {
-        submission_op_id: ulid(),
+        // Stable for the life of this dialog: re-minting per click made a retry
+        // after a timeout a second, non-idempotent submission (AT16).
+        submission_op_id: submissionOpId,
         marked_at: markedAt,
-        marks: detail.roster.map((r) => ({
+        marks: marked.map((r) => ({
           student_id: r.student_id,
-          status: statuses[r.student_id] ?? 'present',
+          status: statuses[r.student_id]!,
           client_op_id: ulid(),
         })),
       });
-      toast.success('Attendance saved.');
+      toast.success(
+        marked.length === detail.roster.length
+          ? 'Attendance saved.'
+          : `Attendance saved for ${marked.length} of ${detail.roster.length} students.`,
+      );
       onOpenChange(false);
       onMarked();
     } catch (err) {
@@ -150,11 +173,21 @@ function MarkAttendanceDialog({
                       </td>
                       <td className="px-3 py-2">
                         <Select
-                          value={statuses[r.student_id] ?? 'present'}
-                          onValueChange={(v) => setStatuses((prev) => ({ ...prev, [r.student_id]: v as AttStatus }))}
+                          value={statuses[r.student_id] ?? UNMARKED}
+                          onValueChange={(v) =>
+                            setStatuses((prev) => {
+                              const next = { ...prev };
+                              if (v === UNMARKED) delete next[r.student_id];
+                              else next[r.student_id] = v as AttStatus;
+                              return next;
+                            })
+                          }
                         >
                           <SelectTrigger className="h-8 w-32"><SelectValue /></SelectTrigger>
                           <SelectContent>
+                            <SelectItem value={UNMARKED} className="text-muted-foreground">
+                              Not marked
+                            </SelectItem>
                             {ATT_STATUSES.map((s) => (
                               <SelectItem key={s} value={s} className="capitalize">{s}</SelectItem>
                             ))}
@@ -166,11 +199,43 @@ function MarkAttendanceDialog({
                 </tbody>
               </table>
             </div>
-            <div className="flex justify-end gap-2">
-              <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
-              <Button type="button" disabled={busy || detail.roster.length === 0} onClick={submit}>
-                {busy ? 'Saving…' : 'Save attendance'}
-              </Button>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-3">
+                {/* Bulk helper: removing the present-default would otherwise turn a
+                    routine full-attendance day into one click per student. */}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={busy || detail.roster.length === 0}
+                  onClick={() =>
+                    setStatuses((prev) => {
+                      const next = { ...prev };
+                      for (const r of detail.roster) {
+                        // Never overwrite a pre-notified absence (AT4) — that is
+                        // information the parent gave us, not a blank to fill.
+                        if (r.suggested_status === 'excused' && next[r.student_id] === undefined) {
+                          next[r.student_id] = 'excused';
+                        } else if (next[r.student_id] === undefined) {
+                          next[r.student_id] = 'present';
+                        }
+                      }
+                      return next;
+                    })
+                  }
+                >
+                  Mark rest present
+                </Button>
+                <span className="text-xs text-muted-foreground">
+                  {marked.length} of {detail.roster.length} marked
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
+                <Button type="button" disabled={busy || marked.length === 0} onClick={submit}>
+                  {busy ? 'Saving…' : 'Save attendance'}
+                </Button>
+              </div>
             </div>
           </div>
         ) : null}
@@ -267,13 +332,21 @@ export default function AttendancePage() {
             </td>
             <td className="px-4 py-3">
               {centreId ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  onClick={() => setMarkingSessionId(s.id)}
-                >
-                  Mark
-                </Button>
+                s.can_mark === false ? (
+                  // Disabled, not hidden — the Guruji should see the session
+                  // exists and understand why they cannot mark it.
+                  <span className="text-xs text-muted-foreground" title="This batch is assigned to another Guruji.">
+                    Not your batch
+                  </span>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => setMarkingSessionId(s.id)}
+                  >
+                    Mark
+                  </Button>
+                )
               ) : null}
             </td>
           </tr>

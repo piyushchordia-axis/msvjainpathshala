@@ -15,7 +15,7 @@ import {
   users,
   type User,
 } from "@workspace/db";
-import { ageYearsFromDob } from "@workspace/db/enums";
+import { meetsStudentViewAge } from "@workspace/api-zod";
 import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Role } from "@workspace/api-zod";
@@ -184,7 +184,7 @@ async function assertProgressWriteAccess(
         message: "You can only update your own course progress.",
       };
     }
-    if (!stu.dob || ageYearsFromDob(stu.dob) < 13) {
+    if (!meetsStudentViewAge(stu.dob)) {
       return {
         ok: false,
         status: 403,

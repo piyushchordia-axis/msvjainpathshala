@@ -3,7 +3,6 @@
  * screens stay declarative and cache keys never drift. All hooks return the
  * unwrapped DTO (lib/api.ts strips the { data } envelope).
  */
-import { Alert } from "react-native";
 import {
   useInfiniteQuery,
   useMutation,
@@ -11,6 +10,9 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiGetEnvelope, ApiError } from "@/lib/api";
+// Type-only: the sync engine itself is imported dynamically at each call site so
+// the offline module stays out of the initial bundle.
+import type { SyncUiState } from "@/lib/offline/types";
 import type {
   AdminBatchRow,
   AdminStudentRow,
@@ -372,10 +374,24 @@ export function useCreateStudentAbsence(studentId?: string) {
   });
 }
 
-export function usePunya(studentId?: string) {
+/** How many ledger rows to add per "show more" tap. */
+export const PUNYA_LEDGER_PAGE = 50;
+
+/**
+ * Punya balance + ledger.
+ *
+ * `limit` grows on demand rather than paging with a cursor: the ledger is read
+ * top-down and the total is the headline number, so a single growing window
+ * keeps the running sum meaningful. Server clamps at 200 per request.
+ */
+export function usePunya(studentId?: string, opts?: { limit?: number }) {
+  const limit = opts?.limit ?? PUNYA_LEDGER_PAGE;
   return useQuery({
-    queryKey: qk.punya(studentId ?? ""),
-    queryFn: () => apiGet<PunyaSummary>(`/v1/me/students/${studentId}/punya`),
+    queryKey: [...qk.punya(studentId ?? ""), limit],
+    queryFn: () =>
+      apiGet<PunyaSummary>(
+        `/v1/me/students/${studentId}/punya?limit=${encodeURIComponent(String(limit))}`,
+      ),
     enabled: !!studentId,
   });
 }
@@ -407,9 +423,23 @@ export function useNiyamCatalog(enabled = true, studentId?: string | null) {
 }
 
 export function useToday(enabled = true) {
+  const qc = useQueryClient();
   return useQuery({
     queryKey: qk.today,
-    queryFn: () => apiGet<List<ShikshakSessionRow>>("/v1/sessions/today"),
+    queryFn: async () => {
+      const res = await apiGet<List<ShikshakSessionRow>>("/v1/sessions/today");
+      // The server already ships each session's full roster here (it is batch-
+      // bounded for a shikshak). Seed the per-session cache with it so opening a
+      // session is instant and does not refetch rows we just downloaded and
+      // would otherwise discard.
+      for (const item of res.items ?? []) {
+        const roster = (item as { roster?: unknown }).roster;
+        if (Array.isArray(roster) && roster.length > 0) {
+          qc.setQueryData(qk.attendanceSession(item.id), { session: item, roster });
+        }
+      }
+      return res;
+    },
     enabled,
   });
 }
@@ -646,14 +676,30 @@ export function useMarkAttendance() {
           client_op_id: ulid(),
         })),
       });
-      // Best-effort immediate drain when online.
-      await drainQueues();
+      // Best-effort immediate drain when online. The per-op result is returned
+      // rather than discarded: this used to always report success, so a server
+      // 409 (cancelled session, AT26 edit window expired) rendered as a green
+      // "Saved — will sync" that never resolved.
+      const results = await drainQueues();
+      const mine = results.find((r) => r.submission_op_id === submission_op_id);
+      const sync_state: SyncUiState =
+        mine?.status === "success"
+          ? "synced"
+          : mine?.status === "duplicate"
+            ? "duplicate"
+            : mine?.status === "conflict"
+              ? "conflict"
+              : mine?.status === "failed"
+                ? "failed"
+                : "queued";
       return {
-        session_id: "",
+        session_id: mine?.server_id ?? "",
         marked: records.length,
         method: "manual" as const,
         submission_op_id,
-        queued: true,
+        queued: sync_state === "queued",
+        sync_state,
+        sync_error: mine?.error,
       };
     },
     onSuccess: (_res, vars) => {
@@ -954,18 +1000,27 @@ export type PendingNiyamPage = {
 export function usePendingNiyamInfinite(opts: {
   batchId?: string | null;
   niyamType?: string | null;
+  /**
+   * Server-side narrowing for the "review this child's niyams" deep link.
+   * Filtering client-side only searched already-loaded pages, so a submission
+   * past page 1 showed the empty state — and because the list then never
+   * rendered, onEndReached could not fire to load more.
+   */
+  studentId?: string | null;
   enabled?: boolean;
 }) {
   const batchId = opts.batchId ?? null;
   const niyamType = opts.niyamType ?? null;
+  const studentId = opts.studentId ?? null;
   const enabled = opts.enabled !== false;
   return useInfiniteQuery({
-    queryKey: qk.pendingNiyam(batchId, niyamType),
+    queryKey: [...qk.pendingNiyam(batchId, niyamType), studentId ?? ""],
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam }) => {
       const qs = new URLSearchParams({ limit: "30" });
       if (batchId) qs.set("batch_id", batchId);
       if (niyamType) qs.set("niyam_type", niyamType);
+      if (studentId) qs.set("student_id", studentId);
       if (pageParam) qs.set("cursor", pageParam);
       return apiGet<PendingNiyamPage>(`/v1/niyam-submissions/pending?${qs.toString()}`);
     },
@@ -1535,14 +1590,48 @@ export type NotificationRow = {
   read_at: string | null;
   created_at: string;
 };
-export type NotificationsResponse = { items: NotificationRow[]; unread_count: number };
+export type NotificationsResponse = {
+  items: NotificationRow[];
+  unread_count: number;
+  /** Keyset cursor — the server returns it in `data`, not `meta`. */
+  next_cursor?: string | null;
+};
 
+/**
+ * Notifications inbox, paged.
+ *
+ * The server pages at 50 with `next_cursor`; this fetched the bare path once, so
+ * everything past the 50th notification was permanently unreachable — with no
+ * "load more" and no sign anything had been truncated. A parent of two children
+ * at an active centre passes 50 in a few weeks.
+ *
+ * Note `next_cursor` lives inside `data` here, not `meta` (notifications.ts:196)
+ * — unlike gallery/homework, which put it in `meta`.
+ */
 export function useNotifications(enabled = true) {
-  return useQuery({
+  const query = useInfiniteQuery({
     queryKey: qk.notifications,
-    queryFn: () => apiGet<NotificationsResponse>("/v1/notifications"),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      apiGet<NotificationsResponse>(
+        pageParam ? `/v1/notifications?cursor=${encodeURIComponent(pageParam)}` : "/v1/notifications",
+      ),
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
     enabled,
   });
+
+  const pages = query.data?.pages ?? [];
+  return {
+    ...query,
+    // Flattened view so call sites keep the shape they had before paging.
+    data: pages.length
+      ? {
+          items: pages.flatMap((p) => p.items),
+          // Only page 0 carries the count — the server omits it on later pages.
+          unread_count: pages[0]?.unread_count ?? 0,
+        }
+      : undefined,
+  };
 }
 export function useMarkNotificationRead() {
   const qc = useQueryClient();
@@ -1571,12 +1660,81 @@ export interface SubmitNiyamResult {
   id: string;
   status: string;
   new_badges?: SubmitNiyamNewBadge[];
+  /** True when the submission was queued offline rather than confirmed by the server. */
+  queued?: boolean;
+  /** Present when queued — lets the screen surface queued/conflict/failed state. */
+  submission_op_id?: string;
+  sync_state?: SyncUiState;
+  sync_error?: { code: string; message: string };
 }
+
+/**
+ * Submit a niyam through the offline queue.
+ *
+ * This used to POST directly, so a submission made out of signal threw and was
+ * lost — along with the proof the parent had just recorded, which lived only in
+ * component state. Everything now goes through jp.queue.niyam_submissions and
+ * /v1/sync/batch (CLAUDE.md offline sync §4: one transport, no parallel path).
+ */
 export function useSubmitNiyam() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ studentId: _studentId, ...body }: SubmitNiyamInput) =>
-      apiPost<SubmitNiyamResult>("/v1/niyam-submissions", body),
+    mutationFn: async ({
+      studentId: _studentId,
+      niyam_id,
+      student_id,
+      media,
+      notes,
+      proof_url,
+    }: SubmitNiyamInput): Promise<SubmitNiyamResult> => {
+      const { enqueueNiyamSubmission, drainQueues } = await import("@/lib/offline/sync-engine");
+
+      const wireMedia =
+        media && media.length > 0
+          ? media.map((m) => ({
+              url: m.url,
+              kind: (m.kind === "video" || m.kind === "audio" ? m.kind : "photo") as
+                | "photo"
+                | "video"
+                | "audio",
+              mime: m.mime,
+              size_bytes: m.size_bytes,
+            }))
+          : proof_url
+            ? [{ url: proof_url, kind: "photo" as const }]
+            : undefined;
+
+      const submission_op_id = await enqueueNiyamSubmission({
+        niyam_id,
+        student_id,
+        media: wireMedia,
+        notes,
+      });
+
+      // Best-effort immediate drain when online; offline this is a no-op and the
+      // loop picks it up. The per-op result is returned so the screen can tell
+      // "saved offline" from "the server rejected this".
+      const results = await drainQueues();
+      const mine = results.find((r) => r.submission_op_id === submission_op_id);
+
+      return {
+        id: mine?.server_id ?? "",
+        status: mine?.status === "success" ? "submitted" : "queued",
+        queued: mine?.status !== "success",
+        submission_op_id,
+        sync_state:
+          mine?.status === "success"
+            ? "synced"
+            : mine?.status === "duplicate"
+              ? "duplicate"
+              : mine?.status === "conflict"
+                ? "conflict"
+                : mine?.status === "failed"
+                  ? "failed"
+                  : "queued",
+        sync_error: mine?.error,
+      };
+    },
     onSuccess: (_res, vars) => {
       qc.invalidateQueries({ queryKey: qk.niyams(vars.studentId) });
       qc.invalidateQueries({ queryKey: qk.punya(vars.studentId) });
@@ -1589,8 +1747,11 @@ export function useSubmitNiyam() {
 export interface HomeworkRow {
   id: string;
   assignment_id: string;
+  /** EN source of truth; `*_hi` is null on rows authored before bilingual support. */
   title: string;
+  title_hi?: string | null;
   description?: string | null;
+  description_hi?: string | null;
   due_date: string;
   attachment_url?: string | null;
   status: string;
@@ -1603,33 +1764,45 @@ export interface HomeworkRow {
   curriculum_topic_en?: string | null;
   curriculum_topic_hi?: string | null;
 }
-/** Per-student when studentId is set; combined across children when allChildren. */
+/**
+ * Per-student when studentId is set; combined across children when allChildren.
+ *
+ * Pages on demand. This used to loop up to 50 cursor pages SERIALLY before
+ * painting a single row — so a parent of three children at year end waited on up
+ * to 50 blocking round trips, then got 2,500 rows mounted at once.
+ *
+ * Note the server already orders overdue-first within each page; sorting the
+ * accumulated set client-side would reshuffle across page boundaries and make
+ * rows jump as later pages arrive, so we keep server order.
+ */
 export function useHomework(studentId?: string | null, opts?: { allChildren?: boolean }) {
   const allChildren = opts?.allChildren === true;
-  return useQuery({
+  const query = useInfiniteQuery({
     queryKey: qk.homework(allChildren ? "__all__" : studentId ?? ""),
-    queryFn: async () => {
-      const collected: HomeworkRow[] = [];
-      let cursor: string | null = null;
-      let guard = 0;
-      do {
-        const qs = new URLSearchParams({ limit: "50" });
-        if (!allChildren && studentId) qs.set("student_id", studentId);
-        if (cursor) qs.set("cursor", cursor);
-        const envelope = await apiGetEnvelope<List<HomeworkRow>>(
-          `/v1/homework/mine?${qs.toString()}`,
-        );
-        collected.push(...(envelope.data?.items ?? []));
-        const next = envelope.meta?.next_cursor;
-        cursor = typeof next === "string" && next.length > 0 ? next : null;
-        guard += 1;
-      } while (cursor && guard < 50);
-      // Overdue first across the full feed (F11).
-      collected.sort((a, b) => Number(!!b.overdue) - Number(!!a.overdue));
-      return { items: collected } satisfies List<HomeworkRow>;
+    initialPageParam: null as string | null,
+    queryFn: async ({ pageParam }) => {
+      const qs = new URLSearchParams({ limit: "50" });
+      if (!allChildren && studentId) qs.set("student_id", studentId);
+      if (pageParam) qs.set("cursor", pageParam);
+      const envelope = await apiGetEnvelope<List<HomeworkRow>>(
+        `/v1/homework/mine?${qs.toString()}`,
+      );
+      const next = envelope.meta?.next_cursor;
+      return {
+        items: envelope.data?.items ?? [],
+        next_cursor: typeof next === "string" && next.length > 0 ? next : null,
+      };
     },
+    getNextPageParam: (last) => last.next_cursor ?? undefined,
     enabled: allChildren || !!studentId,
   });
+
+  const pages = query.data?.pages ?? [];
+  return {
+    ...query,
+    // Flattened so existing call sites keep reading `.data.items`.
+    data: pages.length ? { items: pages.flatMap((p) => p.items) } : undefined,
+  };
 }
 export function useSubmitHomework() {
   const qc = useQueryClient();
@@ -1777,8 +1950,11 @@ export function useCreateHomeworkAssignment() {
     mutationFn: (body: {
       batch_id: string;
       title: string;
+      /** Optional Hindi — clients fall back to the EN column when absent. */
+      title_hi?: string;
       due_date: string;
       description?: string;
+      description_hi?: string;
       attachment_url?: string;
     }) =>
       apiPost<{ id: string; submissions_created: number }>("/v1/homework/assignments", body),
@@ -1894,20 +2070,46 @@ export function useAvailableQuizzes(studentId?: string) {
     enabled: !!studentId,
   });
 }
+// Error handling deliberately lives at the CALL SITE, not here: this module has
+// no access to useLocale(), so an Alert raised from a hook is always English —
+// over an all-Devanagari screen — and it also pre-empts the screen's own onError,
+// leaving the failure with no on-screen trace.
 export function useStartQuiz() {
   return useMutation({
     mutationFn: ({ id, student_id }: { id: string; student_id: string }) =>
       apiPost<QuizStartResponse>(`/v1/quizzes/events/${id}/start`, { student_id }),
-    onError: (err) => Alert.alert("Could not start quiz", err instanceof Error ? err.message : "Please try again."),
   });
 }
+/**
+ * Persist in-progress quiz answers without grading, so an app kill mid-attempt
+ * does not lose them. Failures are intentionally swallowed: autosave is a safety
+ * net, and an alert mid-question would be worse than a silent retry on the next
+ * change.
+ */
+export function useAutosaveQuizAnswers() {
+  return useMutation({
+    mutationFn: ({
+      attemptId,
+      student_id,
+      answers,
+    }: {
+      attemptId: string;
+      student_id: string;
+      answers: Record<string, number[]>;
+    }) =>
+      apiPut<{ attempt_id: string; saved: boolean }>(
+        `/v1/quizzes/events/attempts/${attemptId}/answers`,
+        { student_id, answers },
+      ),
+  });
+}
+
 export function useSubmitQuiz() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id, student_id, answers }: { id: string; student_id: string; answers: Record<string, number[]> }) =>
       apiPost<QuizSubmitResponse>(`/v1/quizzes/events/${id}/submit`, { student_id, answers }),
     onSuccess: (_res, vars) => qc.invalidateQueries({ queryKey: qk.quizzesAvailable(vars.student_id) }),
-    onError: (err) => Alert.alert("Could not submit quiz", err instanceof Error ? err.message : "Please try again."),
   });
 }
 
@@ -1948,7 +2150,7 @@ export function useSubmitPushQuiz() {
     mutationFn: ({ id, student_id, answers }: { id: string; student_id: string; answers: Record<string, number[]> }) =>
       apiPost<PushQuizSubmitResponse>(`/v1/quizzes/push/${id}/submit`, { student_id, answers }),
     onSuccess: (_res, vars) => qc.invalidateQueries({ queryKey: qk.pushQuizActive(vars.student_id) }),
-    onError: (err) => Alert.alert("Could not submit quiz", err instanceof Error ? err.message : "Please try again."),
+    // See useStartQuiz — errors are surfaced bilingually at the call site.
   });
 }
 
@@ -1963,6 +2165,8 @@ export interface OpenCompetitionRow {
   winner_points: number;
   participant_points: number;
   eligible_student_ids?: string[] | null;
+  /** Which of the caller's children are already registered — server truth. */
+  registered_student_ids?: string[] | null;
 }
 export function useOpenCompetitions(enabled = true) {
   return useQuery({
@@ -2109,6 +2313,8 @@ export type StudentCourseTree = {
 export type CourseCertificateRow = {
   id: string;
   kind: string;
+  /** Stable join key for badging a course — titles change, ids don't. */
+  course_id: string | null;
   title_en: string;
   title_hi: string | null;
   issued_at: string;

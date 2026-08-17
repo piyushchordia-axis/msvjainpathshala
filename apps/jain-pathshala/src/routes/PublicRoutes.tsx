@@ -17,6 +17,7 @@ import { AboutPage, MsvPage } from "@/pages/public/PublicStubs";
 import CoursesPage from "@/pages/public/CoursesPage";
 import CourseDetailPage from "@/pages/public/CourseDetailPage";
 import CertificatesPage from "@/pages/public/CertificatesPage";
+import MyMsvPage from "@/pages/public/MyMsvPage";
 import ContactPage from "@/pages/public/ContactPage";
 import EnquirePage from "@/pages/public/EnquirePage";
 import DonatePage from "@/pages/public/DonatePage";
@@ -60,6 +61,8 @@ export default function PublicRoutes() {
         <Route path="/courses/:id" component={CourseDetailPage} />
         <Route path="/courses" component={CoursesPage} />
         <Route path="/certificates" component={CertificatesPage} />
+        {/* Member MSV apply/status — /msv stays the guest info page. */}
+        <Route path="/my-msv" component={MyMsvPage} />
         <Route path="/gallery" component={GalleryPage} />
         <Route path="/about" component={AboutPage} />
         <Route path="/contact" component={ContactPage} />

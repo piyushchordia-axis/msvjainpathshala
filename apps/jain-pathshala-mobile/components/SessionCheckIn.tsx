@@ -28,7 +28,8 @@ import type { SyncUiState } from "@/lib/offline/types";
 
 export type SessionCheckInMode = "checkin" | "checkout";
 
-type GpsFix = { lat: number; lng: number; accuracy_m: number } | null;
+/** accuracy_m is nullable: a real fix whose accuracy the platform did not report. */
+type GpsFix = { lat: number; lng: number; accuracy_m: number | null } | null;
 
 type Props = {
   visible: boolean;
@@ -99,7 +100,10 @@ export function SessionCheckIn({
       return {
         lat: pos.coords.latitude,
         lng: pos.coords.longitude,
-        accuracy_m: pos.coords.accuracy ?? 0,
+        // AT32.2 — never invent a fix. `?? 0` claimed pinpoint accuracy, so
+        // AT15's "accuracy > 100 ⇒ unverified" path could never trigger and the
+        // Sanchalak saw a wrongly-trusted check-in.
+        accuracy_m: pos.coords.accuracy ?? null,
       };
     } catch {
       setDenyLocation(true);

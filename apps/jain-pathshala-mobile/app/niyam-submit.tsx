@@ -8,6 +8,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { useNiyamCatalog, useSubmitNiyam } from "@/lib/queries";
 import { ApiError } from "@/lib/api";
+import { apiErrorMessage } from "@/lib/api-error-copy";
 import { bodyFamily } from "@/constants/typography";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { NiyamListRow } from "@/components/NiyamListRow";
@@ -168,20 +169,15 @@ export default function NiyamSubmit() {
             code === "ERR_CONFLICT"
           ) {
             message = periodDupMessage(selected.niyam_type, hi);
-          } else if (status === 422 || code === "ERR_VALIDATION_FAILED") {
-            message =
-              err instanceof ApiError
-                ? err.message
-                : hi
-                  ? "प्रमाण अमान्य है। कृपया पुनः प्रयास करें।"
-                  : "Proof is invalid. Please try again.";
           } else {
-            message =
-              err instanceof ApiError
-                ? err.message
-                : hi
-                  ? "नियम प्रस्तुत नहीं किया जा सका।"
-                  : "Could not submit your niyam.";
+            // Shared bilingual mapping: the old code fell back to err.message,
+            // which is English-only, so a Hindi parent saw an English sentence.
+            message = apiErrorMessage(err, hi, {
+              ERR_VALIDATION_FAILED: {
+                en: "That proof couldn't be accepted — check the photo or video and try again.",
+                hi: "यह प्रमाण स्वीकार नहीं हुआ — फ़ोटो या वीडियो जाँचकर पुनः प्रयास करें।",
+              },
+            });
           }
           Alert.alert(hi ? "प्रस्तुत नहीं हुआ" : "Submission failed", message);
         },

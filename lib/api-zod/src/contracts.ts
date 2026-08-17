@@ -115,6 +115,51 @@ export function ageYearsFromDob(dob: string | Date, on: Date = new Date()): numb
   return age;
 }
 
+/**
+ * Two distinct age gates. They are deliberately separate constants: a child may
+ * be old enough to hold their own login well before they are old enough to be
+ * the authoritative writer of their own progress record.
+ *
+ * Both are enforced server-side (join provisioning / auth + course services),
+ * never only on the client. A missing or unparseable DOB fails both.
+ */
+
+/** Minimum age to be provisioned an independent OTP login (users.role='student'). */
+export const MIN_STUDENT_LOGIN_AGE = 8;
+
+/**
+ * Q4 — minimum age for student-view capabilities (writing one's own course
+ * progress). The threshold previously lived as an inline `13` at two call sites
+ * with divergent return shapes; this is the single source of truth.
+ */
+export const MIN_STUDENT_VIEW_AGE = 13;
+
+function meetsAge(dob: string | Date | null | undefined, min: number, on: Date): boolean {
+  if (!dob) return false;
+  const age = ageYearsFromDob(dob, on);
+  return Number.isFinite(age) && age >= min;
+}
+
+/** Whether a student may be provisioned their own OTP login. */
+export function meetsStudentLoginAge(
+  dob: string | Date | null | undefined,
+  on: Date = new Date(),
+): boolean {
+  return meetsAge(dob, MIN_STUDENT_LOGIN_AGE, on);
+}
+
+/**
+ * Whether a student is old enough for student-view capabilities (Q4).
+ * Returns a plain boolean — callers build their own error envelope, because the
+ * existing gates disagree on response shape.
+ */
+export function meetsStudentViewAge(
+  dob: string | Date | null | undefined,
+  on: Date = new Date(),
+): boolean {
+  return meetsAge(dob, MIN_STUDENT_VIEW_AGE, on);
+}
+
 /** Map DOB → age group using AGE_GROUP_META ranges. Null if outside 5–21. */
 export function ageGroupFromDob(dob: string | Date, on: Date = new Date()): AgeGroup | null {
   const age = ageYearsFromDob(dob, on);
@@ -707,6 +752,12 @@ export const punyaSummarySchema = z.object({
   total_points: z.number(),
   tier: z.string(),
   transactions: z.array(punyaTransactionSchema),
+  /**
+   * True when older transactions exist beyond the returned page. Clients must
+   * say so rather than presenting a truncated ledger as the whole story — the
+   * visible rows will not sum to total_points.
+   */
+  has_more: z.boolean().optional(),
 });
 export type PunyaSummary = z.infer<typeof punyaSummarySchema>;
 

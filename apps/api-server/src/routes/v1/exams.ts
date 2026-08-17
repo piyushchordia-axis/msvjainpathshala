@@ -938,8 +938,11 @@ router.post("/:id/start", async (req: Request, res: Response) => {
 
   const uid = req.authUser!.id;
   const examId = String(req.params.id);
-  if (await rateLimit(`exam:start:user:${uid}`, 10, 3600)) {
-    fail(res, 429, "ERR_RATE_LIMITED", "Too many requests. Please try again later.");
+  // Per (user, student): keying on the parent alone meant a family of four
+  // shared ten starts an hour — the same squeeze already fixed for the OTP
+  // limiter below and for niyam submission.
+  if (await rateLimit(`exam:start:user:${uid}:${student.id}`, 10, 3600)) {
+    fail(res, 429, "ERR_RATE_LIMITED", "Too many exam starts for this student — try again later.");
     return;
   }
 

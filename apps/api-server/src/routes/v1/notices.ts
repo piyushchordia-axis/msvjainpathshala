@@ -39,7 +39,7 @@ import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState, type AdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
-import { clampLimit, inScope } from "../../lib/route-helpers";
+import { clampLimit, inScope, ownedStudentsCondition } from "../../lib/route-helpers";
 
 const router: IRouter = Router();
 
@@ -156,7 +156,8 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
     const owned = await db
       .select({ centre_id: students.centre_id, batch_id: students.batch_id, msv_status: students.msv_status })
       .from(students)
-      .where(and(isNull(students.deleted_at), or(eq(students.user_id, user.id), eq(students.parent_id, user.id))));
+      // Q11 — shared ownership predicate (excludes soft-deleted and inactive students).
+      .where(ownedStudentsCondition(user.id));
 
     const centreIds = Array.from(new Set(owned.map((o) => o.centre_id).filter((x): x is string => !!x)));
     const batchIds = Array.from(new Set(owned.map((o) => o.batch_id).filter((x): x is string => !!x)));

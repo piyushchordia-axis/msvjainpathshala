@@ -35,11 +35,12 @@ export default function CoursesCatalogueScreen() {
   const coursesQ = guest ? publicQ : memberQ;
   const courses = coursesQ.data?.items ?? [];
   const certsQ = useStudentCertificates(activeStudentId ?? undefined, !guest && !!activeStudentId);
-  const courseCertTitles = new Set<string>();
+  // Matched by course_id, not title: a renamed course used to lose its badge,
+  // and two courses sharing a title badged each other.
+  const certifiedCourseIds = new Set<string>();
   for (const row of certsQ.data?.items ?? []) {
     if (row.kind !== "course" || row.voided_at) continue;
-    if (row.title_en) courseCertTitles.add(row.title_en);
-    if (row.title_hi) courseCertTitles.add(row.title_hi);
+    if (row.course_id) certifiedCourseIds.add(row.course_id);
   }
 
   const certificatesBtn = guest ? undefined : (
@@ -177,8 +178,7 @@ export default function CoursesCatalogueScreen() {
                 {courses.map((course) => {
                   const title = hi ? course.name_hi || course.name_en : course.name_en;
                   const certified =
-                    courseCertTitles.has(course.name_en) ||
-                    (!!course.name_hi && courseCertTitles.has(course.name_hi));
+                    certifiedCourseIds.has(course.id);
                   return (
                     <CourseFolderCard
                       key={course.id}

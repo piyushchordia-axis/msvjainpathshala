@@ -10,6 +10,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { rejectIfOverUploadLimit } from "@/lib/upload-size-guard";
 import type { UploadFileInput, UploadResult } from "@/lib/api";
 import type { DrainOpResult } from "./sync-engine";
+import { MAX_ATTEMPTS, backoffDelayMs } from "./backoff";
 
 export const MEDIA_UPLOAD_QUEUE_KEY = "jp.queue.media_uploads";
 
@@ -34,6 +35,8 @@ export type PendingMediaUpload = {
   follow_up?: HomeworkFollowUp;
   state: "queued" | "uploading" | "failed";
   attempts: number;
+  /** Epoch ms — earliest next try. Without this, failures re-uploaded every tick. */
+  next_attempt_at?: number;
   last_error?: string;
   created_at: string;
   /** Set after a successful upload, before follow-up enqueue. */
@@ -204,10 +207,26 @@ export async function drainMediaUploads(
   let attached = 0;
 
   let ops = await readQueue();
+
+  // Rescue items orphaned mid-upload (app killed while "uploading"): without this
+  // they are never selected again and sit invisible forever — the media-queue
+  // equivalent of requeueOrphanedSyncing in the domain queue.
+  const orphaned = ops.filter((o) => o.state === "uploading");
+  if (orphaned.length > 0) {
+    ops = ops.map((o) => (o.state === "uploading" ? { ...o, state: "queued" as const } : o));
+    await writeQueue(ops);
+  }
+
   for (const op of ops.filter((o) => o.state === "queued" || o.state === "failed")) {
     ops = await readQueue();
     const current = ops.find((o) => o.id === op.id);
     if (!current || (current.state !== "queued" && current.state !== "failed")) continue;
+
+    // `attempts` was incremented but never read, so a permanently-rejecting file
+    // re-uploaded on every drain tick forever. Respect the same ceiling and
+    // backoff the domain queue uses.
+    if (current.attempts >= MAX_ATTEMPTS) continue;
+    if (current.next_attempt_at && current.next_attempt_at > Date.now()) continue;
 
     await writeQueue(
       ops.map((o) =>
@@ -283,6 +302,9 @@ export async function drainMediaUploads(
             ? {
                 ...o,
                 state: "failed" as const,
+                // Back off like the domain queue instead of hammering the same
+                // file on every tick until the app is reinstalled.
+                next_attempt_at: Date.now() + backoffDelayMs(o.attempts),
                 last_error: message,
                 remote_url: remoteUrl,
               }

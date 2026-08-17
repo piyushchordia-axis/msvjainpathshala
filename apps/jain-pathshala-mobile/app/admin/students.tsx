@@ -24,6 +24,7 @@ import {
   useCreateAdminStudent,
   useStudentStatusAction,
 } from "@/lib/queries";
+import { recordStatusLabel } from "@/lib/status-labels";
 import type { AdminStudentRow } from "@/lib/types";
 import { formatDate } from "@/lib/format";
 import { ageGroupFromDob, formatAgeGroup } from "@workspace/api-zod";
@@ -477,7 +478,10 @@ export default function StudentsScreen() {
                 </Body>
               ) : null}
             </View>
-            <Pill tone={s.status === "active" ? "success" : "neutral"} label={s.status} />
+            <Pill
+              tone={s.status === "active" ? "success" : "neutral"}
+              label={recordStatusLabel(s.status, hi)}
+            />
           </Row>
           <Row style={{ gap: 8, marginTop: 8 }}>
             {s.dob ? (

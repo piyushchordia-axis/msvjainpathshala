@@ -1,0 +1,624 @@
+<title>Persona Review Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg: #FBF5EC;
+    --surface: #FFFFFF;
+    --surface-2: #F5EDE0;
+    --surface-3: #EFE4D2;
+    --ink: #1A0A00;
+    --ink-sub: #6F5949;
+    --ink-faint: #9C8A78;
+    --line: #E6D9C4;
+    --line-strong: #D8C7AC;
+    --accent: #C6551A;
+    --accent-deep: #7A1818;
+    --gold: #B4831B;
+    --sev-critical: #A11212;
+    --sev-high: #C2410C;
+    --sev-medium: #A9791A;
+    --sev-low: #5A7186;
+    --rag-green: #2F7D57;
+    --rag-amber: #A9791A;
+    --rag-red: #A11212;
+    --chip-bg: #F5EDE0;
+    --shadow: 0 1px 2px rgba(58,32,10,.06), 0 8px 24px -12px rgba(58,32,10,.18);
+    --serif: "Iowan Old Style", "Palatino Linotype", "Palatino", "Book Antiqua", Georgia, serif;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  }
+  :root:not([data-theme="light"]) {
+    @media (prefers-color-scheme: dark) {
+      --bg: #17100A;
+      --surface: #211812;
+      --surface-2: #2A1F16;
+      --surface-3: #34271B;
+      --ink: #F4E9D8;
+      --ink-sub: #C1AC95;
+      --ink-faint: #897561;
+      --line: #362819;
+      --line-strong: #46341f;
+      --accent: #EF8542;
+      --accent-deep: #E0918B;
+      --gold: #DFAF48;
+      --sev-critical: #F0716B;
+      --sev-high: #F0924E;
+      --sev-medium: #DFB44B;
+      --sev-low: #92A9BF;
+      --rag-green: #5FB98A;
+      --rag-amber: #DFB44B;
+      --rag-red: #F0716B;
+      --chip-bg: #2E2217;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.6);
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #17100A;
+    --surface: #211812;
+    --surface-2: #2A1F16;
+    --surface-3: #34271B;
+    --ink: #F4E9D8;
+    --ink-sub: #C1AC95;
+    --ink-faint: #897561;
+    --line: #362819;
+    --line-strong: #46341f;
+    --accent: #EF8542;
+    --accent-deep: #E0918B;
+    --gold: #DFAF48;
+    --sev-critical: #F0716B;
+    --sev-high: #F0924E;
+    --sev-medium: #DFB44B;
+    --sev-low: #92A9BF;
+    --rag-green: #5FB98A;
+    --rag-amber: #DFB44B;
+    --rag-red: #F0716B;
+    --chip-bg: #2E2217;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 10px 30px -14px rgba(0,0,0,.6);
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1140px; margin: 0 auto; padding: 0 22px 80px; }
+
+  /* ---- Masthead ---- */
+  header.mast {
+    border-bottom: 1px solid var(--line);
+    background:
+      radial-gradient(120% 140% at 88% -20%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 60%),
+      var(--bg);
+  }
+  .mast-inner { max-width: 1140px; margin: 0 auto; padding: 34px 22px 26px; }
+  .kicker {
+    font-family: var(--mono);
+    font-size: 11.5px;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+    color: var(--accent-deep);
+    display: flex; align-items: center; gap: 10px;
+    margin: 0 0 12px;
+  }
+  .kicker .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
+  h1.title {
+    font-family: var(--serif);
+    font-weight: 600;
+    font-size: clamp(28px, 4.6vw, 46px);
+    line-height: 1.04;
+    letter-spacing: -.01em;
+    text-wrap: balance;
+    margin: 0 0 10px;
+  }
+  h1.title em { font-style: italic; color: var(--accent); }
+  .lede { color: var(--ink-sub); max-width: 68ch; font-size: 16px; margin: 0 0 20px; }
+  .meta-row { display: flex; flex-wrap: wrap; gap: 8px 22px; font-size: 13px; color: var(--ink-sub); align-items: center; }
+  .meta-row b { color: var(--ink); font-weight: 600; }
+  .meta-row .sep { color: var(--line-strong); }
+
+  .theme-toggle {
+    position: absolute; top: 18px; right: 22px;
+    font-family: var(--mono); font-size: 12px;
+    background: var(--surface); color: var(--ink-sub);
+    border: 1px solid var(--line-strong); border-radius: 999px;
+    padding: 6px 13px; cursor: pointer; display: inline-flex; gap: 7px; align-items: center;
+  }
+  .theme-toggle:hover { color: var(--ink); border-color: var(--accent); }
+  .mast { position: relative; }
+
+  /* ---- Sections ---- */
+  section { margin-top: 40px; }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin: 0 0 16px; }
+  .sec-head h2 {
+    font-family: var(--serif); font-weight: 600;
+    font-size: 21px; letter-spacing: -.01em; margin: 0;
+  }
+  .sec-head .n { font-family: var(--mono); font-size: 12px; color: var(--ink-faint); }
+  .sec-note { color: var(--ink-sub); font-size: 14px; max-width: 74ch; margin: -6px 0 18px; }
+
+  /* ---- KPI tiles ---- */
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+  .kpi {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 14px; padding: 15px 16px 14px; position: relative; overflow: hidden;
+    box-shadow: var(--shadow);
+  }
+  .kpi::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--k); }
+  .kpi .num { font-family: var(--mono); font-weight: 600; font-size: 30px; line-height: 1; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .kpi .lbl { font-size: 12.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--ink-sub); margin-top: 8px; font-weight: 600; }
+  .kpi .sub { font-size: 12px; color: var(--ink-faint); margin-top: 3px; }
+
+  .baseline-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  .btag { font-family: var(--mono); font-size: 11.5px; padding: 5px 11px; border-radius: 999px; border: 1px solid var(--line-strong); color: var(--ink-sub); background: var(--surface); }
+  .btag b { color: var(--ink); font-weight: 600; }
+
+  /* ---- Scorecard ---- */
+  .scorecard-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
+  table.score { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 13.5px; }
+  table.score th, table.score td { padding: 11px 14px; text-align: left; border-bottom: 1px solid var(--line); }
+  table.score thead th { font-size: 11.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--ink-sub); font-weight: 600; background: var(--surface-2); }
+  table.score tbody tr:last-child td { border-bottom: 0; }
+  table.score td.persona { font-weight: 600; font-family: var(--serif); font-size: 15px; }
+  .rag { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; color: var(--ink-sub); }
+  .rag .bulb { width: 11px; height: 11px; border-radius: 50%; flex: none; }
+  .rag.g .bulb { background: var(--rag-green); } .rag.a .bulb { background: var(--rag-amber); } .rag.r .bulb { background: var(--rag-red); }
+
+  /* ---- Cross-cutting cards ---- */
+  .xc-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .xc {
+    background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--x);
+    border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow);
+  }
+  .xc h3 { margin: 0 0 6px; font-size: 15px; display: flex; align-items: center; gap: 9px; }
+  .xc h3 .id { font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+  .xc p { margin: 0; font-size: 13.5px; color: var(--ink-sub); }
+
+  /* ---- Filter bar ---- */
+  .filterbar {
+    position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border: 1px solid var(--line); border-radius: 14px;
+    padding: 13px 15px; margin-bottom: 16px; box-shadow: var(--shadow);
+  }
+  .fb-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .fb-row + .fb-row { margin-top: 10px; }
+  .fb-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink-faint); margin-right: 4px; }
+  .chip {
+    font-family: var(--sans); font-size: 12.5px; font-weight: 500;
+    padding: 6px 12px; border-radius: 999px; cursor: pointer; user-select: none;
+    border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink-sub);
+    transition: background .12s, color .12s, border-color .12s;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .chip:hover { border-color: var(--accent); color: var(--ink); }
+  .chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+  :root[data-theme="dark"] .chip[aria-pressed="true"], :root:not([data-theme="light"]) .chip[aria-pressed="true"] { color: #17100A; }
+  .chip .cnt { font-family: var(--mono); font-size: 11px; opacity: .7; }
+  .chip.sev[aria-pressed="true"] { background: var(--sc); border-color: var(--sc); color: #fff; }
+  :root[data-theme="dark"] .chip.sev[aria-pressed="true"] { color: #17100A; }
+  .chip .sq { width: 9px; height: 9px; border-radius: 2.5px; background: var(--sc); }
+  .search {
+    flex: 1; min-width: 180px;
+    font-family: var(--sans); font-size: 13.5px;
+    background: var(--surface); color: var(--ink);
+    border: 1px solid var(--line-strong); border-radius: 999px;
+    padding: 8px 15px;
+  }
+  .search:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+  .count-live { font-family: var(--mono); font-size: 12.5px; color: var(--ink-sub); white-space: nowrap; }
+  .count-live b { color: var(--accent); }
+  .btn-reset { font-family: var(--mono); font-size: 11.5px; background: none; border: 1px solid var(--line-strong); color: var(--ink-sub); border-radius: 999px; padding: 6px 11px; cursor: pointer; }
+  .btn-reset:hover { color: var(--ink); border-color: var(--accent); }
+
+  /* ---- Issue cards ---- */
+  .issues { display: flex; flex-direction: column; gap: 10px; }
+  .issue {
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: 12px; overflow: hidden; position: relative;
+    box-shadow: var(--shadow);
+  }
+  .issue::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--sc); }
+  .issue-top { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 15px 0 19px; }
+  .sev-pill { font-family: var(--mono); font-size: 10.5px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; padding: 3px 9px; border-radius: 5px; color: #fff; background: var(--sc); }
+  :root[data-theme="dark"] .sev-pill, :root:not([data-theme="light"]) .sev-pill { color: #17100A; }
+  .tag { font-size: 11.5px; padding: 3px 9px; border-radius: 999px; background: var(--chip-bg); color: var(--ink-sub); border: 1px solid var(--line); font-weight: 500; }
+  .tag.persona { color: var(--accent-deep); font-weight: 600; }
+  .tag.surface { font-family: var(--mono); font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; }
+  .tag.dim { font-family: var(--mono); font-size: 10.5px; }
+  .id-tag { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--ink-faint); }
+  .base { font-family: var(--mono); font-size: 10px; padding: 2px 7px; border-radius: 4px; text-transform: uppercase; letter-spacing: .04em; }
+  .base.NEW { color: var(--ink-faint); border: 1px solid var(--line-strong); }
+  .base.OPEN { color: var(--sev-high); border: 1px solid color-mix(in srgb, var(--sev-high) 45%, transparent); }
+  .base.REG { color: var(--sev-critical); border: 1px solid color-mix(in srgb, var(--sev-critical) 45%, transparent); font-weight: 600; }
+
+  .issue-nav { padding: 9px 15px 2px 19px; font-size: 14.5px; }
+  .issue-nav .path { color: var(--ink-sub); }
+  .issue-nav .arrow { color: var(--accent); padding: 0 6px; }
+  .issue-nav .act { color: var(--ink); font-weight: 600; }
+
+  .oe { display: grid; grid-template-columns: 1fr 1fr; gap: 0; margin: 8px 15px 0 19px; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .oe > div { padding: 9px 13px; font-size: 13px; }
+  .oe .obs { background: color-mix(in srgb, var(--sev-critical) 6%, var(--surface)); border-right: 1px solid var(--line); }
+  .oe .exp { background: color-mix(in srgb, var(--rag-green) 7%, var(--surface)); }
+  .oe .oe-lbl { font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; margin-bottom: 3px; font-weight: 600; }
+  .oe .obs .oe-lbl { color: var(--sev-critical); }
+  .oe .exp .oe-lbl { color: var(--rag-green); }
+  .oe .oe-txt { color: var(--ink); }
+
+  .fix { display: flex; gap: 9px; align-items: baseline; margin: 9px 0 0; padding: 10px 15px 13px 19px; border-top: 1px dashed var(--line); background: color-mix(in srgb, var(--accent) 5%, transparent); }
+  .fix .fx-lbl { font-family: var(--mono); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); font-weight: 700; flex: none; padding-top: 2px; }
+  .fix .fx-txt { font-size: 13.5px; color: var(--ink); }
+
+  .empty { text-align: center; padding: 50px 20px; color: var(--ink-faint); font-family: var(--mono); font-size: 13px; display: none; }
+
+  footer { margin-top: 46px; padding-top: 22px; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: 12.5px; }
+  footer code { font-family: var(--mono); background: var(--surface-2); padding: 1px 6px; border-radius: 4px; color: var(--ink-sub); }
+
+  @media (max-width: 720px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .xc-grid { grid-template-columns: 1fr; }
+    .oe { grid-template-columns: 1fr; }
+    .oe .obs { border-right: 0; border-bottom: 1px solid var(--line); }
+    .id-tag { margin-left: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<header class="mast">
+  <button class="theme-toggle" id="themeBtn" aria-label="Toggle colour theme"><span id="themeIcon">◐</span> <span id="themeTxt">Theme</span></button>
+  <div class="mast-inner">
+    <p class="kicker"><span class="dot"></span> Jain Pathshala · Code review · 16 Aug 2026</p>
+    <h1 class="title">Persona review <em>console</em></h1>
+    <p class="lede">Every one of the eight roles, checked across web, mobile and the API on four dimensions — API wiring, design consistency, performance, and error handling. Each issue below is one row: where you are, what you do, what happens, what should happen, and the fix.</p>
+    <div class="meta-row">
+      <span><b>8</b> personas</span><span class="sep">·</span>
+      <span><b>3</b> surfaces</span><span class="sep">·</span>
+      <span><b>~128</b> findings</span><span class="sep">·</span>
+      <span>Static review — no runtime; verified at file:line</span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <section id="summary">
+    <div class="sec-head"><span class="n">01</span><h2>Where it stands</h2></div>
+    <div class="kpis">
+      <div class="kpi" style="--k:var(--sev-critical)"><div class="num">14</div><div class="lbl">Critical</div><div class="sub">Broken journey / unsafe</div></div>
+      <div class="kpi" style="--k:var(--sev-high)"><div class="num">35</div><div class="lbl">High</div><div class="sub">Rule violation / broken feature</div></div>
+      <div class="kpi" style="--k:var(--sev-medium)"><div class="num">52</div><div class="lbl">Medium</div><div class="sub">Degraded UX / perf risk</div></div>
+      <div class="kpi" style="--k:var(--sev-low)"><div class="num">27</div><div class="lbl">Low</div><div class="sub">Polish</div></div>
+    </div>
+    <div class="baseline-row">
+      <span class="btag"><b>~95</b> new</span>
+      <span class="btag"><b>~28</b> still open from prior reviews</span>
+      <span class="btag"><b>2</b> regressions</span>
+      <span class="btag"><b>~20</b> prior findings verified fixed</span>
+    </div>
+    <p class="sec-note" style="margin-top:16px">The API core is strong — scope model, Punya idempotency, the attendance transaction and AT32 GPS handling are correct and well-tested. The damage clusters at three seams: the <b>authorization edge</b> (admin routes gate on nav visibility, not role, and three endpoints agree), the <b>offline engine</b> (the drain loop runs for only two of the roles that enqueue, and two queues have no producer at all), and <b>error surfacing</b> (silent catches, no error boundary, offline failures that render as success).</p>
+  </section>
+
+  <section id="scorecard">
+    <div class="sec-head"><span class="n">02</span><h2>Persona × dimension</h2></div>
+    <div class="scorecard-wrap">
+      <table class="score">
+        <thead><tr><th>Persona</th><th>API wiring</th><th>Design</th><th>Performance</th><th>Errors</th></tr></thead>
+        <tbody id="scoreBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="crosscut">
+    <div class="sec-head"><span class="n">03</span><h2>Cross-cutting root causes</h2></div>
+    <p class="sec-note">Fix these once and many persona rows resolve together. They are the highest-leverage work in the report.</p>
+    <div class="xc-grid" id="xcGrid"></div>
+  </section>
+
+  <section id="issues-sec">
+    <div class="sec-head"><span class="n">04</span><h2>Every issue, filterable</h2></div>
+    <p class="sec-note">Filter by persona, severity, or search the text. Each card: navigation → action, then observed vs expected, then the fix. Left stripe encodes severity.</p>
+
+    <div class="filterbar">
+      <div class="fb-row">
+        <span class="fb-label">Persona</span>
+        <span id="personaChips" style="display:contents"></span>
+      </div>
+      <div class="fb-row">
+        <span class="fb-label">Severity</span>
+        <span id="sevChips" style="display:contents"></span>
+      </div>
+      <div class="fb-row">
+        <input class="search" id="search" type="search" placeholder="Search navigation, action, fix, ID…" aria-label="Search issues">
+        <span class="count-live" id="countLive"></span>
+        <button class="btn-reset" id="resetBtn">Reset</button>
+      </div>
+    </div>
+
+    <div class="issues" id="issueList"></div>
+    <div class="empty" id="emptyState">No issues match these filters.</div>
+  </section>
+
+  <footer>
+    <p>Companion to <code>docs/reviews/FULL_PERSONA_FUNCTIONALITY_REVIEW_2026_08.md</code>. Findings verified by reading the cited <code>file:line</code>; this is a static review with no dev-server run. Re-run <code>pnpm typecheck</code> and the api-server suites locally before scheduling P0 work. Severity: Critical = data loss / auth-scope bypass / silent write drop · High = broken journey or Q*/AT* rule violation · Medium = degraded UX or perf risk · Low = polish.</p>
+  </footer>
+</div>
+
+<script>
+  const PERSONAS = [
+    ["super","super_admin"],["state","state_admin"],["city","city_admin"],["sanchalak","sanchalak"],
+    ["shikshak","shikshak"],["parent","parent"],["student","student"],["guest","guest"]
+  ];
+  const SEV = { C:["Critical","var(--sev-critical)"], H:["High","var(--sev-high)"], M:["Medium","var(--sev-medium)"], L:["Low","var(--sev-low)"] };
+  const DIM = { API:"API wiring", DSN:"Design", PRF:"Performance", ERR:"Errors" };
+
+  const SCORE = [
+    ["super_admin","r","a","a","a"],["state_admin","a","a","g","a"],["city_admin","r","a","a","r"],
+    ["sanchalak","r","a","a","r"],["shikshak","r","a","g","r"],["parent","r","a","a","r"],
+    ["student","r","a","a","a"],["guest","r","a","a","r"]
+  ];
+  const RAGTXT = { g:"solid", a:"issues", r:"broken" };
+
+  const XC = [
+    ["XC-API-01","Ungated admin routes + permissive endpoints","var(--sev-critical)","34 of 48 admin routes gate on nav visibility, not role. MSV approval, donations read, and settings read admit any admin-panel role — a shikshak who types a URL can read donor PII and approve MSV admissions."],
+    ["XC-MOB-01","Offline drain loop excludes roles that enqueue","var(--sev-critical)","The loop runs only for shikshak/sanchalak, but parents enqueue homework and city+ enqueue certifications. Their work gets one opportunistic drain and, if it fails, never retries."],
+    ["XC-MOB-02","Two offline queues have no producer","var(--sev-critical)","jp.queue.niyam_submissions and jp.queue.shivir_scans are declared, drained and unit-tested, but nothing enqueues to them — niyam proof and shivir scans post directly and lose the work offline."],
+    ["XC-API-02","Q3 (80G) unimplemented and inverted","var(--sev-critical)","No 80G settings exist; capture hardcodes eighty_g_eligible: true and receipts assert Section 80G deductibility — the exact opposite of the default-off, both-fields-required rule."],
+    ["XC-WEB-02","~20 admin lists silently truncate","var(--sev-high)","AdminLoadMore exists but only 4 of 32 pages use it; the rest request a fixed limit and stop, showing a truncated prefix with no count — donations under-report against the bank."],
+    ["XC-WEB-03","~12 pages swallow load errors","var(--sev-high)","Silent catches render an outage as “no centres / not found”, and the sanchalak dashboard shows confident all-zero stats — worse than a blank."],
+    ["XC-API-04","Public writes have no rate limit","var(--sev-high)","join, registration, enquiries, donations and uploads accept unlimited unauthenticated requests; two write to object storage. The limiter also fails open on Redis error."],
+    ["XC-API-05","Auth invariants not enforced","var(--sev-high)","No 5-device cap, no refresh-token reuse detection, and impersonation writes one audit entry attributing actions to the subject, not the operator."]
+  ];
+
+  // persona, surface, sev, dim, nav, action, observed, expected, fix, baseline, id
+  const D = [
+    ["super","web","C","API","System → Settings","Configure or disable 80G","No control; receipts claim 80G unconditionally","Toggle with paired reg-number + PAN validation, default off","Add eighty_g_* settings; gate capture on the flag","OPEN","XC-API-02"],
+    ["super","web","H","API","People / Team rows","Start impersonating a user","No control exists anywhere — curl only","Super-only row action with a confirm dialog","Add ImpersonateButton to Team and Shikshaks","OPEN","SUP-API-03"],
+    ["super","web","H","API","System → Settings","Edit a platform setting","Read-only table, no edit control","Inline edit for allowlisted keys","Edit dialog wired to PATCH /admin/settings","OPEN","SUP-API-01"],
+    ["super","web","M","ERR","Impersonation banner","Click “Stop impersonating” on a split-origin deploy","POSTs to the web origin; session never ends","Stop reaches the API; returns to own account","apiPost with a noscript form fallback","OPEN","SUP-API-04"],
+    ["super","web","M","DSN","System → Queues","Open the page","DLQ defaults to a non-existent queue → false all-clear","Default to a real queue from stats","Init selectedQueue from stats[0]","OPEN","SUP-DSN-01"],
+    ["super","web","L","DSN","Programme → Exam builder","Pick between same-named exams","Options indistinguishable (title only)","City and window shown per option","Add city_name/window to the option label","NEW","CTY-DSN-06"],
+    ["super","web","L","DSN","(code health)","Read AdminListPages.tsx","5 dead page components shadow live ones","Removed","Delete the unused exports","OPEN","SUP-DSN-02"],
+
+    ["state","web","H","API","Insights → Audit log","Filter / scroll past 200 entries","Hard cap at 200; a city_admin sees a bare 403 card","Cursor paging + an explicit restricted state","useAdminList + AdminLoadMore + 403 copy","OPEN","STA-API-01"],
+    ["state","web","M","DSN","System → Geography / Settings","Open either page","Read-only with no explanation why","A note naming who can edit","Role-aware read-only subtitle","OPEN","STA-DSN-01"],
+
+    ["city","web","C","ERR","Programme → Exams → Edit","Click the edit pencil","The whole admin panel white-screens","Dialog opens pre-filled","Add missing SELECT columns + an error boundary","NEW","CTY-ERR-01"],
+    ["city","web","C","API","Programme → Exams → Edit","Change dates / marks and save","Silent 404 — the exam is never editable","Exam updates, list refetches","Implement PATCH /v1/admin/exams/:id","REG","CTY-API-01"],
+    ["city","web","C","API","Operations → Donations","(shikshak types the URL) view donations","Full city donor list + PII renders, no 403","403 + an explanation card","Add canViewDonations to the donation routes","NEW","XC-API-01"],
+    ["city","web","C","API","People → MSV applications","(shikshak types the URL) Approve","Approval succeeds — a teacher decides admission","403 + an explanation","Role-guard the routes + the MSV write endpoints","OPEN","XC-API-01"],
+    ["city","web","H","API","Programme → Exam builder / Release","Build questions summing below total, release","The whole cohort fails silently","Mismatch warning + a release guard","Show SUM(marks); block release on mismatch","OPEN","CTY-API-07b"],
+    ["city","web","H","API","Programme → Exams → New exam","Pick an out-of-scope city and submit","403 after the full form is filled","Picker shows only in-scope cities","Scoped geography hook in the dialogs","OPEN","CTY-API-05"],
+    ["city","web","H","ERR","Programme → Exams → New exam","Create with an auto-generated OTP","OTP vanishes in a 4s toast, unrecoverable","Persistent code panel + copy + regenerate","Show the OTP in a dialog; add regenerate","NEW","CTY-API-07"],
+    ["city","web","H","API","Programme → Punya configs","Correct a wrong point value","No edit or deactivate control exists","Inline edit + active toggle","Add PATCH /punya/configs/:id + row edit","NEW","CTY-API-09"],
+    ["city","web","H","API","People → MSV applications","Approve an application","No rationale recorded — the note is dropped","Optional note captured like reject","Add a note dialog to approve","NEW","CTY-API-08"],
+    ["city","web","H","DSN","Operations → Library → Items","Edit and save a draft","No publish affordance, no draft/published state","Disabled publish + reason + a draft badge","Render disabled PublishControls for editors","OPEN","CTY-DSN-01"],
+    ["city","web","H","PRF","Operations → Donations","Scroll to the end of the list","Silently truncated at 100, no count","A load-more footer or “100 of N”","Adopt AdminLoadMore across the lists","OPEN","XC-WEB-02"],
+    ["city","web","H","ERR","Any admin mutation","Trigger a 403 / 409","Generic “Failed.” toast, no code mapping","A code-mapped message naming the fix","Shared describeApiError() + field errors","NEW","CTY-ERR-02"],
+    ["city","mobile","H","API","Admin → Courses → student → Certify","Certify while offline","The op queues and never drains for this role","Drains on reconnect","Run the sync loop for any role with work","OPEN","XC-MOB-01"],
+    ["city","web","M","API","Programme → Competitions / Quizzes","(shikshak types the URL) create","Full authoring works below the nav minimum","Guard parity in both directions","Align the server guard with the nav min","NEW","CTY-API-10"],
+    ["city","web","M","ERR","Programme → Quizzes → Add question","Open the dialog with the API failing","Empty pickers read as “empty scope”","Inline load error + retry","Surface picker load failures","NEW","CTY-ERR-03"],
+    ["city","web","M","DSN","Operations → Library / Media / Grading","Follow a shared link without the role","Silent bounce to the dashboard","A named restriction message","AdminRestricted card, not Redirect","NEW","CTY-DSN-04"],
+    ["city","web","M","DSN","Programme → Exams","Read the OTP column","Always “Set” — implies a retrievable code","“Access code: Required / Not required”","Rename the column; drop the plaintext branch","NEW","CTY-DSN-05"],
+    ["city","web","M","DSN","People → MSV applications","View status badges","Off-palette stock Tailwind colours","Status design tokens","Swap STATUS_STYLES to --status-* tokens","OPEN","CTY-DSN-03"],
+    ["city","web","M","PRF","Any dialog with a city picker","Open the dialog repeatedly","Full national geography re-fetched each time","A cached, scope-filtered lookup","useGeography() cache hook","OPEN","CTY-PRF-01"],
+    ["city","web","M","PRF","People → ID Cards / Award Punya","Search a student beyond the first 500","Not found; Award Punya can’t reach them at all","Server-side ?q= search","Add ?q= to /v1/admin/students","NEW","CTY-PRF-02"],
+
+    ["sanchalak","both","H","API","Manage → Niyam review","Approve an unbatched student’s submission","Disabled “another Guruji’s batch” / 404","Approve succeeds centre-wide","Reorder inBatchWriteScope null-batch guard","NEW","SAN-API-01"],
+    ["sanchalak","both","H","API","Batches","Change a batch’s day / time","No control exists","Edit timetable triggers AT9 rematerialise","Add a timetable editor calling the PATCH","NEW","SAN-API-06"],
+    ["sanchalak","web","H","API","Notices → New notice","Publish with the default audience","403 after full compose — it defaults to National","Only centre / batch offered, centre default","Filter AUDIENCE_LABEL by role","OPEN","SAN-API-02"],
+    ["sanchalak","web","H","API","Enrolments → Reject","Enter “x” as the reason","Rejection saved with “x”, sent to the parent","A 10–300 character reason enforced","min(10).max(300) + a real dialog","OPEN","SAN-API-03"],
+    ["sanchalak","web","H","API","Enrolments → Add enrolment","Search a student late in the alphabet","“No matching student” — only 50 loaded","Server ?q= search","Wire CommandInput to ?q=","NEW","SAN-API-04"],
+    ["sanchalak","web","H","API","Students","Find a deactivated student","No filter; the list caps at 100","Status filter + search + load more","Wire q / status / cursor into the fetch","NEW","SAN-API-07"],
+    ["sanchalak","web","H","ERR","Dashboard","Load with the API failing","Confident all-zero stats shown as fact","An error state with retry","Set an error state, not an empty catch","NEW","SAN-ERR-01"],
+    ["sanchalak","web","H","API","Gallery","Click Feature","Generic failure toast (a 403)","Control hidden with an explanation","Gate the button on canFeatureMedia(role)","NEW","SAN-API-05"],
+    ["sanchalak","web","M","ERR","Centres → Staffing","Load while the API errors","Empty lists read as “no staff”","An error card with retry","Keep an error state; don’t swallow catches","NEW","SAN-ERR-03"],
+    ["sanchalak","web","M","ERR","Students → Deactivate","Type a reason and confirm","The reason is discarded, no audit trail","Reason stored and audited","Persist the reason + write an audit entry","NEW","SAN-ERR-02"],
+    ["sanchalak","web","M","API","Award Punya","Enter points above the role cap","Blind rejection after submit","Cap + remaining-today shown up front","Fetch award-limit, clamp, send an idem key","NEW","SAN-API-08"],
+    ["sanchalak","mobile","M","API","Manage / Students","Award Punya to a child","No entry point; the card only offers Deactivate","Student card opens detail with an award sheet","Add a Punya tile + make rows tappable","OPEN","SAN-API-09"],
+    ["sanchalak","web","M","API","Attendance","Look for consecutive-absence alerts","Only a flat session table","Four alert groups with the parent phone","Render /attendance/alerts above the log","NEW","SAN-API-10"],
+    ["sanchalak","mobile","M","PRF","Holidays","Add a 20-day range","20 serial requests; a vague partial-failure","One ranged call with per-date results","A ranged holiday endpoint","NEW","SAN-PRF-01"],
+    ["sanchalak","web","M","PRF","Centres → Staffing → Batches","Reassign across several batches","8 serial writes; partial state on failure","A single atomic assignment call","A bulk batch-assignment endpoint","NEW","SAN-PRF-02"],
+    ["sanchalak","both","M","PRF","Service requests / Enrolments","Scroll past 100 rows","The list silently ends","Load more + a result count","AdminLoadMore + cursor on the mobile hooks","NEW","SAN-PRF-03"],
+    ["sanchalak","web","M","API","Typed URL (/geography, /settings, /team)","Visit an above-role page","National data + dead buttons render","An access-denied screen","Reuse the nav min as a route gate","NEW","SAN-API-11"],
+    ["sanchalak","web","M","DSN","Enrolments / Students / Gallery","Trigger a reason-required action","A native browser prompt — unstyled, no Hindi","A designed dialog with presets + counter","Replace prompts with Dialog components","NEW","SAN-DSN-02"],
+    ["sanchalak","web","M","DSN","Holidays / Attendance","Read the page subtitle","Rule IDs and route paths shown","A warm, human subtitle","Rewrite the subtitles in product voice","NEW","SAN-DSN-01"],
+    ["sanchalak","web","L","DSN","Dashboard","Read the approval queue","Identical anonymous “Enrolment request” rows","Child name, code and batch shown","Render the fields the API already returns","OPEN","SAN-DSN-04"],
+
+    ["shikshak","web","C","API","Attendance → Mark","Mark 3 absent and save","29 untouched students recorded present + Punya","Untouched students left unmarked","“Not marked” default; submit only changed rows","NEW","SHI-API-02"],
+    ["shikshak","mobile","C","API","Shivirs → Scan attendance","Scan cards with no network","Every scan fails and is discarded","Scans queue offline and sync later","Add an enqueueShivirScan producer","NEW","XC-MOB-02"],
+    ["shikshak","mobile","C","ERR","Session → Mark","Save on a cancelled / out-of-window session","Green “Saved — queued” success banner","A conflict banner explaining the rejection","Surface the attendance queue via SyncOpStatus","NEW","SHI-ERR-01"],
+    ["shikshak","mobile","H","API","Dashboard → session → Mark","Mark a late arrival","Only Present / Absent available","Late and excused selectable","Add late/excused to the roster control","OPEN","SHI-API-04"],
+    ["shikshak","mobile","H","ERR","Dashboard","Relaunch offline at a centre","“No sessions today” — no roster reachable","Cached sessions render from disk","Add [“me”,“today”] to the persist allow-list","REG","SHI-ERR-05"],
+    ["shikshak","mobile","H","API","Session → Mark","Tap “All present” with pre-notified absences","Excused prefill destroyed, unrestorable","Pre-notified rows preserved, reason shown","Preserve suggested_status; show absence_reason","NEW","SHI-API-06"],
+    ["shikshak","mobile","H","ERR","Dashboard","Close the check-out sheet while queued, sync fails","No state shown, no retry possible","A failed banner with manual retry","Read the checkout queue in today.tsx","NEW","SHI-ERR-07"],
+    ["shikshak","mobile","M","ERR","Background sync","Server returns 422 / 401 for the batch","10 futile retries over ~25 minutes","Immediate terminal failed state","Read err.statusCode, not err.status","NEW","SHI-ERR-08"],
+    ["shikshak","web","M","API","Attendance → centre","Click Mark on another Guruji’s batch","Roster opens, save 403s after the work","Mark disabled with a scope note","Return can_mark per row","NEW","SHI-API-09"],
+    ["shikshak","mobile","M","API","Students → student → Niyam review","Student’s submission is past page 1","“No pending Niyams” — pagination stalls","The student’s pending rows listed","Pass student_id to /pending","NEW","SHI-API-10"],
+    ["shikshak","mobile","M","API","Dashboard → Start with location","GPS returns no accuracy value","Recorded as 0 m — a pinpoint fix","Recorded as null / unverified","Send null accuracy, not 0","NEW","SHI-API-13"],
+    ["shikshak","mobile","M","ERR","Homework → assignment → Approve ready","4 of 30 fail server-side","Only “26 approved” — failures silent","skipped / failed counts surfaced","Print skipped/failed; state notify volume","OPEN","SHI-ERR-14"],
+    ["shikshak","mobile","M","ERR","Guruji menu → Join approvals","Load fails or the list is empty","Bare error string, no retry, no spinner","StateView triad + confirm on approve","Port to React Query + StateView","NEW","SHI-ERR-11"],
+    ["shikshak","mobile","M","PRF","Dashboard","Open on a slow link","Full rosters for all batches downloaded, discarded","Counts-only list, roster on demand","Seed the session cache from the today payload","NEW","SHI-PRF-12"],
+    ["shikshak","mobile","M","DSN","Any list with a status pill","View in Hindi","Raw enum “in_progress” / “active”","A localised sentence-case label","Export statusLabel and reuse it","NEW","SHI-DSN-15"],
+    ["shikshak","mobile","M","PRF","Courses → student tree","Leave the screen open","2 storage reads / second with an empty queue","Event-driven updates","subscribeQueue; poll only when pending","NEW","SHI-PRF-16"],
+    ["shikshak","mobile","L","ERR","Niyam review → select → Approve","Some rows skipped","Raw UUIDs listed in an alert","Student names + the reason","Map ids to student_name","NEW","SHI-ERR-17"],
+    ["shikshak","mobile","L","PRF","Niyam review","Multi-select 20 of 90 rows","The whole visible list re-renders per tap","Only the tapped row re-renders","memo ReviewRow; index by id","NEW","SHI-PRF-19"],
+    ["shikshak","both","L","API","Guruji menu","Look for notices","No mobile entry — the web nav row exists","Notices reachable on mobile","Add /notices to SHIKSHAK_ACTIONS","NEW","SHI-API-18"],
+    ["shikshak","mobile","L","API","Homework → New","Type the date as DD-MM-YYYY","Server 422 in an alert after submit","Inline validation or a date picker","Add a date picker","NEW","SHI-API-20"],
+
+    ["parent","both","C","API","Join approval → student mobile OTP","Sign in as an under-13 student","Full student app, no age gate","Login blocked below 13","Age-gate at provision + auth service","OPEN","PAR-API-01"],
+    ["parent","mobile","C","API","Niyams → Submit Niyam","Submit with proof while offline","“Submission failed” — proof and submission lost","“Saved offline — will sync”","enqueueNiyamSubmission + the media queue","OPEN","XC-MOB-02"],
+    ["parent","mobile","C","API","Homework → Submit","Submit offline, reconnect later","Op stranded in the local queue indefinitely","Drains on reconnect and confirms","Run the sync loop for any role with work","NEW","XC-MOB-01"],
+    ["parent","both","H","API","Any screen after a child is deactivated","Open the app","Inactive child auto-selected, every screen 404s","Inactive children hidden from the switcher","Reuse ownedStudentsCondition in /me/children","NEW","PAR-API-04"],
+    ["parent","both","H","API","(no route exists)","Try to apply for MSV","No entry point anywhere in the app","Apply form + status card wired to /v1/msv","Build the MSV apply + status screen","NEW","PAR-API-05"],
+    ["parent","mobile","H","API","Competitions","Register child A, switch to child B","Child B shown registered, can’t register","Per-child registration state from the server","Return registered_student_ids; key by student","OPEN","PAR-API-07"],
+    ["parent","mobile","H","API","Header bell → Notifications","Scroll past 50 items","The list ends silently, older items unreachable","Loads the next page on scroll","useInfiniteQuery with next_cursor","NEW","PAR-API-08"],
+    ["parent","mobile","H","ERR","Homework","Submit offline, leave, come back","No sign it queued; failures invisible","Per-row queued / syncing / failed badge + retry","Mount SyncOpStatus on the homework rows","NEW","XC-MOB-03"],
+    ["parent","web","H","API","/courses","Parent of 2 children in different cities","Merged catalogue, wrong child’s cert badges","A child selector scoping both calls","Add a child picker; pass student_id","NEW","PAR-API-10"],
+    ["parent","mobile","M","API","Profile → Gallery visibility","Toggle off, return to home","The child’s photo is still on the carousel","Photos gone immediately","Invalidate gallery keys; optimistic switch","NEW","PAR-API-13"],
+    ["parent","both","M","ERR","Submit Niyam / Start exam","Multi-child parent acting for a 2nd+ child","429 with a generic failure message","Per-student budget; 429 states the wait","Key limiters on (user, student) + 429 copy","OPEN","PAR-API-11"],
+    ["parent","mobile","M","DSN","Attendance → Notify leave","Type dates dd-mm-yyyy, or pick a holiday week","Format error / a silent no-op notice","Date picker, min date, holiday awareness","DateTimePicker + pass holidays into the modal","NEW","PAR-DSN-16"],
+    ["parent","mobile","M","PRF","Homework → All children","Year-end feed of hundreds of rows","Long blank wait then jank / memory spike","A paged FlatList, one page per scroll","useInfiniteQuery + FlatList","NEW","PAR-PRF-22"],
+    ["parent","mobile","M","DSN","Homework","Hindi-preference parent views an assignment","Mixed-script card, body English only","Bilingual title / description with fallback","Add title_hi / description_hi","OPEN","PAR-DSN-15"],
+    ["parent","both","M","API","Courses catalogue","Course renamed after a certificate issued","The certificate badge disappears","Badge follows course_id, survives renames","Return course_id on cert rows; match on it","NEW","PAR-API-18"],
+    ["parent","mobile","M","DSN","Profile → Delete my account","Read the confirmation","Claims permanent deletion of child records","States closure + 30-day purge + re-enrol path","Rewrite copy to match soft-delete (Q11)","NEW","PAR-DSN-19"],
+
+    ["student","mobile","H","API","Quizzes → Start quiz","App killed mid-attempt, then Resume","All answers lost, the attempt slot consumed","Answers restored from the server","Add quiz answer autosave, mirror exams","OPEN","STU-API-06"],
+    ["student","mobile","M","API","Punya tab","Student with more than 50 transactions","Ledger stops at 50, the total doesn’t reconcile","Paged ledger or an explicit truncation notice","Add cursor paging to punya transactions","NEW","STU-API-14"],
+    ["student","mobile","M","DSN","Punya tab","Switch the app to Hindi","Ledger rows in English key-case","Devanagari feature labels","A bilingual feature_key label map","NEW","STU-DSN-12"],
+    ["student","mobile","M","ERR","Quizzes → Start quiz","Start / submit fails in a Hindi session","English-only alert, no fix stated","Bilingual “problem + fix” from the screen","Move onError to the screen; hi/en copy","NEW","PAR-ERR-17"],
+    ["student","mobile","L","DSN","Course detail / SR thread","View in Hindi","A CJK period; English-only timestamps","Devanagari punctuation; locale-aware dates","Fix punctuation; pass locale to toLocaleString","NEW","PAR-DSN-20"],
+
+    ["guest","both","C","API","Home → Join → Student","Open the form while the API is down","“Registration is closed”","“Couldn’t load — check connection, retry”","Split the load-error state from closed","NEW","GST-API-01"],
+    ["guest","mobile","H","API","More → Donate / Enquire","Make a donation or send an enquiry","A mailto composer opens, no API call","In-app forms posting to /donations, /enquiries","Port DonatePage / EnquirePage to mobile","NEW","GST-API-03"],
+    ["guest","both","H","API","Join → Student → Submit","Pay the registration fee","Only “Done”; the payment screen is unreachable","“Complete payment” CTA with code prefilled","Add the complete-payment CTA to the done screen","NEW","GST-API-02"],
+    ["guest","web","H","ERR","Home → Centres (also Shivirs, Donate)","Browse while the API is down","“No centres listed yet” — looks empty","An error state naming the failure + Retry","Add an error state; stop the no-op catch","NEW","XC-WEB-03"],
+    ["guest","web","H","ERR","Centres → a centre (also /register)","Open a detail page during a 5xx","“Centre not found” / “No form available”","A distinct load-failure state with retry","Separate 404 from the catch / 5xx path","NEW","GST-ERR-02"],
+    ["guest","web","H","PRF","Library → section → text","Browse two levels deep","The full library corpus downloaded 3×","One index fetch + one per-section fetch","Use /public/library/sections/:id; share a cache","NEW","GST-PRF-01"],
+    ["guest","both","M","DSN","Enquire / Register / Complete payment","Submit an invalid form in Hindi","English server text inside a Hindi page","Localized copy keyed off error.code","messageForCode(code, locale) helper","NEW","GST-API-05"],
+    ["guest","web","M","DSN","Direct URL /about or /msv","Read about MSV in Hindi","English-only stub text","Bilingual copy, same as mobile /info/msv","Reuse the mobile CONTENT map on web","NEW","GST-DSN-02"],
+    ["guest","mobile","M","DSN","More → Team (also Gallery, Panchang)","Browse in Hindi","English header titles above Hindi content","Localized titles","Localize stack titles like join/_layout","NEW","GST-DSN-01"],
+    ["guest","web","M","DSN","Library / Courses / Gallery / Notices","Hit a server error","“Library request failed (502)” — raw, English","Localized “problem + fix” copy","Replace Error.message with a localized pair","NEW","GST-DSN-03"],
+    ["guest","web","M","DSN","Centres / Shivirs / Notices / Register","Wait for first paint in Hindi","English “Loading…”","“लोड हो रहा है…”","Localize the loading strings","NEW","GST-DSN-04"],
+    ["guest","mobile","M","PRF","Centres tab (also Shivirs, Notices)","Scroll a large network list","All rows mounted, janky scroll","A virtualized list","Convert the maps to FlatList / SectionList","NEW","GST-PRF-02"],
+    ["guest","mobile","M","ERR","Centres / Shivirs / Notices tab","Reopen the app offline","Error state, no content","A cached list with an offline notice","Add the public keys to the persist allow-list","NEW","GST-ERR-03"],
+    ["guest","both","M","API","Enquire → Register","Fill a parent / shikshak registration form","Only the student form exists; no mobile UI","A kind selector on web; a mobile screen","Add a kind selector; port to mobile","NEW","GST-API-06"],
+    ["guest","both","M","API","Centres → a centre","Check when the centre is closed","No holiday information shown","Published holidays listed under batches","Render /v1/centres/:id/holidays","NEW","GST-API-07"],
+    ["guest","mobile","M","API","Join → Shikshak → Complete payment","Pay by UPI","UPI id as plain text, no QR","The QR image + payee name","Add payment_qr_image to the mobile settings type","NEW","GST-API-08"],
+    ["guest","mobile","M","API","Sign in tab (vs More → Sign in)","Sign in mid-task","Inline flow ignores returnTo, loses OTP on tab switch","One shared flow honouring returnTo","Redirect the guest-home CTA to /auth/phone","NEW","GST-API-09"],
+    ["guest","mobile","M","API","Sign in → Browse grid / More","Browse the course catalogue","No Courses entry point in guest chrome","A Courses tile linking to /courses","Add Courses to GUEST_BROWSE_ACTIONS","OPEN","GST-API-12"],
+    ["guest","web","M","API","Library → Panchang","Look up today’s tithi","“Panchang will be available here soon”","A month calendar (mobile already has it)","Port PanchangMonthCalendar to web","NEW","GST-API-04"],
+    ["guest","both","L","API","Home → Join","See which paths are open","Cards flash “Open” then flip; outage → all “Closed”","A loading state, then true status","Add a loading state; don’t default to open","NEW","GST-API-10"],
+    ["guest","both","L","API","Join → Complete payment","Try sequential registration codes","Each code discloses a name + a writable id","Throttle + mobile-number confirmation","Require a mobile match; client backoff","NEW","GST-API-11"],
+    ["guest","both","M","PRF","Join → Student → City","Pick a city","Full national catalogue downloaded + mounted","Server-side search / a capped list","Add ?q= to cities and centres","NEW","GST-PRF-03"],
+    ["guest","both","L","API","Home → Courses","Browse the catalogue","Every active course listed, uncapped","Only public-flagged courses, paginated","Add an is_public filter + limit","OPEN","GST-API-13"],
+    ["guest","web","L","DSN","Home → Team → a city","Load the roster","Dozens of failed localhost debug POSTs per page","No debug telemetry","Delete both #region agent log blocks","OPEN","XC-WEB-04"],
+    ["guest","web","L","ERR","Gallery (also Notices, Team, Courses)","Recover after a transient failure","A static error card, reload required","A “Try again” button","Hoist the loader into a retry handler","NEW","GST-ERR-04"],
+    ["guest","web","L","DSN","Donate → complete a donation","See the confirmation","Amber badge outside the palette, ALL CAPS","gold / accent token, sentence case","Swap the amber classes for tokens","NEW","GST-DSN-05"]
+  ];
+
+  const personaLabel = Object.fromEntries(PERSONAS);
+  const state = { persona: "all", sev: new Set(["C","H","M","L"]), q: "" };
+
+  // Scorecard
+  const sb = document.getElementById("scoreBody");
+  SCORE.forEach(row => {
+    const tr = document.createElement("tr");
+    const cells = [`<td class="persona">${row[0]}</td>`];
+    for (let i=1;i<=4;i++){ const c=row[i]; cells.push(`<td><span class="rag ${c}"><span class="bulb"></span>${RAGTXT[c]}</span></td>`); }
+    tr.innerHTML = cells.join("");
+    sb.appendChild(tr);
+  });
+
+  // Cross-cutting
+  const xg = document.getElementById("xcGrid");
+  XC.forEach(x => {
+    const d = document.createElement("div");
+    d.className = "xc"; d.style.setProperty("--x", x[2]);
+    d.innerHTML = `<h3>${x[1]} <span class="id">${x[0]}</span></h3><p>${x[3]}</p>`;
+    xg.appendChild(d);
+  });
+
+  // Persona chips
+  const pc = document.getElementById("personaChips");
+  const counts = {}; D.forEach(d => counts[d[0]] = (counts[d[0]]||0)+1);
+  const allChip = mkChip("All", "all", D.length, true);
+  pc.appendChild(allChip);
+  PERSONAS.forEach(([k,label]) => { if (counts[k]) pc.appendChild(mkChip(label, k, counts[k])); });
+  function mkChip(label, val, cnt, pressed){
+    const b = document.createElement("button");
+    b.className = "chip"; b.setAttribute("aria-pressed", pressed?"true":"false"); b.dataset.persona = val;
+    b.innerHTML = `${label} <span class="cnt">${cnt}</span>`;
+    b.onclick = () => { state.persona = val; [...pc.children].forEach(c=>c.setAttribute("aria-pressed", c.dataset.persona===val?"true":"false")); render(); };
+    return b;
+  }
+
+  // Severity chips
+  const sc = document.getElementById("sevChips");
+  ["C","H","M","L"].forEach(k => {
+    const [name,color] = SEV[k];
+    const n = D.filter(d=>d[2]===k).length;
+    const b = document.createElement("button");
+    b.className = "chip sev"; b.setAttribute("aria-pressed","true"); b.dataset.sev = k; b.style.setProperty("--sc", color);
+    b.innerHTML = `<span class="sq"></span>${name} <span class="cnt">${n}</span>`;
+    b.onclick = () => { b.getAttribute("aria-pressed")==="true" ? (state.sev.delete(k), b.setAttribute("aria-pressed","false")) : (state.sev.add(k), b.setAttribute("aria-pressed","true")); render(); };
+    sc.appendChild(b);
+  });
+
+  const searchEl = document.getElementById("search");
+  searchEl.oninput = () => { state.q = searchEl.value.trim().toLowerCase(); render(); };
+  document.getElementById("resetBtn").onclick = () => {
+    state.persona="all"; state.sev=new Set(["C","H","M","L"]); state.q=""; searchEl.value="";
+    [...pc.children].forEach(c=>c.setAttribute("aria-pressed", c.dataset.persona==="all"?"true":"false"));
+    [...sc.children].forEach(c=>c.setAttribute("aria-pressed","true"));
+    render();
+  };
+
+  const list = document.getElementById("issueList");
+  const empty = document.getElementById("emptyState");
+  const countLive = document.getElementById("countLive");
+  const SEVORDER = { C:0, H:1, M:2, L:3 };
+
+  function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+  function render(){
+    const rows = D.filter(d => {
+      if (state.persona !== "all" && d[0] !== state.persona) return false;
+      if (!state.sev.has(d[2])) return false;
+      if (state.q){
+        const hay = (d[4]+" "+d[5]+" "+d[6]+" "+d[7]+" "+d[8]+" "+d[10]+" "+personaLabel[d[0]]).toLowerCase();
+        if (!hay.includes(state.q)) return false;
+      }
+      return true;
+    }).sort((a,b)=> SEVORDER[a[2]]-SEVORDER[b[2]]);
+
+    countLive.innerHTML = `<b>${rows.length}</b> of ${D.length}`;
+    list.innerHTML = rows.map(d => {
+      const [p,s,v,dim,nav,act,obs,exp,fix,base,id] = d;
+      const [sevName,sevColor] = SEV[v];
+      return `<article class="issue" style="--sc:${sevColor}">
+        <div class="issue-top">
+          <span class="sev-pill">${sevName}</span>
+          <span class="tag persona">${personaLabel[p]}</span>
+          <span class="tag surface">${s}</span>
+          <span class="tag dim">${DIM[dim]}</span>
+          <span class="base ${base}">${base}</span>
+          <span class="id-tag">${id}</span>
+        </div>
+        <div class="issue-nav"><span class="path">${esc(nav)}</span><span class="arrow">→</span><span class="act">${esc(act)}</span></div>
+        <div class="oe">
+          <div class="obs"><div class="oe-lbl">Observed</div><div class="oe-txt">${esc(obs)}</div></div>
+          <div class="exp"><div class="oe-lbl">Expected</div><div class="oe-txt">${esc(exp)}</div></div>
+        </div>
+        <div class="fix"><span class="fx-lbl">Fix</span><span class="fx-txt">${esc(fix)}</span></div>
+      </article>`;
+    }).join("");
+    empty.style.display = rows.length ? "none" : "block";
+    list.style.display = rows.length ? "flex" : "none";
+  }
+  render();
+
+  // Theme toggle
+  const tb = document.getElementById("themeBtn");
+  const ti = document.getElementById("themeIcon");
+  const tt = document.getElementById("themeTxt");
+  function sysDark(){ return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches; }
+  let mode = null; // null = system
+  function apply(){
+    const root = document.documentElement;
+    if (mode === null){ root.removeAttribute("data-theme"); tt.textContent="System"; ti.textContent="◐"; }
+    else { root.setAttribute("data-theme", mode); tt.textContent = mode==="dark"?"Dark":"Light"; ti.textContent = mode==="dark"?"●":"○"; }
+  }
+  tb.onclick = () => {
+    const eff = mode===null ? (sysDark()?"dark":"light") : mode;
+    mode = eff==="dark" ? "light" : "dark";
+    apply();
+  };
+  apply();
+</script>

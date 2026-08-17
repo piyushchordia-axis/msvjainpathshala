@@ -89,6 +89,13 @@ export function NotificationsInbox() {
       data={rows}
       keyExtractor={keyExtractor}
       renderItem={renderItem}
+      // Older notifications past the first page were unreachable before this.
+      onEndReachedThreshold={0.4}
+      onEndReached={() => {
+        if (notifications.hasNextPage && !notifications.isFetchingNextPage) {
+          void notifications.fetchNextPage();
+        }
+      }}
       ListEmptyComponent={
         <StateView
           status="empty"

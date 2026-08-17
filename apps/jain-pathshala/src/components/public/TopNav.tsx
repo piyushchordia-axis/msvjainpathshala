@@ -26,6 +26,7 @@ const GUEST_NAV_ITEMS = [
 
 const MEMBER_NAV_EXTRA = [
   { href: '/exams', label: 'My exams', label_hi: 'मेरी परीक्षाएँ' },
+  { href: '/my-msv', label: 'MSV', label_hi: 'MSV' },
 ] as const;
 
 /** Compact EN | हिं segment — works on narrow screens. */

@@ -18,7 +18,7 @@ import { auditFromReq } from "../../lib/audit";
 import { signUploadUrl } from "../../lib/file-tokens";
 import { verifyCardSignature } from "../../lib/idcard-crypto";
 import { upsertIdCardArt } from "../../lib/idcard-render";
-import { inScope } from "../../lib/route-helpers";
+import { inScope, ownedStudentsCondition } from "../../lib/route-helpers";
 import { enqueueJob } from "../../lib/queues";
 import { ulid } from "../../lib/ulid";
 import { IDCARD_CHUNK_SIZE } from "../../jobs/idcard-jobs";
@@ -245,7 +245,8 @@ router.get("/mine", async (req: Request, res: Response) => {
     .select({ id: students.id })
     .from(students)
     .where(
-      and(eq(students.id, studentId), or(eq(students.parent_id, uid), eq(students.user_id, uid))),
+      // Q11 — shared ownership predicate (excludes soft-deleted and inactive students).
+      and(eq(students.id, studentId), ownedStudentsCondition(uid)),
     )
     .limit(1);
   if (!owned) {

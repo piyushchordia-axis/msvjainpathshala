@@ -67,7 +67,7 @@ export default function LearnerCourseDetailScreen() {
         ) : !activeStudentId ? (
           <StateView
             status="empty"
-            emptyText={hi ? "पहले बच्चा चुनें。" : "Pick a child first."}
+            emptyText={hi ? "पहले बच्चा चुनें।" : "Pick a child first."}
           />
         ) : (
           <>

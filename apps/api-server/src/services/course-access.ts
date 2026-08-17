@@ -2,7 +2,7 @@
  * Shared scope checks for online course routes and sync/batch handlers.
  */
 import type { User } from "@workspace/db";
-import { ageYearsFromDob } from "@workspace/db/enums";
+import { meetsStudentViewAge } from "@workspace/api-zod";
 import { hasMinRole } from "../lib/roles";
 import { resolveAdminScope, inBatchWriteScope } from "../lib/scope";
 import { loadActiveStudent } from "../lib/course-visibility";
@@ -48,7 +48,7 @@ export async function assertCourseProgressWriteAccess(
         message: "You can only update your own course progress.",
       };
     }
-    if (!stu.dob || ageYearsFromDob(stu.dob) < 13) {
+    if (!meetsStudentViewAge(stu.dob)) {
       return {
         ok: false,
         code: "ERR_FORBIDDEN",

@@ -44,9 +44,14 @@ export function DeleteAccountButton() {
   function confirm() {
     Alert.alert(
       hi ? "खाता हटाएं?" : "Delete account?",
+      // Truthful copy: this soft-deletes the login and schedules a purge of
+      // personal data. It does NOT erase the child's pathshala record — Q11
+      // requires students to be deactivated and re-activatable, never deleted.
+      // The old wording promised permanent erasure and said it could not be
+      // undone; both were wrong, in opposite directions.
       hi
-        ? "इससे आपका खाता और आपकी जानकारी (प्रोफ़ाइल, उपस्थिति, गृहकार्य, परीक्षा, नियम, ID कार्ड) स्थायी रूप से हटा दी जाएगी। यह वापस नहीं किया जा सकता।"
-        : "This permanently deletes your account and your data — profile, attendance, homework, exams, niyams, and ID card. This cannot be undone.",
+        ? "इससे आपका लॉगिन बंद हो जाएगा और आपकी व्यक्तिगत जानकारी 30 दिनों में हटा दी जाएगी। आपके बच्चे का पाठशाला रिकॉर्ड केंद्र के पास रहेगा। दोबारा खाता खोलने के लिए अपने केंद्र से संपर्क करें।"
+        : "This closes your login and removes your personal data within 30 days. Your child's pathshala record stays with the centre. To re-open the account, contact your centre.",
       [
         { text: hi ? "रद्द करें" : "Cancel", style: "cancel" },
         {

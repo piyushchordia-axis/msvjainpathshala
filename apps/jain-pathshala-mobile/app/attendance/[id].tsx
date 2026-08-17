@@ -21,6 +21,7 @@ import {
   type AttendanceMark,
   type AttendanceRosterRow as RosterEntry,
 } from "@/lib/queries";
+import { sessionStatusLabel } from "@/lib/status-labels";
 import { ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 import { bodyFamily } from "@/constants/typography";
@@ -77,7 +78,12 @@ export default function AttendanceMarkScreen() {
     (value: AttendanceMark) => {
       setFeedback(null);
       const next: Record<string, AttendanceMark> = {};
-      for (const r of roster) next[r.student_id] = value;
+      for (const r of roster) {
+        // AT4 — a pre-notified absence is information the parent gave us, not a
+        // blank to overwrite. "All present" used to destroy it irrecoverably,
+        // marking the child present and awarding Punya they did not earn (AT2).
+        next[r.student_id] = r.suggested_status === "excused" ? "excused" : value;
+      }
       setMarks(next);
     },
     [roster],
@@ -101,13 +107,51 @@ export default function AttendanceMarkScreen() {
       },
       {
         onSuccess: (res) => {
+          // The server may have rejected these marks outright (cancelled session,
+          // AT26 edit window). Reporting that as "Saved" left the Guruji believing
+          // work had landed that never would.
+          if (res.sync_state === "conflict" || res.sync_state === "failed") {
+            if (Platform.OS !== "web") {
+              void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+            }
+            const code = res.sync_error?.code ?? "";
+            const isCancelled = code === "ERR_SESSION_CANCELLED";
+            const isWindow = code === "ERR_ATTENDANCE_EDIT_WINDOW_EXPIRED";
+            setFeedback({
+              tone: "error",
+              title: isCancelled
+                ? hi ? "यह कक्षा रद्द है" : "This class was cancelled"
+                : isWindow
+                  ? hi ? "समय सीमा समाप्त" : "Editing window closed"
+                  : hi ? "दर्ज नहीं हो सका" : "Couldn't save",
+              detail: isCancelled
+                ? hi
+                  ? "संचालक ने यह सत्र रद्द कर दिया है। उपस्थिति दर्ज नहीं की जा सकती — संचालक से बात करें।"
+                  : "The Sanchalak cancelled this session, so attendance can't be recorded. Speak to them if this looks wrong."
+                : isWindow
+                  ? hi
+                    ? "इस तिथि की उपस्थिति अब बदली नहीं जा सकती। संचालक से सुधार करवाएं।"
+                    : "Attendance for this date can no longer be changed. Ask your Sanchalak to correct it."
+                  : (res.sync_error?.message ??
+                    (hi ? "पुनः प्रयास करें।" : "Please try again.")),
+            });
+            return;
+          }
+
           if (Platform.OS !== "web") void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          const landed = res.sync_state === "synced" || res.sync_state === "duplicate";
           setFeedback({
             tone: "success",
-            title: hi ? "ऑफ़लाइन कतार में" : "Saved — will sync",
-            detail: hi
-              ? `${res.marked} विद्यार्थी सहेजे गए। नेटवर्क पर सिंक होगा।`
-              : `${res.marked} student(s) queued. Syncs when online.`,
+            title: landed
+              ? hi ? "दर्ज हो गया" : "Attendance saved"
+              : hi ? "ऑफ़लाइन कतार में" : "Saved — will sync",
+            detail: landed
+              ? hi
+                ? `${res.marked} विद्यार्थी दर्ज किए गए।`
+                : `${res.marked} student(s) recorded.`
+              : hi
+                ? `${res.marked} विद्यार्थी सहेजे गए। नेटवर्क पर सिंक होगा।`
+                : `${res.marked} student(s) queued. Syncs when online.`,
           });
         },
         onError: (err) => {
@@ -129,6 +173,7 @@ export default function AttendanceMarkScreen() {
         name={item.full_name ?? item.student_code}
         code={item.student_code}
         status={marks[item.student_id]}
+        absenceReason={item.absence_reason}
         hi={hi}
         onMark={onMark}
       />
@@ -192,7 +237,7 @@ export default function AttendanceMarkScreen() {
               {[session.centre_name, formatDate(session.session_date)].filter(Boolean).join(" · ")}
             </Body>
           </View>
-          <Pill label={session.status} tone={cancelled ? "error" : "neutral"} />
+          <Pill label={sessionStatusLabel(session.status, hi)} tone={cancelled ? "error" : "neutral"} />
         </Row>
         {session.topic ? (
           <Body muted numberOfLines={1} style={{ fontSize: 13 }}>
