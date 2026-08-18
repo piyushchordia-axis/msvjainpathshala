@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Loader2, Plus, Trash2 } from "lucide-react";
 import { apiDelete, apiPatch, apiPost, ApiError } from "@/lib/api-client";
 import { toast } from "@/components/ui/toast-jp";
@@ -22,16 +22,25 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TARJ_MAX_LEN } from "@workspace/api-zod";
+import { useConfirm } from "@/components/admin/use-confirm";
 import { PublishControls } from "./PublishControls";
 import { RestrictedHtmlEditor } from "./RestrictedHtmlEditor";
 import {
   flattenLibraryItems,
   formatBytes,
+  hasUnpublishedChanges,
   type LibraryAdminItem,
   type LibraryAdminSection,
 } from "./library-admin-types";
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "";
+
+/** "4:07" — a duration an editor can compare against the recording they meant. */
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -51,10 +60,12 @@ interface Props {
 
 export function LibraryItemsPanel({ sections, canPublish, initialItemId, onChanged }: Props) {
   const allItems = useMemo(() => flattenLibraryItems(sections), [sections]);
+  const { confirm, confirmDialog } = useConfirm();
   const [q, setQ] = useState("");
   const [sectionFilter, setSectionFilter] = useState<string>("all");
   const [pubFilter, setPubFilter] = useState<"all" | "published" | "draft">("all");
   const [createOpen, setCreateOpen] = useState(false);
+  const [editorDirty, setEditorDirty] = useState(false);
   const [editItem, setEditItem] = useState<LibraryAdminItem | null>(() => {
     if (!initialItemId) return null;
     return allItems.find((i) => i.id === initialItemId) ?? null;
@@ -83,8 +94,24 @@ export function LibraryItemsPanel({ sections, canPublish, initialItemId, onChang
     }
   }
 
+  async function closeEditor() {
+    if (editorDirty) {
+      const discard = await confirm({
+        title: "Discard your changes?",
+        destructive: true,
+        confirmLabel: "Discard changes",
+        cancelLabel: "Keep editing",
+        body: <p>This item has edits you have not saved yet. Closing loses them.</p>,
+      });
+      if (!discard) return;
+    }
+    setEditorDirty(false);
+    setEditItem(null);
+  }
+
   return (
     <div className="space-y-4">
+      {confirmDialog}
       <div className="flex flex-wrap items-end gap-3">
         <div className="min-w-[180px] flex-1 space-y-1">
           <Label className="text-xs">Search</Label>
@@ -181,6 +208,7 @@ export function LibraryItemsPanel({ sections, canPublish, initialItemId, onChang
                     <PublishControls
                       canPublish={canPublish}
                       isPublished={item.is_published}
+                      hasChanges={hasUnpublishedChanges(item)}
                       busy={busyId === item.id}
                       onPublish={() => void publish(item.id, true)}
                       onUnpublish={() => void publish(item.id, false)}
@@ -196,7 +224,10 @@ export function LibraryItemsPanel({ sections, canPublish, initialItemId, onChang
       <Dialog
         open={!!editItem}
         onOpenChange={(o) => {
-          if (!o) setEditItem(null);
+          if (o) return;
+          // Esc and a backdrop click used to discard a half-written stavan with
+          // no warning — the same gesture people use to dismiss a toast.
+          void closeEditor();
         }}
       >
         <DialogContent className="max-h-[92vh] overflow-y-auto sm:max-w-2xl">
@@ -205,7 +236,12 @@ export function LibraryItemsPanel({ sections, canPublish, initialItemId, onChang
               key={editItem.id}
               item={editItem}
               canPublish={canPublish}
-              onClose={() => setEditItem(null)}
+              onDirtyChange={setEditorDirty}
+              onRequestClose={() => void closeEditor()}
+              onClose={() => {
+                setEditorDirty(false);
+                setEditItem(null);
+              }}
               onChanged={async () => {
                 await onChanged();
                 const fresh = await apiGetItem(editItem.id);
@@ -320,7 +356,11 @@ function CreateItemForm({
           <Input value={titleEn} onChange={(e) => setTitleEn(e.target.value)} />
         </FormRow>
         <FormRow label="Title (HI)">
-          <Input value={titleHi} onChange={(e) => setTitleHi(e.target.value)} />
+          <Input
+            className="field-devanagari"
+            value={titleHi}
+            onChange={(e) => setTitleHi(e.target.value)}
+          />
         </FormRow>
         <FormRow label="Title (GU)">
           <Input value={titleGu} onChange={(e) => setTitleGu(e.target.value)} />
@@ -344,11 +384,21 @@ function ItemEditor({
   canPublish,
   onClose,
   onChanged,
+  onDirtyChange,
+  onRequestClose,
 }: {
   item: LibraryAdminItem;
   canPublish: boolean;
+  /** Closes immediately — for after a delete, where nothing is left to keep. */
   onClose: () => void;
   onChanged: () => Promise<void>;
+  /** Lets the surrounding Dialog refuse to discard unsaved edits. */
+  onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * Asks to close, and may refuse. The footer button uses this; `onClose`
+   * would let the most obvious way out be the one that discards silently.
+   */
+  onRequestClose?: () => void;
 }) {
   const [lang, setLang] = useState<"en" | "hi" | "gu">("en");
   const [titleEn, setTitleEn] = useState(item.draft.title_en);
@@ -367,6 +417,25 @@ function ItemEditor({
   const [youtube, setYoutube] = useState(item.draft.youtube_url ?? "");
   const [busy, setBusy] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
+  const { confirm, confirmDialog } = useConfirm();
+
+  // Compared against the draft the editor opened with, so saving clears it and
+  // typing a character then deleting it does not leave a false warning.
+  const dirty =
+    titleEn !== item.draft.title_en ||
+    titleHi !== (item.draft.title_hi ?? "") ||
+    titleGu !== (item.draft.title_gu ?? "") ||
+    textEn !== (item.draft.text_content_en ?? "") ||
+    textHi !== (item.draft.text_content_hi ?? "") ||
+    textGu !== (item.draft.text_content_gu ?? "") ||
+    tarjEn !== (item.draft.tarj_en ?? "") ||
+    tarjHi !== (item.draft.tarj_hi ?? "") ||
+    externalUrl !== (item.draft.external_url ?? "") ||
+    youtube !== (item.draft.youtube_url ?? "");
+
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
 
   async function save() {
     setBusy(true);
@@ -429,9 +498,18 @@ function ItemEditor({
   }
 
   async function removePdf() {
-    if (!window.confirm("Remove the draft PDF? The published file is untouched until you publish again.")) {
-      return;
-    }
+    const ok = await confirm({
+      title: "Remove the draft PDF?",
+      destructive: true,
+      confirmLabel: "Remove draft PDF",
+      body: (
+        <p>
+          Readers keep seeing the currently published PDF until you publish this item again.
+          You can upload a replacement at any time.
+        </p>
+      ),
+    });
+    if (!ok) return;
     setPdfBusy(true);
     try {
       await apiDelete(`/v1/admin/library/items/${item.id}/pdf`);
@@ -441,6 +519,31 @@ function ItemEditor({
       toast.error(err instanceof ApiError ? err.message : "Could not remove the PDF.");
     } finally {
       setPdfBusy(false);
+    }
+  }
+
+  async function removeAudio() {
+    const ok = await confirm({
+      title: "Remove the draft audio?",
+      destructive: true,
+      confirmLabel: "Remove draft audio",
+      body: (
+        <p>
+          Readers keep hearing the currently published recording until you publish this item
+          again. You can upload a replacement at any time.
+        </p>
+      ),
+    });
+    if (!ok) return;
+    setUploadBusy(true);
+    try {
+      await apiDelete(`/v1/admin/library/items/${item.id}/audio`);
+      await onChanged();
+      toast.success("Draft audio removed.");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Could not remove the audio.");
+    } finally {
+      setUploadBusy(false);
     }
   }
 
@@ -477,7 +580,23 @@ function ItemEditor({
 
   async function remove() {
     if (!canPublish) return;
-    if (!window.confirm("Soft-delete this item?")) return;
+    const ok = await confirm({
+      title: `Delete "${item.draft.title_en || item.item_code}"?`,
+      destructive: true,
+      confirmLabel: "Delete item",
+      body: (
+        <>
+          <p>
+            This item disappears from the public library, along with its text, audio and PDF.
+          </p>
+          <p className="text-muted-foreground">
+            Nothing is erased — the record is kept, so a developer can restore it if this was
+            a mistake.
+          </p>
+        </>
+      ),
+    });
+    if (!ok) return;
     try {
       await apiDelete(`/v1/admin/library/items/${item.id}`);
       toast.success("Item deleted.");
@@ -490,6 +609,7 @@ function ItemEditor({
 
   return (
     <>
+      {confirmDialog}
       <DialogHeader>
         <DialogTitle>
           {item.item_code} — {item.draft.title_en}
@@ -500,6 +620,7 @@ function ItemEditor({
           <PublishControls
             canPublish={canPublish}
             isPublished={item.is_published}
+            hasChanges={hasUnpublishedChanges(item)}
             onPublish={async () => {
               await apiPost(`/v1/admin/library/items/${item.id}/publish`, {});
               await onChanged();
@@ -549,10 +670,15 @@ function ItemEditor({
           </TabsContent>
           <TabsContent value="hi" className="space-y-3">
             <FormRow label="Title">
-              <Input value={titleHi} onChange={(e) => setTitleHi(e.target.value)} />
+              <Input
+                className="field-devanagari"
+                value={titleHi}
+                onChange={(e) => setTitleHi(e.target.value)}
+              />
             </FormRow>
             <FormRow label="Tarj">
               <Input
+                className="field-devanagari"
                 value={tarjHi}
                 maxLength={TARJ_MAX_LEN}
                 onChange={(e) => setTarjHi(e.target.value)}
@@ -560,7 +686,11 @@ function ItemEditor({
               />
             </FormRow>
             <FormRow label="Text">
-              <RestrictedHtmlEditor value={textHi} onChange={setTextHi} />
+              <RestrictedHtmlEditor
+                value={textHi}
+                onChange={setTextHi}
+                bodyClassName="field-devanagari"
+              />
             </FormRow>
           </TabsContent>
           <TabsContent value="gu" className="space-y-3">
@@ -628,7 +758,35 @@ function ItemEditor({
         <FormRow label="Audio (MP3)">
           <div className="space-y-1">
             {item.draft.audio_url ? (
-              <p className="truncate text-xs text-muted-foreground">{item.draft.audio_url}</p>
+              <div className="space-y-1">
+                {/* A truncated signed URL told an editor nothing they could
+                    check. Duration and size were already on the DTO, and the
+                    only way to be sure the right recording is attached is to
+                    hear it. */}
+                <audio
+                  controls
+                  preload="metadata"
+                  src={item.draft.audio_url}
+                  className="h-9 w-full"
+                />
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted-foreground">
+                    {formatBytes(item.draft.audio_size_bytes ?? 0)}
+                    {item.draft.audio_duration_sec
+                      ? ` · ${formatDuration(item.draft.audio_duration_sec)}`
+                      : ""}
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={uploadBusy}
+                    onClick={() => void removeAudio()}
+                  >
+                    Remove
+                  </Button>
+                </div>
+              </div>
             ) : (
               <p className="text-xs text-muted-foreground">No draft audio yet.</p>
             )}
@@ -642,7 +800,7 @@ function ItemEditor({
         </FormRow>
       </div>
       <DialogFooter>
-        <Button type="button" variant="outline" onClick={onClose}>
+        <Button type="button" variant="outline" onClick={onRequestClose ?? onClose}>
           Close
         </Button>
         <Button type="button" disabled={busy} onClick={() => void save()}>

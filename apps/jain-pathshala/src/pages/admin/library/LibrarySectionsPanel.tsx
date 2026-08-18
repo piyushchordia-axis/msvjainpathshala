@@ -23,6 +23,8 @@ import {
 } from "@/components/ui/select";
 import { PublishControls } from "./PublishControls";
 import { DragReorderList } from "./DragReorderList";
+import { describeContents, useConfirm } from "@/components/admin/use-confirm";
+import { hasUnpublishedChanges } from "./library-admin-types";
 import type { LibraryAdminSection, LibrarySectionType } from "./library-admin-types";
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -46,6 +48,7 @@ export function LibrarySectionsPanel({ sections, canPublish, onChanged }: Props)
   const [createOpen, setCreateOpen] = useState(false);
   const [editSection, setEditSection] = useState<LibraryAdminSection | null>(null);
   const [subParent, setSubParent] = useState<LibraryAdminSection | null>(null);
+  const { confirm, confirmDialog } = useConfirm();
 
   async function reorderSections(ids: string[]) {
     try {
@@ -82,9 +85,29 @@ export function LibrarySectionsPanel({ sections, canPublish, onChanged }: Props)
     }
   }
 
-  async function softDelete(path: string) {
+  async function softDelete(
+    path: string,
+    what: { kind: string; name: string; contains: string | null },
+  ) {
     if (!canPublish) return;
-    if (!window.confirm("Soft-delete this entry? It will disappear from the admin tree.")) return;
+    const ok = await confirm({
+      title: `Delete "${what.name}"?`,
+      destructive: true,
+      confirmLabel: `Delete ${what.kind}`,
+      body: (
+        <>
+          <p>
+            This {what.kind} disappears from the public library and from this tree
+            {what.contains ? `, along with the ${what.contains} inside it` : ""}.
+          </p>
+          <p className="text-muted-foreground">
+            Nothing is erased — the records are kept, so a developer can restore this if it
+            was a mistake.
+          </p>
+        </>
+      ),
+    });
+    if (!ok) return;
     try {
       await apiDelete(path);
       await onChanged();
@@ -96,6 +119,7 @@ export function LibrarySectionsPanel({ sections, canPublish, onChanged }: Props)
 
   return (
     <div className="space-y-4">
+      {confirmDialog}
       <div className="flex justify-end">
         <Dialog open={createOpen} onOpenChange={setCreateOpen}>
           <DialogTrigger asChild>
@@ -124,6 +148,7 @@ export function LibrarySectionsPanel({ sections, canPublish, onChanged }: Props)
       ) : (
         <DragReorderList
           items={sections}
+          labelFor={(s) => s.draft.name_en}
           onReorder={reorderSections}
           renderRow={(s, handle) => {
             const open = !!expanded[s.id];
@@ -147,6 +172,7 @@ export function LibrarySectionsPanel({ sections, canPublish, onChanged }: Props)
                   <PublishControls
                     canPublish={canPublish}
                     isPublished={s.is_published}
+                    hasChanges={hasUnpublishedChanges(s)}
                     busy={busyId === s.id}
                     onPublish={() => void publish(s.id, "section", true)}
                     onUnpublish={() => void publish(s.id, "section", false)}
@@ -159,7 +185,21 @@ export function LibrarySectionsPanel({ sections, canPublish, onChanged }: Props)
                       type="button"
                       variant="ghost"
                       size="sm"
-                      onClick={() => void softDelete(`/v1/admin/library/sections/${s.id}`)}
+                      onClick={() =>
+                        void softDelete(`/v1/admin/library/sections/${s.id}`, {
+                          kind: "section",
+                          name: s.draft.name_en,
+                          contains: describeContents([
+                            [s.subsections.length, "subsection", "subsections"],
+                            [
+                              s.items.length +
+                                s.subsections.reduce((n, sub) => n + sub.items.length, 0),
+                              "item",
+                              "items",
+                            ],
+                          ]),
+                        })
+                      }
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>
@@ -182,6 +222,7 @@ export function LibrarySectionsPanel({ sections, canPublish, onChanged }: Props)
                     ) : (
                       <DragReorderList
                         items={s.subsections}
+                        labelFor={(sub) => sub.draft.name_en}
                         onReorder={(ids) => void reorderSubs(s.id, ids)}
                         renderRow={(sub, subHandle) => (
                           <div className="flex flex-wrap items-center gap-2 rounded border border-border/60 px-2 py-2">
@@ -193,6 +234,7 @@ export function LibrarySectionsPanel({ sections, canPublish, onChanged }: Props)
                             <PublishControls
                               canPublish={canPublish}
                               isPublished={sub.is_published}
+                              hasChanges={hasUnpublishedChanges(sub)}
                               busy={busyId === sub.id}
                               onPublish={() => void publish(sub.id, "subsection", true)}
                               onUnpublish={() => void publish(sub.id, "subsection", false)}
@@ -203,7 +245,16 @@ export function LibrarySectionsPanel({ sections, canPublish, onChanged }: Props)
                                 variant="ghost"
                                 size="sm"
                                 onClick={() =>
-                                  void softDelete(`/v1/admin/library/subsections/${sub.id}`)
+                                  void softDelete(
+                                    `/v1/admin/library/subsections/${sub.id}`,
+                                    {
+                                      kind: "subsection",
+                                      name: sub.draft.name_en,
+                                      contains: describeContents([
+                                        [sub.items.length, "item", "items"],
+                                      ]),
+                                    },
+                                  )
                                 }
                               >
                                 <Trash2 className="h-3.5 w-3.5" />
@@ -322,7 +373,11 @@ function SectionForm({
           <Input value={nameEn} onChange={(e) => setNameEn(e.target.value)} />
         </FormRow>
         <FormRow label="Name (HI)">
-          <Input value={nameHi} onChange={(e) => setNameHi(e.target.value)} />
+          <Input
+            className="field-devanagari"
+            value={nameHi}
+            onChange={(e) => setNameHi(e.target.value)}
+          />
         </FormRow>
         <FormRow label="Name (GU)">
           <Input value={nameGu} onChange={(e) => setNameGu(e.target.value)} />
@@ -407,7 +462,11 @@ function SubsectionForm({
           <Input value={nameEn} onChange={(e) => setNameEn(e.target.value)} />
         </FormRow>
         <FormRow label="Name (HI)">
-          <Input value={nameHi} onChange={(e) => setNameHi(e.target.value)} />
+          <Input
+            className="field-devanagari"
+            value={nameHi}
+            onChange={(e) => setNameHi(e.target.value)}
+          />
         </FormRow>
         <FormRow label="Name (GU)">
           <Input value={nameGu} onChange={(e) => setNameGu(e.target.value)} />

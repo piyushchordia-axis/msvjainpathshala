@@ -27,6 +27,17 @@ const BY_CODE: Record<string, Copy> = {
     en: "Some details look wrong — check the highlighted fields and try again.",
     hi: "कुछ जानकारी सही नहीं लग रही — चिह्नित विवरण जाँचें और पुनः प्रयास करें।",
   },
+  /**
+   * Kept separate from ERR_VALIDATION_FAILED because screens override that code
+   * with "choose a clear image" — wrong advice for a HEIC, where the photo is
+   * perfectly clear and the format is the problem. Should now be unreachable
+   * from the app itself (lib/image-pick.ts makes iOS transcode before upload),
+   * so it means a file arrived some other way.
+   */
+  ERR_UPLOAD_FORMAT_UNSUPPORTED: {
+    en: "This photo is in a format we can't read (HEIC). On iPhone, open Settings › Camera › Formats and choose Most Compatible, then take the photo again — or pick a JPEG.",
+    hi: "यह फोटो ऐसे फ़ॉर्मैट (HEIC) में है जिसे हम पढ़ नहीं सकते। iPhone पर Settings › Camera › Formats में जाकर Most Compatible चुनें और फोटो दोबारा लें — या कोई JPEG चुनें।",
+  },
   ERR_NOT_FOUND: {
     en: "We couldn't find that any more — pull down to refresh and try again.",
     hi: "यह अब उपलब्ध नहीं है — नई जानकारी के लिए नीचे खींचें और पुनः प्रयास करें।",

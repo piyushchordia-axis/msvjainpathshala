@@ -1,9 +1,12 @@
+import { useCallback } from "react";
 import { BlurView } from "expo-blur";
 import { Ionicons } from "@expo/vector-icons";
-import { Redirect, Tabs } from "expo-router";
+import { Redirect, Tabs, useFocusEffect } from "expo-router";
 import { Platform, StyleSheet, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useColors } from "@/hooks/useColors";
 import { useAuth } from "@/contexts/AuthContext";
+import { useSetTabBarInset } from "@/contexts/TabBarInsetContext";
 import { roleAllowed, routeForRole } from "@/lib/roles";
 import { Screen, StateView } from "@/components/ui";
 import type { Role } from "@/lib/types";
@@ -31,6 +34,26 @@ export function PersonaTabs({
 }) {
   const c = useColors();
   const { user, loading } = useAuth();
+  const insets = useSafeAreaInsets();
+  const setTabBarInset = useSetTabBarInset();
+
+  // React Navigation's default bar, plus whatever the device reserves below it.
+  const barHeight = Platform.OS === "web" ? 84 : 49 + insets.bottom;
+
+  /*
+   * Publish the height only while this navigator is FOCUSED.
+   *
+   * The tabs layout stays mounted underneath a pushed stack screen, so keying
+   * off mount would report a tab bar on screens that have none — which is the
+   * bug being fixed. Focus is the thing that actually changes, and it needs no
+   * list of route names to stay correct through a rename.
+   */
+  useFocusEffect(
+    useCallback(() => {
+      setTabBarInset(barHeight);
+      return () => setTabBarInset(0);
+    }, [barHeight, setTabBarInset]),
+  );
 
   if (loading) {
     return (

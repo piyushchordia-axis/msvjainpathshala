@@ -138,3 +138,123 @@ export function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
   return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+/* ── Draft vs published ──────────────────────────────────────────────────── */
+
+/**
+ * Anything the admin tree renders with both copies of its fields.
+ *
+ * Sections, subsections and items all carry `draft` and `published` already,
+ * which is why none of this needs an endpoint or a column.
+ */
+export interface DraftPublishedRow {
+  is_published: boolean;
+  // Typed as `object` rather than Record<string, unknown>: a TS interface has
+  // no implicit index signature, so the concrete DTOs would not satisfy the
+  // stricter type. The keys are read back out with a cast below.
+  draft: object;
+  published: object;
+}
+
+/**
+ * True when a PUBLISHED row's draft has moved away from what the public sees.
+ *
+ * Without this, a published row with edited draft copy looked exactly like a
+ * clean one — same badge, same controls — so neither the editor who made the
+ * change nor the super_admin who has to publish it could tell there was
+ * anything outstanding. Both copies were on the wire the whole time.
+ *
+ * An unpublished row is NOT "changed": it is a draft, which the existing badge
+ * already says. Reporting both as the same thing would make the new badge
+ * meaningless on a tree that is mostly drafts.
+ */
+export function hasUnpublishedChanges(row: DraftPublishedRow): boolean {
+  if (!row.is_published) return false;
+  const draft = (row.draft ?? {}) as Record<string, unknown>;
+  const published = (row.published ?? {}) as Record<string, unknown>;
+  const keys = new Set([...Object.keys(draft), ...Object.keys(published)]);
+  for (const key of keys) {
+    if (!sameFieldValue(draft[key], published[key])) return true;
+  }
+  return false;
+}
+
+/**
+ * Field comparison for draft-vs-published.
+ *
+ * null and "" are treated as equal because the editor writes "" for a cleared
+ * optional text field while the API stores null. Without that, every row with
+ * an empty Gujarati title would claim to have unpublished changes forever, and
+ * a badge that is always on is a badge nobody reads.
+ */
+function sameFieldValue(a: unknown, b: unknown): boolean {
+  const normalise = (v: unknown) => (v === null || v === undefined || v === "" ? null : v);
+  const x = normalise(a);
+  const y = normalise(b);
+  if (x === null || y === null) return x === y;
+  if (typeof x === "object" || typeof y === "object") {
+    return JSON.stringify(x) === JSON.stringify(y);
+  }
+  return x === y;
+}
+
+export type PendingKind = "section" | "subsection" | "item";
+
+export interface PendingLibraryRow {
+  id: string;
+  kind: PendingKind;
+  /** What the editor calls it — draft copy, since that is what changed. */
+  name: string;
+  /** Breadcrumb to find it in the tree. */
+  where: string;
+  isPublished: boolean;
+  hasChanges: boolean;
+}
+
+/**
+ * Everything a super_admin has left to act on, flattened out of the tree.
+ *
+ * §17.3 describes an approval concept with no surface: below super_admin the
+ * journey was create → edit → upload → nothing, and there was no list for the
+ * super_admin to discover what was waiting. This is that list, derived — a row
+ * is pending if it has never been published, or if it has been and its draft
+ * has since moved.
+ */
+export function pendingLibraryRows(sections: LibraryAdminSection[]): PendingLibraryRow[] {
+  const out: PendingLibraryRow[] = [];
+
+  const consider = (
+    row: DraftPublishedRow & { id: string },
+    kind: PendingKind,
+    name: string,
+    where: string,
+  ) => {
+    const changed = hasUnpublishedChanges(row);
+    if (row.is_published && !changed) return;
+    out.push({
+      id: row.id,
+      kind,
+      name: name || "(untitled)",
+      where,
+      isPublished: row.is_published,
+      hasChanges: changed,
+    });
+  };
+
+  for (const section of sections) {
+    const sectionName = section.draft.name_en;
+    consider(section, "section", sectionName, "Section");
+    for (const item of section.items) {
+      consider(item, "item", item.draft.title_en, sectionName);
+    }
+    for (const sub of section.subsections) {
+      const subName = sub.draft.name_en;
+      consider(sub, "subsection", subName, sectionName);
+      for (const item of sub.items) {
+        consider(item, "item", item.draft.title_en, `${sectionName} / ${subName}`);
+      }
+    }
+  }
+
+  return out;
+}

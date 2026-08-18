@@ -561,6 +561,13 @@
       "when": 1791888000006,
       "tag": "0079_granth_draft_publish",
       "breakpoints": true
+    },
+    {
+      "idx": 80,
+      "version": "7",
+      "when": 1791888000007,
+      "tag": "0080_granth_reference_pack",
+      "breakpoints": true
     }
   ]
 }

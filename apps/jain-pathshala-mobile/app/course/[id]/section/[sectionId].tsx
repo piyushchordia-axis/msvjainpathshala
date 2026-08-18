@@ -13,9 +13,11 @@ import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { CourseLearnerRow } from "@/components/CourseLearnerRow";
+import { CourseSectionProgress } from "@/components/CourseSectionProgress";
 import { Body, Button, Screen, StateView, Title } from "@/components/ui";
 import {
   certifiedFrozenExplanation,
+  descriptionPreview,
   type CourseProgressStatus,
 } from "@/lib/course-labels";
 import { applySubsectionStatusCascade } from "@/lib/course-progress-cascade";
@@ -92,6 +94,65 @@ export default function LearnerSectionScreen() {
     }
   }
 
+  /**
+   * One renderer for both branches. They used to hold byte-identical copies of
+   * this card, which is how the guest view came to be missing things the
+   * member view had — and would have drifted again the moment either changed.
+   */
+  function renderSubsections(
+    sec: NonNullable<typeof section>,
+    readOnly: boolean,
+  ) {
+    return (
+      <>
+        <CourseSectionProgress section={sec} />
+        <View
+          style={{
+            backgroundColor: c.card,
+            borderRadius: c.radius,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: c.border,
+            marginTop: 2,
+            overflow: "visible",
+          }}
+        >
+          {sec.subsections.length === 0 ? (
+            <StateView
+              status="empty"
+              emptyText={
+                hi
+                  ? "इस अनुभाग में अभी कोई उप-अनुभाग नहीं।"
+                  : "No subsections in this section yet."
+              }
+            />
+          ) : (
+            sec.subsections.map((sub, i) => (
+              <CourseLearnerRow
+                key={sub.id}
+                index={i + 1}
+                title={hi ? sub.title_hi || sub.title_en : sub.title_en}
+                caption={descriptionPreview(
+                  sub.description_en,
+                  sub.description_hi,
+                  hi,
+                )}
+                status={sub.status}
+                certifiedAt={readOnly ? null : sub.certified_at}
+                certifiedByGender={readOnly ? undefined : sub.certified_by_gender}
+                busy={!readOnly && busyNode === sub.id}
+                showChevron
+                onPress={() => setContentSub(sub)}
+                onChangeStatus={
+                  readOnly ? undefined : (status) => void changeStatus(sub, status)
+                }
+              />
+            ))
+          )}
+        </View>
+      </>
+    );
+  }
+
   return (
     <ActivityThemed accent="courses">
       <AppHeader
@@ -121,42 +182,7 @@ export default function LearnerSectionScreen() {
               onRetry={() => void treeQ.refetch()}
             />
           ) : (
-            <View
-              style={{
-                backgroundColor: c.card,
-                borderRadius: c.radius,
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: c.border,
-                marginTop: 2,
-                overflow: "visible",
-              }}
-            >
-              {section.subsections.length === 0 ? (
-                <StateView
-                  status="empty"
-                  emptyText={
-                    hi
-                      ? "इस अनुभाग में अभी कोई उप-अनुभाग नहीं।"
-                      : "No subsections in this section yet."
-                  }
-                />
-              ) : (
-                section.subsections.map((sub, i) => {
-                  const title = hi ? sub.title_hi || sub.title_en : sub.title_en;
-                  return (
-                    <CourseLearnerRow
-                      key={sub.id}
-                      index={i + 1}
-                      title={title}
-                      status={sub.status}
-                      certifiedAt={null}
-                      showChevron
-                      onPress={() => setContentSub(sub)}
-                    />
-                  );
-                })
-              )}
-            </View>
+            renderSubsections(section, true)
           )
         ) : loading ? (
           <StateView status="loading" emptyText="" />
@@ -187,45 +213,7 @@ export default function LearnerSectionScreen() {
         ) : (
           <>
             <ChildSwitcher />
-            <View
-              style={{
-                backgroundColor: c.card,
-                borderRadius: c.radius,
-                borderWidth: StyleSheet.hairlineWidth,
-                borderColor: c.border,
-                marginTop: 2,
-                overflow: "visible",
-              }}
-            >
-              {section.subsections.length === 0 ? (
-                <StateView
-                  status="empty"
-                  emptyText={
-                    hi
-                      ? "इस अनुभाग में अभी कोई उप-अनुभाग नहीं।"
-                      : "No subsections in this section yet."
-                  }
-                />
-              ) : (
-                section.subsections.map((sub, i) => {
-                  const title = hi ? sub.title_hi || sub.title_en : sub.title_en;
-                  return (
-                    <CourseLearnerRow
-                      key={sub.id}
-                      index={i + 1}
-                      title={title}
-                      status={sub.status}
-                      certifiedAt={sub.certified_at}
-                      certifiedByGender={sub.certified_by_gender}
-                      busy={busyNode === sub.id}
-                      showChevron
-                      onPress={() => setContentSub(sub)}
-                      onChangeStatus={(status) => void changeStatus(sub, status)}
-                    />
-                  );
-                })
-              )}
-            </View>
+            {renderSubsections(section, false)}
           </>
         )}
       </Screen>

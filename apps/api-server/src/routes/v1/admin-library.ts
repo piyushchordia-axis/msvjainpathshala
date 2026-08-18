@@ -52,6 +52,8 @@ import {
   getLibraryMediaUsage,
 } from "../../lib/library-media";
 import {
+  panchangAnchorDetails,
+  panchangAnchorIssues,
   panchangDaySchema,
   panchangYearSchema,
   zodDetails,
@@ -1061,6 +1063,41 @@ router.delete("/items/:id/pdf", async (req: Request, res: Response) => {
 
 /* ── Audio ────────────────────────────────────────────────────────────────── */
 
+/**
+ * Remove the DRAFT audio from an item.
+ *
+ * The PDF equivalent has existed since §17.1.3; audio had an upload path and no
+ * way back, so an admin who attached the wrong recording could only overwrite it
+ * with another file. Clearing the draft leaves the published audio in place —
+ * readers keep hearing what was published until someone publishes the item
+ * again, which is the same contract DELETE /items/:id/pdf already keeps.
+ */
+router.delete("/items/:id/audio", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  const [row] = await db
+    .update(library_items)
+    .set({
+      draft_audio_url: null,
+      draft_audio_size_bytes: null,
+      draft_audio_duration_sec: null,
+      updated_at: new Date(),
+    })
+    .where(and(eq(library_items.id, id), isNull(library_items.deleted_at)))
+    .returning();
+  if (!row) {
+    fail(res, 404, "ERR_NOT_FOUND", "That library item could not be found.");
+    return;
+  }
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "library_item",
+    entityId: row.id,
+    summary: `Library audio removed from draft (${row.item_code}).`,
+  });
+  ok(res, { item: mapItemAdmin(row) });
+});
+
+
 async function applyAudioToItem(
   itemId: string,
   filePath: string,
@@ -1260,12 +1297,17 @@ router.get("/panchang/years/:year", async (req: Request, res: Response) => {
     fail(res, 404, "ERR_NOT_FOUND", "That Panchang year could not be found.");
     return;
   }
+  const draftCheck = panchangYearSchema.safeParse(row.draft_payload);
   ok(res, {
     year: row.year,
     is_published: row.is_published,
     content_version: row.content_version,
     draft: row.draft_payload,
     published: row.published_payload,
+    // What stands between this draft and publication, listed on open.
+    anchor_issues: draftCheck.success
+      ? panchangAnchorDetails(panchangAnchorIssues(draftCheck.data))
+      : zodDetails(draftCheck.error),
   });
 });
 
@@ -1302,11 +1344,15 @@ router.post("/panchang/years", async (req: Request, res: Response) => {
         content_version: 1,
       })
       .returning();
+    // Reported, not enforced. A draft is unverified by definition, and refusing
+    // the upload would leave no way to get a part-transcribed year into the tool
+    // to repair it day by day. The gate is publish — see publishPanchangYear.
     ok(res, {
       year: row!.year,
       is_published: false,
       content_version: 1,
       draft: row!.draft_payload,
+      anchor_issues: panchangAnchorDetails(panchangAnchorIssues(payload)),
     });
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "";
@@ -1352,6 +1398,7 @@ router.put("/panchang/years/:year", async (req: Request, res: Response) => {
     is_published: row.is_published,
     content_version: row.content_version,
     draft: row.draft_payload,
+    anchor_issues: panchangAnchorDetails(panchangAnchorIssues(payload)),
   });
 });
 
@@ -1406,9 +1453,11 @@ router.patch("/panchang/years/:year/days/:date", async (req: Request, res: Respo
     .where(eq(panchang_years.id, row.id))
     .returning();
   ok(res, {
-    year: updated!.year,
     draft: updated!.draft_payload,
     day: parsed.data,
+    anchor_issues: panchangAnchorDetails(
+      yearCheck.success ? panchangAnchorIssues(yearCheck.data) : [],
+    ),
   });
 });
 
@@ -1417,11 +1466,24 @@ router.post(
   requirePublisher,
   async (req: Request, res: Response) => {
     const year = Number(req.params.year);
-    const row = await publishPanchangYear(year);
-    if (!row) {
+    const result = await publishPanchangYear(year);
+    if (result.status === "not_found") {
       fail(res, 404, "ERR_NOT_FOUND", "That Panchang year could not be found.");
       return;
     }
+    if (result.status === "rejected") {
+      // Named rules in `details` so the reviewer knows what to check against
+      // the printed Panchang, rather than being told only that it is wrong.
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        "This Panchang year cannot be published yet — check the listed rules against the source Panchang and fix the draft.",
+        panchangAnchorDetails(result.issues),
+      );
+      return;
+    }
+    const row = result.row;
     ok(res, {
       year: row.year,
       is_published: row.is_published,

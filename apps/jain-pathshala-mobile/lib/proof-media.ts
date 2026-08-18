@@ -3,7 +3,6 @@
  */
 import { Platform } from "react-native";
 import * as FileSystem from "expo-file-system/legacy";
-import * as ImagePicker from "expo-image-picker";
 
 export type MediaKind = "photo" | "video" | "audio";
 
@@ -30,19 +29,11 @@ export type ProofMediaItem = {
 export const VIDEO_MAX_DURATION_SEC = 30;
 
 /**
- * Force a JPEG/H.264-compatible representation on iOS. If this enum is missing
- * after an SDK bump, optional chaining would silently pass `undefined` and iOS
- * would fall back to Current (raw HEIC) — which our upload pipeline rejects.
+ * Re-exported from its new home. It moved to `lib/image-pick.ts` when five
+ * other call sites turned out to be missing it — the constant was never the
+ * problem, remembering to pass it was.
  */
-export const PREFERRED_ASSET_REPRESENTATION_MODE =
-  ImagePicker.UIImagePickerPreferredAssetRepresentationMode?.Compatible;
-
-if (__DEV__ && PREFERRED_ASSET_REPRESENTATION_MODE === undefined) {
-  throw new Error(
-    "[proof-media] UIImagePickerPreferredAssetRepresentationMode.Compatible is undefined. " +
-      "iOS would upload raw HEIC. Check the expo-image-picker version.",
-  );
-}
+export { PREFERRED_ASSET_REPRESENTATION_MODE } from "@/lib/image-pick";
 
 export async function resolveLocalByteSize(
   uri: string,

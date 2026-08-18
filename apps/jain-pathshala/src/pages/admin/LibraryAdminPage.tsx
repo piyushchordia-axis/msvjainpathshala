@@ -4,7 +4,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/lib/auth-context";
 import { roleSatisfies } from "@/components/admin/sidebar-nav";
 import type { Role } from "@/lib/auth";
-import { canPublishLibrary } from "./library/library-admin-types";
+import { canPublishLibrary, pendingLibraryRows } from "./library/library-admin-types";
+import { LibraryPendingPanel } from "./library/LibraryPendingPanel";
 import { useLibraryAdminTree } from "./library/useLibraryAdminTree";
 import { LibrarySectionsPanel } from "./library/LibrarySectionsPanel";
 import { LibraryItemsPanel } from "./library/LibraryItemsPanel";
@@ -16,6 +17,7 @@ import { GranthLibrariesPanel } from "./library/GranthLibrariesPanel";
 import { GranthEntriesPanel } from "./library/GranthEntriesPanel";
 
 type TabId =
+  | "pending"
   | "sections"
   | "items"
   | "audio"
@@ -26,6 +28,7 @@ type TabId =
   | "granth-entries";
 
 function tabFromPath(path: string): TabId {
+  if (path.includes("/library/pending")) return "pending";
   if (path.includes("/library/items")) return "items";
   if (path.includes("/library/audio")) return "audio";
   if (path.includes("/library/panchang")) return "panchang";
@@ -39,6 +42,8 @@ function tabFromPath(path: string): TabId {
 
 function pathForTab(tab: TabId): string {
   switch (tab) {
+    case "pending":
+      return "/admin/library/pending";
     case "items":
       return "/admin/library/items";
     case "audio":
@@ -79,11 +84,17 @@ export default function LibraryAdminPage() {
 
   const canPublish = canPublishLibrary(user?.role);
   const tab = tabFromPath(location);
+  // Derived from the tree already in hand — see pendingLibraryRows.
+  const pendingCount = pendingLibraryRows(sections).length;
 
   return (
     <AdminPageShell
       title="Library"
-      subtitle="Author sections, items, audio, Panchang, and media. Publish is limited to super_admin."
+      subtitle={
+        canPublish
+          ? "Author sections, items, audio, Panchang, and media, then publish them."
+          : "Author sections, items, audio, Panchang, and media. Publishing is done by the national (super) admin — Waiting to publish shows what is outstanding."
+      }
     >
       {error ? <AdminError message={error} /> : null}
 
@@ -93,6 +104,14 @@ export default function LibraryAdminPage() {
         className="space-y-4"
       >
         <TabsList className="flex h-auto flex-wrap">
+          <TabsTrigger value="pending">
+            Waiting to publish
+            {pendingCount > 0 ? (
+              <span className="ml-1.5 rounded-full bg-status-warning-soft px-1.5 py-0.5 text-xs font-semibold text-status-warning">
+                {pendingCount}
+              </span>
+            ) : null}
+          </TabsTrigger>
           <TabsTrigger value="sections">Sections</TabsTrigger>
           <TabsTrigger value="items">Items</TabsTrigger>
           <TabsTrigger value="audio">Bulk audio</TabsTrigger>
@@ -102,6 +121,18 @@ export default function LibraryAdminPage() {
           <TabsTrigger value="granth-libraries">Granth libraries</TabsTrigger>
           <TabsTrigger value="granth-entries">Granths</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="pending">
+          {loading ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : (
+            <LibraryPendingPanel
+              sections={sections}
+              canPublish={canPublish}
+              onChanged={reload}
+            />
+          )}
+        </TabsContent>
 
         <TabsContent value="sections">
           {loading ? (
@@ -129,7 +160,7 @@ export default function LibraryAdminPage() {
         </TabsContent>
 
         <TabsContent value="audio">
-          <LibraryAudioPanel />
+          <LibraryAudioPanel sections={sections} />
         </TabsContent>
 
         <TabsContent value="panchang">

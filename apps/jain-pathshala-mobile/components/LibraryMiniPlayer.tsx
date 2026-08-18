@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from "react";
 import { LayoutChangeEvent, Pressable, View, Text } from "react-native";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useQueryClient } from "@tanstack/react-query";
 import type { LibraryItemDto } from "@workspace/api-zod";
@@ -13,6 +14,7 @@ import {
   type PlaybackSpeed,
 } from "@/contexts/LibraryAudioContext";
 import { findItemInTrees, libraryTreesFromCache } from "@/lib/library/helpers";
+import { useTabBarInset } from "@/contexts/TabBarInsetContext";
 import { LibraryOfflineButton } from "@/components/LibraryOfflineButton";
 
 function formatTime(sec: number): string {
@@ -24,10 +26,22 @@ function formatTime(sec: number): string {
 
 /**
  * Compact bar above the tab bar when a library track is loaded.
+ *
+ * The offset used to be a fixed 64 passed at the single root mount — right on
+ * the tabbed home screens and wrong everywhere else, because a pushed screen
+ * (a library section, Downloads, a Panchang day) has no tab bar. There the bar
+ * floated 64px up with a strip of background showing beneath it, and still
+ * covered the last row of any list that had not padded for it.
+ *
+ * `bottomOffset` is now a floor, not the answer: the live tab-bar height wins
+ * when there is one. See contexts/TabBarInsetContext.
  */
-export function LibraryMiniPlayer({ bottomOffset = 56 }: { bottomOffset?: number }) {
+export function LibraryMiniPlayer({ bottomOffset = 0 }: { bottomOffset?: number }) {
   const c = useColors();
   const { hi } = useLocale();
+  const tabBarInset = useTabBarInset();
+  const insets = useSafeAreaInsets();
+  const bottom = Math.max(bottomOffset, tabBarInset || insets.bottom);
   const {
     loaded,
     track,
@@ -54,7 +68,7 @@ export function LibraryMiniPlayer({ bottomOffset = 56 }: { bottomOffset?: number
         position: "absolute",
         left: 0,
         right: 0,
-        bottom: bottomOffset,
+        bottom,
         zIndex: 40,
         backgroundColor: c.card,
         borderTopWidth: 1,

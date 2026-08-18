@@ -142,3 +142,42 @@ export function isValidVridhiPair(
   if (!prev) return true;
   return prev.tithi === curr.tithi && prev.paksha === curr.paksha;
 }
+
+/**
+ * Short cell label for a tithi — "स 5" / "S 5", "व 14" / "V 14".
+ *
+ * The month grid showed only the Gregorian day number and up to two dots, so
+ * finding Ashtami meant opening up to thirty days one at a time. For a Panchang
+ * the tithi at a glance IS the product. The data was on the cell all along:
+ * PanchangDayCell carries the whole PanchangDay.
+ *
+ * Paksha is prefixed rather than colour-coded — Sud 5 and Vad 5 are different
+ * days and the difference must survive a monochrome screen.
+ */
+export function tithiCellLabel(day: PanchangDay, hi: boolean): string {
+  const paksha = day.paksha === "sud" ? (hi ? "स" : "S") : hi ? "व" : "V";
+  return `${paksha} ${day.tithi}`;
+}
+
+/**
+ * The Jain month(s) a Gregorian month spans, e.g. "Shravan–Bhadarvo".
+ *
+ * A Gregorian month almost always straddles two Jain months, and the header
+ * named neither — so an adhik maas was invisible until a day was opened, which
+ * is exactly the month a reader most needs warning about.
+ */
+export function jainMonthSpan(
+  cells: PanchangDayCell[],
+  months: PanchangMonthMeta[],
+  hi: boolean,
+): string | null {
+  const seen: string[] = [];
+  for (const cell of cells) {
+    const day = cell.panchangDay;
+    if (!day) continue;
+    const label = (day.isAdhikMaas ? (hi ? "अधिक " : "Adhik ") : "") + monthName(months, day.month, hi);
+    if (!seen.includes(label)) seen.push(label);
+  }
+  if (seen.length === 0) return null;
+  return seen.join("–");
+}

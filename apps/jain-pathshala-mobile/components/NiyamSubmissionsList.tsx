@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { useRouter } from "expo-router";
 import { formatDate } from "@/lib/format";
 import type { NiyamSubmissionRow } from "@/lib/types";
@@ -10,6 +10,7 @@ import {
   openProofExternally,
   ProofThumb,
 } from "@/components/NiyamProof";
+import { submissionBadge } from "@/lib/niyam-submission-badges";
 import { useColors } from "@/hooks/useColors";
 import { Body, Button, Row } from "@/components/ui";
 
@@ -72,12 +73,18 @@ export function NiyamSubmissionsList({ items, hi, preview = false }: Props) {
         const reason = n.rejection_reason?.trim() || null;
         const accent = niyamAccent(n.niyam_type, c);
         const statusPal = statusColors(statusTone(n.status), c);
+        const badge = submissionBadge(n);
 
         return (
           <View
             key={n.id}
             style={{
-              backgroundColor: accent.bg,
+              // Neutral card, not accent.bg: tinting each card by niyam type
+              // turned a month of history into a stack of red, amber and
+              // saffron blocks. The stripe below still carries the type.
+              backgroundColor: c.card,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: c.border,
               borderRadius: c.radius,
               overflow: "hidden",
               flexDirection: "row",
@@ -103,19 +110,7 @@ export function NiyamSubmissionsList({ items, hi, preview = false }: Props) {
                     >
                       {title}
                     </Body>
-                    <View
-                      style={{
-                        backgroundColor: statusPal.bg,
-                        borderRadius: 999,
-                        paddingHorizontal: 8,
-                        paddingVertical: 3,
-                      }}
-                    >
-                      <Body style={{ fontSize: 11, fontWeight: "700", color: statusPal.fg }}>
-                        {statusLabel(n.status, hi)}
-                      </Body>
-                    </View>
-                    {n.points_awarded != null ? (
+                    {badge.kind === "points" ? (
                       <View
                         style={{
                           backgroundColor: accent.badge,
@@ -125,10 +120,23 @@ export function NiyamSubmissionsList({ items, hi, preview = false }: Props) {
                         }}
                       >
                         <Body style={{ fontSize: 12, fontWeight: "700", color: accent.badgeFg }}>
-                          +{n.points_awarded}
+                          +{badge.points}
                         </Body>
                       </View>
-                    ) : null}
+                    ) : (
+                      <View
+                        style={{
+                          backgroundColor: statusPal.bg,
+                          borderRadius: 999,
+                          paddingHorizontal: 8,
+                          paddingVertical: 3,
+                        }}
+                      >
+                        <Body style={{ fontSize: 11, fontWeight: "700", color: statusPal.fg }}>
+                          {statusLabel(badge.status, hi)}
+                        </Body>
+                      </View>
+                    )}
                   </Row>
                   {meta ? (
                     <Body
@@ -143,11 +151,10 @@ export function NiyamSubmissionsList({ items, hi, preview = false }: Props) {
               {rejected && reason ? (
                 <Body style={{ fontSize: 13, lineHeight: 22 }}>{reason}</Body>
               ) : null}
-              {n.notes && !rejected ? (
-                <Body muted style={{ fontSize: 12, lineHeight: 22 }} numberOfLines={2}>
-                  {n.notes}
-                </Body>
-              ) : null}
+              {/* The child's own notes are off the row: they are the one part
+                  nobody is scanning for, and two extra lines per card is most
+                  of why a month of history read as noise. A rejection reason
+                  stays above — that is the line telling a family what to do. */}
             </View>
           </View>
         );

@@ -154,6 +154,7 @@ export default function AdminRoutes() {
           <Route path="/admin/notices" component={NoticesAdminPage} />
           <Route path="/admin/gallery" component={GalleryAdminPage} />
           <Route path="/admin/media-curation" component={MediaCurationPage} />
+          <Route path="/admin/library/pending" component={AdminLibraryPage} />
           <Route path="/admin/library/items/:id" component={AdminLibraryPage} />
           <Route path="/admin/library/items" component={AdminLibraryPage} />
           <Route path="/admin/library/audio" component={AdminLibraryPage} />

@@ -20,7 +20,10 @@ import {
 import type { SearchHit } from "@/lib/library/search-query";
 import type { GranthDirectoryDto } from "@workspace/api-zod";
 import { granthDirectoryKey } from "@/lib/library/granth";
+import { apiErrorMessage } from "@/lib/api-error-copy";
 import { AppHeader } from "@/components/AppHeader";
+import { LibraryOfflineBanner } from "@/components/LibraryOfflineBanner";
+import { LibraryShortcut } from "@/components/LibraryShortcut";
 import { LibrarySearchResults } from "@/components/LibrarySearchResults";
 import { Body, Card, Row, Screen, StateView, Title } from "@/components/ui";
 
@@ -124,7 +127,7 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
 
-  const { data, isLoading, isError, refetch, isRefetching } = useQuery({
+  const { data, isLoading, isError, error, refetch, isRefetching } = useQuery({
     queryKey: ["library", authed ? "member" : "public"],
     queryFn: () =>
       authed
@@ -197,41 +200,19 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
   const searching = debouncedQuery.length > 0;
 
   const downloadsBtn = (
-    <Pressable
-      onPress={() => router.push("/library/downloads" as Href)}
-      hitSlop={8}
-      accessibilityRole="button"
-      accessibilityLabel={hi ? "डाउनलोड" : "Downloads"}
-      style={{
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: c.muted,
-      }}
-    >
-      <Ionicons name="download-outline" size={22} color={c.secondary} />
-    </Pressable>
+    <LibraryShortcut
+      icon="download-outline"
+      label={hi ? "डाउनलोड" : "Downloads"}
+      href="/library/downloads"
+    />
   );
 
   const bookmarksBtn = (
-    <Pressable
-      onPress={() => router.push("/library/bookmarks" as Href)}
-      hitSlop={8}
-      accessibilityRole="button"
-      accessibilityLabel={hi ? "बुकमार्क" : "Bookmarks"}
-      style={{
-        width: 40,
-        height: 40,
-        borderRadius: 20,
-        alignItems: "center",
-        justifyContent: "center",
-        backgroundColor: c.muted,
-      }}
-    >
-      <Ionicons name="bookmark-outline" size={22} color={c.secondary} />
-    </Pressable>
+    <LibraryShortcut
+      icon="bookmark-outline"
+      label={hi ? "बुकमार्क" : "Bookmarks"}
+      href="/library/bookmarks"
+    />
   );
 
   const right = (
@@ -311,6 +292,7 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
         )}
       </View>
       <Screen refreshing={isRefetching} onRefresh={refetch} contentStyle={{ paddingBottom: 110 }}>
+        <LibraryOfflineBanner />
         {searching ? (
           <LibrarySearchResults
             hits={hits}
@@ -321,10 +303,14 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
         ) : isLoading ? (
           <StateView status="loading" emptyText="" />
         ) : isError ? (
+          // apiErrorMessage already distinguishes "can't reach the server" from
+          // the rest, in both languages. The hand-written sentence it replaced
+          // threw that away and told a reader on a train the same thing as a
+          // reader hitting a 500.
           <StateView
             status="error"
             emptyText=""
-            errorText={hi ? "पुस्तकालय लोड नहीं हुआ।" : "Could not load the library."}
+            errorText={apiErrorMessage(error, hi)}
             onRetry={() => void refetch()}
             retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
           />
@@ -385,7 +371,9 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
                       <Title style={{ fontSize: 16, lineHeight: 22 }}>{title}</Title>
                       {showLoginHint ? (
                         <Body muted style={{ marginTop: 4, fontSize: 13, lineHeight: 22 }}>
-                          {hi ? "लॉगिन आवश्यक" : "Sign in required"}
+                          {hi
+                            ? "साइन इन करें — इस खंड की सामग्री सदस्यों के लिए है"
+                            : "Sign in to open — this section is for members"}
                         </Body>
                       ) : null}
                     </View>

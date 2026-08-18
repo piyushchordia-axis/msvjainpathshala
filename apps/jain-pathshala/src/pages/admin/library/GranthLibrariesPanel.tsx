@@ -23,6 +23,8 @@ import { toast } from "@/components/ui/toast-jp";
 import { DragReorderList } from "./DragReorderList";
 import { PublishControls } from "./PublishControls";
 import type { GranthAdminCity, GranthAdminLibrary } from "./granth-admin-types";
+import { hasUnpublishedChanges } from "./library-admin-types";
+import { useConfirm } from "@/components/admin/use-confirm";
 
 const BASE = "/v1/admin/library/granth";
 
@@ -116,6 +118,7 @@ export function GranthLibrariesPanel() {
       ) : (
         <DragReorderList
           items={libraries}
+          labelFor={(lib) => lib.draft.name_en}
           onReorder={(ids) => void reorder(ids)}
           renderRow={(lib, handle) => (
             <Card className="flex items-center gap-3 p-4">
@@ -183,6 +186,7 @@ function LibraryEditor({
   onChanged: () => Promise<void>;
 }) {
   const d = library?.draft;
+  const { confirm, confirmDialog } = useConfirm();
   const [nameEn, setNameEn] = useState(d?.name_en ?? "");
   const [nameHi, setNameHi] = useState(d?.name_hi ?? "");
   const [addressEn, setAddressEn] = useState(d?.address_en ?? "");
@@ -241,7 +245,24 @@ function LibraryEditor({
 
   async function remove() {
     if (!library) return;
-    if (!window.confirm("Delete this library? It disappears from the public directory.")) return;
+    const ok = await confirm({
+      title: `Delete "${library.draft.name_en}"?`,
+      destructive: true,
+      confirmLabel: "Delete library",
+      body: (
+        <>
+          <p>
+            This physical library disappears from the public directory, and granths held here
+            stop showing it under "available at".
+          </p>
+          <p className="text-muted-foreground">
+            Nothing is erased — the record is kept, so a developer can restore it if this was
+            a mistake.
+          </p>
+        </>
+      ),
+    });
+    if (!ok) return;
     try {
       await apiDelete(`${BASE}/libraries/${library.id}`);
       toast.success("Library deleted.");
@@ -254,6 +275,7 @@ function LibraryEditor({
 
   return (
     <>
+      {confirmDialog}
       <DialogHeader>
         <DialogTitle>{library ? library.draft.name_en : "New granth library"}</DialogTitle>
       </DialogHeader>
@@ -263,6 +285,7 @@ function LibraryEditor({
             <PublishControls
               canPublish
               isPublished={library.is_published}
+              hasChanges={hasUnpublishedChanges(library)}
               onPublish={async () => {
                 await apiPost(`${BASE}/libraries/${library.id}/publish`, {});
                 await onChanged();
@@ -303,13 +326,21 @@ function LibraryEditor({
             <Input value={nameEn} onChange={(e) => setNameEn(e.target.value)} />
           </FormRow>
           <FormRow label="Name (HI)">
-            <Input value={nameHi} onChange={(e) => setNameHi(e.target.value)} />
+            <Input
+              className="field-devanagari"
+              value={nameHi}
+              onChange={(e) => setNameHi(e.target.value)}
+            />
           </FormRow>
           <FormRow label="Address (EN)">
             <Input value={addressEn} onChange={(e) => setAddressEn(e.target.value)} />
           </FormRow>
           <FormRow label="Address (HI)">
-            <Input value={addressHi} onChange={(e) => setAddressHi(e.target.value)} />
+            <Input
+              className="field-devanagari"
+              value={addressHi}
+              onChange={(e) => setAddressHi(e.target.value)}
+            />
           </FormRow>
           <FormRow label="Timings (EN)">
             <Input
@@ -319,13 +350,21 @@ function LibraryEditor({
             />
           </FormRow>
           <FormRow label="Timings (HI)">
-            <Input value={timingsHi} onChange={(e) => setTimingsHi(e.target.value)} />
+            <Input
+              className="field-devanagari"
+              value={timingsHi}
+              onChange={(e) => setTimingsHi(e.target.value)}
+            />
           </FormRow>
           <FormRow label="Note (EN)">
             <Input value={noteEn} onChange={(e) => setNoteEn(e.target.value)} />
           </FormRow>
           <FormRow label="Note (HI)">
-            <Input value={noteHi} onChange={(e) => setNoteHi(e.target.value)} />
+            <Input
+              className="field-devanagari"
+              value={noteHi}
+              onChange={(e) => setNoteHi(e.target.value)}
+            />
           </FormRow>
           <FormRow label="Contact name">
             <Input value={contactName} onChange={(e) => setContactName(e.target.value)} />

@@ -17,11 +17,16 @@ import {
 } from "@/lib/panchang/load";
 import type { PanchangYear } from "@/lib/panchang/schema";
 import { PanchangMonthCalendar } from "@/components/PanchangMonthCalendar";
+import { PanchangUnpublishedNotice } from "@/components/PanchangUnpublishedNotice";
 import { Body, Card, Screen, StateView, Title } from "@/components/ui";
 
 /**
  * Panchang month calendar — defaults to today (Asia/Kolkata).
- * Data is offline-first from bundled JSON (+ optional AsyncStorage cache).
+ *
+ * Offline-first: AsyncStorage cache, then whatever the API has published. There
+ * is no bundled year any more (see lib/panchang/load.ts), so "no data" is an
+ * ordinary state rather than an error, and the grid still renders — a reader can
+ * open a day and get their Pachchakkhan times whether or not the tithis exist.
  */
 export default function PanchangScreen() {
   const { hi } = useLocale();
@@ -42,7 +47,9 @@ export default function PanchangScreen() {
       .then((data) => {
         if (cancelled) return;
         setYearData(data);
-        setError(!data);
+        // An absent year is not an error. It means nobody has transcribed and
+        // verified this one yet, which the notice explains in those terms.
+        setError(false);
       })
       .catch(() => {
         if (!cancelled) {
@@ -74,6 +81,8 @@ export default function PanchangScreen() {
   );
 
   const todayDay = dayByDate.get(today) ?? null;
+  // Clamped to the year only when there IS one; with no data every month is
+  // equally (un)available and clamping would just trap the reader in January.
   const minMonth = yearData ? `${year}-01` : undefined;
   const maxMonth = yearData ? `${year}-12` : undefined;
 
@@ -92,28 +101,30 @@ export default function PanchangScreen() {
 
       {loading ? (
         <StateView status="loading" emptyText="" />
-      ) : error || !yearData ? (
+      ) : error ? (
         <StateView
           status="error"
           emptyText=""
           errorText={
             hi
-              ? "इस वर्ष का पंचांग उपलब्ध नहीं है।"
-              : "Panchang for this year is not available."
+              ? "पंचांग लोड नहीं हो सका। दोबारा कोशिश करें।"
+              : "The Panchang could not be loaded — try again."
           }
         />
       ) : (
         <>
+          {!yearData ? <PanchangUnpublishedNotice year={year} /> : null}
           <PanchangMonthCalendar
             month={month}
             onMonthChange={setMonth}
             cells={cells}
+            months={yearData?.months ?? []}
             minMonth={minMonth}
             maxMonth={maxMonth}
             onDayPress={(date) => router.push(`/panchang/${date}` as Href)}
           />
 
-          {todayDay && month === today.slice(0, 7) ? (
+          {yearData && todayDay && month === today.slice(0, 7) ? (
             <Pressable
               onPress={() => router.push(`/panchang/${today}` as Href)}
               accessibilityRole="button"

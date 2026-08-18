@@ -1,4 +1,6 @@
 /** Shared types + helpers for /join journeys. */
+import { ApiError } from '@/lib/api-client';
+
 export type JoinKind = 'student' | 'shikshak' | 'sanchalak';
 
 export interface JoinSettings {
@@ -180,10 +182,17 @@ export async function uploadJoinFile(file: File): Promise<{ url: string; key: st
   });
   const json = (await res.json()) as {
     data?: { url: string; key: string };
-    error?: { message: string };
+    error?: { code?: string; message: string };
   };
   if (!res.ok) {
-    throw new Error(json.error?.message ?? 'Upload failed — choose a clear image and try again.');
+    // An ApiError, not a bare Error: the code is what lets apiErrorMessage pick
+    // bilingual copy. A plain Error carries only the server's English sentence,
+    // which left a Hindi visitor with an English string (GST-API-05).
+    throw new ApiError(
+      json.error?.code ?? 'ERR_UPLOAD',
+      json.error?.message ?? 'Upload failed — choose a clear image and try again.',
+      res.status,
+    );
   }
   if (!json.data?.url) {
     throw new Error('Upload failed — no file was received. Please try again.');

@@ -7,6 +7,9 @@ import app from "../src/app";
 import { pool, db, cities, centres, join_settings } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { loginAs, auth } from "./helpers";
+import fs from "node:fs";
+import path from "node:path";
+import sharp from "sharp";
 
 afterAll(async () => {
   await pool.end();
@@ -262,5 +265,45 @@ describe("join registrations", () => {
       .put("/v1/join/settings/registration_open?kind=student")
       .set(auth(admin.token))
       .send({ value: "yes" });
+  });
+});
+
+/**
+ * POST /v1/join/uploads — the registration photo path.
+ *
+ * The bug this covers: an iPhone camera photo (HEIC) was refused while a
+ * screenshot (PNG) uploaded fine, and the refusal came back as the generic
+ * ERR_VALIDATION_FAILED, which the join screens override with "choose a clear
+ * image" — advice that is simply wrong for a format the server cannot decode.
+ */
+describe("POST /v1/join/uploads", () => {
+  it("accepts a PNG (the screenshot case that always worked)", async () => {
+    const png = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: "#888" },
+    })
+      .png()
+      .toBuffer();
+
+    const res = await request(app)
+      .post("/v1/join/uploads")
+      .attach("file", png, { filename: "screenshot.png", contentType: "image/png" });
+
+    expect(res.status, JSON.stringify(res.body)).toBe(200);
+    expect(res.body.data.key).toMatch(/\.png$/);
+  });
+
+  it("refuses HEIC with its own code, not the generic validation one", async () => {
+    const heic = fs.readFileSync(path.join(__dirname, "fixtures", "sample.heic"));
+
+    const res = await request(app)
+      .post("/v1/join/uploads")
+      .attach("file", heic, { filename: "IMG_0001.HEIC", contentType: "image/heic" });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error?.code).toBe("ERR_UPLOAD_FORMAT_UNSUPPORTED");
+    // States the problem AND the fix, per the error-voice rule — a reader who
+    // sees this must know which setting to change.
+    expect(res.body.error?.message).toMatch(/HEIC/);
+    expect(res.body.error?.message).toMatch(/Most Compatible|JPEG/i);
   });
 });

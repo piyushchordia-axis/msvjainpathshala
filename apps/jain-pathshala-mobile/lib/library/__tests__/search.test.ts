@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildRomanTitle, romanize } from "@/lib/library/romanize";
+import {
+  buildRomanSkeleton,
+  buildRomanTitle,
+  romanSkeleton,
+  romanize,
+  romanizeWithSchwa,
+  searchFold,
+} from "@/lib/library/romanize";
 import {
   buildFtsPrefixQuery,
   groupHitsBySection,
@@ -10,9 +17,17 @@ import { collectFtsRows } from "@/lib/library/search-collect";
 import type { LibraryTreePayload } from "@/lib/library/helpers";
 
 describe("romanize", () => {
-  it("maps basic Devanagari to ASCII", () => {
-    expect(romanize("नमस्ते")).toMatch(/namaste|nmste|namste/);
+  it("maps basic Devanagari to ASCII, literally", () => {
+    // Pinned exactly. The previous assertion allowed namaste|nmste|namste,
+    // which is every plausible answer at once — it could not have failed, and
+    // so it certified the spelling that made Roman search miss.
+    expect(romanize("नमस्ते")).toBe("nmste");
     expect(romanize("पुस्तकालय")).toContain("pust");
+  });
+
+  it("writes the inherent vowel in the schwa variant", () => {
+    expect(romanizeWithSchwa("नमस्ते")).toBe("namaste");
+    expect(romanizeWithSchwa("महावीर")).toBe("mahaaveera");
   });
 
   it("maps basic Gujarati to ASCII", () => {
@@ -32,6 +47,53 @@ describe("romanize", () => {
   });
 });
 
+describe("searchFold", () => {
+  it("collapses the vowel distinctions nobody types", () => {
+    // The index wrote mahaaveera and gurujee; readers type mahavir and guruji.
+    expect(searchFold("mahaaveera")).toBe("mahavir");
+    expect(searchFold("gurujee")).toBe("guruji");
+    expect(searchFold("klpsootr")).toBe("klpsutr");
+  });
+
+  it("folds the two spellings of व to one", () => {
+    expect(searchFold("shwetambar")).toBe(searchFold("shvetambar"));
+  });
+
+  it("meets a typed spelling in the middle", () => {
+    // The point of folding both sides: neither spelling is privileged.
+    expect(searchFold("Mahaveer")).toBe(searchFold("mahavir"));
+  });
+
+  it("keeps a short word's final vowel", () => {
+    // Dropping it would leave a single consonant matching most of the shelf.
+    expect(searchFold("ka")).toBe("ka");
+    expect(searchFold("maha")).toBe("mah");
+  });
+
+  it("leaves an already-plain word alone", () => {
+    expect(searchFold("stavan")).toBe("stavan");
+  });
+});
+
+describe("romanSkeleton", () => {
+  it("drops every vowel", () => {
+    expect(romanSkeleton("navakar")).toBe("nvkr");
+    expect(romanSkeleton("navkar")).toBe("nvkr");
+  });
+
+  it("folds the nasal, which the anusvara romanises one way and readers type the other", () => {
+    expect(romanSkeleton("sanvatsari")).toBe(romanSkeleton("samvatsari"));
+  });
+
+  it("discards fragments too short to mean anything", () => {
+    expect(romanSkeleton("a e i")).toBe("");
+  });
+
+  it("builds a skeleton column from titles", () => {
+    expect(buildRomanSkeleton(["कल्पसूत्र"])).toBe("klpstr");
+  });
+});
+
 describe("buildFtsPrefixQuery", () => {
   it("returns null for empty / punctuation-only", () => {
     expect(buildFtsPrefixQuery("")).toBeNull();
@@ -44,8 +106,27 @@ describe("buildFtsPrefixQuery", () => {
     expect(buildFtsPrefixQuery("already*")).toBe("already*");
   });
 
-  it("keeps Devanagari tokens", () => {
-    expect(buildFtsPrefixQuery("नमस्ते")).toBe("नमस्ते*");
+  it("keeps the Devanagari token AND adds its romanisations", () => {
+    // The raw token still reaches the Devanagari columns; the romanised ones
+    // are what let this query reach an English-only title (§17.5 "vice versa").
+    const q = buildFtsPrefixQuery("नमस्ते");
+    expect(q).toContain("नमस्ते*");
+    expect(q).toContain("namaste*");
+    expect(q!.startsWith("(") && q!.endsWith(")")).toBe(true);
+  });
+
+  it("keeps the raw Latin token alongside the folded one", () => {
+    // Folding alone would stop "Mahaveer" finding a title spelled "Mahaveer",
+    // because title_en is not romanised.
+    // Case is left as typed; FTS5's unicode61 tokenizer folds it either way.
+    const q = buildFtsPrefixQuery("Mahaveer");
+    expect(q).toContain("Mahaveer*");
+    expect(q).toContain("mahavir*");
+  });
+
+  it("ANDs the groups, so every typed word is still required", () => {
+    const q = buildFtsPrefixQuery("भक्तामर स्तवन")!;
+    expect(q.split(") (")).toHaveLength(2);
   });
 });
 

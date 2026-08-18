@@ -418,6 +418,47 @@ export function StateView({
   );
 }
 
+/**
+ * A determinate progress bar.
+ *
+ * `value` is 0..1; null renders the empty track, which is the honest thing to
+ * show when progress is unknown rather than a full or empty bar that claims
+ * something. Clamped, so a server value slightly over 1 cannot overflow the
+ * track.
+ */
+export function ProgressBar({
+  value,
+  height = 6,
+  tone,
+}: {
+  value: number | null;
+  height?: number;
+  /** Fill colour; defaults to the primary accent. */
+  tone?: string;
+}) {
+  const c = useColors();
+  const pct = value == null ? 0 : Math.round(Math.min(1, Math.max(0, value)) * 100);
+  return (
+    <View
+      style={{
+        height,
+        borderRadius: height,
+        backgroundColor: c.muted,
+        overflow: "hidden",
+      }}
+    >
+      <View
+        style={{
+          height,
+          width: `${pct}%`,
+          borderRadius: height,
+          backgroundColor: tone ?? c.primary,
+        }}
+      />
+    </View>
+  );
+}
+
 export function Row({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
   return <View style={[{ flexDirection: "row", alignItems: "center" }, style]}>{children}</View>;
 }

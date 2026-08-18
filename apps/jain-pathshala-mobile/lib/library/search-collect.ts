@@ -13,7 +13,7 @@ import {
   stripHtml,
   type LibraryTreePayload,
 } from "@/lib/library/helpers";
-import { buildRomanTitle } from "@/lib/library/romanize";
+import { buildRomanSkeleton, buildRomanTitle } from "@/lib/library/romanize";
 
 const BODY_ROMAN_CAP = 2000;
 
@@ -45,6 +45,12 @@ export type FtsRow = {
   tarj_en: string;
   tarj_hi: string;
   roman_tarj: string;
+  /**
+   * Consonant-only spelling, for the fallback tier. Built from names and tarj
+   * and never from the body: a four-letter skeleton prefix run against a page
+   * of text would match nearly everything on the shelf.
+   */
+  roman_skeleton: string;
 };
 
 function itemBodyPlain(item: LibraryItemDto): string {
@@ -105,6 +111,13 @@ function rowForItem(
     tarj_en: item.tarj_en ?? "",
     tarj_hi: item.tarj_hi ?? "",
     roman_tarj: buildRomanTitle([item.tarj_en, item.tarj_hi]),
+    roman_skeleton: buildRomanSkeleton([
+      item.title_en,
+      item.title_hi,
+      item.title_gu,
+      item.tarj_en,
+      item.tarj_hi,
+    ]),
   };
 }
 
@@ -137,6 +150,11 @@ function rowForPanchang(section: LibrarySectionDto): FtsRow {
     tarj_en: "",
     tarj_hi: "",
     roman_tarj: "",
+    roman_skeleton: buildRomanSkeleton([
+      section.name_en,
+      section.name_hi,
+      section.name_gu,
+    ]),
   };
 }
 
@@ -179,6 +197,12 @@ function rowForGranthEntry(sectionId: string, entry: GranthEntryDto): FtsRow {
     tarj_en: "",
     tarj_hi: "",
     roman_tarj: "",
+    roman_skeleton: buildRomanSkeleton([
+      entry.title_en,
+      entry.title_hi,
+      entry.author_en,
+      entry.author_hi,
+    ]),
   };
 }
 
@@ -208,6 +232,7 @@ function rowForGranthLibrary(sectionId: string, lib: GranthLibraryDto): FtsRow {
     tarj_en: "",
     tarj_hi: "",
     roman_tarj: "",
+    roman_skeleton: buildRomanSkeleton([lib.name_en, lib.name_hi, lib.city_name]),
   };
 }
 

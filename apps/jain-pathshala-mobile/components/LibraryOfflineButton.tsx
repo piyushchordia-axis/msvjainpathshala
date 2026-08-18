@@ -1,4 +1,4 @@
-import { ActivityIndicator, Alert, Pressable, View, type StyleProp, type ViewStyle } from "react-native";
+import { ActivityIndicator, Alert, Pressable, type StyleProp, type ViewStyle } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { LibraryItemDto } from "@workspace/api-zod";
 import { useColors } from "@/hooks/useColors";
@@ -128,12 +128,13 @@ export function LibraryOfflineButton({
       accessibilityLabel={a11y}
       style={[
         {
-          flexDirection: "row",
+          flexDirection: compact ? "column" : "row",
           alignItems: "center",
           justifyContent: "center",
-          gap: 6,
-          paddingHorizontal: compact ? 10 : 8,
-          paddingVertical: 8,
+          gap: compact ? 2 : 6,
+          paddingHorizontal: compact ? 6 : 8,
+          paddingVertical: 6,
+          minHeight: 44,
           borderRadius: 8,
           borderWidth: 1,
           borderColor: c.border,
@@ -144,46 +145,28 @@ export function LibraryOfflineButton({
       ]}
     >
       {state === "downloading" || state === "queued" ? (
-        <View style={{ width: 18, height: 18, alignItems: "center", justifyContent: "center" }}>
-          <ActivityIndicator size="small" color={c.primary} />
-          {state === "downloading" && progress > 0 ? (
-            <View
-              style={{
-                position: "absolute",
-                bottom: -2,
-                left: 0,
-                right: 0,
-                height: 2,
-                backgroundColor: c.muted,
-                borderRadius: 1,
-                overflow: "hidden",
-              }}
-            >
-              <View
-                style={{
-                  height: 2,
-                  width: `${Math.round(progress * 100)}%`,
-                  backgroundColor: c.primary,
-                }}
-              />
-            </View>
-          ) : null}
-        </View>
+        <ActivityIndicator size="small" color={c.primary} />
       ) : (
-          <Ionicons
-            name={iconName}
-            size={compact ? 22 : 16}
-            color={state === "ready" ? c.secondary : c.foreground}
-          />
+        <Ionicons
+          name={iconName}
+          size={compact ? 20 : 16}
+          color={state === "ready" ? c.secondary : c.foreground}
+        />
       )}
-      {!compact ? (
-        <Body
-          numberOfLines={1}
-          style={{ fontSize: 13, lineHeight: 18, color: c.secondary, flexShrink: 1 }}
-        >
-          {label}
-        </Body>
-      ) : null}
+      {/* A 2px sliver under an 18px spinner was the only progress a reader
+          got. The percentage sits where the label does, so a download that is
+          moving looks different from one that has stalled. */}
+      <Body
+        numberOfLines={1}
+        style={{
+          fontSize: compact ? 11 : 13,
+          lineHeight: compact ? 14 : 18,
+          color: c.secondary,
+          flexShrink: 1,
+        }}
+      >
+        {state === "downloading" && progress > 0 ? `${Math.round(progress * 100)}%` : label}
+      </Body>
     </Pressable>
   );
 }

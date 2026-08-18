@@ -24,6 +24,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { LibraryAdminSection } from "./library-admin-types";
+import { useConfirm } from "@/components/admin/use-confirm";
 
 type RequestStatus = "pending" | "accepted" | "rejected" | "published";
 
@@ -91,6 +92,7 @@ export function LibraryRequestsPanel({ sections }: Props) {
   const [canAct, setCanAct] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  const { confirm, confirmDialog } = useConfirm();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detail, setDetail] = useState<DetailPayload | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -155,9 +157,17 @@ export function LibraryRequestsPanel({ sections }: Props) {
   async function decide(action: "accept" | "reject") {
     if (!selectedId || !canAct) return;
     if (action === "reject" && note.trim().length === 0) {
-      const proceed = window.confirm(
-        "Reject without a note? The requester sees this decision and a note is how they learn why.",
-      );
+      const proceed = await confirm({
+        title: "Reject without a note?",
+        confirmLabel: "Reject anyway",
+        cancelLabel: "Write a note",
+        body: (
+          <p>
+            The person who asked will see this decision. A note is the only way they learn
+            why, and whether it is worth asking again.
+          </p>
+        ),
+      });
       if (!proceed) return;
     }
     setBusy(true);
@@ -197,6 +207,7 @@ export function LibraryRequestsPanel({ sections }: Props) {
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)]">
+      {confirmDialog}
       <div className="space-y-4">
         <div className="flex flex-wrap items-end gap-3">
           <div className="space-y-1">

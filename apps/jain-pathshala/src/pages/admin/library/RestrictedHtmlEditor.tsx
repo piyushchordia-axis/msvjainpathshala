@@ -8,6 +8,8 @@ interface RestrictedHtmlEditorProps {
   onChange: (html: string) => void;
   placeholder?: string;
   className?: string;
+  /** Applied to the editable region itself — see .field-devanagari. */
+  bodyClassName?: string;
 }
 
 /**
@@ -19,6 +21,7 @@ export function RestrictedHtmlEditor({
   onChange,
   placeholder,
   className,
+  bodyClassName,
 }: RestrictedHtmlEditorProps) {
   const ref = useRef<HTMLDivElement>(null);
   const lastEmitted = useRef(value);
@@ -74,7 +77,9 @@ export function RestrictedHtmlEditor({
         contentEditable
         suppressContentEditableWarning
         data-placeholder={placeholder}
-        className="min-h-[140px] rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring empty:before:text-muted-foreground empty:before:content-[attr(data-placeholder)]"
+        className={`min-h-[140px] rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring empty:before:text-muted-foreground empty:before:content-[attr(data-placeholder)] ${
+          bodyClassName ?? ""
+        }`}
         onInput={emit}
         onBlur={emit}
       />

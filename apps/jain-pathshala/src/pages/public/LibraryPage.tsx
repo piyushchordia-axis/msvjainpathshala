@@ -34,7 +34,10 @@ function sectionDestination(section: LibrarySectionDto): string | null {
 export default function LibraryPage() {
   const locale = useLocale();
   const hi = locale === 'hi';
-  const { user } = useAuth();
+  // U-19 — `user` is null on first paint while the provider reads the session
+  // cookie. Fetching before that drew the guest tree (lock icons) at a signed-in
+  // member and then re-fetched the whole corpus. `loading` was already here.
+  const { user, loading: authLoading } = useAuth();
   const authed = !!user;
   const [, navigate] = useLocation();
   const [sections, setSections] = useState<LibrarySectionDto[]>([]);
@@ -43,6 +46,7 @@ export default function LibraryPage() {
   const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
+    if (authLoading) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -70,7 +74,7 @@ export default function LibraryPage() {
     return () => {
       cancelled = true;
     };
-  }, [authed, reloadKey]);
+  }, [authed, authLoading, reloadKey]);
 
   function openSection(section: LibrarySectionDto) {
     // Panchang is never login-gated.
@@ -103,7 +107,7 @@ export default function LibraryPage() {
 
   return (
     <section className="container py-12 md:py-16">
-      <p className="text-sm font-medium uppercase tracking-[0.18em] text-primary">
+      <p className="text-sm font-medium uppercase leading-6 tracking-[0.18em] text-primary">
         {hi ? 'पुस्तकालय' : 'Library'}
       </p>
       <h1 className="mt-3 font-display text-4xl text-secondary md:text-5xl">
@@ -111,7 +115,7 @@ export default function LibraryPage() {
       </h1>
       <p className="mt-4 max-w-2xl text-muted-foreground">
         {hi
-          ? 'ग्रंथ, स्तवन और संसाधन — अधिकतर सामग्री बिना लॉगिन के उपलब्ध।'
+          ? 'ग्रंथ, स्तवन और संसाधन — अधिकतर सामग्री बिना साइन इन के उपलब्ध।'
           : 'Scriptures, stavans and resources — most content is open without signing in.'}
       </p>
 
@@ -122,7 +126,7 @@ export default function LibraryPage() {
           whatHi="पुस्तकालय"
           onRetry={() => setReloadKey((k) => k + 1)}
         />
-      ) : loading ? (
+      ) : authLoading || loading ? (
         <GuestLoading hi={hi} />
       ) : sections.length === 0 ? (
         <Card className="mt-10 p-6 text-muted-foreground">
@@ -148,8 +152,10 @@ export default function LibraryPage() {
                     ) : null}
                   </span>
                   {showLock ? (
-                    <span className="mt-2 text-xs text-muted-foreground">
-                      {hi ? 'लॉगिन आवश्यक' : 'Sign in required'}
+                    <span className="mt-2 text-xs leading-6 text-muted-foreground">
+                      {hi
+                        ? 'साइन इन करें — इस खंड की सामग्री सदस्यों के लिए है।'
+                        : 'Sign in to open — this section is for members.'}
                     </span>
                   ) : null}
                 </button>
@@ -169,7 +175,7 @@ export default function LibraryPage() {
           <p className="font-display text-lg text-secondary">
             {t('libraryRequests.action', locale)}
           </p>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="mt-1 text-sm leading-6 text-muted-foreground">
             {t('libraryRequests.actionHint', locale)}
           </p>
         </div>
@@ -184,7 +190,7 @@ export default function LibraryPage() {
       </Card>
 
       {!authed ? (
-        <p className="mt-8 text-sm text-muted-foreground">
+        <p className="mt-8 text-sm leading-6 text-muted-foreground">
           {hi ? 'पहले से सदस्य हैं? ' : 'Already a member? '}
           <Link href="/login?return=%2Flibrary" className="font-medium text-primary underline-offset-4 hover:underline">
             {hi ? 'साइन इन करें' : 'Sign in'}

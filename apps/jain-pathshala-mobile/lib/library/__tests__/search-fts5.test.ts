@@ -20,7 +20,10 @@ import type {
 } from "@workspace/api-zod";
 import type { LibraryTreePayload } from "@/lib/library/helpers";
 import { collectFtsRows } from "@/lib/library/search-collect";
-import { buildFtsPrefixQuery } from "@/lib/library/search-query";
+import {
+  buildFtsPrefixQuery,
+  buildSkeletonQuery,
+} from "@/lib/library/search-query";
 import { hitFromMatchRow, type FtsMatchRow } from "@/lib/library/search-row";
 import {
   CREATE_SQL,
@@ -100,6 +103,13 @@ const tree: LibraryTreePayload = {
           title_en: "Navkar Mantra",
           text_content_en: "<p>Namo Arihantanam</p>",
         }),
+        // Devanagari-ONLY titles. Nothing but the romanisation can reach these,
+        // which is the whole of the reported "searching namokar finds nothing".
+        item({ id: "item-namokar", item_code: "ST-03", title_en: "", title_hi: "णमोकार महामंत्र" }),
+        item({ id: "item-mahavir", item_code: "ST-04", title_en: "", title_hi: "महावीर जयंती" }),
+        // English-ONLY, and spelled the long way. Reaching this from a
+        // Devanagari query is the "and vice versa" half of §17.5.
+        item({ id: "item-english", item_code: "ST-05", title_en: "Mahaveer Jayanti" }),
       ],
     }),
     section({ id: GRANTH_SECTION_ID, key: "granth", name_en: "Granth", type: "granth" }),
@@ -176,8 +186,8 @@ describe("real FTS5 index", () => {
     const count = db.prepare("SELECT COUNT(*) AS c FROM library_fts").get() as {
       c: number;
     };
-    // 2 items + 1 granth entry + 1 granth library.
-    expect(count.c).toBe(4);
+    // 5 items + 1 granth entry + 1 granth library.
+    expect(count.c).toBe(7);
   });
 
   it("finds an item by a value that appears ONLY in its tarj", () => {
@@ -223,5 +233,136 @@ describe("real FTS5 index", () => {
 
   it("returns nothing for a term in no row", () => {
     expect(search("zzzznotpresent")).toEqual([]);
+  });
+});
+
+/**
+ * The tokenizer, read straight out of the index.
+ *
+ * unicode61's default categories treat every matra and halant as a separator,
+ * because Unicode calls them combining marks rather than letters. The shipped
+ * index therefore held single consonants, and everything downstream — prefix
+ * semantics, bm25 ranking, snippet boundaries — was operating on debris.
+ */
+describe("Devanagari tokenization", () => {
+  it("keeps whole words rather than splitting on every matra", () => {
+    db.exec("DROP TABLE IF EXISTS fts_vocab;");
+    db.exec("CREATE VIRTUAL TABLE fts_vocab USING fts5vocab(library_fts, row);");
+    const terms = (
+      db.prepare("SELECT term FROM fts_vocab").all() as unknown as Array<{ term: string }>
+    ).map((r) => r.term);
+
+    expect(terms).toContain("भक्तामर");
+    expect(terms).toContain("कल्पसूत्र");
+    expect(terms).toContain("णमोकार");
+    // The fragments the old tokenizer produced from exactly these words.
+    expect(terms).not.toContain("भक");
+    expect(terms).not.toContain("तवन");
+  });
+
+  it("highlights whole words, leaving no matra orphaned outside the markers", () => {
+    // The old tokenizer split भक्तामर into भक plus fragments, so snippet() closed
+    // the highlight mid-cluster: «भक»्तामर. The halant and matra then rendered
+    // outside the highlight as an orphaned sign on a dotted circle.
+    const hits = search("भावना", true);
+    expect(hits.length).toBeGreaterThan(0);
+    const snippet = hits[0]!.snippet;
+    expect(snippet).toContain("«");
+    // No combining mark may immediately follow a closing marker.
+    expect(/»\p{M}/u.test(snippet)).toBe(false);
+    expect(snippet).toContain("«भावना»");
+  });
+
+  it("stops a bare matra fragment matching in the middle of a word", () => {
+    // "मर" is the tail of भक्तामर. Under the old tokenizer it was a whole term
+    // and matched; a word-prefix search that matches mid-word is not one.
+    expect(search("मर", true)).toEqual([]);
+  });
+});
+
+/**
+ * §17.5, both directions. A Roman query must reach Devanagari content "and
+ * vice versa" — the second half needs the QUERY romanised, not just the index.
+ */
+describe("script-crossing search", () => {
+  it.each([
+    ["namokar", "item-namokar"],
+    ["mahavir", "item-mahavir"],
+    ["mahaveer", "item-mahavir"],
+    ["bhaktamar", "item-tarj"],
+    ["kalpasutra", "entry-1"],
+  ])("finds a Devanagari title from the Roman spelling %s", (query, id) => {
+    expect(search(query).map((h) => h.itemId)).toContain(id);
+  });
+
+  it("finds an English-only title from a Devanagari query", () => {
+    // "Mahaveer Jayanti" has no title_hi at all. The only route from महावीर is
+    // romanising the QUERY — the direction that did not exist before, since
+    // buildFtsPrefixQuery passed Indic input through untransliterated.
+    expect(search("महावीर", true).map((h) => h.itemId)).toContain("item-english");
+  });
+
+  it("keeps matching the spelling a title actually uses", () => {
+    // Folding the query without keeping the raw token would break this: the
+    // fix must not cost anything that already worked.
+    expect(search("Navkar").map((h) => h.itemId)).toContain("item-plain");
+    expect(search("arihantanam").map((h) => h.itemId)).toEqual(["item-plain"]);
+  });
+
+  it("still requires every typed word", () => {
+    // Each word becomes an OR group of its spellings, but the groups are ANDed.
+    expect(search("mahavir arihantanam")).toEqual([]);
+  });
+});
+
+/**
+ * The fallback tier — for a reader who drops a medial vowel the
+ * transliteration keeps.
+ */
+describe("skeleton fallback", () => {
+  function searchTwoTier(raw: string) {
+    const first = search(raw);
+    if (first.length > 0) return { tier: 1, hits: first };
+    const skeleton = buildSkeletonQuery(raw);
+    if (!skeleton) return { tier: 0, hits: [] };
+    const rows = db
+      .prepare(MATCH_SQL)
+      .all(0, skeleton, 50) as unknown as FtsMatchRow[];
+    return { tier: 2, hits: rows.map((r) => hitFromMatchRow(r, false)) };
+  }
+
+  it("finds कल्पसूत्र from kalpsutra, which the real query misses", () => {
+    // The index holds "kalpasutr"; this reader dropped the medial a.
+    expect(search("kalpsutra")).toEqual([]);
+    const out = searchTwoTier("kalpsutra");
+    expect(out.tier).toBe(2);
+    expect(out.hits.map((h) => h.itemId)).toContain("entry-1");
+  });
+
+  it("bridges a medial schwa the two spellings disagree about", () => {
+    // नवकार romanises to "navakar"; the English title spells it "Navkar". The
+    // inherent vowel is written in one and dropped in the other, and no single
+    // transliteration can be right for both — which is why the skeleton tier
+    // exists rather than being a nicety.
+    expect(search("नवकार", true)).toEqual([]);
+    const out = searchTwoTier("नवकार");
+    expect(out.tier).toBe(2);
+    expect(out.hits.map((h) => h.itemId)).toContain("item-plain");
+  });
+
+  it("never runs when the real query already found something", () => {
+    expect(searchTwoTier("kalpasutra").tier).toBe(1);
+  });
+
+  it("refuses to run for a query too short to narrow anything", () => {
+    // "grj" would pull in every title with those consonants in that order.
+    expect(buildSkeletonQuery("guruji")).toBeNull();
+    expect(buildSkeletonQuery("om")).toBeNull();
+  });
+
+  it("scopes itself to the skeleton column", () => {
+    // If it leaked into the other columns a four-consonant prefix would rank
+    // against real title matches.
+    expect(buildSkeletonQuery("kalpsutra")).toContain("roman_skeleton :");
   });
 });

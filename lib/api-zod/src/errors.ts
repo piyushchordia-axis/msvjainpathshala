@@ -38,6 +38,7 @@ export const ERROR_CODES = [
   "ERR_NIYAM_PERIOD_DUPLICATE",
   // Upload
   "ERR_FILE_TOO_LARGE",
+  "ERR_UPLOAD_FORMAT_UNSUPPORTED",
   // Exam
   "ERR_EXAM_HAS_ATTEMPTS",
   "ERR_WINDOW_CLOSED",
@@ -134,6 +135,7 @@ export const ErrorCode = {
   NIYAM_REVERSAL_WINDOW_EXPIRED: "ERR_NIYAM_REVERSAL_WINDOW_EXPIRED",
   NIYAM_PERIOD_DUPLICATE: "ERR_NIYAM_PERIOD_DUPLICATE",
   FILE_TOO_LARGE: "ERR_FILE_TOO_LARGE",
+  UPLOAD_FORMAT_UNSUPPORTED: "ERR_UPLOAD_FORMAT_UNSUPPORTED",
   EXAM_HAS_ATTEMPTS: "ERR_EXAM_HAS_ATTEMPTS",
   WINDOW_CLOSED: "ERR_WINDOW_CLOSED",
   ALREADY_SUBMITTED: "ERR_ALREADY_SUBMITTED",
@@ -203,6 +205,16 @@ export const ERROR_MESSAGES = {
   ERR_FILE_TOO_LARGE: {
     en: "That video is too large (max 50 MB). Record a shorter clip and try again.",
     hi: "यह वीडियो बहुत बड़ा है (अधिकतम 50 MB)। छोटा क्लिप रिकॉर्ड करके फिर कोशिश करें।",
+  },
+  /**
+   * Distinct from ERR_VALIDATION_FAILED on purpose. Screens override the generic
+   * validation copy with "choose a clear image", which is the wrong advice here:
+   * the photo is perfectly clear, the file format is the problem. A separate
+   * code lets the real fix through.
+   */
+  ERR_UPLOAD_FORMAT_UNSUPPORTED: {
+    en: "This photo is in a format we can't read (HEIC). On iPhone, open Settings › Camera › Formats and choose Most Compatible, then take the photo again — or pick a JPEG.",
+    hi: "यह फोटो ऐसे फ़ॉर्मैट (HEIC) में है जिसे हम पढ़ नहीं सकते। iPhone पर Settings › Camera › Formats में जाकर Most Compatible चुनें और फोटो दोबारा लें — या कोई JPEG चुनें।",
   },
   ERR_EXAM_HAS_ATTEMPTS: {
     en: "Students have already attempted this exam — editing questions now would change their scores. Clone the exam instead.",

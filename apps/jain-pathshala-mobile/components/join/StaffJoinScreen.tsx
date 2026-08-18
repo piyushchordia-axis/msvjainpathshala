@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Image, Pressable, ScrollView, TextInput, View } from "react-native";
-import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { apiGet, apiPost } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/api-error-copy";
+import { pickMediaAsset } from "@/lib/image-pick";
 import { mergeById, usePickerSearch } from "@/lib/picker-search";
 import { joinUpload, safeImageMime, safeImageUploadName } from "@/lib/join-upload";
 import {
@@ -138,12 +138,8 @@ export function StaffJoinScreen({ kind }: { kind: "shikshak" | "sanchalak" }) {
   const setValue = (key: string, v: string) => setValues((prev) => ({ ...prev, [key]: v }));
 
   const pickPhoto = async () => {
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      quality: 0.8,
-    });
-    if (res.canceled || !res.assets[0]) return;
-    const asset = res.assets[0];
+    const asset = await pickMediaAsset({ source: "library", mediaTypes: ["images"] });
+    if (!asset) return;
     setPhotoPreviewUri(asset.uri);
     setBusy(true);
     setError(null);

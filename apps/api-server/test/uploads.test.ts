@@ -142,7 +142,12 @@ describe("upload Content-Type round-trip", () => {
         const get = await request(app).get(signed.pathname + signed.search);
         expect(get.headers["content-type"]).toBe("image/jpeg");
       } else {
+        // This build cannot decode HEVC-coded HEIC (sharp's prebuilt libvips
+        // links libheif with AV1 only), so the refusal must name the format
+        // and its own code. NOT ERR_VALIDATION_FAILED: screens override that
+        // with "choose a clear image", which is wrong advice here.
         expect(res.status).toBe(422);
+        expect(res.body.error?.code).toBe("ERR_UPLOAD_FORMAT_UNSUPPORTED");
         expect(res.body.error?.message).toMatch(/HEIC|HEIF|JPEG/i);
       }
     },

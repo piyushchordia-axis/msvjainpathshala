@@ -36,10 +36,14 @@ type PanchangDay = {
   events: unknown[];
 };
 
+type AnchorIssue = { path: string; message: string };
+
 type YearDetail = {
   year: number;
   is_published: boolean;
   content_version: number;
+  /** Rule violations the API found in the DRAFT — advisory until publish. */
+  anchor_issues?: AnchorIssue[];
   draft: {
     year?: number;
     months: Array<{ key: string; name_en: string }>;
@@ -81,6 +85,7 @@ export function LibraryPanchangPanel({ canPublish }: Props) {
   const [fieldErrors, setFieldErrors] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [editDay, setEditDay] = useState<PanchangDay | null>(null);
+  const anchorIssues = detail?.anchor_issues ?? [];
 
   async function loadYears() {
     const res = await apiGet<{ items: YearListItem[] }>("/v1/admin/library/panchang/years");
@@ -230,10 +235,25 @@ export function LibraryPanchangPanel({ canPublish }: Props) {
             isPublished={detail.is_published}
             busy={busy}
             onPublish={async () => {
-              await apiPost(`/v1/admin/library/panchang/years/${year}/publish`, {});
-              await loadYears();
-              await loadYear(year);
-              toast.success("Panchang year published.");
+              // Publishing can now be REFUSED — the year is checked against the
+              // anchor rules first (§17.6.1). Without this branch the 422 threw
+              // past the UI and the reviewer saw a failure with no reason, which
+              // is the least useful possible outcome for someone whose job is to
+              // find the mistake.
+              try {
+                setFieldErrors(null);
+                await apiPost(`/v1/admin/library/panchang/years/${year}/publish`, {});
+                await loadYears();
+                await loadYear(year);
+                toast.success("Panchang year published.");
+              } catch (err) {
+                if (err instanceof ApiError) {
+                  setFieldErrors(formatZodDetails(err.details) || err.message);
+                  toast.error(err.message);
+                } else {
+                  toast.error("Could not publish this Panchang year.");
+                }
+              }
             }}
             onUnpublish={async () => {
               await apiPost(`/v1/admin/library/panchang/years/${year}/unpublish`, {});
@@ -249,6 +269,25 @@ export function LibraryPanchangPanel({ canPublish }: Props) {
         <pre className="whitespace-pre-wrap rounded-md border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">
           {fieldErrors}
         </pre>
+      ) : null}
+
+      {/* Shown against the draft so problems are visible while transcribing.
+          These are the same rules that block publishing, so surfacing them here
+          is the difference between fixing one day and re-uploading a year. */}
+      {anchorIssues.length > 0 ? (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-xs">
+          <p className="mb-2 font-medium">
+            {anchorIssues.length} rule{anchorIssues.length === 1 ? "" : "s"} to resolve before
+            this year can be published — check each against the source Panchang.
+          </p>
+          <ul className="space-y-1">
+            {anchorIssues.map((issue) => (
+              <li key={`${issue.path}-${issue.message}`}>
+                <span className="font-mono">{issue.path}</span> — {issue.message}
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
 
       {busy ? (

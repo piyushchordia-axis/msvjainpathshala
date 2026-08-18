@@ -5,6 +5,7 @@ import * as ImagePicker from "expo-image-picker";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { apiUpload, ApiError } from "@/lib/api";
+import { pickMediaAsset } from "@/lib/image-pick";
 import { useSetUserPhoto } from "@/lib/queries";
 
 type Options = {
@@ -48,23 +49,14 @@ export function useUserPhotoPicker(options: Options = {}) {
         }
       }
 
-      const result =
-        from === "camera"
-          ? await ImagePicker.launchCameraAsync({
-              mediaTypes: ["images"],
-              quality: 0.85,
-              allowsEditing: true,
-              aspect: [1, 1],
-            })
-          : await ImagePicker.launchImageLibraryAsync({
-              mediaTypes: ["images"],
-              quality: 0.85,
-              allowsEditing: true,
-              aspect: [1, 1],
-            });
+      const asset = await pickMediaAsset({
+        source: from,
+        mediaTypes: ["images"],
+        allowsEditing: true,
+        aspect: [1, 1],
+      });
 
-      if (result.canceled || !result.assets[0]) return;
-      const asset = result.assets[0];
+      if (!asset) return;
       const mime = (asset.mimeType ?? "image/jpeg").split(";")[0]!.trim();
       const name = asset.fileName ?? "photo.jpg";
 

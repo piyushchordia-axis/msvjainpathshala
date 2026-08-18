@@ -1,5 +1,10 @@
 /**
- * Resolve which Panchang year payload to use (cache vs bundled).
+ * Which Panchang year payload wins, and where it is cached.
+ *
+ * Deliberately PURE — no network, no storage, no react-native. The fetch used to
+ * live here as a stub; giving it a real implementation pulled in @/lib/api and
+ * through it react-native, whose Flow syntax the test bundler cannot parse, and
+ * took the whole panchang suite down with it. Network lives in ./remote.
  */
 import type { PanchangYear } from "@/lib/panchang/schema";
 
@@ -15,14 +20,4 @@ export function pickNewerPanchangYear(
 
 export function panchangCacheKey(year: number): string {
   return `jp.panchang.year.${year}`;
-}
-
-/**
- * Remote fetch stub — no public endpoint yet.
- * When an API lands, implement GET here and write through the cache.
- */
-export async function fetchRemotePanchangYear(
-  _year: number,
-): Promise<PanchangYear | null> {
-  return null;
 }

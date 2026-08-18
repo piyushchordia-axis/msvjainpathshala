@@ -1,6 +1,7 @@
 /**
  * Library-only reseed — replaces library_sections / subsections / items
- * without truncating the rest of the database.
+ * and the Granth directory (libraries, entries, availability) without
+ * truncating the rest of the database.
  *
  * Run: pnpm --filter @workspace/db run seed:library
  * Requires DATABASE_URL (e.g. postgres://jp:jp_dev_pwd@localhost:5434/jainpathshala).

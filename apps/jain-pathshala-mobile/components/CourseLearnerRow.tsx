@@ -35,7 +35,14 @@ export function CourseLearnerRow(props: {
   onChangeStatus?: (status: CourseProgressStatus) => void;
   /** Show chevron for drill-down. */
   showChevron?: boolean;
+  /** Short trailing text on the SAME line as the title (e.g. a count). */
   subtitle?: string | null;
+  /**
+   * A second, muted line under the title — for a description preview.
+   * Separate from `subtitle` because that one renders inline after the title
+   * and clips at one line, so it cannot carry a sentence.
+   */
+  caption?: string | null;
 }) {
   const c = useColors();
   const { hi } = useLocale();
@@ -110,32 +117,49 @@ export function CourseLearnerRow(props: {
             accessibilityLabel={hi ? "प्रमाणित" : "Certified"}
           />
         ) : null}
-        <Text
-          style={{
-            flex: 1,
-            fontSize: 14,
-            lineHeight: 20,
-            fontFamily: bodyFamily(hi),
-            color: fg,
-            minWidth: 0,
-          }}
-          numberOfLines={1}
-        >
-          {props.title}
-        </Text>
-        {props.subtitle ? (
-          <Text
-            style={{
-              fontSize: 12,
-              lineHeight: 18,
-              fontFamily: bodyFamily(hi),
-              color: c.mutedForeground,
-            }}
-            numberOfLines={1}
-          >
-            {props.subtitle}
-          </Text>
-        ) : null}
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Text
+              style={{
+                flex: 1,
+                fontSize: 14,
+                lineHeight: 20,
+                fontFamily: bodyFamily(hi),
+                color: fg,
+                minWidth: 0,
+              }}
+              numberOfLines={1}
+            >
+              {props.title}
+            </Text>
+            {props.subtitle ? (
+              <Text
+                style={{
+                  fontSize: 12,
+                  lineHeight: 18,
+                  fontFamily: bodyFamily(hi),
+                  color: c.mutedForeground,
+                }}
+                numberOfLines={1}
+              >
+                {props.subtitle}
+              </Text>
+            ) : null}
+          </View>
+          {props.caption ? (
+            <Text
+              style={{
+                fontSize: 12,
+                lineHeight: 18,
+                fontFamily: bodyFamily(hi),
+                color: c.mutedForeground,
+              }}
+              numberOfLines={1}
+            >
+              {props.caption}
+            </Text>
+          ) : null}
+        </View>
         {props.showChevron ? (
           <Ionicons name="chevron-forward" size={16} color={c.mutedForeground} />
         ) : null}

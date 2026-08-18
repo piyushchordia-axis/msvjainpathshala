@@ -18,9 +18,9 @@ import {
   NIYAM_UPLOAD_FOLDER,
 } from "@/lib/offline/media-upload-queue";
 import { fileTooLargeMessage, rejectIfOverUploadLimit } from "@/lib/upload-size-guard";
+import { pickMediaAsset } from "@/lib/image-pick";
 import {
   VIDEO_MAX_DURATION_SEC,
-  PREFERRED_ASSET_REPRESENTATION_MODE,
   resolveLocalByteSize,
   newProofLocalId,
   guessMime,
@@ -30,6 +30,13 @@ import {
   type MediaKind,
   type ProofMediaItem,
 } from "@/lib/proof-media";
+import { ActionSheet, type ActionSheetItem } from "@/components/ActionSheet";
+import {
+  proofSourceLabel,
+  proofSourceNeedsSheet,
+  proofSources,
+  type ProofSourceKey,
+} from "@/lib/niyam-proof-sources";
 import { Body, Button, Row } from "@/components/ui";
 
 export type { MediaKind, ProofMediaItem };
@@ -96,6 +103,7 @@ export function NiyamProofPicker({
   const [webRecording, setWebRecording] = useState(false);
   const [recordingElapsedMs, setRecordingElapsedMs] = useState(0);
   const [pendingAudio, setPendingAudio] = useState<PendingAudio | null>(null);
+  const [sourceSheetOpen, setSourceSheetOpen] = useState(false);
   // Bind source to pending URI so the player reloads when a take is ready
   // (replace()+immediate play often fails silently after a recording session).
   const previewPlayer = useAudioPlayer(pendingAudio?.uri ?? null, { updateInterval: 200 });
@@ -296,14 +304,12 @@ export function NiyamProofPicker({
       );
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
+    const asset = await pickMediaAsset({
+      source: "library",
       mediaTypes: [media],
-      quality: 0.85,
       videoMaxDuration: VIDEO_MAX_DURATION_SEC,
-      preferredAssetRepresentationMode: PREFERRED_ASSET_REPRESENTATION_MODE,
     });
-    if (result.canceled || !result.assets[0]) return;
-    const asset = result.assets[0];
+    if (!asset) return;
     const isVideo =
       media === "videos" ||
       (asset.type ?? "").includes("video") ||
@@ -331,14 +337,12 @@ export function NiyamProofPicker({
       );
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({
+    const asset = await pickMediaAsset({
+      source: "camera",
       mediaTypes: [kind === "video" ? "videos" : "images"],
-      quality: 0.85,
       videoMaxDuration: VIDEO_MAX_DURATION_SEC,
-      preferredAssetRepresentationMode: PREFERRED_ASSET_REPRESENTATION_MODE,
     });
-    if (result.canceled || !result.assets[0]) return;
-    const asset = result.assets[0];
+    if (!asset) return;
     const mime = guessMime(kind, asset.mimeType);
     const name = asset.fileName ?? (kind === "video" ? "proof.mp4" : "proof.jpg");
     await enqueueUpload(kind, asset.uri, name, mime);
@@ -550,6 +554,41 @@ export function NiyamProofPicker({
     isRecordingNative ? recorderState.durationMillis ?? 0 : 0,
   );
 
+  /**
+   * The sources this niyam allows, and how to run each one. All three of
+   * pickFromLibrary / captureCamera / toggleRecord are hoisted function
+   * declarations, so this can sit next to the render it feeds.
+   */
+  const sources = proofSources(proofType);
+  const runSource = (key: ProofSourceKey) => {
+    if (key === "photo_camera") return void captureCamera("photo");
+    if (key === "photo_library") return void pickFromLibrary("images");
+    if (key === "video_camera") return void captureCamera("video");
+    if (key === "video_library") return void pickFromLibrary("videos");
+    return void toggleRecord();
+  };
+  const sheetItems: ActionSheetItem[] = sources.map((source) => ({
+    key: source.key,
+    label: proofSourceLabel(source, hi),
+    icon: source.icon,
+    onPress: () => runSource(source.key),
+  }));
+  /**
+   * With one source the button IS the action, so it says what it does
+   * ("Record audio") rather than opening a list of one.
+   */
+  const needsSheet = proofSourceNeedsSheet(sources);
+  const addProofTitle = hi ? "प्रमाण जोड़ें" : "Add proof";
+  const addProofLabel =
+    !needsSheet && sources[0] ? proofSourceLabel(sources[0], hi) : addProofTitle;
+  const onAddProof = () => {
+    if (needsSheet) {
+      setSourceSheetOpen(true);
+      return;
+    }
+    if (sources[0]) runSource(sources[0].key);
+  };
+
   return (
     <View style={{ marginTop: 12 }}>
       <Body style={{ marginBottom: 6, fontSize: 13 }}>
@@ -694,47 +733,14 @@ export function NiyamProofPicker({
       ) : null}
 
       {!atCap && !disabled && !pendingAudio && !isRecording ? (
-        <Row style={{ gap: 8, flexWrap: "wrap", marginTop: 4 }}>
-          {kinds.includes("photo") ? (
-            <>
-              <Button
-                label={hi ? "कैमरा" : "Camera"}
-                variant="outline"
-                onPress={() => void captureCamera("photo")}
-                style={{ minWidth: 96 }}
-              />
-              <Button
-                label={hi ? "फोटो" : "Library"}
-                variant="outline"
-                onPress={() => void pickFromLibrary("images")}
-                style={{ minWidth: 96 }}
-              />
-            </>
-          ) : null}
-          {kinds.includes("video") ? (
-            <>
-              <Button
-                label={hi ? "वीडियो कैम" : "Video cam"}
-                variant="outline"
-                onPress={() => void captureCamera("video")}
-                style={{ minWidth: 96 }}
-              />
-              <Button
-                label={hi ? "वीडियो" : "Video lib"}
-                variant="outline"
-                onPress={() => void pickFromLibrary("videos")}
-                style={{ minWidth: 96 }}
-              />
-            </>
-          ) : null}
-          {kinds.includes("audio") ? (
-            <Button
-              label={hi ? "ऑडियो रिकॉर्ड" : "Record audio"}
-              variant="outline"
-              onPress={() => void toggleRecord()}
-              style={{ minWidth: 120 }}
-            />
-          ) : null}
+        <Row style={{ marginTop: 4 }}>
+          <Button
+            label={addProofLabel}
+            variant="outline"
+            icon="add"
+            onPress={onAddProof}
+            style={{ flex: 1 }}
+          />
         </Row>
       ) : null}
       {kinds.includes("audio") && !audioReady && Platform.OS !== "web" ? (
@@ -744,6 +750,13 @@ export function NiyamProofPicker({
             : "Mic permission not granted yet — tap Record to allow access."}
         </Body>
       ) : null}
+
+      <ActionSheet
+        open={sourceSheetOpen}
+        title={addProofTitle}
+        items={sheetItems}
+        onClose={() => setSourceSheetOpen(false)}
+      />
     </View>
   );
 }

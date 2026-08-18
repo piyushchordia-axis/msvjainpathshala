@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Modal,
   Pressable,
@@ -53,6 +53,23 @@ const LANG_LABEL: Record<LibraryTextLang, { en: string; hi: string }> = {
   gu: { en: "GU", hi: "ગુ" },
 };
 
+const LANG_NAME: Record<LibraryTextLang, { en: string; hi: string }> = {
+  en: { en: "English", hi: "अंग्रेज़ी" },
+  hi: { en: "Hindi", hi: "हिन्दी" },
+  gu: { en: "Gujarati", hi: "गुजराती" },
+};
+
+/**
+ * Where each text was last read, by item id.
+ *
+ * A stotra runs to many screens. Closing the reader and reopening it dropped
+ * the reader back at verse one every time — so consulting one line meant
+ * scrolling through everything before it again. Module scope rather than state
+ * because it must outlive the component; not persisted, because a reading
+ * position from three weeks ago is not where anyone wants to land.
+ */
+const scrollMemory = new Map<string, number>();
+
 /**
  * Full-screen text reader (RN Modal — reliable on iOS; BottomSheet was not presenting).
  */
@@ -64,6 +81,7 @@ export function LibraryTextSheet({ item, onClose }: LibraryTextSheetProps) {
   const [fontSize, setFontSize] = useState(TEXT_FONT_SIZE_DEFAULT);
   const [lang, setLang] = useState<LibraryTextLang>("en");
   const [copied, setCopied] = useState(false);
+  const scrollRef = useRef<ScrollView | null>(null);
   const open = !!item;
 
   useEffect(() => {
@@ -74,6 +92,12 @@ export function LibraryTextSheet({ item, onClose }: LibraryTextSheetProps) {
     if (!item) return;
     setLang(pickDefaultLang(item, hi));
     setCopied(false);
+    const saved = scrollMemory.get(item.id) ?? 0;
+    // The list has to lay out before an offset means anything.
+    const t = setTimeout(() => {
+      scrollRef.current?.scrollTo({ y: saved, animated: false });
+    }, 50);
+    return () => clearTimeout(t);
   }, [item, hi]);
 
   const langs = item ? availableTextLangs(item) : [];
@@ -141,7 +165,12 @@ export function LibraryTextSheet({ item, onClose }: LibraryTextSheetProps) {
           >
             {title}
           </Text>
-          <Pressable onPress={onClose} hitSlop={10} accessibilityLabel={hi ? "बंद करें" : "Close"}>
+          <Pressable
+            onPress={onClose}
+            hitSlop={10}
+            accessibilityRole="button"
+            accessibilityLabel={hi ? "बंद करें" : "Close"}
+          >
             <Ionicons name="close" size={26} color={c.mutedForeground} />
           </Pressable>
         </View>
@@ -183,9 +212,16 @@ export function LibraryTextSheet({ item, onClose }: LibraryTextSheetProps) {
             <Pressable
               key={l}
               onPress={() => setLang(l)}
+              accessibilityRole="button"
+              // "EN" / "हि" is legible but unspeakable — a screen reader read
+              // the chips as two letters with no indication which was active.
+              accessibilityLabel={hi ? LANG_NAME[l].hi : LANG_NAME[l].en}
+              accessibilityState={{ selected: lang === l }}
               style={{
-                paddingHorizontal: 10,
+                paddingHorizontal: 12,
                 paddingVertical: 6,
+                minHeight: 44,
+                justifyContent: "center",
                 borderRadius: 8,
                 borderWidth: 1,
                 borderColor: lang === l ? c.primary : c.border,
@@ -205,7 +241,9 @@ export function LibraryTextSheet({ item, onClose }: LibraryTextSheetProps) {
           ))}
           <ToolBtn
             icon={copied ? "checkmark-outline" : "copy-outline"}
-            label={copied ? (hi ? "कॉपी" : "Copied") : hi ? "कॉपी" : "Copy"}
+            // Both Hindi states used to read "कॉपी", so the only feedback was
+            // the icon flip. Say what happened.
+            label={copied ? (hi ? "कॉपी हो गया" : "Copied") : hi ? "कॉपी" : "Copy"}
             onPress={() => void onCopy()}
             c={c}
             hi={hi}
@@ -220,6 +258,11 @@ export function LibraryTextSheet({ item, onClose }: LibraryTextSheetProps) {
         </View>
 
         <ScrollView
+          ref={scrollRef}
+          scrollEventThrottle={250}
+          onScroll={(e) => {
+            if (item) scrollMemory.set(item.id, e.nativeEvent.contentOffset.y);
+          }}
           contentContainerStyle={{
             paddingHorizontal: 16,
             paddingBottom: 40 + insets.bottom,
@@ -265,13 +308,18 @@ function ToolBtn({
     <Pressable
       onPress={onPress}
       disabled={disabled}
+      accessibilityRole="button"
       accessibilityLabel={label}
+      // Without this a screen reader announced a greyed-out control as an
+      // ordinary button and let the reader tap it to no effect.
+      accessibilityState={{ disabled: !!disabled }}
       style={{
         flexDirection: "row",
         alignItems: "center",
         gap: 4,
         paddingHorizontal: 10,
         paddingVertical: 6,
+        minHeight: 44,
         borderRadius: 8,
         borderWidth: 1,
         borderColor: c.border,

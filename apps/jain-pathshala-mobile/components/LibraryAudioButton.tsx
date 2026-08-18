@@ -96,14 +96,18 @@ export function LibraryAudioButton({
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={label}
+      accessibilityState={{ selected: isCurrent }}
       style={[
         {
-          flexDirection: "row",
+          // Compact stacks icon over label so the row still fits five actions
+          // while clearing the 44px touch floor it used to sit under.
+          flexDirection: compact ? "column" : "row",
           alignItems: "center",
           justifyContent: "center",
-          gap: 6,
+          gap: compact ? 2 : 6,
           paddingHorizontal: 8,
-          paddingVertical: 8,
+          paddingVertical: 6,
+          minHeight: 44,
           borderRadius: 8,
           borderWidth: 1,
           borderColor: c.border,
@@ -114,14 +118,20 @@ export function LibraryAudioButton({
     >
       <Ionicons
         name={isCurrent ? (playing ? "pause" : "play") : "musical-notes-outline"}
-        size={compact ? 22 : 16}
+        size={compact ? 20 : 16}
         color={c.secondary}
       />
-      {compact ? null : (
-        <Body numberOfLines={1} style={{ fontSize: 13, lineHeight: 18, color: c.secondary, flexShrink: 1 }}>
-          {label}
-        </Body>
-      )}
+      <Body
+        numberOfLines={1}
+        style={{
+          fontSize: compact ? 11 : 13,
+          lineHeight: compact ? 14 : 18,
+          color: c.secondary,
+          flexShrink: 1,
+        }}
+      >
+        {label}
+      </Body>
     </Pressable>
   );
 }

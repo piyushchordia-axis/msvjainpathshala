@@ -748,11 +748,16 @@ router.post("/uploads", uploadMultipart.single("file"), async (req: Request, res
       storeBody = normalised.path;
       storeMime = normalised.mime;
     } catch (err) {
+      // Carry the specific code through: the join screens override
+      // ERR_VALIDATION_FAILED with "choose a clear image", which is wrong advice
+      // for a format we simply cannot decode.
       const message =
         err instanceof ImageNormaliseError
           ? err.message
           : "Could not process this image. Please try another photo.";
-      fail(res, 422, "ERR_VALIDATION_FAILED", message);
+      const code =
+        err instanceof ImageNormaliseError ? err.code : "ERR_VALIDATION_FAILED";
+      fail(res, 422, code, message);
       return;
     }
     const ext = storageExtForUpload(storeMime, storeMime === contentMime ? detected?.ext : undefined);

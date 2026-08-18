@@ -19,8 +19,13 @@ import type { FtsRow } from "@/lib/library/search-collect";
  * Bumped for a CONTENT change too, not only a column change: the romanisation
  * now writes the inherent vowel as well, and a device holding the old index
  * would keep missing "kalpasutra" until something unrelated forced a rebuild.
+ *
+ * 4: the tokenizer stopped splitting Devanagari on every matra, roman_title
+ * changed to folded spellings, and roman_skeleton appeared. A device on 3 holds
+ * an index whose tokens are single consonants, so it must be dropped and
+ * rebuilt — there is nothing in it worth keeping.
  */
-export const FTS_SCHEMA_VERSION = 3;
+export const FTS_SCHEMA_VERSION = 4;
 
 export const FTS_TABLE = "library_fts";
 
@@ -52,6 +57,14 @@ export const FTS_COLUMNS = [
   { name: "tarj_en", indexed: true },
   { name: "tarj_hi", indexed: true },
   { name: "roman_tarj", indexed: true },
+  // Last-resort consonant skeleton. Titles and tarj only, never the body: a
+  // four-letter skeleton prefix over a page of text would match half the shelf.
+  //
+  // searchLibrary aims the SKELETON QUERY here only after the real query came
+  // back empty. The column is still indexed, so an unfiltered MATCH can reach
+  // it incidentally — harmless, since a folded query token and a skeleton token
+  // rarely coincide, and when they do the row is one the reader wanted anyway.
+  { name: "roman_skeleton", indexed: true },
 ] as const;
 
 export type FtsColumnName = (typeof FTS_COLUMNS)[number]["name"];
@@ -60,10 +73,29 @@ export function ftsCol(name: FtsColumnName): number {
   return FTS_COLUMNS.findIndex((c) => c.name === name);
 }
 
+/**
+ * `categories` is what keeps Devanagari words whole.
+ *
+ * unicode61 classifies by Unicode category and by default counts only letters
+ * and numbers as token characters. Every matra and every halant is Mn or Mc — a
+ * COMBINING mark, not a letter — so the default treats them as separators, and
+ * 'भक्तामर स्तवन णमोकार' indexes as ["क","णम","त","तवन","भक","मर","र","स"].
+ * Prefix search over that is meaningless: "मर*" matches भक्तामर in the middle,
+ * a single consonant matches most of the shelf, bm25 ranks fragments, and
+ * snippet() cuts between a consonant and its matra, so the highlight renders an
+ * orphaned vowel sign on a dotted circle.
+ *
+ * Adding Mn and Mc to the token categories restores whole words. Co covers the
+ * private-use codepoints some Devanagari fonts still ship glyphs for.
+ *
+ * remove_diacritics 2 stays. It strips Latin diacritics (é → e), and Indic
+ * matras are not decomposable diacritics, so they survive it — checked against
+ * the engine rather than assumed.
+ */
 export const CREATE_SQL = `
 CREATE VIRTUAL TABLE IF NOT EXISTS ${FTS_TABLE} USING fts5(
   ${FTS_COLUMNS.map((c) => (c.indexed ? c.name : `${c.name} UNINDEXED`)).join(", ")},
-  tokenize = 'unicode61 remove_diacritics 2'
+  tokenize = 'unicode61 remove_diacritics 2 categories ''L* N* Co Mn Mc'''
 );
 `;
 

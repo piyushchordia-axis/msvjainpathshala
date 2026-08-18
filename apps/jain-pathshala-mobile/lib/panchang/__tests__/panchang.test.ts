@@ -1,6 +1,14 @@
+/**
+ * The Panchang schema and the calendar helpers.
+ *
+ * These used to run against assets/data/panchang-2026.json, asserting things
+ * like "the bundled sample has 365 days" and "2026-08-12 is a parv day with a
+ * highlight". That file was machine-generated and its Samvatsari was three weeks
+ * early, so the suite was certifying the shape of fabricated data — and would
+ * have gone green for any wrong year of the same shape. It is deleted, and these
+ * tests now run against an openly synthetic fixture instead.
+ */
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import {
   buildPanchangMonthCells,
   indexDaysByDate,
@@ -9,32 +17,52 @@ import {
 } from "@/lib/panchang/calendar";
 import { panchangYearSchema } from "@/lib/panchang/schema";
 import { pickNewerPanchangYear } from "@/lib/panchang/version";
-
-const bundledPath = resolve(__dirname, "../../../assets/data/panchang-2026.json");
+import { makeDay, makeYear } from "./panchang-fixture";
 
 describe("panchangYearSchema", () => {
-  it("accepts the bundled 2026 sample", () => {
-    const raw = JSON.parse(readFileSync(bundledPath, "utf8"));
-    const parsed = panchangYearSchema.safeParse(raw);
+  it("accepts a well-formed year", () => {
+    const parsed = panchangYearSchema.safeParse(makeYear());
     expect(parsed.success).toBe(true);
-    if (!parsed.success) return;
-    expect(parsed.data.days).toHaveLength(365);
-    expect(parsed.data.schemaVersion).toBe(1);
+  });
+
+  it("REFUSES a year with no provenance", () => {
+    // §17.6.1 — the whole defence. A year nobody has put their name to must not
+    // be loadable by any path: not bundled, not fetched, not restored from cache.
+    const { provenance, ...withoutProvenance } = makeYear();
+    expect(provenance).toBeDefined();
+    expect(panchangYearSchema.safeParse(withoutProvenance).success).toBe(false);
+  });
+
+  it("refuses provenance with a blank verifier", () => {
+    // An empty string would satisfy "the field exists" while naming nobody.
+    const year = makeYear();
+    const parsed = panchangYearSchema.safeParse({
+      ...year,
+      provenance: { ...year.provenance, verified_by: "" },
+    });
+    expect(parsed.success).toBe(false);
+  });
+
+  it("refuses a malformed verification date", () => {
+    const year = makeYear();
+    const parsed = panchangYearSchema.safeParse({
+      ...year,
+      provenance: { ...year.provenance, verified_at: "last Tuesday" },
+    });
+    expect(parsed.success).toBe(false);
   });
 });
 
 describe("pickNewerPanchangYear", () => {
+  const base = makeYear();
+
   it("prefers higher contentVersion", () => {
-    const raw = JSON.parse(readFileSync(bundledPath, "utf8"));
-    const base = panchangYearSchema.parse(raw);
     const newer = { ...base, contentVersion: base.contentVersion + 1 };
     expect(pickNewerPanchangYear(newer, base)).toBe(newer);
     expect(pickNewerPanchangYear(base, newer).contentVersion).toBe(newer.contentVersion);
   });
 
   it("falls back when preferred is null", () => {
-    const raw = JSON.parse(readFileSync(bundledPath, "utf8"));
-    const base = panchangYearSchema.parse(raw);
     expect(pickNewerPanchangYear(null, base)).toBe(base);
   });
 });
@@ -50,13 +78,33 @@ describe("pakshaLabel", () => {
 
 describe("buildPanchangMonthCells", () => {
   it("builds a full week-aligned grid with markers", () => {
-    const year = panchangYearSchema.parse(
-      JSON.parse(readFileSync(bundledPath, "utf8")),
-    );
-    const dayByDate = indexDaysByDate(year);
+    const year = makeYear({
+      days: [
+        ...makeYear().days.slice(0, 11),
+        makeDay("2026-08-12", {
+          tithi: 8,
+          parvTithi: true,
+          events: [
+            {
+              id: "e1",
+              type: "festival",
+              title_en: "Fixture event",
+              title_hi: "परीक्षण",
+              title_gu: null,
+              note_en: null,
+              note_hi: null,
+              note_gu: null,
+              highlight: true,
+              linkedItemId: null,
+            },
+          ],
+        }),
+        ...makeYear().days.slice(12),
+      ],
+    });
     const cells = buildPanchangMonthCells({
       month: "2026-08",
-      dayByDate,
+      dayByDate: indexDaysByDate(year),
       todayIso: "2026-08-12",
     });
     expect(cells.length % 7).toBe(0);
@@ -64,38 +112,56 @@ describe("buildPanchangMonthCells", () => {
     expect(today?.isToday).toBe(true);
     expect(today?.hasHighlight).toBe(true);
     expect(today?.hasParv).toBe(true);
-    // Every real day cell has a gregorian date — vridhi does not insert extra cells
-    const real = cells.filter((c) => c.date);
-    expect(real).toHaveLength(31);
+    // Every real day cell has a gregorian date — vridhi inserts no extra cells.
+    expect(cells.filter((c) => c.date)).toHaveLength(31);
+  });
+
+  it("still builds a grid when no year has been published", () => {
+    // The screen renders this so a reader can open a day and get their
+    // Pachchakkhan times even with no transcription — it must not throw or
+    // come back short.
+    const cells = buildPanchangMonthCells({
+      month: "2026-08",
+      dayByDate: new Map(),
+      todayIso: "2026-08-12",
+    });
+    expect(cells.length % 7).toBe(0);
+    expect(cells.filter((c) => c.date)).toHaveLength(31);
+    expect(cells.every((c) => !c.hasParv && !c.hasHighlight)).toBe(true);
+    expect(cells.find((c) => c.date === "2026-08-12")?.isToday).toBe(true);
   });
 });
 
 describe("tithiStatus handling", () => {
-  it("marks vridhi days with the same tithi as the previous day", () => {
-    const year = panchangYearSchema.parse(
-      JSON.parse(readFileSync(bundledPath, "utf8")),
-    );
-    const vridhi = year.days.filter((d) => d.tithiStatus === "vridhi");
-    expect(vridhi.length).toBeGreaterThan(0);
-    for (const d of vridhi) {
-      const idx = year.days.findIndex((x) => x.date === d.date);
-      const prev = year.days[idx - 1];
-      expect(isValidVridhiPair(prev, d)).toBe(true);
-    }
+  it("accepts a vridhi day repeating the previous day's tithi", () => {
+    const prev = makeDay("2026-08-10", { tithi: 10, paksha: "sud" });
+    const vridhi = makeDay("2026-08-11", {
+      tithi: 10,
+      paksha: "sud",
+      tithiStatus: "vridhi",
+    });
+    expect(isValidVridhiPair(prev, vridhi)).toBe(true);
   });
 
-  it("does not assume contiguous tithi numbers across a paksha", () => {
-    const year = panchangYearSchema.parse(
-      JSON.parse(readFileSync(bundledPath, "utf8")),
-    );
-    // Around a known kshay jump date, tithi delta can be > 1
-    const i = year.days.findIndex((d) => d.date === "2026-03-18");
-    expect(i).toBeGreaterThan(0);
-    const prev = year.days[i - 1]!;
-    const curr = year.days[i]!;
-    const delta =
-      curr.paksha === prev.paksha ? curr.tithi - prev.tithi : null;
-    // Either paksha rolled or stepped by more than 1 (kshay skip)
-    expect(delta === null || Math.abs(delta) >= 1).toBe(true);
+  it("rejects a vridhi day whose tithi moved on", () => {
+    const prev = makeDay("2026-08-10", { tithi: 10, paksha: "sud" });
+    const notVridhi = makeDay("2026-08-11", {
+      tithi: 11,
+      paksha: "sud",
+      tithiStatus: "vridhi",
+    });
+    expect(isValidVridhiPair(prev, notVridhi)).toBe(false);
+  });
+
+  it("tolerates a kshay gap, so nothing assumes contiguous tithi numbers", () => {
+    // A kshay tithi is skipped entirely: the sequence jumps by 2. Code that
+    // assumes +1 per day silently mislabels every day after the first kshay.
+    const days = [
+      makeDay("2026-08-10", { tithi: 10, paksha: "sud" }),
+      makeDay("2026-08-11", { tithi: 12, paksha: "sud", tithiStatus: "kshay" }),
+    ];
+    const parsed = panchangYearSchema.safeParse(makeYear({ days }));
+    expect(parsed.success).toBe(true);
+    expect(days[1]!.tithi - days[0]!.tithi).toBe(2);
   });
 });

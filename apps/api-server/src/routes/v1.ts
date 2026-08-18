@@ -32,6 +32,7 @@ import coursesRouter from "./v1/courses";
 import libraryRouter from "./v1/library";
 import libraryAccessRouter from "./v1/library-access";
 import libraryGranthRouter from "./v1/library-granth";
+import panchangRouter from "./v1/panchang";
 import libraryRequestsRouter from "./v1/library-requests";
 import enrolmentsRouter from "./v1/enrolments";
 import clientSettingsRouter from "./v1/client-settings";
@@ -82,6 +83,9 @@ router.use("/library/requests", libraryRequestsRouter);
 router.use("/library/access", libraryAccessRouter);
 // Same reason — the Granth directory is browsable before sign-in (§17.11).
 router.use("/library/granth", libraryGranthRouter);
+// Its own top-level mount, not under /library: /v1/library is requireAuth, and
+// the Panchang must stay reachable before sign-in (see the router's header).
+router.use("/panchang", panchangRouter);
 router.use("/library", libraryRouter);
 router.use("/enrolments", enrolmentsRouter);
 router.use("/students", studentsRouter);

@@ -31,6 +31,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { LibraryDownloadProvider } from "@/contexts/LibraryDownloadContext";
 import { LibraryAudioProvider } from "@/contexts/LibraryAudioContext";
 import { LibraryFullPlayer, LibraryMiniPlayer } from "@/components/LibraryMiniPlayer";
+import { TabBarInsetProvider } from "@/contexts/TabBarInsetContext";
 import { LibraryDownloadItemLookup } from "@/components/LibraryDownloadItemLookup";
 import { LibraryVersionSyncLoop } from "@/components/LibraryVersionSyncLoop";
 
@@ -272,18 +273,20 @@ export default function RootLayout() {
               <LocaleProvider>
                 <AuthProvider>
                   <SessionViewProvider>
-                    <BottomSheetModalProvider>
-                      <LibraryDownloadProvider>
-                        <LibraryAudioProvider>
-                          <OfflineSyncLoop />
-                          <LibraryDownloadItemLookup />
-                          <LibraryVersionSyncLoop hydrated={queryHydrated} />
-                          <RootLayoutNav />
-                          <LibraryMiniPlayer bottomOffset={64} />
-                          <LibraryFullPlayer />
-                        </LibraryAudioProvider>
-                      </LibraryDownloadProvider>
-                    </BottomSheetModalProvider>
+                    <TabBarInsetProvider>
+                      <BottomSheetModalProvider>
+                        <LibraryDownloadProvider>
+                          <LibraryAudioProvider>
+                            <OfflineSyncLoop />
+                            <LibraryDownloadItemLookup />
+                            <LibraryVersionSyncLoop hydrated={queryHydrated} />
+                            <RootLayoutNav />
+                            <LibraryMiniPlayer />
+                            <LibraryFullPlayer />
+                          </LibraryAudioProvider>
+                        </LibraryDownloadProvider>
+                      </BottomSheetModalProvider>
+                    </TabBarInsetProvider>
                   </SessionViewProvider>
                 </AuthProvider>
               </LocaleProvider>

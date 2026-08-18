@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useParams } from 'wouter';
 import type { LibraryItemDto, LibrarySectionDto } from '@workspace/api-zod';
 import { t } from '@workspace/i18n';
@@ -22,7 +22,10 @@ import { useLocale } from '@/lib/locale-context';
 import { useAuth } from '@/lib/auth-context';
 import { safeHref } from '@/lib/safe-url';
 import { fetchLibrarySection } from '@/lib/library-cache';
-import { toast } from '@/components/ui/toast-jp';
+import { Input } from '@/components/ui/input';
+import { GuestError, GuestLoading } from '@/components/public/GuestLoadState';
+import { formatClock, useLibraryAudio } from '@/lib/library-audio-context';
+import { videoEmbedSrc } from '@/lib/video-embed';
 
 function pick(hi: boolean, en: string | null | undefined, hiVal: string | null | undefined, gu?: string | null) {
   if (hi) return hiVal || en || gu || '';
@@ -33,26 +36,57 @@ function hasText(item: LibraryItemDto): boolean {
   return !!(item.text_content_en || item.text_content_hi || item.text_content_gu);
 }
 
-function openVideoExternally(youtubeUrl: string | null | undefined, hi: boolean) {
-  const href = safeHref(youtubeUrl);
-  if (!href) {
-    toast.error(
-      hi ? 'वीडियो नहीं खुला' : 'Could not open video',
-      hi
-        ? 'कोई ऐप यह लिंक नहीं खोल सका — YouTube या ब्राउज़र इंस्टॉल करें, फिर फिर से कोशिश करें।'
-        : 'No app could open this link — install YouTube or a browser, then try again.',
-    );
-    return;
+/**
+ * Q7 — the video plays here. This used to be window.open, so a popup blocker
+ * replaced a stavan recording with a toast telling a desktop reader to
+ * "install YouTube". An unrecognised host still gets a plain link: better an
+ * honest anchor than an iframe pointed somewhere we did not vet.
+ */
+function VideoEmbed({ url, title, hi }: { url: string; title: string; hi: boolean }) {
+  const src = videoEmbedSrc(url);
+  const href = safeHref(url);
+
+  if (!src) {
+    return href ? (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-3 inline-block text-sm leading-6 text-primary hover:underline"
+      >
+        {hi ? 'वीडियो देखें' : 'Watch the video'}
+      </a>
+    ) : null;
   }
-  const win = window.open(href, '_blank', 'noopener,noreferrer');
-  if (!win) {
-    toast.error(
-      hi ? 'वीडियो नहीं खुला' : 'Could not open video',
-      hi
-        ? 'कोई ऐप यह लिंक नहीं खोल सका — YouTube या ब्राउज़र इंस्टॉल करें, फिर फिर से कोशिश करें।'
-        : 'No app could open this link — install YouTube or a browser, then try again.',
-    );
-  }
+
+  return (
+    <div className="mt-3">
+      <div
+        className="relative w-full overflow-hidden rounded-md border border-border"
+        style={{ paddingTop: '56.25%' }}
+      >
+        <iframe
+          src={src}
+          title={title}
+          loading="lazy"
+          allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+          referrerPolicy="strict-origin-when-cross-origin"
+          className="absolute inset-0 h-full w-full"
+        />
+      </div>
+      {href ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="mt-1 inline-block text-xs leading-6 text-muted-foreground hover:text-primary"
+        >
+          {hi ? 'नए टैब में खोलें' : 'Open in a new tab'}
+        </a>
+      ) : null}
+    </div>
+  );
 }
 
 function ItemRow({
@@ -73,45 +107,15 @@ function ItemRow({
   const text = hasText(item);
   const hasPdf = !!item.pdf_url;
   const externalHref = item.external_url ? safeHref(item.external_url) : undefined;
-  const playerRef = useRef<HTMLAudioElement | null>(null);
-  const [playing, setPlaying] = useState(false);
 
-  useEffect(() => {
-    return () => {
-      playerRef.current?.pause();
-      playerRef.current = null;
-    };
-  }, []);
-
-  async function toggleAudio() {
-    if (!audio) return;
-    try {
-      if (!playerRef.current || playerRef.current.src !== audio) {
-        playerRef.current?.pause();
-        const el = new Audio(audio);
-        el.preload = 'metadata';
-        el.addEventListener('ended', () => setPlaying(false));
-        el.addEventListener('pause', () => setPlaying(false));
-        el.addEventListener('play', () => setPlaying(true));
-        playerRef.current = el;
-      }
-      if (playing) {
-        playerRef.current.pause();
-        setPlaying(false);
-      } else {
-        await playerRef.current.play();
-        setPlaying(true);
-      }
-    } catch {
-      toast.error(
-        hi ? 'ऑडियो नहीं चला' : 'Could not play audio',
-        hi
-          ? 'लिंक समाप्त हो सकता है — पेज रिफ़्रेश करके फिर कोशिश करें।'
-          : 'The link may have expired — refresh the page and try again.',
-      );
-      setPlaying(false);
-    }
-  }
+  // One element for the whole page (see lib/library-audio-context). Identity is
+  // the item id: comparing against el.src compared a relative signed path with
+  // the absolute URL the DOM resolves it to, which is never equal, so every
+  // press rebuilt the element — restarting playback and re-downloading the file.
+  const { currentItemId, playing, position, duration, toggle, seek } = useLibraryAudio();
+  const isCurrent = currentItemId === item.id;
+  const isPlaying = isCurrent && playing;
+  const shownDuration = isCurrent ? duration : (item.audio_duration_sec ?? 0);
 
   return (
     <Card className="p-4">
@@ -120,7 +124,7 @@ function ItemRow({
       {availableAt && availableAt.library_count > 0 ? (
         <Link
           href={offlineGranthHref(item.section_id, availableAt.library_ids)}
-          className="mt-1 inline-flex items-center gap-1 text-sm text-primary hover:underline"
+          className="mt-1 inline-flex items-center gap-1 text-sm leading-6 text-primary hover:underline"
         >
           <Building2 className="h-3.5 w-3.5" aria-hidden />
           {hi
@@ -128,17 +132,23 @@ function ItemRow({
             : `Available at ${availableAt.library_count} ${availableAt.library_count === 1 ? 'library' : 'libraries'}`}
         </Link>
       ) : null}
-      {audio || text || hasVideo || hasPdf || externalHref ? (
+      {/* hasVideo is deliberately absent: the video renders as an embed below,
+          not as a button here, so a video-only item must not draw an empty
+          action row. */}
+      {audio || text || hasPdf || externalHref ? (
         <div className="mt-3 flex flex-wrap gap-2">
           {audio ? (
             <Button
               type="button"
               variant="outline"
               size="sm"
+              aria-pressed={isPlaying}
               className="min-w-0 flex-1 truncate"
-              onClick={() => void toggleAudio()}
+              onClick={() =>
+                toggle({ itemId: item.id, src: audio, title }, item.audio_duration_sec)
+              }
             >
-              {playing ? (hi ? 'रोकें' : 'Pause') : hi ? 'ऑडियो' : 'Audio'}
+              {isPlaying ? (hi ? 'रोकें' : 'Pause') : hi ? 'ऑडियो' : 'Audio'}
             </Button>
           ) : null}
           {text ? (
@@ -150,17 +160,6 @@ function ItemRow({
               onClick={() => onOpenText(item)}
             >
               {hi ? 'पाठ' : 'Text'}
-            </Button>
-          ) : null}
-          {hasVideo ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="min-w-0 flex-1 truncate"
-              onClick={() => openVideoExternally(item.youtube_url, hi)}
-            >
-              {hi ? 'वीडियो' : 'Video'}
             </Button>
           ) : null}
           {/* Rendered only when the modality exists — never a disabled
@@ -190,6 +189,32 @@ function ItemRow({
           ) : null}
         </div>
       ) : null}
+
+      {audio && isCurrent ? (
+        <div className="mt-3 flex items-center gap-3">
+          <span className="shrink-0 font-mono text-xs leading-6 tabular-nums text-muted-foreground">
+            {formatClock(position)}
+          </span>
+          <input
+            type="range"
+            min={0}
+            max={shownDuration || 0}
+            step={1}
+            value={Math.min(position, shownDuration || 0)}
+            onChange={(e) => seek(Number(e.target.value))}
+            aria-label={hi ? 'ऑडियो में आगे-पीछे जाएँ' : 'Seek audio'}
+            disabled={!shownDuration}
+            className="h-1 min-w-0 flex-1 accent-primary"
+          />
+          <span className="shrink-0 font-mono text-xs leading-6 tabular-nums text-muted-foreground">
+            {formatClock(shownDuration)}
+          </span>
+        </div>
+      ) : null}
+
+      {hasVideo && item.youtube_url ? (
+        <VideoEmbed url={item.youtube_url} title={title} hi={hi} />
+      ) : null}
     </Card>
   );
 }
@@ -199,12 +224,18 @@ export default function LibrarySectionPage() {
   const sectionId = String(id ?? '');
   const locale = useLocale();
   const hi = locale === 'hi';
-  const { user } = useAuth();
+  // U-19 — the provider reads the session cookie in an effect, so `user` is
+  // null on first paint. Deriving `authed` without waiting fetched the GUEST
+  // tree, drew lock icons at a member, then fetched the whole tree again when
+  // the effect landed. `authLoading` was always exposed; nothing read it.
+  const { user, loading: authLoading } = useAuth();
   const authed = !!user;
   const [, navigate] = useLocation();
   const [section, setSection] = useState<LibrarySectionDto | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+  const [query, setQuery] = useState('');
   const [readerItem, setReaderItem] = useState<LibraryItemDto | null>(null);
   const [granthTab, setGranthTab] = useState<GranthTab>(() => {
     const fromUrl = new URLSearchParams(window.location.search).get('tab');
@@ -218,8 +249,13 @@ export default function LibrarySectionPage() {
   );
 
   useEffect(() => {
+    if (authLoading) return;
     let cancelled = false;
     setLoading(true);
+    // Clearing the error is not housekeeping. Without it one failed load stuck
+    // to the component: every later section rendered that first failure's copy,
+    // however well it had loaded, until something unmounted the page.
+    setError(null);
     // Scoped fetch (GST-PRF-01): a warm index visit serves this from the tree
     // cache; a cold deep-link downloads ONE section, not the whole corpus.
     fetchLibrarySection(authed, sectionId)
@@ -237,7 +273,7 @@ export default function LibrarySectionPage() {
     return () => {
       cancelled = true;
     };
-  }, [authed, sectionId]);
+  }, [authed, authLoading, sectionId, reloadKey]);
 
   const title = useMemo(
     () => (section ? pick(hi, section.name_en, section.name_hi, section.name_gu) : ''),
@@ -278,27 +314,39 @@ export default function LibrarySectionPage() {
     };
   }, [isGranth, section]);
 
-  if (loading) {
+  if (authLoading || loading) {
     return (
       <section className="container py-12">
-        <p className="text-muted-foreground">{hi ? 'लोड हो रहा है…' : 'Loading…'}</p>
+        <GuestLoading hi={hi} />
       </section>
     );
   }
 
-  if (error || !section || (section.type !== 'item_list' && section.type !== 'granth')) {
+  // A transport failure is recoverable and gets a retry; a genuine 404 is not
+  // and does not. Sharing one branch let the second wear the first's copy.
+  if (error) {
+    return (
+      <section className="container py-12">
+        <GuestError
+          hi={hi}
+          what="this section"
+          whatHi="यह खंड"
+          onRetry={() => setReloadKey((k) => k + 1)}
+        />
+        <Link href="/library" className="mt-4 inline-block text-sm leading-6 text-primary">
+          ← {hi ? 'पुस्तकालय' : 'Library'}
+        </Link>
+      </section>
+    );
+  }
+
+  if (!section || (section.type !== 'item_list' && section.type !== 'granth')) {
     return (
       <section className="container py-12">
         <p className="text-muted-foreground">
-          {error
-            ? hi
-              ? 'खंड लोड नहीं हो सका — अपना कनेक्शन जाँचें और पुनः प्रयास करें।'
-              : "Couldn't load this section — check your connection and try again."
-            : hi
-              ? 'यह खंड उपलब्ध नहीं है।'
-              : 'That section is not available.'}
+          {hi ? 'यह खंड उपलब्ध नहीं है।' : 'That section is not available.'}
         </p>
-        <Link href="/library" className="mt-4 inline-block text-primary">
+        <Link href="/library" className="mt-4 inline-block text-sm leading-6 text-primary">
           ← {hi ? 'पुस्तकालय' : 'Library'}
         </Link>
       </section>
@@ -310,7 +358,9 @@ export default function LibrarySectionPage() {
       <section className="container py-12">
         <h1 className="font-display text-3xl text-secondary">{title}</h1>
         <p className="mt-4 text-muted-foreground">
-          {hi ? 'इस खंड के लिए साइन इन करें।' : 'Sign in to open this section.'}
+          {hi
+            ? 'साइन इन करें — इस खंड के स्तवन, पाठ और ऑडियो सदस्यों के लिए हैं।'
+            : 'Sign in to open — the stavans, texts and audio in this section are for members.'}
         </p>
         <Button
           className="mt-6"
@@ -322,14 +372,40 @@ export default function LibrarySectionPage() {
     );
   }
 
-  const subsections = section.subsections ?? [];
-  const loose = section.items ?? [];
+  // U-17 — a 60-item Istavan section was an unfiltered scroll. The section is
+  // already fully loaded, so this is a filter over what is in hand, not a
+  // search backend; mobile's in-section filter works the same way.
+  const q = query.trim().toLowerCase();
+  const hit = (...values: Array<string | null | undefined>) =>
+    !q || values.some((v) => (v ?? '').toLowerCase().includes(q));
+
+  const subsections = (section.subsections ?? [])
+    .map((sub) => {
+      const subHit = hit(sub.name_en, sub.name_hi, sub.name_gu);
+      return {
+        ...sub,
+        items: (sub.items ?? []).filter(
+          (i) => subHit || hit(i.title_en, i.title_hi, i.title_gu),
+        ),
+      };
+    })
+    .filter((sub) => (sub.items ?? []).length > 0);
+  const loose = (section.items ?? []).filter((i) =>
+    hit(i.title_en, i.title_hi, i.title_gu),
+  );
+  const total = (section.subsections ?? []).reduce(
+    (sum, sub) => sum + (sub.items ?? []).length,
+    (section.items ?? []).length,
+  );
   // Only a granth section has a second tab to be on.
   const showOffline = isGranth && granthTab === 'offline';
 
   return (
     <section className="container py-12 md:py-16">
-      <Link href="/library" className="text-sm text-muted-foreground hover:text-primary">
+      <Link
+        href="/library"
+        className="text-sm leading-6 text-muted-foreground hover:text-primary"
+      >
         ← {hi ? 'पुस्तकालय' : 'Library'}
       </Link>
       <h1 className="mt-4 font-display text-3xl text-secondary md:text-4xl">{title}</h1>
@@ -346,7 +422,7 @@ export default function LibrarySectionPage() {
               role="tab"
               aria-selected={granthTab === tab.id}
               onClick={() => setGranthTab(tab.id)}
-              className={`rounded-full border px-4 py-2 text-sm transition ${
+              className={`rounded-full border px-4 py-2 text-sm leading-6 transition ${
                 granthTab === tab.id
                   ? 'border-primary bg-accent text-primary'
                   : 'border-border bg-card text-muted-foreground hover:border-primary/40'
@@ -368,6 +444,18 @@ export default function LibrarySectionPage() {
           loading={directoryLoading}
         />
       ) : null}
+
+      {showOffline || total < 8 ? null : (
+        <div className="mt-6 max-w-sm">
+          <Input
+            type="search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder={hi ? 'इस खंड में खोजें…' : 'Search this section…'}
+            aria-label={hi ? 'इस खंड में खोजें' : 'Search this section'}
+          />
+        </div>
+      )}
 
       <div className={`mt-8 space-y-8 ${showOffline ? 'hidden' : ''}`}>
         {subsections.map((sub) => (
@@ -410,7 +498,13 @@ export default function LibrarySectionPage() {
 
         {subsections.length === 0 && loose.length === 0 ? (
           <p className="text-muted-foreground">
-            {hi ? 'इस खंड में अभी कोई सामग्री नहीं है।' : 'No items in this section yet.'}
+            {q
+              ? hi
+                ? 'कोई परिणाम नहीं — कोई और शब्द आज़माएँ।'
+                : 'Nothing matched — try another word.'
+              : hi
+                ? 'इस खंड में अभी कोई सामग्री नहीं है।'
+                : 'No items in this section yet.'}
           </p>
         ) : null}
 

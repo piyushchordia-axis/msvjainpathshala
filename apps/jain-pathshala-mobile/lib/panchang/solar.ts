@@ -147,8 +147,32 @@ export function localHHmmToMs(date: string, hhmm: string): number | null {
   return Date.UTC(y, mo - 1, d, h, mi) - (5 * 60 + 30) * 60_000;
 }
 
-export function formatTimeIst(ms: number, hi: boolean): string {
-  return new Date(ms).toLocaleTimeString(hi ? "hi-IN" : "en-IN", {
+/**
+ * Render an instant as an IST wall-clock time, to the minute.
+ *
+ * The rounding direction matters and has no safe default for both cases.
+ * toLocaleTimeString with hour+minute simply discards the seconds, so 06:48:59
+ * printed as "6:48 am" — up to 59 seconds EARLY. A parent who waits for the
+ * displayed minute and then eats has broken the Navkarsi vow on the app's word.
+ *
+ * So: a permission time rounds UP, and a deadline rounds DOWN. Both directions
+ * err by making the observance slightly stricter, which is the only tolerable
+ * way to be wrong here. Callers with a Pachchakkhan slot pass its `boundary`
+ * (see istRoundingFor) rather than choosing.
+ *
+ * Default stays "down" for the informational sunrise/sunset line, so that it
+ * agrees with Chovihar rather than reading a minute later than the sunset it
+ * is derived from.
+ */
+export function formatTimeIst(
+  ms: number,
+  hi: boolean,
+  round: "up" | "down" = "down",
+): string {
+  const MINUTE = 60_000;
+  const rounded =
+    round === "up" ? Math.ceil(ms / MINUTE) * MINUTE : Math.floor(ms / MINUTE) * MINUTE;
+  return new Date(rounded).toLocaleTimeString(hi ? "hi-IN" : "en-IN", {
     timeZone: "Asia/Kolkata",
     hour: "numeric",
     minute: "2-digit",

@@ -10,6 +10,12 @@ import {
 } from "@workspace/db";
 import { and, eq, isNull } from "drizzle-orm";
 
+import {
+  panchangAnchorIssues,
+  panchangYearSchema,
+  type PanchangAnchorIssue,
+} from "@workspace/api-zod";
+
 import { publishLinkedContentRequests } from "./library-requests-admin";
 
 export async function publishSection(id: string) {
@@ -164,13 +170,50 @@ export async function unpublishItem(id: string) {
   return updated ?? null;
 }
 
-export async function publishPanchangYear(year: number) {
+export type PublishPanchangResult =
+  | { status: "not_found" }
+  | { status: "rejected"; issues: PanchangAnchorIssue[] }
+  | { status: "published"; row: NonNullable<Awaited<ReturnType<typeof selectPanchangYear>>> };
+
+async function selectPanchangYear(year: number) {
   const [row] = await db
     .select()
     .from(panchang_years)
     .where(and(eq(panchang_years.year, year), isNull(panchang_years.deleted_at)))
     .limit(1);
-  if (!row) return null;
+  return row ?? null;
+}
+
+/**
+ * Publish a Panchang year — the gate, not merely a column copy.
+ *
+ * The validation lives HERE rather than in the route because publication is the
+ * moment unverified data becomes something a family plans a fast around, and a
+ * check a second route could forget to call is not a gate. A draft may be saved
+ * in any state; it may only be published once it parses (provenance included,
+ * §17.6.1) and contradicts none of the anchor rules.
+ *
+ * Rejection is not advisory. The previous year shipped with Samvatsari three
+ * weeks early, and no step between "someone typed it" and "families read it"
+ * would have caught that.
+ */
+export async function publishPanchangYear(year: number): Promise<PublishPanchangResult> {
+  const row = await selectPanchangYear(year);
+  if (!row) return { status: "not_found" };
+
+  const parsed = panchangYearSchema.safeParse(row.draft_payload);
+  if (!parsed.success) {
+    return {
+      status: "rejected",
+      issues: parsed.error.issues.map((i) => ({
+        rule: i.path.join(".") || "payload",
+        message: i.message,
+      })),
+    };
+  }
+  const issues = panchangAnchorIssues(parsed.data);
+  if (issues.length > 0) return { status: "rejected", issues };
+
   const draft = row.draft_payload as Record<string, unknown>;
   const nextPayload = {
     ...draft,
@@ -189,7 +232,8 @@ export async function publishPanchangYear(year: number) {
     })
     .where(eq(panchang_years.id, row.id))
     .returning();
-  return updated ?? null;
+  if (!updated) return { status: "not_found" };
+  return { status: "published", row: updated };
 }
 
 export async function unpublishPanchangYear(year: number) {

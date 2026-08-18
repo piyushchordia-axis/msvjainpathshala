@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { apiGet, apiPost, ApiError } from "@/lib/api-client";
 import { toast } from "@/components/ui/toast-jp";
+import { useConfirm } from "@/components/admin/use-confirm";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -19,6 +20,7 @@ export function LibraryMediaPanel({ canPublish }: Props) {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
+  const { confirm, confirmDialog } = useConfirm();
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -49,11 +51,26 @@ export function LibraryMediaPanel({ canPublish }: Props) {
 
   async function cleanup(keys: string[]) {
     if (!canPublish) return;
-    const label =
-      keys.length === 0
-        ? "Delete all current orphan library files?"
-        : `Delete ${keys.length} selected orphan file(s)?`;
-    if (!window.confirm(label)) return;
+    const ok = await confirm({
+      title:
+        keys.length === 0
+          ? "Delete every orphan file?"
+          : `Delete ${keys.length} selected file${keys.length === 1 ? "" : "s"}?`,
+      destructive: true,
+      confirmLabel: "Delete files",
+      body: (
+        <>
+          <p>
+            These files are no longer referenced by any library item. Deleting them frees the
+            storage they use.
+          </p>
+          <p className="text-muted-foreground">
+            This one cannot be undone — the files are removed from storage, not soft-deleted.
+          </p>
+        </>
+      ),
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       const res = await apiPost<{ deleted: number; failed: Array<{ key: string; error: string }> }>(
@@ -86,6 +103,7 @@ export function LibraryMediaPanel({ canPublish }: Props) {
 
   return (
     <div className="space-y-4">
+      {confirmDialog}
       <div className="flex flex-wrap gap-6 text-sm">
         <div>
           <div className="text-xs text-muted-foreground">Total size</div>

@@ -19,7 +19,11 @@ import {
 } from "@/lib/library/helpers";
 import { openLibraryExternalUrl } from "@/lib/library/open-external";
 import { useLibraryBookmarks } from "@/lib/library/bookmarks";
+import { apiErrorMessage } from "@/lib/api-error-copy";
+import { formatBytes } from "@/lib/library/downloaded-audio";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { LibraryOfflineBanner } from "@/components/LibraryOfflineBanner";
+import { LibraryShortcut } from "@/components/LibraryShortcut";
 import { LibraryTextSheet } from "@/components/LibraryTextSheet";
 import { LibraryAudioButton } from "@/components/LibraryAudioButton";
 import { LibraryOfflineButton } from "@/components/LibraryOfflineButton";
@@ -141,6 +145,14 @@ function GranthTabs({
   );
 }
 
+/**
+ * One action in an item's row.
+ *
+ * The icon used to stand alone at roughly 38px tall — under the 44px touch
+ * floor, and asking a reader to know that a document glyph means "text" and a
+ * play glyph means "audio". The label is small but it is there, and the row
+ * now clears 44.
+ */
 function IconAction({
   icon,
   label,
@@ -160,13 +172,43 @@ function IconAction({
         flex: 1,
         alignItems: "center",
         justifyContent: "center",
-        paddingVertical: 8,
+        minHeight: 44,
+        paddingVertical: 6,
         minWidth: 0,
       }}
     >
-      <Ionicons name={icon} size={22} color={c.secondary} />
+      <Ionicons name={icon} size={20} color={c.secondary} />
+      <Body
+        numberOfLines={1}
+        style={{ fontSize: 11, lineHeight: 14, color: c.secondary, marginTop: 2 }}
+      >
+        {label}
+      </Body>
     </Pressable>
   );
+}
+
+/**
+ * "4:07 · 3.8 MB" — what this item is, before committing to it.
+ *
+ * Duration and size were on LibraryItemDto all along and reached no screen, so
+ * a reader on a metered connection had to start the download to find out how
+ * big it was. Only downloads over 20MB were announced at all.
+ */
+function itemMeta(item: LibraryItemDto, hi: boolean): string | null {
+  const parts: string[] = [];
+  if (item.audio_duration_sec) {
+    const m = Math.floor(item.audio_duration_sec / 60);
+    const sec = Math.floor(item.audio_duration_sec % 60);
+    parts.push(`${m}:${String(sec).padStart(2, "0")}`);
+  }
+  if (item.audio_size_bytes) parts.push(formatBytes(item.audio_size_bytes));
+  if (item.pdf_page_count) {
+    parts.push(hi ? `${item.pdf_page_count} पृष्ठ` : `${item.pdf_page_count} pages`);
+  } else if (item.pdf_size_bytes) {
+    parts.push(formatBytes(item.pdf_size_bytes));
+  }
+  return parts.length > 0 ? parts.join(" · ") : null;
 }
 
 function CollapsibleGroup({
@@ -236,6 +278,7 @@ function ItemRow({
   const hasText = itemHasText(item);
   const hasPdf = !!item.pdf_url;
   const hasLink = !!item.external_url;
+  const meta = itemMeta(item, hi);
 
   async function openVideo() {
     const result = await openLibraryExternalUrl(item.youtube_url);
@@ -291,6 +334,11 @@ function ItemRow({
         </Pressable>
       </Row>
       <LibraryTarjLine item={item} style={{ marginTop: 2 }} />
+      {meta ? (
+        <Body muted style={{ marginTop: 2, fontSize: 12, lineHeight: 18 }}>
+          {meta}
+        </Body>
+      ) : null}
       {availableAt && availableAt.library_count > 0 ? (
         <AvailableAtRow
           sectionId={item.section_id}
@@ -380,7 +428,7 @@ export default function LibrarySectionScreen() {
     parseLibraryIds(rawLibraryIds),
   );
 
-  const { data, isLoading, isError, refetch, isRefetching } = useQuery({
+  const { data, isLoading, isError, error, refetch, isRefetching } = useQuery({
     queryKey: ["library", authed ? "member" : "public"],
     queryFn: () =>
       authed
@@ -491,7 +539,7 @@ export default function LibrarySectionScreen() {
           <StateView
             status="error"
             emptyText=""
-            errorText={hi ? "खंड लोड नहीं हुआ।" : "Could not load this section."}
+            errorText={apiErrorMessage(error, hi)}
             onRetry={() => void refetch()}
             retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
           />
@@ -517,8 +565,8 @@ export default function LibrarySectionScreen() {
             status="empty"
             emptyText={
               hi
-                ? "इस खंड के लिए साइन इन करें।"
-                : "Sign in to open this section."
+                ? "साइन इन करें — इस खंड के स्तवन, पाठ और ऑडियो सदस्यों के लिए हैं।"
+                : "Sign in to open — the stavans, texts and audio in this section are for members."
             }
           />
           <View style={{ marginTop: 12 }}>
@@ -549,8 +597,25 @@ export default function LibrarySectionScreen() {
 
   return (
     <>
-    <Screen refreshing={isRefetching} onRefresh={refetch}>
+    <Screen refreshing={isRefetching} onRefresh={refetch} contentStyle={{ paddingBottom: 120 }}>
+      <LibraryOfflineBanner />
       <Title style={{ fontSize: 22, lineHeight: 30, marginBottom: 12 }}>{title}</Title>
+
+      {/* Downloads and Bookmarks existed only on library home, so a reader
+          three levels in had to back all the way out to reach what they had
+          saved. */}
+      <Row style={{ gap: 8, marginBottom: 12 }}>
+        <LibraryShortcut
+          icon="bookmark-outline"
+          label={hi ? "बुकमार्क" : "Bookmarks"}
+          href="/library/bookmarks"
+        />
+        <LibraryShortcut
+          icon="download-outline"
+          label={hi ? "डाउनलोड" : "Downloads"}
+          href="/library/downloads"
+        />
+      </Row>
 
       {isGranth ? <GranthTabs tab={granthTab} onChange={setGranthTab} /> : null}
 

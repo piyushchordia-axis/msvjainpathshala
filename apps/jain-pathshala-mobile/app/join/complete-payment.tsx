@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Image, TextInput, View } from "react-native";
-import * as ImagePicker from "expo-image-picker";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { apiGet, apiPatch } from "@/lib/api";
 import { apiErrorMessage } from "@/lib/api-error-copy";
+import { pickMediaAsset } from "@/lib/image-pick";
 import { joinUpload, safeImageMime, safeImageUploadName } from "@/lib/join-upload";
 import { fonts } from "@/constants/typography";
 import { Body, Button, Screen, Title } from "@/components/ui";
@@ -303,12 +303,8 @@ export default function JoinCompletePaymentScreen() {
             style={{ marginTop: 12 }}
             disabled={busy}
             onPress={async () => {
-              const res = await ImagePicker.launchImageLibraryAsync({
-                mediaTypes: ["images"],
-                quality: 0.8,
-              });
-              if (res.canceled || !res.assets[0]) return;
-              const asset = res.assets[0];
+              const asset = await pickMediaAsset({ source: "library", mediaTypes: ["images"] });
+              if (!asset) return;
               setShotPreviewUri(asset.uri);
               setBusy(true);
               setError(null);

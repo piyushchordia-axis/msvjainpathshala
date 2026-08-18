@@ -9,6 +9,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { useLocale } from "@/lib/locale-context";
+import { toast } from "@/components/ui/toast-jp";
 import {
   availableTextLangs,
   clampTextFontSize,
@@ -36,6 +37,13 @@ const LANG_LABEL: Record<LibraryTextLang, { en: string; hi: string }> = {
   en: { en: "EN", hi: "EN" },
   hi: { en: "HI", hi: "हि" },
   gu: { en: "GU", hi: "ગુ" },
+};
+
+/** "EN" / "हि" is legible but unspeakable — screen readers need the language. */
+const LANG_NAME: Record<LibraryTextLang, { en: string; hi: string }> = {
+  en: { en: "English", hi: "अंग्रेज़ी" },
+  hi: { en: "Hindi", hi: "हिन्दी" },
+  gu: { en: "Gujarati", hi: "गुजराती" },
 };
 
 export type LibraryTextSheetProps = {
@@ -84,14 +92,24 @@ export function LibraryTextSheet({ item, open, onOpenChange }: LibraryTextSheetP
     writeTextFontSize(next);
   };
 
-  const onCopy = async () => {
-    if (!plain) return;
+  const onCopy = async (): Promise<boolean> => {
+    if (!plain) return false;
     try {
       await navigator.clipboard.writeText(plain);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
+      return true;
     } catch {
-      /* ignore */
+      // Clipboard access is refused outright on an insecure origin and in some
+      // embedded browsers. Silence left the reader pressing a button that did
+      // nothing, in a UI whose only feedback was a label that did not change.
+      toast.error(
+        hi ? "कॉपी नहीं हुआ" : "Could not copy",
+        hi
+          ? "आपका ब्राउज़र इस पेज से कॉपी करने की अनुमति नहीं देता — पाठ चुनकर कॉपी करें।"
+          : "Your browser blocked copying from this page — select the text and copy it instead.",
+      );
+      return false;
     }
   };
 
@@ -102,10 +120,20 @@ export function LibraryTextSheet({ item, open, onOpenChange }: LibraryTextSheetP
         await navigator.share({ title: title || undefined, text: plain });
         return;
       } catch {
-        /* fall through to copy */
+        /* no share sheet, or the reader dismissed it — fall through to copy */
       }
     }
-    await onCopy();
+    // Desktop browsers mostly have no share sheet, so Share quietly became
+    // Copy and nothing said so. A reader went looking for a share dialog that
+    // was never going to appear.
+    if (await onCopy()) {
+      toast.success(
+        hi ? "पाठ कॉपी हो गया" : "Text copied",
+        hi
+          ? "इस ब्राउज़र में शेयर उपलब्ध नहीं है — पाठ क्लिपबोर्ड पर है।"
+          : "Sharing isn't available in this browser, so the text is on your clipboard.",
+      );
+    }
   };
 
   return (
@@ -134,7 +162,7 @@ export function LibraryTextSheet({ item, open, onOpenChange }: LibraryTextSheetP
               aria-label={hi ? "छोटा" : "Smaller"}
             >
               <Minus className="h-4 w-4" />
-              <span className="ml-1">{hi ? "छोटा" : "Smaller"}</span>
+              <span className="ml-1 leading-6">{hi ? "छोटा" : "Smaller"}</span>
             </Button>
             <Button
               type="button"
@@ -145,7 +173,7 @@ export function LibraryTextSheet({ item, open, onOpenChange }: LibraryTextSheetP
               aria-label={hi ? "बड़ा" : "Larger"}
             >
               <Plus className="h-4 w-4" />
-              <span className="ml-1">{hi ? "बड़ा" : "Larger"}</span>
+              <span className="ml-1 leading-6">{hi ? "बड़ा" : "Larger"}</span>
             </Button>
             {langs.map((l) => (
               <Button
@@ -153,6 +181,8 @@ export function LibraryTextSheet({ item, open, onOpenChange }: LibraryTextSheetP
                 type="button"
                 variant={lang === l ? "default" : "outline"}
                 size="sm"
+                aria-pressed={lang === l}
+                aria-label={hi ? LANG_NAME[l].hi : LANG_NAME[l].en}
                 onClick={() => setLang(l)}
               >
                 {hi ? LANG_LABEL[l].hi : LANG_LABEL[l].en}
@@ -160,13 +190,15 @@ export function LibraryTextSheet({ item, open, onOpenChange }: LibraryTextSheetP
             ))}
             <Button type="button" variant="outline" size="sm" onClick={() => void onCopy()}>
               <Copy className="h-4 w-4" />
-              <span className="ml-1">
-                {copied ? (hi ? "कॉपी" : "Copied") : hi ? "कॉपी" : "Copy"}
+              {/* Both Hindi states used to read "कॉपी" and the icon never
+                  changed either, so a Hindi reader got no feedback at all. */}
+              <span className="ml-1 leading-6">
+                {copied ? (hi ? "कॉपी हो गया" : "Copied") : hi ? "कॉपी" : "Copy"}
               </span>
             </Button>
             <Button type="button" variant="outline" size="sm" onClick={() => void onShare()}>
               <Share2 className="h-4 w-4" />
-              <span className="ml-1">{hi ? "शेयर" : "Share"}</span>
+              <span className="ml-1 leading-6">{hi ? "शेयर" : "Share"}</span>
             </Button>
             <Button
               type="button"
@@ -176,7 +208,7 @@ export function LibraryTextSheet({ item, open, onOpenChange }: LibraryTextSheetP
               aria-label={expanded ? (hi ? "छोटा करें" : "Collapse") : hi ? "बड़ा करें" : "Expand"}
             >
               {expanded ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-              <span className="ml-1">
+              <span className="ml-1 leading-6">
                 {expanded ? (hi ? "छोटा" : "Collapse") : hi ? "बड़ा" : "Expand"}
               </span>
             </Button>

@@ -27,6 +27,8 @@ import type {
   GranthAdminLibrary,
   GranthLibraryItemOption,
 } from "./granth-admin-types";
+import { hasUnpublishedChanges } from "./library-admin-types";
+import { useConfirm } from "@/components/admin/use-confirm";
 
 const BASE = "/v1/admin/library/granth";
 
@@ -129,6 +131,7 @@ export function GranthEntriesPanel() {
       ) : (
         <DragReorderList
           items={entries}
+          labelFor={(entry) => entry.draft.title_en}
           onReorder={(ids) => void reorder(ids)}
           renderRow={(entry, handle) => (
             <EntryRow entry={entry} handle={handle} onOpen={() => setEditing(entry)} />
@@ -204,6 +207,7 @@ function EntryEditor({
   onChanged: () => Promise<void>;
 }) {
   const d = entry?.draft;
+  const { confirm, confirmDialog } = useConfirm();
   const [titleEn, setTitleEn] = useState(d?.title_en ?? "");
   const [titleHi, setTitleHi] = useState(d?.title_hi ?? "");
   const [authorEn, setAuthorEn] = useState(d?.author_en ?? "");
@@ -254,7 +258,24 @@ function EntryEditor({
 
   async function remove() {
     if (!entry) return;
-    if (!window.confirm("Delete this granth? It disappears from the public directory.")) return;
+    const ok = await confirm({
+      title: `Delete "${entry.draft.title_en}"?`,
+      destructive: true,
+      confirmLabel: "Delete granth",
+      body: (
+        <>
+          <p>
+            This granth disappears from the public directory, including the "available at"
+            links on any library that holds it.
+          </p>
+          <p className="text-muted-foreground">
+            Nothing is erased — the record is kept, so a developer can restore it if this was
+            a mistake.
+          </p>
+        </>
+      ),
+    });
+    if (!ok) return;
     try {
       await apiDelete(`${BASE}/entries/${entry.id}`);
       toast.success("Granth deleted.");
@@ -267,6 +288,7 @@ function EntryEditor({
 
   return (
     <>
+      {confirmDialog}
       <DialogHeader>
         <DialogTitle>{entry ? entry.draft.title_en : "New granth"}</DialogTitle>
       </DialogHeader>
@@ -276,6 +298,7 @@ function EntryEditor({
             <PublishControls
               canPublish
               isPublished={entry.is_published}
+              hasChanges={hasUnpublishedChanges(entry)}
               onPublish={async () => {
                 await apiPost(`${BASE}/entries/${entry.id}/publish`, {});
                 await onChanged();
@@ -300,13 +323,21 @@ function EntryEditor({
               <Input value={titleEn} onChange={(e) => setTitleEn(e.target.value)} />
             </FormRow>
             <FormRow label="Title (HI)">
-              <Input value={titleHi} onChange={(e) => setTitleHi(e.target.value)} />
+              <Input
+                className="field-devanagari"
+                value={titleHi}
+                onChange={(e) => setTitleHi(e.target.value)}
+              />
             </FormRow>
             <FormRow label="Author (EN)">
               <Input value={authorEn} onChange={(e) => setAuthorEn(e.target.value)} />
             </FormRow>
             <FormRow label="Author (HI)">
-              <Input value={authorHi} onChange={(e) => setAuthorHi(e.target.value)} />
+              <Input
+                className="field-devanagari"
+                value={authorHi}
+                onChange={(e) => setAuthorHi(e.target.value)}
+              />
             </FormRow>
             <FormRow label="Language">
               <Input
@@ -320,7 +351,11 @@ function EntryEditor({
             <Input value={descEn} onChange={(e) => setDescEn(e.target.value)} />
           </FormRow>
           <FormRow label="Description (HI)">
-            <Input value={descHi} onChange={(e) => setDescHi(e.target.value)} />
+            <Input
+              className="field-devanagari"
+              value={descHi}
+              onChange={(e) => setDescHi(e.target.value)}
+            />
           </FormRow>
 
           <LibraryItemPicker value={linkedItemId} onChange={setLinkedItemId} />

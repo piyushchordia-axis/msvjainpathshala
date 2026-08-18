@@ -9,6 +9,7 @@ import { getSearchDb, type SearchDb } from "@/lib/library/search-db";
 import { hitFromMatchRow } from "@/lib/library/search-row";
 import {
   buildFtsPrefixQuery,
+  buildSkeletonQuery,
   type SearchHit,
 } from "@/lib/library/search-query";
 
@@ -55,6 +56,33 @@ export async function ensureLibrarySearchIndex(
   await rebuildLibrarySearchIndex(tree, directory, db);
 }
 
+/** One MATCH, with a malformed expression treated as no hits rather than a crash. */
+async function runMatch(
+  db: SearchDb,
+  fts: string,
+  localeHi: boolean,
+): Promise<SearchHit[]> {
+  try {
+    const rows = await db.match(fts, localeHi);
+    return rows.map((r) => hitFromMatchRow(r, localeHi));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Search in two tiers.
+ *
+ * Tier 1 is the real query: every typed word in every spelling it could have,
+ * across both scripts. Tier 2 drops all the vowels and tries again, and exists
+ * for one narrow case — a reader who omits a medial vowel the transliteration
+ * keeps ("navkar" for नवकार, "kalpsutra" for कल्पसूत्र).
+ *
+ * Tier 2 runs ONLY when tier 1 found nothing. It is a much weaker signal, and
+ * blending the two would let a consonant-skeleton guess outrank an exact title
+ * match — bm25 cannot tell that one of the terms was a guess. Zero results is
+ * also the only moment the extra query costs nothing anybody notices.
+ */
 export async function searchLibrary(
   query: string,
   localeHi: boolean,
@@ -63,12 +91,11 @@ export async function searchLibrary(
   const fts = buildFtsPrefixQuery(query);
   if (!fts) return [];
   await db.ensureSchema();
-  let rows;
-  try {
-    rows = await db.match(fts, localeHi);
-  } catch {
-    // Malformed FTS query — treat as no hits.
-    return [];
-  }
-  return rows.map((r) => hitFromMatchRow(r, localeHi));
+
+  const hits = await runMatch(db, fts, localeHi);
+  if (hits.length > 0) return hits;
+
+  const skeleton = buildSkeletonQuery(query);
+  if (!skeleton) return hits;
+  return runMatch(db, skeleton, localeHi);
 }

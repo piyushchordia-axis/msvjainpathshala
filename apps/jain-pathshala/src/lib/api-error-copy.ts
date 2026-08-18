@@ -24,6 +24,13 @@ const BY_CODE: Record<string, Copy> = {
     en: 'Some details look wrong — check the form and try again.',
     hi: 'कुछ जानकारी सही नहीं लग रही — फ़ॉर्म जाँचें और पुनः प्रयास करें।',
   },
+  // A .heic reaching the join form from an iPhone photo library or a desktop
+  // drag-and-drop. The server cannot decode HEVC-coded HEIC, so say which
+  // setting fixes it rather than "check the form".
+  ERR_UPLOAD_FORMAT_UNSUPPORTED: {
+    en: "This photo is in a format we can't read (HEIC). On iPhone, open Settings › Camera › Formats and choose Most Compatible, then take the photo again — or pick a JPEG.",
+    hi: 'यह फोटो ऐसे फ़ॉर्मैट (HEIC) में है जिसे हम पढ़ नहीं सकते। iPhone पर Settings › Camera › Formats में जाकर Most Compatible चुनें और फोटो दोबारा लें — या कोई JPEG चुनें।',
+  },
   ERR_NOT_FOUND: {
     en: "We couldn't find that — refresh the page and try again.",
     hi: 'यह नहीं मिला — पृष्ठ रीफ़्रेश करें और पुनः प्रयास करें।',

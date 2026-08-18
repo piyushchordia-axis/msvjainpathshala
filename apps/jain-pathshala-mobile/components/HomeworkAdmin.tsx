@@ -25,11 +25,8 @@ import {
 } from "@/lib/queries";
 import { ApiError, apiUpload } from "@/lib/api";
 import { formatDate } from "@/lib/format";
-import {
-  PREFERRED_ASSET_REPRESENTATION_MODE,
-  ensureFileUri,
-  guessMime,
-} from "@/lib/proof-media";
+import { pickMediaAsset } from "@/lib/image-pick";
+import { ensureFileUri, guessMime } from "@/lib/proof-media";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
 import { CentreSwitcher, usePersistedCentreId } from "@/components/CentreSwitcher";
@@ -389,13 +386,8 @@ function CreateAssignmentModal({
       );
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      quality: 0.85,
-      preferredAssetRepresentationMode: PREFERRED_ASSET_REPRESENTATION_MODE,
-    });
-    if (result.canceled || !result.assets[0]) return;
-    const asset = result.assets[0];
+    const asset = await pickMediaAsset({ source: "library", mediaTypes: ["images"] });
+    if (!asset) return;
     const mime = guessMime("photo", asset.mimeType);
     const name = asset.fileName ?? "worksheet.jpg";
     await uploadWorksheetAsset(asset.uri, name, mime);

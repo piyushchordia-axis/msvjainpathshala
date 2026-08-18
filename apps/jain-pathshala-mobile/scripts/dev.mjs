@@ -102,44 +102,6 @@ const env = {
 
 };
 
-// #region agent log
-{
-  const fs = await import("node:fs");
-  const payload = {
-    sessionId: "115197",
-    runId: "post-fix",
-    hypothesisId: "A",
-    location: "scripts/dev.mjs:env",
-    message: "Expo Metro spawn env — NODE_ENV drives expo-router APP_ROOT inlining",
-    data: {
-      NODE_ENV: env.NODE_ENV ?? null,
-      BABEL_ENV: env.BABEL_ENV ?? null,
-      inheritedNODE_ENV: process.env.NODE_ENV ?? null,
-      wouldSkipAppRootInline: env.NODE_ENV === "test",
-      metroPort,
-      projectRoot,
-    },
-    timestamp: Date.now(),
-  };
-  try {
-    fs.appendFileSync(
-      path.resolve(projectRoot, "..", "..", "debug-115197.log"),
-      JSON.stringify(payload) + "\n",
-    );
-  } catch {
-    /* ignore */
-  }
-  fetch("http://127.0.0.1:7744/ingest/33975112-0421-4ef6-a79e-c48c452c7ec5", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "115197",
-    },
-    body: JSON.stringify(payload),
-  }).catch(() => {});
-}
-// #endregion
-
 console.log(`Metro port: ${metroPort}`);
 
 console.log(`API base: ${apiBase}`);

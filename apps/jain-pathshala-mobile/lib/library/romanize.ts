@@ -252,18 +252,109 @@ export function romanizeWithSchwa(input: string): string {
   return out.replace(/\s+/g, " ").trim();
 }
 
-/** Join several strings, romanize, and collapse for the roman_title column. */
+/**
+ * Collapse the spelling distinctions people do not make when typing.
+ *
+ * The schwa variant above was not enough on its own: it writes "namokaara",
+ * "mahaaveera", "gurujee" — faithful, and nothing anyone types. A reader types
+ * "namokar", "mahavir", "guruji". The long/short vowel distinction Devanagari
+ * marks is simply absent from how Indian users spell in Latin, so the index and
+ * the query have to meet in the middle.
+ *
+ * Applied to BOTH sides. Folding only the index would leave the query spelling
+ * "mahaveer" unable to reach a folded "mahavir"; folding only the query would
+ * do the reverse. The rule is one function so the two cannot drift.
+ *
+ * The word-final "a" goes too: the schwa variant writes "kalpasutra" where the
+ * literal writes "klpsootr", and a reader may type either. Dropping it from both
+ * sides and matching by prefix covers both, because "kalpasutr" is a prefix of
+ * whatever they typed. Guarded at length 2 so single syllables ("ka") survive.
+ */
+export function searchFold(input: string): string {
+  if (!input) return "";
+  return input
+    .toLowerCase()
+    .split(/\s+/)
+    .map((word) => {
+      const folded = word
+        .replace(/aa/g, "a")
+        .replace(/ee|ii/g, "i")
+        .replace(/oo|uu/g, "u")
+        // Hindi speakers type व as either; "shwetambar" and "shvetambar" are
+        // the same word to everyone who searches for it.
+        .replace(/w/g, "v");
+      return folded.length > 2 && folded.endsWith("a")
+        ? folded.slice(0, -1)
+        : folded;
+    })
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+}
+
+/**
+ * The consonant skeleton — every vowel dropped.
+ *
+ * Last resort for the one thing folding cannot reach: a reader who drops a
+ * MEDIAL vowel. नवकार is indexed "navakar" and typed "navkar"; कल्पसूत्र is
+ * "kalpasutr" and typed "kalpsutra". Enumerating which internal schwas a
+ * particular speaker keeps is guesswork, so the skeleton ignores all of them.
+ *
+ * "m" folds to "n" because the anusvara is romanised one way and typed the
+ * other before a labial — संवत्सरी is "sanvatsari" here and "samvatsari" to
+ * everyone who types it.
+ *
+ * Far too loose to rank against, so it is queried ONLY when the real query
+ * found nothing, and only from four characters up — see searchLibrary.
+ */
+export function romanSkeleton(input: string): string {
+  if (!input) return "";
+  return input
+    .toLowerCase()
+    .split(/\s+/)
+    .map((word) => word.replace(/[aeiou]/g, "").replace(/m/g, "n"))
+    .filter((word) => word.length >= 3)
+    .join(" ")
+    .trim();
+}
+
+/** Both romanisations of one string, folded and de-duplicated. */
+function foldedVariants(input: string): string[] {
+  const literal = searchFold(romanize(input));
+  const schwa = searchFold(romanizeWithSchwa(input));
+  return [...new Set([literal, schwa])].filter(Boolean);
+}
+
+/**
+ * Join several strings, romanize, and collapse for the roman_title column.
+ *
+ * Emits the FOLDED spellings only. Every query token that can reach this column
+ * is folded too (see buildFtsPrefixQuery), so an unfolded copy could never
+ * match — it would be index weight that no query can address.
+ */
 export function buildRomanTitle(parts: Array<string | null | undefined>, bodyCap = 2000): string {
   const chunks: string[] = [];
   for (const p of parts) {
     if (!p?.trim()) continue;
-    const literal = romanize(p);
-    chunks.push(literal);
-    // Both spellings, so "kalp" and "klp" both reach कल्पसूत्र.
-    const schwa = romanizeWithSchwa(p);
-    if (schwa && schwa !== literal) chunks.push(schwa);
+    chunks.push(...foldedVariants(p));
   }
   let joined = chunks.filter(Boolean).join(" ");
   if (joined.length > bodyCap) joined = joined.slice(0, bodyCap);
   return joined.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The skeleton column's contents. Titles and tarj only — never the body, which
+ * would turn a four-letter skeleton prefix into a match against half the shelf.
+ */
+export function buildRomanSkeleton(parts: Array<string | null | undefined>): string {
+  const chunks: string[] = [];
+  for (const p of parts) {
+    if (!p?.trim()) continue;
+    for (const variant of foldedVariants(p)) {
+      const skel = romanSkeleton(variant);
+      if (skel) chunks.push(skel);
+    }
+  }
+  return [...new Set(chunks.join(" ").split(" "))].filter(Boolean).join(" ");
 }

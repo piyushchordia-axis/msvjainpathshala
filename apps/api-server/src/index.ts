@@ -5,6 +5,7 @@ import { startScheduler } from "./lib/scheduler";
 import { getSmsProvider, logSmsBalanceIfConfigured } from "./lib/sms";
 import { warmTestOtpNumbers } from "./lib/otp-test-numbers";
 import { warmOtpConfig } from "./lib/otp-config";
+import { warnIfHeicUndecodable } from "./lib/image-normalise";
 import { assertProductionRedisConfigured } from "./lib/assert-production-redis";
 import { registerAllJobs } from "./jobs/register-all";
 import { attachAdminDashboardFeed } from "./lib/admin-dashboard-feed";
@@ -99,6 +100,11 @@ const server = app.listen(port, host, () => {
   // after review is precisely the thing that should be impossible to miss.
   warmTestOtpNumbers();
   warmOtpConfig();
+
+  // Same reasoning: if this build cannot decode HEIC, every iPhone photo that
+  // reaches us raw is refused, and that belongs in the startup log rather than
+  // in a support ticket six weeks later.
+  warnIfHeicUndecodable();
 });
 
 // PERF #18 — nginx upstream keepalive defaults to 60s; Node's keepAliveTimeout

@@ -13,16 +13,63 @@
  */
 import { copyFile, readFile } from "node:fs/promises";
 import sharp from "sharp";
+import { ERROR_MESSAGES, ErrorCode } from "@workspace/api-zod";
+import { logger } from "./logger";
 
 export class ImageNormaliseError extends Error {
-  constructor(message: string) {
+  /**
+   * Carried so routes can answer with the right code rather than flattening
+   * every image problem into ERR_VALIDATION_FAILED — which screens override
+   * with "choose a clear image", advice that is simply wrong for a format the
+   * server cannot decode.
+   */
+  readonly code: ErrorCode;
+
+  constructor(message: string, code: ErrorCode = "ERR_VALIDATION_FAILED") {
     super(message);
     this.name = "ImageNormaliseError";
+    this.code = code;
   }
 }
 
 const ROTATABLE = new Set(["image/jpeg", "image/png", "image/webp"]);
 const HEIC = new Set(["image/heic", "image/heif"]);
+
+/**
+ * Whether this sharp build can actually decode an iPhone HEIC.
+ *
+ * libvips advertises a `heif` loader whenever libheif is linked, but the
+ * prebuilt sharp binaries link it with AV1 only — no libde265, no x265 — so
+ * `format.heif.input.fileSuffix` reads [".avif"] and every HEVC-coded HEIC (i.e.
+ * every photo an iPhone takes) fails to decode. The suffix list is the one
+ * capability signal libvips exposes for this.
+ *
+ * Log-only. The conversion below is still attempted, so a deployment that does
+ * carry the codec simply works without a code change.
+ */
+export function heicDecodeLikelySupported(): boolean {
+  const suffixes = sharp.format.heif?.input?.fileSuffix ?? [];
+  return suffixes.some((s) => s === ".heic" || s === ".heif");
+}
+
+/**
+ * Called at boot (see index.ts) so the warning lands in the startup logs
+ * rather than in whichever request first happens to carry a HEIC — i.e.
+ * exactly when nobody is reading. Returns whether the codec is present so
+ * callers can assert on it.
+ */
+export function warnIfHeicUndecodable(): boolean {
+  const supported = heicDecodeLikelySupported();
+  if (!supported) {
+    logger.warn(
+      { heifInputSuffixes: sharp.format.heif?.input?.fileSuffix ?? [] },
+      "sharp has no HEIC/HEVC decoder (libheif is AV1-only in the prebuilt binary), so " +
+        "HEIC uploads are refused with ERR_UPLOAD_FORMAT_UNSUPPORTED. Clients must send " +
+        "JPEG — check preferredAssetRepresentationMode on the mobile pickers.",
+    );
+  }
+  return supported;
+}
 
 /**
  * Normalise an allowlisted image to an output path (PERF #18): apply EXIF
@@ -51,7 +98,8 @@ export async function stripImageMetadataToFile(
       return { path: outputPath, mime: "image/jpeg" };
     } catch {
       throw new ImageNormaliseError(
-        "Could not process this HEIC/HEIF photo. Please retry with a JPEG (iOS: use Compatible photo mode).",
+        ERROR_MESSAGES.ERR_UPLOAD_FORMAT_UNSUPPORTED.en,
+        "ERR_UPLOAD_FORMAT_UNSUPPORTED",
       );
     }
   }
@@ -105,7 +153,8 @@ export async function stripImageMetadata(
       return { buffer, mime: "image/jpeg" };
     } catch {
       throw new ImageNormaliseError(
-        "Could not process this HEIC/HEIF photo. Please retry with a JPEG (iOS: use Compatible photo mode).",
+        ERROR_MESSAGES.ERR_UPLOAD_FORMAT_UNSUPPORTED.en,
+        "ERR_UPLOAD_FORMAT_UNSUPPORTED",
       );
     }
   }

@@ -5,6 +5,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { ToasterJP } from "@/components/ui/toast-jp";
 import { AuthProvider } from "@/lib/auth-context";
 import { LocaleProvider } from "@/lib/locale-context";
+import { LibraryAudioProvider } from "@/lib/library-audio-context";
 
 const PublicRoutes = lazy(() => import("@/routes/PublicRoutes"));
 const AdminRoutes = lazy(() => import("@/routes/AdminRoutes"));
@@ -48,12 +49,14 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <LocaleProvider>
+          <LibraryAudioProvider>
           <AuthProvider>
             <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, "")}>
               <Router />
             </WouterRouter>
             <ToasterJP />
           </AuthProvider>
+          </LibraryAudioProvider>
         </LocaleProvider>
       </TooltipProvider>
     </QueryClientProvider>

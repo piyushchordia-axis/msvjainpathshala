@@ -140,6 +140,23 @@
 }
 
 @layer utilities {
+  /*
+   * Devanagari text entry.
+   *
+   * Hindi fields in the admin panel used the same 20px line-height and Latin
+   * font stack as English ones. Devanagari ascenders and matras are taller, so
+   * the top of श्री and the bottom of a matra were both clipped inside the box
+   * — an editor could not read back what they had typed. CLAUDE.md sets a 22px
+   * floor for any Devanagari text.
+   */
+  .field-devanagari {
+    font-family: var(--font-ui);
+    line-height: 1.75rem;
+    height: auto;
+    padding-top: 0.375rem;
+    padding-bottom: 0.375rem;
+  }
+
   .container {
     width: 100%;
     margin-left: auto;

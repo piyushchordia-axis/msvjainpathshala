@@ -8,11 +8,8 @@ import * as ImagePicker from "expo-image-picker";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { apiUpload } from "@/lib/api";
-import {
-  PREFERRED_ASSET_REPRESENTATION_MODE,
-  guessMime,
-  resolveLocalByteSize,
-} from "@/lib/proof-media";
+import { pickMediaAsset } from "@/lib/image-pick";
+import { guessMime, resolveLocalByteSize } from "@/lib/proof-media";
 import {
   enqueueHomeworkProofUpload,
   type HomeworkProofSyncState,
@@ -161,13 +158,8 @@ export function HomeworkProofPicker({
       );
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      quality: 0.85,
-      preferredAssetRepresentationMode: PREFERRED_ASSET_REPRESENTATION_MODE,
-    });
-    if (result.canceled || !result.assets[0]) return;
-    const asset = result.assets[0];
+    const asset = await pickMediaAsset({ source: "library", mediaTypes: ["images"] });
+    if (!asset) return;
     const mime = guessMime("photo", asset.mimeType);
     const name = asset.fileName ?? "homework.jpg";
     setPicked(asset.uri, name, mime);
@@ -183,13 +175,8 @@ export function HomeworkProofPicker({
       );
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ["images"],
-      quality: 0.85,
-      preferredAssetRepresentationMode: PREFERRED_ASSET_REPRESENTATION_MODE,
-    });
-    if (result.canceled || !result.assets[0]) return;
-    const asset = result.assets[0];
+    const asset = await pickMediaAsset({ source: "camera", mediaTypes: ["images"] });
+    if (!asset) return;
     const mime = guessMime("photo", asset.mimeType);
     const name = asset.fileName ?? "homework.jpg";
     setPicked(asset.uri, name, mime);
