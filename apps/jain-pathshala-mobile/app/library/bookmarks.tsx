@@ -15,6 +15,7 @@ import {
   type LibraryTreePayload,
 } from "@/lib/library/helpers";
 import { Body, Card, Row, Screen, StateView, Title } from "@/components/ui";
+import { LibraryTarjLine } from "@/components/LibraryTarjLine";
 
 export default function LibraryBookmarksScreen() {
   const { hi } = useLocale();
@@ -78,6 +79,7 @@ export default function LibraryBookmarksScreen() {
                     accessibilityLabel={title}
                   >
                     <Title style={{ fontSize: 15, lineHeight: 22 }}>{title}</Title>
+                    <LibraryTarjLine item={item} style={{ marginTop: 2 }} />
                     <Body muted style={{ marginTop: 4, fontSize: 13, lineHeight: 20 }}>
                       {sectionTitle}
                     </Body>

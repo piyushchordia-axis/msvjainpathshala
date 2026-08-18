@@ -154,10 +154,15 @@ export default function JoinCompletePaymentPage({ kind }: { kind: JoinKind }) {
       <Card className="mx-auto max-w-lg space-y-4 p-8">
         <div className="flex items-start justify-between gap-3">
           <h1 className="font-display text-2xl text-secondary">
-            {hi ? 'भुगतान पूरा करें' : 'Complete payment'}
+            {hi ? 'MSV शुल्क भुगतान करें' : 'Pay the MSV registration fee'}
           </h1>
           <JoinLangToggle />
         </div>
+        <p className="text-sm text-muted-foreground">
+          {hi
+            ? 'पाठशाला में प्रवेश निःशुल्क है — यह शुल्क केवल MSV पंजीकरण के लिए है।'
+            : 'Pathshala enrolment is free — this fee applies only to MSV registration.'}
+        </p>
         <div>
           <Label>{hi ? 'पंजीकृत मोबाइल नंबर' : 'Registered mobile number'}</Label>
           <Input

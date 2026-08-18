@@ -108,6 +108,34 @@ export async function seedLibraryContent(
         is_published: true,
         content_version: 1,
       },
+      {
+        /**
+         * v3 §17.11.1 — exactly one granth section, seeded UNPUBLISHED so
+         * nothing appears to readers until an admin has renamed it, set its
+         * tier and published it. That is a data operation, not a release:
+         * the name below is a starting value, never something the clients
+         * key on. All granth behaviour switches on `type`.
+         *
+         * SPEC says access_tier='public'. This build has no access_tier
+         * column — visibility is the requires_login boolean — so public
+         * means requires_login: false.
+         */
+        key: "granth",
+        name_en: "Granth",
+        name_hi: "ग्रंथ",
+        name_gu: "ગ્રંથ",
+        order_index: 4,
+        type: "granth",
+        requires_login: false,
+        draft_name_en: "Granth",
+        draft_name_hi: "ग्रंथ",
+        draft_name_gu: "ગ્રંથ",
+        draft_type: "granth",
+        draft_requires_login: false,
+        draft_order_index: 4,
+        is_published: false,
+        content_version: 1,
+      },
     ])
     .returning();
 
@@ -195,6 +223,10 @@ export async function seedLibraryContent(
       audio_url: "https://example.org/audio/stavan-1.mp3",
       audio_size_bytes: 1_024_000,
       audio_duration_sec: 180,
+      // §17.1.3 — one seeded Tarj so the caption line and its search path
+      // are exercisable locally without hand-editing a row.
+      tarj_en: "Meri Bhavna",
+      tarj_hi: "मेरी भावना",
       draft_title_en: "Stavan Collection Vol. 1",
       draft_title_hi: "स्तवन संग्रह भाग 1",
       draft_title_gu: "સ્તવન સંગ્રહ ભાગ 1",
@@ -202,6 +234,8 @@ export async function seedLibraryContent(
       draft_audio_url: "https://example.org/audio/stavan-1.mp3",
       draft_audio_size_bytes: 1_024_000,
       draft_audio_duration_sec: 180,
+      draft_tarj_en: "Meri Bhavna",
+      draft_tarj_hi: "मेरी भावना",
       is_published: true,
       content_version: 1,
     },

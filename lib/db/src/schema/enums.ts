@@ -98,10 +98,36 @@ export const EXAM_QUESTION_TYPES = ["single_choice", "multi_choice", "text"] as 
 export const NOTICE_AUDIENCES = ["batch", "centre", "city", "state", "national", "msv"] as const;
 export const SHIVIR_ATTENDANCE_MODES = ["in_out", "present_only"] as const;
 export const SHIVIR_SCAN_KINDS = ["check_in", "check_out", "present"] as const;
-/** Section.type drives client rendering — never key UI off section name_*. */
-export const LIBRARY_SECTION_TYPES = ["item_list", "deeplink", "panchang"] as const;
-/** Local-only DownloadedAudio status (not a Postgres enum). */
+/**
+ * Section.type drives client rendering — never key UI off section name_*.
+ * `granth` renders the two-tab screen (Online Granth + physical library
+ * directory) — Section 17 v3 §17.1.2.
+ */
+export const LIBRARY_SECTION_TYPES = ["item_list", "deeplink", "panchang", "granth"] as const;
+/** Local-only DownloadedAudio / DownloadedPdf status (not a Postgres enum). */
 export const LIBRARY_DOWNLOAD_STATUSES = ["queued", "downloading", "complete", "failed"] as const;
+/**
+ * Content-request lifecycle (v3 §17.10.4). `published` is system-set when the
+ * linked item is published; `rejected` and `published` are terminal.
+ */
+export const LIBRARY_CONTENT_REQUEST_STATUSES = [
+  "pending",
+  "accepted",
+  "rejected",
+  "published",
+] as const;
+/**
+ * Access-log events (v3 §17.9). `view` is the base item open; the other
+ * four are the v3 additions. Distinct reach per (item, actor, event) —
+ * re-opening a stotra thirty times is one reader, not thirty.
+ */
+export const LIBRARY_ACCESS_EVENTS = [
+  "view",
+  "pdf_view",
+  "pdf_download",
+  "granth_view",
+  "external_link_open",
+] as const;
 // acknowledged = parent mark-done without upload (F1); returned = Guruji sent
 // work back for rework (F9). Both added in migration 0023.
 export const HOMEWORK_STATUSES = [
@@ -141,6 +167,9 @@ export const NOTIFICATION_KINDS = [
   "attendance_streak",
   "donation",
   "gallery",
+  "join",
+  /** Library content request published (Section 17 v3 §17.10.7). */
+  "library",
 ] as const;
 export const DONATION_PAYMENT_STATUSES = ["created", "pending", "captured", "failed", "refunded"] as const;
 
@@ -208,6 +237,14 @@ export const noticeAudienceEnum = pgEnum("notice_audience_enum", NOTICE_AUDIENCE
 export const shivirAttendanceModeEnum = pgEnum("shivir_attendance_mode_enum", SHIVIR_ATTENDANCE_MODES);
 export const shivirScanKindEnum = pgEnum("shivir_scan_kind_enum", SHIVIR_SCAN_KINDS);
 export const librarySectionTypeEnum = pgEnum("library_section_type_enum", LIBRARY_SECTION_TYPES);
+export const libraryContentRequestStatusEnum = pgEnum(
+  "library_content_request_status_enum",
+  LIBRARY_CONTENT_REQUEST_STATUSES,
+);
+export const libraryAccessEventEnum = pgEnum(
+  "library_access_event_enum",
+  LIBRARY_ACCESS_EVENTS,
+);
 export const homeworkStatusEnum = pgEnum("homework_status_enum", HOMEWORK_STATUSES);
 export const serviceRequestStatusEnum = pgEnum("service_request_status_enum", SERVICE_REQUEST_STATUSES);
 export const curriculumLevelEnum = pgEnum("curriculum_level_enum", CURRICULUM_LEVELS);

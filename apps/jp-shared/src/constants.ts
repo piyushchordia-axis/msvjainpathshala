@@ -34,6 +34,13 @@ export const QUEUE_NAMES = {
   /** Centre monthly aggregate PDF (Sanchalak / admin). */
   REPORT_GENERATION: "report.generation",
   /**
+   * Post-upload media derivation (SPEC §17.11.2 names this queue).
+   * Payload: `{ kind: string, ... }` — handlers dispatch on `kind`, same
+   * shape as DB_BACKFILL_GENERIC. Event-driven; no CRON_EXPRESSIONS entry.
+   * Today's only kind is `library_pdf_page_count`.
+   */
+  MEDIA_PROCESSING: "media.processing",
+  /**
    * Generic one-shot / throttled data backfills (SPEC §18.7).
    * Payload: `{ kind: string, ... }` — handlers dispatch on `kind`.
    * Do not invent per-feature backfill queue names; reuse this.

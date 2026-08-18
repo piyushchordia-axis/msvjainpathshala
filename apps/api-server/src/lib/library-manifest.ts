@@ -3,10 +3,22 @@
  */
 import { db, library_items, library_sections } from "@workspace/db";
 import { and, eq, inArray, isNull } from "drizzle-orm";
+import { buildGranthManifest } from "./granth-directory";
 
 export type LibraryVersionManifest = {
   sections: Record<string, number>;
   items: Record<string, number>;
+  /**
+   * §17.7 — the Granth directory versions the same way sections and items
+   * do. Without these maps a corrected address or a new library would never
+   * reach a device that already holds the directory, and the on-device
+   * search index (which rebuilds on manifest change) would stay stale.
+   *
+   * Not gated per section: the directory has no tier of its own, and a
+   * version number is not content.
+   */
+  granth_libraries: Record<string, number>;
+  granth_entries: Record<string, number>;
 };
 
 export type BuildLibraryManifestOpts = {
@@ -55,5 +67,7 @@ export async function buildLibraryManifest(
     }
   }
 
-  return { sections: sectionMap, items: itemMap };
+  const granth = await buildGranthManifest();
+
+  return { sections: sectionMap, items: itemMap, ...granth };
 }

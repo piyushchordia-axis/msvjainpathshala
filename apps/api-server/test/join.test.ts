@@ -12,6 +12,14 @@ afterAll(async () => {
   await pool.end();
 });
 
+/** ISO date of birth for someone who turns `age` today. */
+function dobForAge(age: number): string {
+  const now = new Date();
+  return new Date(Date.UTC(now.getUTCFullYear() - age, now.getUTCMonth(), now.getUTCDate()))
+    .toISOString()
+    .slice(0, 10);
+}
+
 async function cityId(code: string): Promise<string> {
   const [row] = await db.select({ id: cities.id }).from(cities).where(eq(cities.code, code)).limit(1);
   if (!row) throw new Error(`city ${code} missing — seed required`);
@@ -44,11 +52,32 @@ describe("join registrations", () => {
     expect(settings.status).toBe(200);
     expect(settings.body.data.kind).toBe("shikshak");
     expect(typeof settings.body.data.registration_open).toBe("boolean");
+    // Seva carries no fee — staff kinds must not advertise the default amount.
+    expect(settings.body.data.payment_amount).toBe("");
+    expect(settings.body.data.payment_upi_id).toBe("");
+
+    const student = await request(app).get("/v1/join/settings?kind=student");
+    expect(student.status).toBe(200);
+    expect(student.body.data.payment_amount).not.toBe("");
 
     const fields = await request(app).get("/v1/join/form-fields?kind=student");
     expect(fields.status).toBe(200);
     expect(Array.isArray(fields.body.data.items)).toBe(true);
     expect(fields.body.data.items.length).toBeGreaterThan(0);
+    // Date of birth replaced the whole-year age field.
+    const keys = fields.body.data.items.map((f: { field_key: string }) => f.field_key);
+    expect(keys).toContain("date_of_birth");
+    expect(keys).not.toContain("age");
+  });
+
+  it("refuses to configure a staff fee that could never be paid", async () => {
+    const admin = await loginAs("super_admin");
+    const res = await request(app)
+      .put("/v1/join/settings/payment_amount?kind=shikshak")
+      .set(auth(admin.token))
+      .send({ value: "501" });
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe("ERR_VALIDATION_FAILED");
   });
 
   it("rejects student create when registration is closed", async () => {
@@ -73,7 +102,7 @@ describe("join registrations", () => {
       .where(and(eq(join_settings.kind, "student"), eq(join_settings.key, "registration_open")));
   });
 
-  it("creates shikshak with PATHSHALA-SHK code, supports payment + lookup", async () => {
+  it("creates shikshak with PATHSHALA-SHK code, refuses payment, supports lookup", async () => {
     const centre = await centreWithCode();
     const create = await request(app).post("/v1/join/registrations").send({
       kind: "shikshak",
@@ -81,64 +110,28 @@ describe("join registrations", () => {
       name: "Guruji Test",
       whatsapp_contact: "9876500011",
       role: "गुरुजी",
-      age: 40,
+      date_of_birth: dobForAge(40),
     });
     expect(create.status).toBe(201);
     expect(create.body.data.display_code).toMatch(
       new RegExp(`^${centre.code.replace(/-/g, "\\-")}-SHK-\\d{5}$`),
     );
+    // Age is derived from the date of birth, never collected.
+    expect(create.body.data.age).toBe(40);
     const id = create.body.data.id as string;
     const code = create.body.data.display_code as string;
     const screenshot = "http://localhost:8080/uploads/join-registration/pay-proof.png";
 
-    // Payment PATCH is throttled and mobile-authorised (guest re-review #1):
-    // the registration UUID leaks through create/lookup, so alone it must not
-    // authorise a write, and the response must not dump the row's PII.
-    const noMobile = await request(app).patch(`/v1/join/registrations/${id}/payment`).send({
-      kind: "shikshak",
-      payment_screenshot_url: screenshot,
-      has_paid: "yes",
-    });
-    expect(noMobile.status).toBe(422);
-
-    const wrongMobilePay = await request(app).patch(`/v1/join/registrations/${id}/payment`).send({
-      kind: "shikshak",
-      payment_screenshot_url: screenshot,
-      has_paid: "yes",
-      mobile: "1112223334",
-    });
-    expect(wrongMobilePay.status).toBe(404);
-
-    const externalUrl = await request(app).patch(`/v1/join/registrations/${id}/payment`).send({
-      kind: "shikshak",
-      payment_screenshot_url: "https://example.com/pay.png",
-      has_paid: "yes",
-      mobile: "9876500011",
-    });
-    expect(externalUrl.status).toBe(422);
-
+    // Seva as a Guruji carries no fee. The staff payment screens are gone, but
+    // a bookmarked link or an old app build must not be able to record one.
     const pay = await request(app).patch(`/v1/join/registrations/${id}/payment`).send({
       kind: "shikshak",
       payment_screenshot_url: screenshot,
       has_paid: "yes",
       mobile: "9876500011",
     });
-    expect(pay.status).toBe(200);
-    expect(pay.body.data.has_paid).toBe("yes");
-    // Minimal projection only — the old handler returned the entire row.
-    expect(Object.keys(pay.body.data).sort()).toEqual(["display_code", "has_paid", "id"]);
-    expect(pay.body.data).not.toHaveProperty("whatsapp_contact");
-    expect(pay.body.data).not.toHaveProperty("address");
-
-    // Idempotent: a replay does not error and stays minimal.
-    const replay = await request(app).patch(`/v1/join/registrations/${id}/payment`).send({
-      kind: "shikshak",
-      payment_screenshot_url: screenshot,
-      has_paid: "yes",
-      mobile: "9876500011",
-    });
-    expect(replay.status).toBe(200);
-    expect(replay.body.data.has_paid).toBe("yes");
+    expect(pay.status).toBe(422);
+    expect(pay.body.error.code).toBe("ERR_VALIDATION_FAILED");
 
     // Code alone is refused — sequential codes were a name-enumeration oracle;
     // the registered mobile is the required shared secret (GST-API-11).
@@ -152,7 +145,7 @@ describe("join registrations", () => {
     );
     expect(lookup.status).toBe(200);
     expect(lookup.body.data.items[0].display_code).toBe(code);
-    expect(lookup.body.data.items[0].has_paid).toBe("yes");
+    expect(lookup.body.data.items[0].has_paid).toBe("no");
 
     // A valid code paired with the wrong mobile must not disclose the record.
     const wrongMobile = await request(app).get(
@@ -169,7 +162,8 @@ describe("join registrations", () => {
       name: "Sanchalak Test",
       whatsapp_contact: "9876500012",
       role: "संचालक",
-      age: 45,
+      sex: "Male",
+      date_of_birth: dobForAge(45),
     });
     expect(create.status).toBe(201);
     expect(create.body.data.display_code).toMatch(
@@ -193,7 +187,7 @@ describe("join registrations", () => {
       centre_id: centre.id,
       name: "Student Join",
       parent_mobile: "9876500022",
-      age: 12,
+      date_of_birth: dobForAge(12),
     });
     expect(create.status).toBe(201);
     expect(create.body.data.display_code).toMatch(/^MUM-STU-\d{5}$/);
@@ -213,16 +207,56 @@ describe("join registrations", () => {
     expect(typeof stats.body.data.pending).toBe("number");
 
     // Student payment PATCH matches parent_mobile and never echoes it back.
+    // It is throttled and mobile-authorised (guest re-review #1): the
+    // registration UUID leaks through create/lookup, so alone it must not
+    // authorise a write, and the response must not dump the row's PII.
     const regId = create.body.data.id as string;
+    const screenshot = "http://localhost:8080/uploads/join-registration/stu-pay.png";
+
+    const noMobile = await request(app).patch(`/v1/join/registrations/${regId}/payment`).send({
+      kind: "student",
+      payment_screenshot_url: screenshot,
+      has_paid: "yes",
+    });
+    expect(noMobile.status).toBe(422);
+
+    const wrongMobilePay = await request(app).patch(`/v1/join/registrations/${regId}/payment`).send({
+      kind: "student",
+      payment_screenshot_url: screenshot,
+      has_paid: "yes",
+      mobile: "1112223334",
+    });
+    expect(wrongMobilePay.status).toBe(404);
+
+    const externalUrl = await request(app).patch(`/v1/join/registrations/${regId}/payment`).send({
+      kind: "student",
+      payment_screenshot_url: "https://example.com/pay.png",
+      has_paid: "yes",
+      mobile: "9876500022",
+    });
+    expect(externalUrl.status).toBe(422);
+
     const pay = await request(app).patch(`/v1/join/registrations/${regId}/payment`).send({
       kind: "student",
-      payment_screenshot_url: "http://localhost:8080/uploads/join-registration/stu-pay.png",
+      payment_screenshot_url: screenshot,
       has_paid: "yes",
       mobile: "9876500022",
     });
     expect(pay.status).toBe(200);
+    expect(pay.body.data.has_paid).toBe("yes");
+    // Minimal projection only — the old handler returned the entire row.
     expect(Object.keys(pay.body.data).sort()).toEqual(["display_code", "has_paid", "id"]);
     expect(pay.body.data).not.toHaveProperty("parent_mobile");
+
+    // Idempotent: a replay does not error and stays minimal.
+    const replay = await request(app).patch(`/v1/join/registrations/${regId}/payment`).send({
+      kind: "student",
+      payment_screenshot_url: screenshot,
+      has_paid: "yes",
+      mobile: "9876500022",
+    });
+    expect(replay.status).toBe(200);
+    expect(replay.body.data.has_paid).toBe("yes");
 
     await request(app)
       .put("/v1/join/settings/registration_open?kind=student")

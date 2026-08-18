@@ -10,6 +10,15 @@ export const PINO_REDACT_PATHS = [
   "phone",
   "*.phone",
   "req.body.phone",
+  // pino redact paths are exact key matches, not substrings — "phone" above
+  // does NOT cover requester_phone, so the library content-request body would
+  // have logged a guest's number in full (§17.10.6).
+  "requester_phone",
+  "*.requester_phone",
+  "req.body.requester_phone",
+  "contact_phone",
+  "*.contact_phone",
+  "req.body.contact_phone",
   "email",
   "*.email",
   "req.body.email",

@@ -10,6 +10,7 @@ import { registerIdCardJobs } from "./idcard-jobs";
 import { registerBirthdayJobs } from "./birthday-jobs";
 import { registerReportJobs } from "./report-jobs";
 import { registerBackfillJobs } from "./backfill-jobs";
+import { registerMediaJobs } from "./media-jobs";
 
 let registered = false;
 
@@ -23,4 +24,5 @@ export function registerAllJobs(): void {
   registerBirthdayJobs();
   registerReportJobs();
   registerBackfillJobs();
+  registerMediaJobs();
 }

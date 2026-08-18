@@ -23,6 +23,8 @@ import { testOtpCodeFor } from "../lib/otp-test-numbers";
 import { defaultOtpCode, isDefaultOtpFlag, isOtpEnabled } from "../lib/otp-config";
 import { logger } from "../lib/logger";
 import { rateLimit } from "../lib/ratelimit";
+import { rekeyDeviceRequestsToUser } from "../lib/library-requests";
+import { rekeyDeviceAccessLogsToUser } from "../lib/library-access-log";
 import { auditFromReq } from "../lib/audit";
 import { requireAuth } from "../middlewares/auth";
 import { toSessionUser } from "../lib/session-user";
@@ -267,6 +269,15 @@ router.post("/login", async (req: Request, res: Response) => {
     });
   });
   await db.update(users).set({ last_login_at: new Date() }).where(eq(users.id, user.id));
+
+  // Re-key anything this device did while signed out (SPEC §17.4 / §17.10.2).
+  // Runs on every verify, not just the first: the guard is `requester_user_id
+  // IS NULL`, so it is idempotent, and a guest request made BETWEEN two logins
+  // would be stranded forever by a strict first-login-only hook. Never throws.
+  await rekeyDeviceRequestsToUser(user.id, parsed.device_id);
+  // §17.9 reach is distinct-per-human; without this a guest who signs in
+  // keeps a second row for everything they read before logging in.
+  await rekeyDeviceAccessLogsToUser(user.id, parsed.device_id);
 
   const sessionUser = toSessionUser(user);
   setAuthCookies(res, sessionUser, access.token, access.expiresAt, refresh.token, refresh.expiresAt);

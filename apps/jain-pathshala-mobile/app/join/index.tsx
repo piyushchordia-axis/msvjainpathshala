@@ -123,12 +123,20 @@ export default function JoinIndexScreen() {
         );
       })}
 
-      {/* Registered families come back to pay — give them the way in (GST-API-02). */}
-      <Pressable onPress={() => router.push("/join/complete-payment?kind=student")}>
-        <Body style={{ marginTop: 8, fontSize: 13, color: c.primary }}>
-          {hi ? "पहले से पंजीकृत हैं? शुल्क भुगतान करें" : "Already registered? Complete your payment"}
+      {/* Registered families come back to pay — give them the way in (GST-API-02).
+          Students only: seva as a Guruji or Sanchalak carries no fee. */}
+      <Pressable onPress={() => router.push("/join/complete-payment")}>
+        <Body style={{ marginTop: 8, fontSize: 13, color: c.primary, lineHeight: 22 }}>
+          {hi
+            ? "पहले से पंजीकृत हैं? MSV शुल्क भुगतान करें"
+            : "Already registered? Pay your MSV registration fee"}
         </Body>
       </Pressable>
+      <Body muted style={{ marginTop: 6, fontSize: 12, lineHeight: 22 }}>
+        {hi
+          ? "पाठशाला में प्रवेश निःशुल्क है — यह शुल्क केवल MSV पंजीकरण के लिए है।"
+          : "Pathshala enrolment is free — this fee applies only to MSV registration."}
+      </Body>
     </Screen>
   );
 }

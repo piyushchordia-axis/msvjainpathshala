@@ -21,10 +21,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { TARJ_MAX_LEN } from "@workspace/api-zod";
 import { PublishControls } from "./PublishControls";
 import { RestrictedHtmlEditor } from "./RestrictedHtmlEditor";
 import {
   flattenLibraryItems,
+  formatBytes,
   type LibraryAdminItem,
   type LibraryAdminSection,
 } from "./library-admin-types";
@@ -355,6 +357,13 @@ function ItemEditor({
   const [textEn, setTextEn] = useState(item.draft.text_content_en ?? "");
   const [textHi, setTextHi] = useState(item.draft.text_content_hi ?? "");
   const [textGu, setTextGu] = useState(item.draft.text_content_gu ?? "");
+  // §17.1.3 — plain single-line inputs, deliberately NOT RestrictedHtmlEditor:
+  // a Tarj renders as one caption line, and markup pasted into it would show
+  // up as tags under the title on every surface.
+  const [tarjEn, setTarjEn] = useState(item.draft.tarj_en ?? "");
+  const [tarjHi, setTarjHi] = useState(item.draft.tarj_hi ?? "");
+  const [externalUrl, setExternalUrl] = useState(item.draft.external_url ?? "");
+  const [pdfBusy, setPdfBusy] = useState(false);
   const [youtube, setYoutube] = useState(item.draft.youtube_url ?? "");
   const [busy, setBusy] = useState(false);
   const [uploadBusy, setUploadBusy] = useState(false);
@@ -370,6 +379,9 @@ function ItemEditor({
         text_content_en: textEn || null,
         text_content_hi: textHi || null,
         text_content_gu: textGu || null,
+        tarj_en: tarjEn.trim() || null,
+        tarj_hi: tarjHi.trim() || null,
+        external_url: externalUrl.trim() || null,
       });
       await onChanged();
       toast.success("Draft saved.");
@@ -377,6 +389,58 @@ function ItemEditor({
       toast.error(err instanceof ApiError ? err.message : "Could not save item.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * §17.11.2 — PDF upload. The 413 is worth naming explicitly: multer and
+   * the storage layer both fail generically, and "upload failed" tells an
+   * admin holding a 140MB scan nothing about what to do next.
+   */
+  async function uploadPdf(file: File | null) {
+    if (!file) return;
+    setPdfBusy(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`${API_BASE}/v1/admin/library/items/${item.id}/pdf`, {
+        method: "POST",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+        body: form,
+      });
+      if (!res.ok) {
+        let message = res.statusText;
+        try {
+          const j = (await res.json()) as { error?: { message?: string } };
+          message = j.error?.message ?? message;
+        } catch {
+          /* ignore */
+        }
+        throw new Error(message);
+      }
+      await onChanged();
+      toast.success("PDF uploaded to draft. Page count follows shortly.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "PDF upload failed.");
+    } finally {
+      setPdfBusy(false);
+    }
+  }
+
+  async function removePdf() {
+    if (!window.confirm("Remove the draft PDF? The published file is untouched until you publish again.")) {
+      return;
+    }
+    setPdfBusy(true);
+    try {
+      await apiDelete(`/v1/admin/library/items/${item.id}/pdf`);
+      await onChanged();
+      toast.success("Draft PDF removed.");
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Could not remove the PDF.");
+    } finally {
+      setPdfBusy(false);
     }
   }
 
@@ -465,6 +529,20 @@ function ItemEditor({
             <FormRow label="Title">
               <Input value={titleEn} onChange={(e) => setTitleEn(e.target.value)} />
             </FormRow>
+            <FormRow label="Tarj">
+              <div className="space-y-1">
+                <Input
+                  value={tarjEn}
+                  maxLength={TARJ_MAX_LEN}
+                  onChange={(e) => setTarjEn(e.target.value)}
+                  placeholder="Tune it is sung to"
+                />
+                <p className="text-xs text-muted-foreground">
+                  The melody this is sung to — another stavan, or a well-known song.
+                  Optional, one line, shown under the title.
+                </p>
+              </div>
+            </FormRow>
             <FormRow label="Text">
               <RestrictedHtmlEditor value={textEn} onChange={setTextEn} placeholder="Content…" />
             </FormRow>
@@ -472,6 +550,14 @@ function ItemEditor({
           <TabsContent value="hi" className="space-y-3">
             <FormRow label="Title">
               <Input value={titleHi} onChange={(e) => setTitleHi(e.target.value)} />
+            </FormRow>
+            <FormRow label="Tarj">
+              <Input
+                value={tarjHi}
+                maxLength={TARJ_MAX_LEN}
+                onChange={(e) => setTarjHi(e.target.value)}
+                placeholder="जिस तर्ज़ पर गाया जाता है"
+              />
             </FormRow>
             <FormRow label="Text">
               <RestrictedHtmlEditor value={textHi} onChange={setTextHi} />
@@ -489,6 +575,54 @@ function ItemEditor({
 
         <FormRow label="YouTube URL">
           <Input value={youtube} onChange={(e) => setYoutube(e.target.value)} />
+        </FormRow>
+
+        <FormRow label="External link">
+          <div className="space-y-1">
+            <Input
+              value={externalUrl}
+              onChange={(e) => setExternalUrl(e.target.value)}
+              placeholder="https://…"
+            />
+            <p className="text-xs text-muted-foreground">
+              A document hosted elsewhere — opens in the reader&apos;s browser. Documents
+              only: YouTube and Vimeo links belong in the video field and are rejected
+              here.
+            </p>
+          </div>
+        </FormRow>
+
+        <FormRow label="PDF">
+          <div className="space-y-1">
+            {item.draft.pdf_url ? (
+              <div className="flex items-center gap-2">
+                <p className="truncate text-xs text-muted-foreground">
+                  {formatBytes(item.draft.pdf_size_bytes ?? 0)}
+                  {item.draft.pdf_page_count
+                    ? ` · ${item.draft.pdf_page_count} pages`
+                    : " · counting pages…"}
+                </p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={pdfBusy}
+                  onClick={() => void removePdf()}
+                >
+                  Remove
+                </Button>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">No draft PDF yet.</p>
+            )}
+            <Input
+              type="file"
+              accept="application/pdf,.pdf"
+              disabled={pdfBusy}
+              onChange={(e) => void uploadPdf(e.target.files?.[0] ?? null)}
+            />
+            <p className="text-xs text-muted-foreground">PDF only, up to 100MB.</p>
+          </div>
         </FormRow>
 
         <FormRow label="Audio (MP3)">

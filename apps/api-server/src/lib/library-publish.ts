@@ -10,6 +10,8 @@ import {
 } from "@workspace/db";
 import { and, eq, isNull } from "drizzle-orm";
 
+import { publishLinkedContentRequests } from "./library-requests-admin";
+
 export async function publishSection(id: string) {
   const [row] = await db
     .select()
@@ -78,6 +80,32 @@ export async function unpublishSubsection(id: string) {
   return updated ?? null;
 }
 
+/**
+ * Publishing an item with no modality violates the CHECK constraint, which
+ * surfaced as a raw 500 telling the admin nothing. §17.1.3 is the rule; this
+ * is how the admin hears about it.
+ */
+export class LibraryPublishError extends Error {
+  readonly code = "ERR_VALIDATION_FAILED" as const;
+  readonly status = 409;
+  constructor(message: string) {
+    super(message);
+    this.name = "LibraryPublishError";
+  }
+}
+
+/** §17.1.3 — one of these must be present before readers can open it. */
+function draftHasModality(row: typeof library_items.$inferSelect): boolean {
+  return !!(
+    row.draft_audio_url ||
+    row.draft_youtube_url ||
+    row.draft_text_content_en ||
+    row.draft_pdf_url ||
+    row.pdf_asset_id ||
+    row.draft_external_url
+  );
+}
+
 export async function publishItem(id: string) {
   const [row] = await db
     .select()
@@ -85,6 +113,11 @@ export async function publishItem(id: string) {
     .where(and(eq(library_items.id, id), isNull(library_items.deleted_at)))
     .limit(1);
   if (!row) return null;
+  if (!draftHasModality(row)) {
+    throw new LibraryPublishError(
+      "This item has nothing to open yet — add audio, text, a PDF, a video link or an external link, then publish.",
+    );
+  }
   const [updated] = await db
     .update(library_items)
     .set({
@@ -99,13 +132,27 @@ export async function publishItem(id: string) {
       text_content_en: row.draft_text_content_en,
       text_content_hi: row.draft_text_content_hi,
       text_content_gu: row.draft_text_content_gu,
+      tarj_en: row.draft_tarj_en,
+      tarj_hi: row.draft_tarj_hi,
+      pdf_url: row.draft_pdf_url,
+      pdf_size_bytes: row.draft_pdf_size_bytes,
+      pdf_page_count: row.draft_pdf_page_count,
+      external_url: row.draft_external_url,
       is_published: true,
       content_version: row.content_version + 1,
       updated_at: new Date(),
     })
     .where(eq(library_items.id, id))
     .returning();
-  return updated ?? null;
+  if (!updated) return null;
+
+  // §17.10.4 — `published` on a content request is SYSTEM-SET, and this is the
+  // moment it becomes true: the thing someone asked for is now in the library.
+  // It lives on the publish service path rather than in the route so any future
+  // caller (a bulk publish, a worker) flips the requests too. Never throws.
+  await publishLinkedContentRequests(updated.id);
+
+  return updated;
 }
 
 export async function unpublishItem(id: string) {

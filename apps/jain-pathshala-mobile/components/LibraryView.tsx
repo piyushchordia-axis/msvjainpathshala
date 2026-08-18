@@ -5,6 +5,7 @@ import { Linking, Pressable, TextInput, View } from "react-native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, type Href } from "expo-router";
 import type { LibrarySectionDto } from "@workspace/api-zod";
+import { t } from "@workspace/i18n";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -17,6 +18,8 @@ import {
   searchLibrary,
 } from "@/lib/library/search-index";
 import type { SearchHit } from "@/lib/library/search-query";
+import type { GranthDirectoryDto } from "@workspace/api-zod";
+import { granthDirectoryKey } from "@/lib/library/granth";
 import { AppHeader } from "@/components/AppHeader";
 import { LibrarySearchResults } from "@/components/LibrarySearchResults";
 import { Body, Card, Row, Screen, StateView, Title } from "@/components/ui";
@@ -29,7 +32,12 @@ export type LibraryViewProps = {
 
 /** In-app destination for a section after (optional) login. */
 export function sectionDestination(section: LibrarySectionDto): string | null {
-  if (section.type === "item_list") return `/library/${section.id}`;
+  // §17.11.1 — granth opens the SAME section screen; the two-tab shell is
+  // drawn there, off the type. A separate route would fork the item_list
+  // rules §17.11.2 says must be shared exactly.
+  if (section.type === "item_list" || section.type === "granth") {
+    return `/library/${section.id}`;
+  }
   if (section.type === "panchang") return "/panchang";
   if (section.type === "deeplink") {
     const target = section.deeplink_target?.trim();
@@ -52,7 +60,7 @@ function openSection(section: LibrarySectionDto, guest: boolean) {
   }
 
   // Behaviour is driven only by type — never by name or key.
-  if (section.type === "item_list") {
+  if (section.type === "item_list" || section.type === "granth") {
     router.push(`/library/${section.id}` as Href);
     return;
   }
@@ -75,6 +83,21 @@ function openSection(section: LibrarySectionDto, guest: boolean) {
 function navigateSearchHit(hit: SearchHit) {
   if (hit.resultKind === "panchang") {
     router.push("/panchang" as Href);
+    return;
+  }
+  // §17.11.4 — a granth match opens the entry detail, a library match the
+  // library detail. sectionId came from the index, so the detail screen can
+  // load the cached directory without a lookup of its own.
+  if (hit.resultKind === "granth_entry" && hit.itemId) {
+    router.push(
+      `/library/granth/entry/${hit.itemId}?sectionId=${hit.sectionId}` as Href,
+    );
+    return;
+  }
+  if (hit.resultKind === "granth_library" && hit.itemId) {
+    router.push(
+      `/library/granth/library/${hit.itemId}?sectionId=${hit.sectionId}` as Href,
+    );
     return;
   }
   if (!hit.sectionId) return;
@@ -116,7 +139,14 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
   useEffect(() => {
     const tree = preferredLibraryTree(qc) ?? data;
     if (!tree?.sections?.length) return;
-    void ensureLibrarySearchIndex(tree).catch(() => {
+    // Index the granth directory alongside the tree when a cached copy
+    // exists — an index built without it would silently exclude every
+    // granth and every library from search (§17.11.4).
+    const granthSection = tree.sections.find((s) => s.type === "granth");
+    const directory = granthSection
+      ? (qc.getQueryData<GranthDirectoryDto>(granthDirectoryKey(granthSection.id)) ?? null)
+      : null;
+    void ensureLibrarySearchIndex(tree, directory).catch(() => {
       /* best-effort */
     });
   }, [qc, data]);
@@ -152,6 +182,17 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
   const onPressHit = useCallback((hit: SearchHit) => {
     navigateSearchHit(hit);
   }, []);
+
+  /**
+   * §17.5 — carry the query through as the request title, so a reader who has
+   * already typed what they want does not type it a second time.
+   */
+  const requestFromSearch = useCallback(() => {
+    router.push({
+      pathname: "/library/request",
+      params: debouncedQuery ? { title: debouncedQuery } : {},
+    } as never);
+  }, [debouncedQuery]);
 
   const searching = debouncedQuery.length > 0;
 
@@ -275,6 +316,7 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
             hits={hits}
             loading={searchLoading}
             onPressHit={onPressHit}
+            onRequestContent={requestFromSearch}
           />
         ) : isLoading ? (
           <StateView status="loading" emptyText="" />
@@ -287,10 +329,13 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
             retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
           />
         ) : sections.length === 0 ? (
-          <StateView
-            status="empty"
-            emptyText={hi ? "अभी कोई खंड नहीं है।" : "No sections available yet."}
-          />
+          <>
+            <StateView
+              status="empty"
+              emptyText={hi ? "अभी कोई खंड नहीं है।" : "No sections available yet."}
+            />
+            <RequestContentCard />
+          </>
         ) : (
           sections.map((section) => {
             const title = pickLocalized(hi, section.name_en, section.name_hi, section.name_gu);
@@ -328,7 +373,9 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
                             ? "calendar-outline"
                             : section.type === "deeplink"
                               ? "link-outline"
-                              : "library-outline"
+                              : section.type === "granth"
+                                ? "book-outline"
+                                : "library-outline"
                         }
                         size={22}
                         color={c.primary}
@@ -349,7 +396,64 @@ export function LibraryView({ headerRight, showAppHeader = true }: LibraryViewPr
             );
           })
         )}
+        {!searching && !isLoading && !isError ? <RequestContentCard /> : null}
       </Screen>
+    </View>
+  );
+}
+
+/**
+ * §17.10.1 entry point — "Request content" on library home.
+ *
+ * Sits at the foot of the section list rather than in the header: it is what
+ * you reach for after looking and not finding, so it belongs after the things
+ * there are to look at. Open to guests, like the form itself (Q13).
+ */
+function RequestContentCard() {
+  const c = useColors();
+  const { locale } = useLocale();
+  return (
+    <View style={{ gap: 8 }}>
+      <Pressable
+        onPress={() => router.push("/library/request" as Href)}
+        accessibilityRole="button"
+        accessibilityLabel={t("libraryRequests.action", locale)}
+      >
+        <Card>
+          <Row style={{ gap: 12, alignItems: "center" }}>
+            <View
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: 10,
+                backgroundColor: c.muted,
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Ionicons name="add-circle-outline" size={22} color={c.secondary} />
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Title style={{ fontSize: 16, lineHeight: 22 }}>
+                {t("libraryRequests.action", locale)}
+              </Title>
+              <Body muted style={{ marginTop: 4, fontSize: 13, lineHeight: 22 }}>
+                {t("libraryRequests.actionHint", locale)}
+              </Body>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={c.mutedForeground} />
+          </Row>
+        </Card>
+      </Pressable>
+      <Pressable
+        onPress={() => router.push("/library/my-requests" as Href)}
+        accessibilityRole="button"
+        style={{ alignSelf: "center", paddingVertical: 8, paddingHorizontal: 12 }}
+      >
+        <Body style={{ fontSize: 13, color: c.primary }}>
+          {t("libraryRequests.viewMine", locale)}
+        </Body>
+      </Pressable>
     </View>
   );
 }

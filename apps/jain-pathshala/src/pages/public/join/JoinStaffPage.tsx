@@ -14,6 +14,7 @@ import { apiErrorMessage } from '@/lib/api-error-copy';
 import { mergeById, usePickerSearch } from '@/lib/picker-search';
 import {
   STAFF_SECTIONS,
+  dobProblem,
   fieldLabel,
   fieldPlaceholder,
   fieldsForSection,
@@ -26,6 +27,20 @@ import {
   uploadJoinFile,
 } from '@/lib/join';
 import { JoinLangToggle, usePreferJoinHindi } from './JoinLangToggle';
+
+/** Age band the staff join form accepts, mirrored by staffCreateSchema. */
+const STAFF_MIN_AGE = 15;
+const STAFF_MAX_AGE = 90;
+
+/** Bounds for the native date input, so the picker opens near the right decade. */
+function dobBounds(minAge: number, maxAge: number): { min: string; max: string } {
+  const now = new Date();
+  const iso = (y: number) =>
+    new Date(Date.UTC(y, now.getUTCMonth(), now.getUTCDate())).toISOString().slice(0, 10);
+  return { min: iso(now.getUTCFullYear() - maxAge), max: iso(now.getUTCFullYear() - minAge) };
+}
+
+const STAFF_DOB_BOUNDS = dobBounds(STAFF_MIN_AGE, STAFF_MAX_AGE);
 
 export default function JoinStaffPage({ kind }: { kind: 'shikshak' | 'sanchalak' }) {
   usePreferJoinHindi();
@@ -119,6 +134,12 @@ export default function JoinStaffPage({ kind }: { kind: 'shikshak' | 'sanchalak'
     if (section.includePhoto && photo?.is_required && !photoUrl) {
       return hi ? 'फ़ोटो अपलोड करें' : 'Please upload a photo';
     }
+    // The staff form never validated age at all; the DOB it replaces is what
+    // the whole registration is dated from, so check it here.
+    if (sectionFields.some((f) => f.field_key === 'date_of_birth')) {
+      const problem = dobProblem(values.date_of_birth, STAFF_MIN_AGE, STAFF_MAX_AGE, hi);
+      if (problem) return problem;
+    }
     if (sectionFields.some((f) => f.field_key === 'whatsapp_contact')) {
       const wa = values.whatsapp_contact ?? '';
       if (wa && !/^\d{10}$/.test(wa)) {
@@ -140,7 +161,8 @@ export default function JoinStaffPage({ kind }: { kind: 'shikshak' | 'sanchalak'
         name: values.name,
         whatsapp_contact: values.whatsapp_contact,
         s_o: values.s_o || null,
-        age: values.age ? Number(values.age) : null,
+        date_of_birth: values.date_of_birth || null,
+        sex: values.sex || null,
         school_qualification: values.school_qualification || null,
         address: values.address || null,
         religious_education: values.religious_education || null,
@@ -184,7 +206,15 @@ export default function JoinStaffPage({ kind }: { kind: 'shikshak' | 'sanchalak'
         {fieldLabel(f, hi)}
         {f.is_required ? ' *' : ''}
       </Label>
-      {f.field_type === 'textarea' ? (
+      {f.field_type === 'date' ? (
+        <Input
+          type="date"
+          value={values[f.field_key] ?? ''}
+          min={STAFF_DOB_BOUNDS.min}
+          max={STAFF_DOB_BOUNDS.max}
+          onChange={(e) => setValue(f.field_key, e.target.value)}
+        />
+      ) : f.field_type === 'textarea' ? (
         <Textarea
           value={values[f.field_key] ?? ''}
           placeholder={fieldPlaceholder(f, hi)}
@@ -299,17 +329,10 @@ export default function JoinStaffPage({ kind }: { kind: 'shikshak' | 'sanchalak'
           <p className="text-sm text-muted-foreground">
             {hi ? 'इस कोड को सुरक्षित रखें' : 'Keep this code safe'}
           </p>
+          {/* No payment step: seva as a Guruji or Sanchalak carries no fee. */}
           <div className="flex flex-wrap justify-center gap-3">
             <Button asChild>
               <Link href="/join">{hi ? 'होम' : 'Done'}</Link>
-            </Button>
-            <Button asChild variant="outline">
-              {/* Carry the code + mobile the applicant just typed (GST-API-02). */}
-              <Link
-                href={`/join/${kind}/complete-payment?code=${encodeURIComponent(displayCode ?? '')}&mobile=${encodeURIComponent(values.whatsapp_contact ?? '')}`}
-              >
-                {hi ? 'भुगतान पूरा करें' : 'Complete payment'}
-              </Link>
             </Button>
           </div>
         </Card>

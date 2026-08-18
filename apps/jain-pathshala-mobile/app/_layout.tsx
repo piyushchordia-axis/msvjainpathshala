@@ -145,8 +145,27 @@ function RootLayoutNav() {
       <Stack.Screen name="library/index" options={{ title: hi ? "पुस्तकालय" : "Library" }} />
       <Stack.Screen name="library/[sectionId]" options={{ title: hi ? "पुस्तकालय" : "Library" }} />
       <Stack.Screen name="library/item/[itemId]" options={{ title: hi ? "पाठ" : "Text" }} />
+      {/* The reader draws its own header (title + page counter + close), so
+          the stack header would be a second bar over the same screen. */}
+      <Stack.Screen name="library/pdf/[itemId]" options={{ headerShown: false }} />
+      <Stack.Screen
+        name="library/granth/library/[libraryId]"
+        options={{ title: hi ? "पुस्तकालय" : "Library" }}
+      />
+      <Stack.Screen
+        name="library/granth/entry/[entryId]"
+        options={{ title: hi ? "ग्रंथ" : "Granth" }}
+      />
       <Stack.Screen name="library/downloads" options={{ title: hi ? "डाउनलोड" : "Downloads" }} />
       <Stack.Screen name="library/bookmarks" options={{ title: hi ? "बुकमार्क" : "Bookmarks" }} />
+      <Stack.Screen
+        name="library/request"
+        options={{ title: hi ? "सामग्री का अनुरोध" : "Request content" }}
+      />
+      <Stack.Screen
+        name="library/my-requests"
+        options={{ title: hi ? "मेरे अनुरोध" : "My requests" }}
+      />
       <Stack.Screen name="panchang/index" options={{ title: hi ? "पंचांग" : "Panchang" }} />
       <Stack.Screen name="panchang/[date]" options={{ title: hi ? "दिन" : "Day" }} />
     </Stack>

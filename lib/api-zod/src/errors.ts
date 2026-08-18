@@ -88,6 +88,11 @@ export const ERROR_CODES = [
   "ERR_COURSE_NODE_NOT_FOUND",
   "ERR_COURSE_STUDENT_OUT_OF_SCOPE",
   "ERR_COURSE_NOT_PUBLISHABLE",
+  // Library — content requests + PDF (Section 17 v3)
+  "ERR_LIBRARY_REQUEST_RATE_LIMITED",
+  "ERR_LIBRARY_REQUEST_PENDING_LIMIT",
+  "ERR_LIBRARY_REQUEST_ACTION_FORBIDDEN",
+  "ERR_LIBRARY_PDF_TOO_LARGE",
   // Geography
   "ERR_CITY_SLUG_CONFLICT",
   // Team directory
@@ -169,6 +174,10 @@ export const ErrorCode = {
   COURSE_NODE_NOT_FOUND: "ERR_COURSE_NODE_NOT_FOUND",
   COURSE_STUDENT_OUT_OF_SCOPE: "ERR_COURSE_STUDENT_OUT_OF_SCOPE",
   COURSE_NOT_PUBLISHABLE: "ERR_COURSE_NOT_PUBLISHABLE",
+  LIBRARY_REQUEST_RATE_LIMITED: "ERR_LIBRARY_REQUEST_RATE_LIMITED",
+  LIBRARY_REQUEST_PENDING_LIMIT: "ERR_LIBRARY_REQUEST_PENDING_LIMIT",
+  LIBRARY_REQUEST_ACTION_FORBIDDEN: "ERR_LIBRARY_REQUEST_ACTION_FORBIDDEN",
+  LIBRARY_PDF_TOO_LARGE: "ERR_LIBRARY_PDF_TOO_LARGE",
   CITY_SLUG_CONFLICT: "ERR_CITY_SLUG_CONFLICT",
   TEAM_PUBLISH_FORBIDDEN: "ERR_TEAM_PUBLISH_FORBIDDEN",
   TEAM_SCOPE_INVALID: "ERR_TEAM_SCOPE_INVALID",
@@ -178,6 +187,13 @@ export const ErrorCode = {
 
 /** Server + client upload size cap (multer + pre-upload guard). */
 export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Library granth PDF cap — Section 17 v3 §17.11.2. Higher than MAX_UPLOAD_BYTES
+ * because scanned granths run large; confirmable against the first real upload
+ * batch (v3 Open Decision 3).
+ */
+export const MAX_LIBRARY_PDF_BYTES = 100 * 1024 * 1024;
 
 /**
  * Bilingual copy for known error codes.
@@ -239,6 +255,22 @@ export const ERROR_MESSAGES = {
   ERR_TRANSLATION_FAILED: {
     en: "The translation could not be used — check the English text and try again, or type the Hindi yourself.",
     hi: "अनुवाद उपयोग नहीं हो सका — अंग्रेज़ी पाठ जाँचकर फिर कोशिश करें, या हिंदी स्वयं लिखें।",
+  },
+  ERR_LIBRARY_REQUEST_RATE_LIMITED: {
+    en: "You have sent all the content requests allowed for today — try again tomorrow, or add detail to a request you already sent.",
+    hi: "आज के लिए अनुमत सभी सामग्री अनुरोध भेजे जा चुके हैं — कल फिर भेजें, या पहले भेजे अनुरोध में विवरण जोड़ें।",
+  },
+  ERR_LIBRARY_REQUEST_PENDING_LIMIT: {
+    en: "Your earlier requests are still waiting for review — wait for one to be answered before sending another.",
+    hi: "आपके पिछले अनुरोध अभी समीक्षा की प्रतीक्षा में हैं — नया भेजने से पहले किसी एक का उत्तर आने दें।",
+  },
+  ERR_LIBRARY_REQUEST_ACTION_FORBIDDEN: {
+    en: "Only a state or national admin can accept or reject content requests — you can read the queue and pass this one on.",
+    hi: "सामग्री अनुरोध स्वीकार या अस्वीकार केवल राज्य या राष्ट्रीय एडमिन कर सकते हैं — आप सूची देख सकते हैं और यह अनुरोध आगे भेज सकते हैं।",
+  },
+  ERR_LIBRARY_PDF_TOO_LARGE: {
+    en: "That PDF is too large (max 100 MB). Compress the scan or split it into volumes and upload again.",
+    hi: "यह PDF बहुत बड़ा है (अधिकतम 100 MB)। स्कैन को कंप्रेस करें या खंडों में बाँटकर फिर अपलोड करें।",
   },
   ERR_CITY_SLUG_CONFLICT: {
     en: "That city slug is already taken — choose a different slug (for example append the state code).",

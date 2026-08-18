@@ -49,11 +49,59 @@ import {
 } from "../../lib/upload";
 import { storage, makeKey } from "../../lib/storage";
 import { stripImageMetadataToFile, ImageNormaliseError } from "../../lib/image-normalise";
+import { notifyJoinApproved, notifyJoinSubmitted } from "../../lib/join-notify";
+import { enqueueJob } from "../../lib/queues";
+import { QUEUE_NAMES } from "@jp/shared/constants";
+import { ageYearsFromDob } from "@workspace/api-zod";
+import { logger } from "../../lib/logger";
 
 const router: IRouter = Router();
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAGIC_SAMPLE_BYTES = 4096;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function isRealCalendarDate(v: string): boolean {
+  const [y, m, d] = v.split("-").map(Number) as [number, number, number];
+  const parsed = new Date(Date.UTC(y, m - 1, d));
+  // Round-trip, because Date rolls 31 February forward to 3 March rather than
+  // rejecting it — and Postgres then 500s on the insert instead of 422-ing here.
+  return (
+    parsed.getUTCFullYear() === y && parsed.getUTCMonth() === m - 1 && parsed.getUTCDate() === d
+  );
+}
+
+/**
+ * Date of birth, validated against the age band the persona's form allows.
+ * The band is the same one the legacy whole-year `age` field enforced.
+ */
+function dobField(minAge: number, maxAge: number) {
+  return z
+    .string()
+    .regex(ISO_DATE_RE, "Use the date picker — a date of birth looks like 2014-03-14.")
+    .refine(isRealCalendarDate, {
+      message: "That date does not exist — check the day and month.",
+    })
+    .refine((v) => Date.parse(`${v}T00:00:00Z`) <= Date.now(), {
+      message: "A date of birth cannot be in the future — check the year.",
+    })
+    .refine(
+      (v) => {
+        const age = ageYearsFromDob(v);
+        return Number.isFinite(age) && age >= minAge && age <= maxAge;
+      },
+      { message: `That date of birth is outside the accepted range (${minAge} to ${maxAge} years).` },
+    );
+}
+
+/** `age` is no longer collected — it is derived so existing readers keep working. */
+function ageForRow(dob: string | null | undefined, legacyAge: number | null | undefined): number | null {
+  if (dob) {
+    const age = ageYearsFromDob(dob);
+    if (Number.isFinite(age)) return Math.floor(age);
+  }
+  return legacyAge ?? null;
+}
 
 function isJoinKind(v: unknown): v is JoinKind {
   return typeof v === "string" && (JOIN_KINDS as readonly string[]).includes(v);
@@ -95,6 +143,8 @@ const STUDENT_FIXED = new Set([
   "email",
   "father_name",
   "fatherName",
+  "date_of_birth",
+  "dateOfBirth",
   "age",
   "sex",
   "education",
@@ -126,7 +176,10 @@ const STAFF_FIXED = new Set([
   "name",
   "s_o",
   "sO",
+  "date_of_birth",
+  "dateOfBirth",
   "age",
+  "sex",
   "school_qualification",
   "schoolQualification",
   "address",
@@ -187,13 +240,17 @@ router.get("/settings", async (req: Request, res: Response) => {
     .from(join_settings)
     .where(eq(join_settings.kind, kind));
   const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  // A fee is only ever charged for the student MSV journey. Staff kinds report
+  // no payment at all rather than falling back to the default amount — the
+  // fallback used to advertise ₹501 for seva that costs nothing.
+  const charges = kind === "student";
   ok(res, {
     kind,
     registration_open: map.registration_open === "yes",
-    payment_amount: map.payment_amount ?? "501",
-    payment_upi_id: map.payment_upi_id ?? "",
-    payment_name: map.payment_name ?? "",
-    payment_qr_image: map.payment_qr_image ?? "",
+    payment_amount: charges ? (map.payment_amount ?? "501") : "",
+    payment_upi_id: charges ? (map.payment_upi_id ?? "") : "",
+    payment_name: charges ? (map.payment_name ?? "") : "",
+    payment_qr_image: charges ? (map.payment_qr_image ?? "") : "",
   });
 });
 
@@ -222,6 +279,9 @@ const studentCreateSchema = z.object({
   mobile: z.union([z.string().regex(/^\d{10}$/), z.literal(""), z.null()]).optional(),
   email: z.union([z.string().email(), z.literal(""), z.null()]).optional(),
   father_name: z.string().optional().nullable(),
+  date_of_birth: dobField(3, 35).optional().nullable(),
+  // Legacy: superseded by date_of_birth. Kept accepted so app builds already in
+  // the field keep submitting rather than 422-ing; never collected by new forms.
   age: z.coerce.number().int().min(3).max(35).optional().nullable(),
   sex: z.string().optional().nullable(),
   education: z.string().optional().nullable(),
@@ -243,7 +303,10 @@ const staffCreateSchema = z.object({
   name: z.string().min(1),
   whatsapp_contact: z.string().regex(/^\d{10}$/),
   s_o: z.string().optional().nullable(),
+  date_of_birth: dobField(15, 90).optional().nullable(),
+  // Legacy — see the note on studentCreateSchema.
   age: z.coerce.number().int().min(15).max(90).optional().nullable(),
+  sex: z.string().optional().nullable(),
   school_qualification: z.string().optional().nullable(),
   address: z.string().optional().nullable(),
   religious_education: z.string().optional().nullable(),
@@ -274,6 +337,9 @@ router.post("/registrations", async (req: Request, res: Response) => {
   const body = req.body as Record<string, unknown>;
   // Accept camelCase aliases from ported clients.
   if (body.fatherName !== undefined && body.father_name === undefined) body.father_name = body.fatherName;
+  if (body.dateOfBirth !== undefined && body.date_of_birth === undefined) {
+    body.date_of_birth = body.dateOfBirth;
+  }
   if (body.parentMobile !== undefined && body.parent_mobile === undefined) {
     body.parent_mobile = body.parentMobile;
   }
@@ -357,7 +423,8 @@ router.post("/registrations", async (req: Request, res: Response) => {
           mobile: data.mobile && data.mobile.length > 0 ? data.mobile : null,
           email: data.email && data.email.length > 0 ? data.email : null,
           father_name: data.father_name ?? null,
-          age: data.age ?? null,
+          date_of_birth: data.date_of_birth ?? null,
+          age: ageForRow(data.date_of_birth, data.age),
           sex: data.sex ?? null,
           education: data.education ?? null,
           address: data.address ?? null,
@@ -375,6 +442,14 @@ router.post("/registrations", async (req: Request, res: Response) => {
         })
         .returning();
       return inserted;
+    });
+    // Fire-and-forget: a public registration must not fail because a reviewer's
+    // push token was stale. notifyJoinSubmitted swallows its own errors.
+    void notifyJoinSubmitted({
+      kind: "student",
+      centreId: row!.centre_id,
+      name: row!.name,
+      displayCode: row!.display_code,
     });
     ok(res, row, undefined, 201);
     return;
@@ -418,7 +493,9 @@ router.post("/registrations", async (req: Request, res: Response) => {
         centre_id: data.centre_id,
         name: data.name,
         s_o: data.s_o ?? null,
-        age: data.age ?? null,
+        date_of_birth: data.date_of_birth ?? null,
+        age: ageForRow(data.date_of_birth, data.age),
+        sex: data.sex ?? null,
         school_qualification: data.school_qualification ?? null,
         address: data.address ?? null,
         religious_education: data.religious_education ?? null,
@@ -436,6 +513,12 @@ router.post("/registrations", async (req: Request, res: Response) => {
       })
       .returning();
     return inserted;
+  });
+  void notifyJoinSubmitted({
+    kind: kindRaw,
+    centreId: row!.centre_id,
+    name: row!.name,
+    displayCode: row!.display_code,
   });
   ok(res, row, undefined, 201);
 });
@@ -545,6 +628,19 @@ router.patch("/registrations/:id/payment", async (req: Request, res: Response) =
   }
   const { kind, payment_screenshot_url, has_paid, mobile } = parsed.data;
 
+  // A fee is only ever charged for the student MSV journey — Pathshala
+  // enrolment and staff seva are free. The staff payment screens are gone, but
+  // a bookmarked link or an app build still in the field must not slip past.
+  if (kind !== "student") {
+    fail(
+      res,
+      422,
+      "ERR_VALIDATION_FAILED",
+      "Payment is only collected for student MSV registration — there is nothing to pay here.",
+    );
+    return;
+  }
+
   if (!isJoinUploadUrl(payment_screenshot_url)) {
     fail(
       res,
@@ -555,47 +651,19 @@ router.patch("/registrations/:id/payment", async (req: Request, res: Response) =
     return;
   }
 
-  if (kind === "student") {
-    const [existing] = await db
-      .select({
-        id: join_student_registrations.id,
-        display_code: join_student_registrations.display_code,
-        has_paid: join_student_registrations.has_paid,
-        parent_mobile: join_student_registrations.parent_mobile,
-        mobile: join_student_registrations.mobile,
-      })
-      .from(join_student_registrations)
-      .where(eq(join_student_registrations.id, id))
-      .limit(1);
-    // Wrong mobile reads exactly like an unknown id — never confirm existence.
-    if (!existing || (existing.parent_mobile !== mobile && existing.mobile !== mobile)) {
-      fail(res, 404, "ERR_NOT_FOUND", "Registration not found.");
-      return;
-    }
-    if (existing.has_paid === "yes") {
-      ok(res, { id: existing.id, display_code: existing.display_code, has_paid: "yes" });
-      return;
-    }
-    await db
-      .update(join_student_registrations)
-      .set({ payment_screenshot_url, has_paid, updated_at: new Date() })
-      .where(eq(join_student_registrations.id, id));
-    ok(res, { id: existing.id, display_code: existing.display_code, has_paid });
-    return;
-  }
-
-  const table = kind === "shikshak" ? join_shikshak_registrations : join_sanchalak_registrations;
   const [existing] = await db
     .select({
-      id: table.id,
-      display_code: table.display_code,
-      has_paid: table.has_paid,
-      whatsapp_contact: table.whatsapp_contact,
+      id: join_student_registrations.id,
+      display_code: join_student_registrations.display_code,
+      has_paid: join_student_registrations.has_paid,
+      parent_mobile: join_student_registrations.parent_mobile,
+      mobile: join_student_registrations.mobile,
     })
-    .from(table)
-    .where(eq(table.id, id))
+    .from(join_student_registrations)
+    .where(eq(join_student_registrations.id, id))
     .limit(1);
-  if (!existing || existing.whatsapp_contact !== mobile) {
+  // Wrong mobile reads exactly like an unknown id — never confirm existence.
+  if (!existing || (existing.parent_mobile !== mobile && existing.mobile !== mobile)) {
     fail(res, 404, "ERR_NOT_FOUND", "Registration not found.");
     return;
   }
@@ -604,9 +672,9 @@ router.patch("/registrations/:id/payment", async (req: Request, res: Response) =
     return;
   }
   await db
-    .update(table)
+    .update(join_student_registrations)
     .set({ payment_screenshot_url, has_paid, updated_at: new Date() })
-    .where(eq(table.id, id));
+    .where(eq(join_student_registrations.id, id));
   ok(res, { id: existing.id, display_code: existing.display_code, has_paid });
 });
 
@@ -713,6 +781,17 @@ router.put(
       return;
     }
     const key = String(req.params.key);
+    // Staff journeys have no payment screen, so a fee configured here could
+    // never be paid — refuse rather than leave an uncollectable amount on file.
+    if (kind !== "student" && key.startsWith("payment_")) {
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        "Payment is only collected for student MSV registration — set this on the student journey instead.",
+      );
+      return;
+    }
     const value = str(req.body?.value);
     if (value === null) {
       fail(res, 422, "ERR_VALIDATION_FAILED", "Body value is required.");
@@ -804,6 +883,7 @@ router.get(
           city_name: cities.name,
           photo_url: join_student_registrations.photo_url,
           payment_screenshot_url: join_student_registrations.payment_screenshot_url,
+          date_of_birth: join_student_registrations.date_of_birth,
           age: join_student_registrations.age,
           sex: join_student_registrations.sex,
           father_name: join_student_registrations.father_name,
@@ -1004,6 +1084,21 @@ router.post(
           summary: `Approved join student ${reg.display_code}`,
           metadata: provisioned,
         });
+        // Both fire-and-forget: the approval has already committed, so a stale
+        // push token or a queue hiccup must not turn it into a 500.
+        void notifyJoinApproved({
+          kind: "student",
+          userIds: [provisioned.userId, provisioned.studentUserId],
+          name: reg.name,
+          displayCode: reg.display_code,
+        });
+        void enqueueJob(QUEUE_NAMES.IDCARD_GENERATION, {
+          batch_id: `join-${id}`,
+          student_ids: [provisioned.studentId],
+          only_missing: true,
+        }).catch((err) => {
+          logger.warn({ err, studentId: provisioned.studentId }, "join approval id-card enqueue failed");
+        });
         ok(res, updated);
         return;
       }
@@ -1045,6 +1140,12 @@ router.post(
         entityId: id,
         summary: `Approved join ${kind} ${reg.display_code}`,
         metadata: provisioned,
+      });
+      void notifyJoinApproved({
+        kind,
+        userIds: [provisioned.userId],
+        name: reg.name,
+        displayCode: reg.display_code,
       });
       ok(res, updated);
     } catch (err) {

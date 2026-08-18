@@ -148,12 +148,18 @@ export default function JoinLandingPage() {
             );
           })}
         </div>
-        {/* Registered families come back to pay — give them the way in (GST-API-02). */}
+        {/* Registered families come back to pay — give them the way in (GST-API-02).
+            Students only: seva as a Guruji or Sanchalak carries no fee. */}
         <p className="mt-8 text-sm text-muted-foreground">
           {hi ? 'पहले से पंजीकृत हैं? ' : 'Already registered? '}
           <Link href="/join/student/complete-payment" className="text-primary underline-offset-2 hover:underline">
-            {hi ? 'शुल्क भुगतान करें' : 'Complete your payment'}
+            {hi ? 'MSV शुल्क भुगतान करें' : 'Pay your MSV registration fee'}
           </Link>
+        </p>
+        <p className="mt-2 text-xs text-muted-foreground">
+          {hi
+            ? 'पाठशाला में प्रवेश निःशुल्क है — यह शुल्क केवल MSV पंजीकरण के लिए है।'
+            : 'Pathshala enrolment is free — this fee applies only to MSV registration.'}
         </p>
         <div className="mt-6">
           <Button asChild variant="outline">

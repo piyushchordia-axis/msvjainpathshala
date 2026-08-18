@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Image, Pressable, TextInput, View } from "react-native";
+import { Image, Pressable, ScrollView, TextInput, View } from "react-native";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { useColors } from "@/hooks/useColors";
@@ -10,6 +10,7 @@ import { mergeById, usePickerSearch } from "@/lib/picker-search";
 import { joinUpload, safeImageMime, safeImageUploadName } from "@/lib/join-upload";
 import {
   STUDENT_SECTIONS,
+  dobProblem,
   fieldLabel,
   fieldPlaceholder,
   fieldsForSection,
@@ -17,8 +18,13 @@ import {
   photoField,
   type JoinField,
 } from "@/lib/join";
+import { DateOfBirthField } from "@/components/join/DateOfBirthField";
 import { fonts } from "@/constants/typography";
 import { Body, Button, Card, Screen, Title } from "@/components/ui";
+
+/** Age band the student join form accepts, mirrored by studentCreateSchema. */
+const STUDENT_MIN_AGE = 3;
+const STUDENT_MAX_AGE = 35;
 
 type City = { id: string; name: string; code: string; state_name?: string };
 type Centre = { id: string; name: string; code: string | null; city_id: string };
@@ -117,6 +123,20 @@ export default function JoinStudentScreen() {
     );
   }, [centresInCity, centreQ]);
 
+  // Collapse each picker to the chosen row once one is picked; editing the
+  // search box reopens the list.
+  const visibleCities = useMemo(() => {
+    const picked = filteredCities.find((x) => x.id === cityId);
+    if (picked && cityQuery === picked.name) return [picked];
+    return filteredCities.slice(0, 12);
+  }, [filteredCities, cityId, cityQuery]);
+
+  const visibleCentres = useMemo(() => {
+    const picked = filteredCentres.find((x) => x.id === centreId);
+    if (picked && centreQuery === `${picked.name} (${picked.code})`) return [picked];
+    return filteredCentres.slice(0, 12);
+  }, [filteredCentres, centreId, centreQuery]);
+
   const inputStyle = {
     borderWidth: 1,
     borderColor: c.input,
@@ -206,11 +226,9 @@ export default function JoinStudentScreen() {
         return hi ? "10 अंकों का मोबाइल दर्ज करें" : "Enter a valid 10-digit mobile";
       }
     }
-    if (sectionFields.some((f) => f.field_key === "age") && values.age) {
-      const age = Number(values.age);
-      if (!Number.isFinite(age) || age < 3 || age > 35) {
-        return hi ? "आयु 3 से 35 के बीच होनी चाहिए" : "Age must be between 3 and 35";
-      }
+    if (sectionFields.some((f) => f.field_key === "date_of_birth")) {
+      const problem = dobProblem(values.date_of_birth, STUDENT_MIN_AGE, STUDENT_MAX_AGE, hi);
+      if (problem) return problem;
     }
     return null;
   };
@@ -228,7 +246,7 @@ export default function JoinStudentScreen() {
         mobile: values.mobile || null,
         email: values.email || null,
         father_name: values.father_name || null,
-        age: values.age ? Number(values.age) : null,
+        date_of_birth: values.date_of_birth || null,
         sex: values.sex || null,
         education: values.education || null,
         address: values.address || null,
@@ -267,7 +285,15 @@ export default function JoinStudentScreen() {
         {fieldLabel(f, hi)}
         {f.is_required ? " *" : ""}
       </Body>
-      {f.field_type === "yesno" ? (
+      {f.field_type === "date" ? (
+        <DateOfBirthField
+          value={values[f.field_key]}
+          onChange={(iso) => setValue(f.field_key, iso)}
+          hi={hi}
+          minAge={STUDENT_MIN_AGE}
+          maxAge={STUDENT_MAX_AGE}
+        />
+      ) : f.field_type === "yesno" ? (
         <View style={{ flexDirection: "row", flexWrap: "wrap" }}>
           {(["yes", "no"] as const).map((v) => {
             const active = values[f.field_key] === v;
@@ -371,11 +397,16 @@ export default function JoinStudentScreen() {
         <Body muted style={{ marginTop: 8 }}>
           {hi ? "इस कोड को सुरक्षित रखें" : "Keep this code safe"}
         </Body>
+        <Body muted style={{ marginTop: 16, lineHeight: 22 }}>
+          {hi
+            ? "पाठशाला में प्रवेश निःशुल्क है — यह शुल्क केवल MSV पंजीकरण के लिए है।"
+            : "Pathshala enrolment is free — this fee applies only to MSV registration."}
+        </Body>
         {/* Carry the code + mobile the family just typed (GST-API-02) — and
             push, not replace, so the code screen stays reachable. */}
         <Button
-          label={hi ? "शुल्क भुगतान करें" : "Complete payment"}
-          style={{ marginTop: 20 }}
+          label={hi ? "MSV शुल्क भुगतान करें" : "Pay the MSV registration fee"}
+          style={{ marginTop: 12 }}
           onPress={() =>
             router.push({
               pathname: "/join/complete-payment",
@@ -433,8 +464,14 @@ export default function JoinStudentScreen() {
               placeholderTextColor={c.inkDim}
               style={inputStyle}
             />
-            <View style={{ maxHeight: 180, marginTop: 8 }}>
-              {filteredCities.slice(0, 12).map((city) => {
+            {/* maxHeight on a bare View clips without scrolling — the rows used
+                to paint over the fields below. Same fix as the centre picker. */}
+            <ScrollView
+              style={{ maxHeight: 180, marginTop: 8, overflow: "hidden" }}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
+            >
+              {visibleCities.map((city) => {
                 const active = cityId === city.id;
                 return (
                   <Pressable
@@ -459,7 +496,7 @@ export default function JoinStudentScreen() {
                   </Pressable>
                 );
               })}
-            </View>
+            </ScrollView>
           </View>
         ) : null}
 
@@ -482,8 +519,12 @@ export default function JoinStudentScreen() {
               placeholderTextColor={c.inkDim}
               style={inputStyle}
             />
-            <View style={{ maxHeight: 180, marginTop: 8 }}>
-              {filteredCentres.slice(0, 12).map((centre) => {
+            <ScrollView
+              style={{ maxHeight: 180, marginTop: 8, overflow: "hidden" }}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
+            >
+              {visibleCentres.map((centre) => {
                 const active = centreId === centre.id;
                 return (
                   <Pressable
@@ -506,7 +547,7 @@ export default function JoinStudentScreen() {
                   </Pressable>
                 );
               })}
-            </View>
+            </ScrollView>
           </View>
         ) : null}
 

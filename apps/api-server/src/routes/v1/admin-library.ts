@@ -19,9 +19,13 @@ import { ok, fail } from "../../lib/envelope";
 import { requireRole } from "../../middlewares/auth";
 import { requireMinRole } from "../../lib/roles";
 import { auditFromReq } from "../../lib/audit";
+import adminLibraryRequestsRouter from "./admin-library-requests";
+import adminGranthRouter from "./admin-granth";
 import { sanitizeLibraryHtml } from "../../lib/library-sanitize-html";
-import { videoEmbedUrl } from "../../lib/validation";
+import { externalDocumentUrl, videoEmbedUrl } from "../../lib/validation";
+import { librarySectionTypeSchema, normalizeTarj, tarjLineSchema } from "@workspace/api-zod";
 import {
+  LibraryPublishError,
   publishItem,
   publishPanchangYear,
   publishSection,
@@ -31,6 +35,12 @@ import {
   unpublishSection,
   unpublishSubsection,
 } from "../../lib/library-publish";
+import {
+  LIBRARY_PDF_MAX_BYTES,
+  LibraryPdfError,
+  storeLibraryPdf,
+} from "../../lib/library-pdf";
+import { enqueueLibraryPdfPageCount } from "../../jobs/media-jobs";
 import {
   itemCodeFromFilename,
   LIBRARY_AUDIO_MAX_BYTES,
@@ -58,7 +68,27 @@ const requirePublisher = requireRole("super_admin");
 
 router.use(requireEditor);
 
-const sectionTypeSchema = z.enum(["item_list", "deeplink", "panchang"]);
+/**
+ * Content-request queue (§17.10.5). Mounted here so it inherits the city_admin
+ * READ gate above; the act gate (state_admin+) lives in its service layer, not
+ * in a guard. Declared before the `/items/:id` routes so "requests" can never
+ * be read as an item id.
+ */
+router.use("/requests", adminLibraryRequestsRouter);
+
+/**
+ * Granth directory (§17.11.5). Same arrangement as the request queue: the
+ * city_admin gate above keeps sanchalak and shikshak out entirely, and the
+ * finer authorities — a city_admin confined to their own city, entries
+ * reserved to state_admin+ — live in the service layer, not in a guard.
+ * Declared before `/items/:id` so "granth" can never be read as an item id.
+ */
+router.use("/granth", adminGranthRouter);
+
+// Mirrors LIBRARY_SECTION_TYPES. `granth` is a first-class section type
+// (v3 §17.11.1) — admins rename, re-tier and publish the seeded row as a
+// data operation, which needs the write path to accept the type at all.
+const sectionTypeSchema = librarySectionTypeSchema;
 const reorderSchema = z.object({ ids: z.array(z.string().uuid()).min(1) });
 
 const audioUpload = multer({
@@ -75,6 +105,31 @@ const audioUpload = multer({
       file.originalname.toLowerCase().endsWith(".mp3");
     if (!okMime) {
       cb(new Error("Only MP3 audio is accepted."));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+/**
+ * §17.11.2 — PDF only. The multer limit is set one byte above the cap so an
+ * oversize file is refused by our own check with 413
+ * ERR_LIBRARY_PDF_TOO_LARGE, rather than by multer's generic LIMIT_FILE_SIZE
+ * which would surface as a 422 telling the admin nothing about the cap.
+ */
+const pdfUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, tmpdir()),
+    filename: (_req, file, cb) =>
+      cb(null, `jp-lib-pdf-${Date.now()}-${file.originalname.replace(/[^\w.-]/g, "_")}`),
+  }),
+  limits: { fileSize: LIBRARY_PDF_MAX_BYTES + 1, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    const ok =
+      file.mimetype === "application/pdf" ||
+      file.originalname.toLowerCase().endsWith(".pdf");
+    if (!ok) {
+      cb(new Error("Only PDF files are accepted — rename or convert the file first."));
       return;
     }
     cb(null, true);
@@ -151,6 +206,12 @@ function mapItemAdmin(row: typeof library_items.$inferSelect) {
       text_content_en: row.draft_text_content_en,
       text_content_hi: row.draft_text_content_hi,
       text_content_gu: row.draft_text_content_gu,
+      tarj_en: row.draft_tarj_en,
+      tarj_hi: row.draft_tarj_hi,
+      pdf_url: row.draft_pdf_url,
+      pdf_size_bytes: row.draft_pdf_size_bytes,
+      pdf_page_count: row.draft_pdf_page_count,
+      external_url: row.draft_external_url,
     },
     published: {
       title_en: row.title_en,
@@ -164,6 +225,12 @@ function mapItemAdmin(row: typeof library_items.$inferSelect) {
       text_content_en: row.text_content_en,
       text_content_hi: row.text_content_hi,
       text_content_gu: row.text_content_gu,
+      tarj_en: row.tarj_en,
+      tarj_hi: row.tarj_hi,
+      pdf_url: row.pdf_url,
+      pdf_size_bytes: row.pdf_size_bytes,
+      pdf_page_count: row.pdf_page_count,
+      external_url: row.external_url,
     },
   };
 }
@@ -659,6 +726,16 @@ const itemCreateSchema = z.object({
   text_content_en: z.string().nullable().optional(),
   text_content_hi: z.string().nullable().optional(),
   text_content_gu: z.string().nullable().optional(),
+  // §17.1.3 — metadata, not a modality: a Tarj alone never makes an item
+  // publishable, so it is deliberately absent from the modality CHECK.
+  // Plain text, never sanitizeLibraryHtml'd: this is a caption, not a body.
+  tarj_en: tarjLineSchema.nullable().optional(),
+  tarj_hi: tarjLineSchema.nullable().optional(),
+  // §17.1.3 — third-party DOCUMENT link. Q7 keeps video on youtube_url,
+  // which is the only field the embed validator guards; without this refusal
+  // a pasted YouTube URL would reach the client through the unguarded field
+  // and open as a raw link, bypassing Q7 entirely.
+  external_url: externalDocumentUrl(2000).nullable().optional(),
 });
 
 router.post("/items", async (req: Request, res: Response) => {
@@ -671,6 +748,8 @@ router.post("/items", async (req: Request, res: Response) => {
   const textEn = b.text_content_en != null ? sanitizeLibraryHtml(b.text_content_en) : null;
   const textHi = b.text_content_hi != null ? sanitizeLibraryHtml(b.text_content_hi) : null;
   const textGu = b.text_content_gu != null ? sanitizeLibraryHtml(b.text_content_gu) : null;
+  const tarjEn = normalizeTarj(b.tarj_en);
+  const tarjHi = normalizeTarj(b.tarj_hi);
   const subId = b.subsection_id ?? null;
   const draftOrder = await nextItemDraftOrder(b.section_id, subId);
   const pubOrder = await nextPublishedOrder("items", b.section_id, subId);
@@ -689,6 +768,9 @@ router.post("/items", async (req: Request, res: Response) => {
         text_content_en: textEn,
         text_content_hi: textHi,
         text_content_gu: textGu,
+        tarj_en: tarjEn,
+        tarj_hi: tarjHi,
+        external_url: b.external_url ?? null,
         draft_title_en: b.title_en,
         draft_title_hi: b.title_hi ?? null,
         draft_title_gu: b.title_gu ?? null,
@@ -697,6 +779,9 @@ router.post("/items", async (req: Request, res: Response) => {
         draft_text_content_en: textEn,
         draft_text_content_hi: textHi,
         draft_text_content_gu: textGu,
+        draft_tarj_en: tarjEn,
+        draft_tarj_hi: tarjHi,
+        draft_external_url: b.external_url ?? null,
         is_published: false,
         content_version: 1,
       })
@@ -766,6 +851,9 @@ router.patch("/items/:id", async (req: Request, res: Response) => {
     patch.draft_text_content_gu =
       b.text_content_gu == null ? null : sanitizeLibraryHtml(b.text_content_gu);
   }
+  if (b.tarj_en !== undefined) patch.draft_tarj_en = normalizeTarj(b.tarj_en);
+  if (b.tarj_hi !== undefined) patch.draft_tarj_hi = normalizeTarj(b.tarj_hi);
+  if (b.external_url !== undefined) patch.draft_external_url = b.external_url ?? null;
   const [row] = await db
     .update(library_items)
     .set(patch)
@@ -793,12 +881,22 @@ router.delete("/items/:id", requirePublisher, async (req: Request, res: Response
 });
 
 router.post("/items/:id/publish", requirePublisher, async (req: Request, res: Response) => {
-  const row = await publishItem(String(req.params.id));
-  if (!row) {
-    fail(res, 404, "ERR_NOT_FOUND", "That library item could not be found.");
-    return;
+  try {
+    const row = await publishItem(String(req.params.id));
+    if (!row) {
+      fail(res, 404, "ERR_NOT_FOUND", "That library item could not be found.");
+      return;
+    }
+    ok(res, { item: mapItemAdmin(row) });
+  } catch (e) {
+    // §17.1.3 — a contentless publish used to reach the DB and come back as
+    // a raw 500, which told the admin nothing about what to add.
+    if (e instanceof LibraryPublishError) {
+      fail(res, e.status, e.code, e.message);
+      return;
+    }
+    throw e;
   }
-  ok(res, { item: mapItemAdmin(row) });
 });
 
 router.post("/items/:id/unpublish", requirePublisher, async (req: Request, res: Response) => {
@@ -837,6 +935,128 @@ router.post("/items/reorder", async (req: Request, res: Response) => {
     }
   });
   ok(res, { reordered: ids.length });
+});
+
+/* ── PDF (v3 §17.11.2) ────────────────────────────────────────────────────── */
+
+router.post(
+  "/items/:id/pdf",
+  (req: Request, res: Response, next: NextFunction) => {
+    pdfUpload.single("file")(req, res, (err: unknown) => {
+      if (err) {
+        // multer's own size guard fires one byte past our cap; report it as
+        // the documented 413 rather than a generic upload failure.
+        const code = (err as { code?: string }).code;
+        if (code === "LIMIT_FILE_SIZE") {
+          fail(
+            res,
+            413,
+            "ERR_LIBRARY_PDF_TOO_LARGE",
+            "That PDF is larger than 100MB — compress it or split it into volumes, then upload again.",
+          );
+          return;
+        }
+        fail(
+          res,
+          422,
+          "ERR_VALIDATION_FAILED",
+          err instanceof Error ? err.message : "Invalid PDF upload.",
+        );
+        return;
+      }
+      next();
+    });
+  },
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    const file = req.file;
+    if (!file?.path) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "No PDF file provided.");
+      return;
+    }
+    try {
+      const buf = await readFile(file.path);
+      const pdf = await storeLibraryPdf(buf, file.originalname);
+      const uploadedBy = req.authUser?.id;
+      if (uploadedBy) {
+        await db
+          .insert(upload_objects)
+          .values({ key: pdf.key, uploaded_by: uploadedBy, content_type: "application/pdf" })
+          .onConflictDoUpdate({
+            target: upload_objects.key,
+            set: {
+              uploaded_by: uploadedBy,
+              content_type: "application/pdf",
+              created_at: sql`now()`,
+            },
+          });
+      }
+      const [row] = await db
+        .update(library_items)
+        .set({
+          draft_pdf_url: pdf.url,
+          draft_pdf_size_bytes: pdf.size_bytes,
+          // Cleared, not carried over: the old count belongs to the old file,
+          // and a stale "412 pages" under a new upload is worse than none.
+          draft_pdf_page_count: null,
+          updated_at: new Date(),
+        })
+        .where(and(eq(library_items.id, id), isNull(library_items.deleted_at)))
+        .returning();
+      if (!row) {
+        fail(res, 404, "ERR_NOT_FOUND", "That library item could not be found.");
+        return;
+      }
+      // §17.11.2 — page count is derived off the request path. A 100MB scan
+      // takes seconds to parse and the admin should not wait on a number
+      // that only decorates the UI.
+      await enqueueLibraryPdfPageCount(row.id);
+      await auditFromReq(req, {
+        action: "update",
+        entityKind: "library_item",
+        entityId: row.id,
+        summary: `Library PDF uploaded to draft (${row.item_code}).`,
+      });
+      ok(res, {
+        item: mapItemAdmin(row),
+        pdf: { url: pdf.url, size_bytes: pdf.size_bytes },
+      });
+    } catch (e) {
+      if (e instanceof LibraryPdfError) {
+        fail(res, e.status, e.code, e.message);
+        return;
+      }
+      throw e;
+    } finally {
+      await unlink(file.path).catch(() => undefined);
+    }
+  },
+);
+
+/** Detach the draft PDF. The stored object is left to the orphan sweep. */
+router.delete("/items/:id/pdf", async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  const [row] = await db
+    .update(library_items)
+    .set({
+      draft_pdf_url: null,
+      draft_pdf_size_bytes: null,
+      draft_pdf_page_count: null,
+      updated_at: new Date(),
+    })
+    .where(and(eq(library_items.id, id), isNull(library_items.deleted_at)))
+    .returning();
+  if (!row) {
+    fail(res, 404, "ERR_NOT_FOUND", "That library item could not be found.");
+    return;
+  }
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "library_item",
+    entityId: row.id,
+    summary: `Library PDF removed from draft (${row.item_code}).`,
+  });
+  ok(res, { item: mapItemAdmin(row) });
 });
 
 /* ── Audio ────────────────────────────────────────────────────────────────── */

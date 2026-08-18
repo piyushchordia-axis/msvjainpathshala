@@ -63,7 +63,7 @@ export const STUDENT_SECTIONS: JoinSection[] = [
     title_hi: 'आपके बारे में',
     sub_en: 'Basic identity details',
     sub_hi: 'मूल पहचान विवरण',
-    keys: ['name', 'father_name', 'sex', 'age'],
+    keys: ['name', 'father_name', 'sex', 'date_of_birth'],
     includePhoto: true,
   },
   {
@@ -93,7 +93,7 @@ export const STAFF_SECTIONS: JoinSection[] = [
     title_hi: 'आपके बारे में',
     sub_en: 'Basic identity details',
     sub_hi: 'मूल पहचान विवरण',
-    keys: ['name', 's_o', 'age'],
+    keys: ['name', 's_o', 'sex', 'date_of_birth'],
     includeRole: true,
     includePhoto: true,
   },
@@ -189,4 +189,58 @@ export async function uploadJoinFile(file: File): Promise<{ url: string; key: st
     throw new Error('Upload failed — no file was received. Please try again.');
   }
   return json.data;
+}
+
+/** Whole years from an ISO `YYYY-MM-DD` date of birth. NaN when unparseable. */
+export function ageYearsFromDobString(dob: string): number {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dob.trim());
+  if (!m) return NaN;
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  const born = new Date(Date.UTC(y, mo - 1, d));
+  // Round-trip guards impossible dates like 2014-02-31.
+  if (
+    born.getUTCFullYear() !== y ||
+    born.getUTCMonth() !== mo - 1 ||
+    born.getUTCDate() !== d
+  ) {
+    return NaN;
+  }
+  const now = new Date();
+  let age = now.getUTCFullYear() - y;
+  const hadBirthday =
+    now.getUTCMonth() + 1 > mo || (now.getUTCMonth() + 1 === mo && now.getUTCDate() >= d);
+  if (!hadBirthday) age -= 1;
+  return age;
+}
+
+/**
+ * Validate a date of birth for a persona's accepted age band.
+ * Returns a bilingual message stating the problem AND the fix, or null.
+ */
+export function dobProblem(
+  dob: string | undefined,
+  minAge: number,
+  maxAge: number,
+  hi: boolean,
+): string | null {
+  if (!dob) {
+    return hi ? 'जन्म तिथि चुनें' : 'Choose a date of birth';
+  }
+  const age = ageYearsFromDobString(dob);
+  if (!Number.isFinite(age)) {
+    return hi
+      ? 'यह तारीख़ मान्य नहीं है — दिन और महीना जाँचें।'
+      : 'That date is not valid — check the day and month.';
+  }
+  if (age < 0) {
+    return hi
+      ? 'जन्म तिथि भविष्य में नहीं हो सकती — वर्ष जाँचें।'
+      : 'A date of birth cannot be in the future — check the year.';
+  }
+  if (age < minAge || age > maxAge) {
+    return hi
+      ? `आयु ${minAge} से ${maxAge} वर्ष के बीच होनी चाहिए — जन्म तिथि जाँचें।`
+      : `Age must be between ${minAge} and ${maxAge} — check the date of birth.`;
+  }
+  return null;
 }

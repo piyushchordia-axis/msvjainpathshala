@@ -56,6 +56,12 @@ function sampleTree(): LibraryTreePayload {
                 text_content_en: "<p>hi</p>",
                 text_content_hi: null,
                 text_content_gu: null,
+                tarj_en: null,
+                tarj_hi: null,
+                pdf_url: null,
+                pdf_size_bytes: null,
+                pdf_page_count: null,
+                external_url: null,
                 content_version: 1,
                 is_published: true,
               },
@@ -79,6 +85,12 @@ function sampleTree(): LibraryTreePayload {
             text_content_en: "<p>two</p>",
             text_content_hi: null,
             text_content_gu: null,
+            tarj_en: null,
+            tarj_hi: null,
+            pdf_url: null,
+            pdf_size_bytes: null,
+            pdf_page_count: null,
+            external_url: null,
             content_version: 1,
             is_published: true,
           },
@@ -111,13 +123,15 @@ describe("planVersionSync", () => {
       server: {
         sections: { [SECTION_A]: 1 },
         items: { [ITEM_1]: 1 },
+        granth_libraries: {},
+        granth_entries: {},
       },
       tree: sampleTree(),
       downloadedItemIds: [ITEM_1],
     });
     expect(plan.isBaseline).toBe(true);
     expect(plan.sectionsToRefetch).toEqual([]);
-    expect(plan.audioToRedownload).toEqual([]);
+    expect(plan.downloadsToRefresh).toEqual([]);
   });
 
   it("prunes deleted sections and items", () => {
@@ -125,10 +139,14 @@ describe("planVersionSync", () => {
       previous: {
         sections: { [SECTION_A]: 1, [SECTION_B]: 1 },
         items: { [ITEM_1]: 1, [ITEM_2]: 1 },
+        granth_libraries: {},
+        granth_entries: {},
       },
       server: {
         sections: { [SECTION_A]: 1 },
         items: { [ITEM_1]: 1 },
+        granth_libraries: {},
+        granth_entries: {},
       },
       tree: sampleTree(),
       downloadedItemIds: [ITEM_2],
@@ -142,17 +160,21 @@ describe("planVersionSync", () => {
       previous: {
         sections: { [SECTION_A]: 1, [SECTION_B]: 1 },
         items: { [ITEM_1]: 1, [ITEM_2]: 1 },
+        granth_libraries: {},
+        granth_entries: {},
       },
       server: {
         sections: { [SECTION_A]: 1, [SECTION_B]: 1 },
         items: { [ITEM_1]: 2, [ITEM_2]: 1 },
+        granth_libraries: {},
+        granth_entries: {},
       },
       tree: sampleTree(),
       downloadedItemIds: [ITEM_1],
     });
     expect(plan.staleItemIds).toContain(ITEM_1);
     expect(plan.sectionsToRefetch).toContain(SECTION_A);
-    expect(plan.audioToRedownload).toContain(ITEM_1);
+    expect(plan.downloadsToRefresh).toContain(ITEM_1);
   });
 
   it("refetches when section version alone increases", () => {
@@ -160,10 +182,14 @@ describe("planVersionSync", () => {
       previous: {
         sections: { [SECTION_A]: 1 },
         items: { [ITEM_1]: 1 },
+        granth_libraries: {},
+        granth_entries: {},
       },
       server: {
         sections: { [SECTION_A]: 2 },
         items: { [ITEM_1]: 1 },
+        granth_libraries: {},
+        granth_entries: {},
       },
       tree: sampleTree(),
       downloadedItemIds: [],

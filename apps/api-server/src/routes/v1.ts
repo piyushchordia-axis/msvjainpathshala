@@ -30,6 +30,9 @@ import enquiriesRouter from "./v1/enquiries";
 import curriculumRouter from "./v1/curriculum";
 import coursesRouter from "./v1/courses";
 import libraryRouter from "./v1/library";
+import libraryAccessRouter from "./v1/library-access";
+import libraryGranthRouter from "./v1/library-granth";
+import libraryRequestsRouter from "./v1/library-requests";
 import enrolmentsRouter from "./v1/enrolments";
 import clientSettingsRouter from "./v1/client-settings";
 import syncRouter from "./v1/sync";
@@ -72,6 +75,13 @@ router.use("/shivir-scanner", shivirScannerRouter);
 router.use("/enquiries", enquiriesRouter);
 router.use("/curriculum", curriculumRouter);
 router.use("/courses", coursesRouter);
+// MUST precede /library: that router applies requireAuth to everything under
+// it, and content requests are open to guests by design (§17.10.2, Q13).
+router.use("/library/requests", libraryRequestsRouter);
+// Ahead of /library, which is requireAuth: §17.9 logs guest reach too.
+router.use("/library/access", libraryAccessRouter);
+// Same reason — the Granth directory is browsable before sign-in (§17.11).
+router.use("/library/granth", libraryGranthRouter);
 router.use("/library", libraryRouter);
 router.use("/enrolments", enrolmentsRouter);
 router.use("/students", studentsRouter);

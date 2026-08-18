@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { Link, useLocation } from 'wouter';
 import { Lock } from 'lucide-react';
 import type { LibrarySectionDto } from '@workspace/api-zod';
+import { t } from '@workspace/i18n';
 import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { useLocale } from '@/lib/locale-context';
 import { useAuth } from '@/lib/auth-context';
 import { safeHref } from '@/lib/safe-url';
@@ -15,7 +17,12 @@ function pickName(hi: boolean, s: LibrarySectionDto): string {
 }
 
 function sectionDestination(section: LibrarySectionDto): string | null {
-  if (section.type === 'item_list') return `/library/${section.id}`;
+  // §17.11.1 — granth opens the SAME section screen, which draws the two-tab
+  // shell off the type. A separate route would fork the item_list rules
+  // §17.11.2 requires be shared exactly.
+  if (section.type === 'item_list' || section.type === 'granth') {
+    return `/library/${section.id}`;
+  }
   if (section.type === 'panchang') return '/panchang';
   if (section.type === 'deeplink') {
     const t = section.deeplink_target?.trim();
@@ -74,7 +81,7 @@ export default function LibraryPage() {
       return;
     }
 
-    if (section.type === 'item_list') {
+    if (section.type === 'item_list' || section.type === 'granth') {
       navigate(`/library/${section.id}`);
       return;
     }
@@ -151,6 +158,30 @@ export default function LibraryPage() {
           })}
         </ul>
       )}
+
+      {/*
+        §17.10.1 entry point. Below the sections, not above them: this is what
+        you reach for after looking and not finding. Open to guests, like the
+        form itself — no sign-in gate (Q13).
+      */}
+      <Card className="mt-10 flex flex-wrap items-center justify-between gap-4 p-5">
+        <div>
+          <p className="font-display text-lg text-secondary">
+            {t('libraryRequests.action', locale)}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {t('libraryRequests.actionHint', locale)}
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-3">
+          <Button asChild>
+            <Link href="/library/request">{t('libraryRequests.action', locale)}</Link>
+          </Button>
+          <Button asChild variant="outline">
+            <Link href="/library/my-requests">{t('libraryRequests.viewMine', locale)}</Link>
+          </Button>
+        </div>
+      </Card>
 
       {!authed ? (
         <p className="mt-8 text-sm text-muted-foreground">

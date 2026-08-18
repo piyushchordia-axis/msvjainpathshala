@@ -33,10 +33,10 @@ export default function JoinCompletePaymentScreen() {
   const { hi } = useLocale();
   const router = useRouter();
   const params = useLocalSearchParams<{ kind?: string; code?: string; mobile?: string }>();
-  const kind: JoinKind =
-    params.kind === "shikshak" || params.kind === "sanchalak" || params.kind === "student"
-      ? params.kind
-      : "student";
+  // A fee is only ever charged for the student MSV journey. A bookmarked staff
+  // link lands here; send it home rather than showing a payment that is not owed.
+  const kind: JoinKind = "student";
+  const wrongKind = params.kind !== undefined && params.kind !== "student";
 
   // Prefilled from the done screen's CTA (GST-API-02) — the family had just
   // typed both and was handed an empty form.
@@ -161,10 +161,33 @@ export default function JoinCompletePaymentScreen() {
     );
   }
 
+  if (wrongKind) {
+    return (
+      <Screen>
+        <Title>{hi ? "यहाँ कोई शुल्क नहीं है" : "There is no fee here"}</Title>
+        <Body muted style={{ marginTop: 8, lineHeight: 22 }}>
+          {hi
+            ? "शुल्क केवल MSV विद्यार्थी पंजीकरण के लिए है — गुरुजी और संचालक सेवा निःशुल्क है।"
+            : "The fee applies only to MSV student registration — seva as a Guruji or Sanchalak is free."}
+        </Body>
+        <Button
+          label={hi ? "मार्ग चुनें" : "Choose path"}
+          style={{ marginTop: 16 }}
+          onPress={() => router.replace("/join")}
+        />
+      </Screen>
+    );
+  }
+
   return (
     <Screen scroll>
-      <Title>{hi ? "भुगतान पूरा करें" : "Complete payment"}</Title>
-      <Body muted style={{ marginTop: 8 }}>
+      <Title>{hi ? "MSV शुल्क भुगतान करें" : "Pay the MSV registration fee"}</Title>
+      <Body muted style={{ marginTop: 8, lineHeight: 22 }}>
+        {hi
+          ? "पाठशाला में प्रवेश निःशुल्क है — यह शुल्क केवल MSV पंजीकरण के लिए है।"
+          : "Pathshala enrolment is free — this fee applies only to MSV registration."}
+      </Body>
+      <Body muted style={{ marginTop: 12 }}>
         {hi ? "पंजीकृत मोबाइल नंबर" : "Registered mobile number"}
       </Body>
       <TextInput
@@ -192,7 +215,7 @@ export default function JoinCompletePaymentScreen() {
         value={code}
         onChangeText={setCode}
         autoCapitalize="characters"
-        placeholder={kind === "student" ? "MUM-STU-00042" : "MUM-GHK-SHK-00003"}
+        placeholder="MUM-STU-00042"
         placeholderTextColor={c.inkDim}
         style={{
           marginTop: 6,

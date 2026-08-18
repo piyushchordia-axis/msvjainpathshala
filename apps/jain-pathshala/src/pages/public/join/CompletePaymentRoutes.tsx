@@ -1,13 +1,9 @@
 import JoinCompletePaymentPage from './JoinCompletePaymentPage';
 
+/**
+ * Students only. A fee is charged for MSV registration alone — seva as a Guruji
+ * or Sanchalak carries none, so those journeys have no payment route.
+ */
 export function StudentCompletePaymentPage() {
   return <JoinCompletePaymentPage kind="student" />;
-}
-
-export function ShikshakCompletePaymentPage() {
-  return <JoinCompletePaymentPage kind="shikshak" />;
-}
-
-export function SanchalakCompletePaymentPage() {
-  return <JoinCompletePaymentPage kind="sanchalak" />;
 }

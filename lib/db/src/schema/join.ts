@@ -4,6 +4,7 @@
  */
 import {
   boolean,
+  date,
   index,
   integer,
   jsonb,
@@ -34,6 +35,7 @@ export const JOIN_FIELD_TYPES = [
   "dropdown",
   "textarea",
   "photo",
+  "date",
 ] as const;
 export type JoinFieldType = (typeof JOIN_FIELD_TYPES)[number];
 
@@ -103,6 +105,8 @@ export const join_student_registrations = pgTable(
     mobile: text("mobile"),
     email: text("email"),
     father_name: text("father_name"),
+    /** Collected at intake; `age` below is derived from it on write. */
+    date_of_birth: date("date_of_birth"),
     age: integer("age"),
     sex: text("sex"),
     education: text("education"),
@@ -148,7 +152,11 @@ export const join_shikshak_registrations = pgTable(
       .references(() => centres.id, { onDelete: "restrict" }),
     name: text("name").notNull(),
     s_o: text("s_o"),
+    /** Collected at intake; `age` below is derived from it on write. */
+    date_of_birth: date("date_of_birth"),
     age: integer("age"),
+    /** Explicit gender; a shikshak's is inferred from `role` when blank. */
+    sex: text("sex"),
     school_qualification: text("school_qualification"),
     address: text("address"),
     religious_education: text("religious_education"),
@@ -187,7 +195,11 @@ export const join_sanchalak_registrations = pgTable(
       .references(() => centres.id, { onDelete: "restrict" }),
     name: text("name").notNull(),
     s_o: text("s_o"),
+    /** Collected at intake; `age` below is derived from it on write. */
+    date_of_birth: date("date_of_birth"),
     age: integer("age"),
+    /** Explicit gender — a sanchalak's role carries no male/female signal. */
+    sex: text("sex"),
     school_qualification: text("school_qualification"),
     address: text("address"),
     religious_education: text("religious_education"),

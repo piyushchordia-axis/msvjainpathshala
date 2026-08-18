@@ -41,6 +41,16 @@ function mapItem(row: typeof library_items.$inferSelect): LibraryItemDto {
     text_content_en: row.text_content_en,
     text_content_hi: row.text_content_hi,
     text_content_gu: row.text_content_gu,
+    tarj_en: row.tarj_en,
+    tarj_hi: row.tarj_hi,
+    // Signed here like audio_url, so the tree is browsable offline and the
+    // reader still cannot be deep-linked by an unsigned URL. Clients treat
+    // this copy as expiring and re-fetch the item at download time (§17.4).
+    pdf_url: signUploadUrl(row.pdf_url),
+    pdf_size_bytes: row.pdf_size_bytes,
+    pdf_page_count: row.pdf_page_count,
+    // Never signed — a third-party document link is not ours to sign.
+    external_url: row.external_url,
     content_version: row.content_version,
     is_published: row.is_published,
   };

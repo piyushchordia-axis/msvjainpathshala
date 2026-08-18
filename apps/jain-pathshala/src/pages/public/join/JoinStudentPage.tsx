@@ -14,6 +14,7 @@ import { apiErrorMessage } from '@/lib/api-error-copy';
 import { mergeById, usePickerSearch } from '@/lib/picker-search';
 import {
   STUDENT_SECTIONS,
+  dobProblem,
   fieldLabel,
   fieldPlaceholder,
   fieldsForSection,
@@ -25,6 +26,20 @@ import {
   uploadJoinFile,
 } from '@/lib/join';
 import { JoinLangToggle, usePreferJoinHindi } from './JoinLangToggle';
+
+/** Age band the student join form accepts, mirrored by studentCreateSchema. */
+const STUDENT_MIN_AGE = 3;
+const STUDENT_MAX_AGE = 35;
+
+/** Bounds for the native date input, so the picker opens near the right decade. */
+function dobBounds(minAge: number, maxAge: number): { min: string; max: string } {
+  const now = new Date();
+  const iso = (y: number) =>
+    new Date(Date.UTC(y, now.getUTCMonth(), now.getUTCDate())).toISOString().slice(0, 10);
+  return { min: iso(now.getUTCFullYear() - maxAge), max: iso(now.getUTCFullYear() - minAge) };
+}
+
+const STUDENT_DOB_BOUNDS = dobBounds(STUDENT_MIN_AGE, STUDENT_MAX_AGE);
 
 // 'error' is distinct from 'closed' on purpose: a dead network used to render
 // "Registration is closed" — a permanent-sounding refusal on the single
@@ -154,11 +169,9 @@ export default function JoinStudentPage() {
         return hi ? '10 अंकों का मोबाइल दर्ज करें' : 'Enter a valid 10-digit mobile';
       }
     }
-    if (sectionFields.some((f) => f.field_key === 'age') && values.age) {
-      const age = Number(values.age);
-      if (!Number.isFinite(age) || age < 3 || age > 35) {
-        return hi ? 'आयु 3 से 35 के बीच होनी चाहिए' : 'Age must be between 3 and 35';
-      }
+    if (sectionFields.some((f) => f.field_key === 'date_of_birth')) {
+      const problem = dobProblem(values.date_of_birth, STUDENT_MIN_AGE, STUDENT_MAX_AGE, hi);
+      if (problem) return problem;
     }
     return null;
   };
@@ -192,7 +205,7 @@ export default function JoinStudentPage() {
           mobile: values.mobile || null,
           email: values.email || null,
           father_name: values.father_name || null,
-          age: values.age ? Number(values.age) : null,
+          date_of_birth: values.date_of_birth || null,
           sex: values.sex || null,
           education: values.education || null,
           address: values.address || null,
@@ -244,7 +257,15 @@ export default function JoinStudentPage() {
         {fieldLabel(f, hi)}
         {f.is_required ? ' *' : ''}
       </Label>
-      {f.field_type === 'textarea' ? (
+      {f.field_type === 'date' ? (
+        <Input
+          type="date"
+          value={values[f.field_key] ?? ''}
+          min={STUDENT_DOB_BOUNDS.min}
+          max={STUDENT_DOB_BOUNDS.max}
+          onChange={(e) => setValue(f.field_key, e.target.value)}
+        />
+      ) : f.field_type === 'textarea' ? (
         <Textarea
           value={values[f.field_key] ?? ''}
           placeholder={fieldPlaceholder(f, hi)}
@@ -366,6 +387,11 @@ export default function JoinStudentPage() {
           <p className="text-xs text-muted-foreground">
             {hi ? 'इस कोड को सुरक्षित रखें' : 'Keep this code safe'}
           </p>
+          <p className="text-sm text-muted-foreground">
+            {hi
+              ? 'पाठशाला में प्रवेश निःशुल्क है — यह शुल्क केवल MSV पंजीकरण के लिए है।'
+              : 'Pathshala enrolment is free — this fee applies only to MSV registration.'}
+          </p>
           {/* Carry the code + mobile the family just typed — the CTA used to
               land them on an empty form to retype both (GST-API-02). */}
           <div className="flex flex-wrap justify-center gap-2">
@@ -373,7 +399,7 @@ export default function JoinStudentPage() {
               <Link
                 href={`/join/student/complete-payment?code=${encodeURIComponent(reg.display_code)}&mobile=${encodeURIComponent(values.parent_mobile ?? '')}`}
               >
-                {hi ? 'शुल्क भुगतान करें' : 'Complete payment'}
+                {hi ? 'MSV शुल्क भुगतान करें' : 'Pay the MSV registration fee'}
               </Link>
             </Button>
             <Button asChild variant="outline">

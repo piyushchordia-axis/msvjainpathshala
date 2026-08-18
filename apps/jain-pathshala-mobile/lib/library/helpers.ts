@@ -33,6 +33,22 @@ export function itemHasText(item: LibraryItemDto): boolean {
   return !!(item.text_content_en || item.text_content_hi || item.text_content_gu);
 }
 
+/**
+ * §17.1.3 — the melody caption, in the viewer's language with fallback to the
+ * other. Returns "" when both are null so callers render nothing at all: a
+ * "Tarj" label with no melody after it is worse than no line.
+ */
+export function tarjLine(item: LibraryItemDto, hi: boolean): string {
+  const en = item.tarj_en?.trim() || "";
+  const hiVal = item.tarj_hi?.trim() || "";
+  return hi ? hiVal || en : en || hiVal;
+}
+
+/** The label itself — a Jain/Indic term, kept untranslated in both locales. */
+export function tarjLabel(hi: boolean): string {
+  return hi ? "तर्ज़" : "Tarj";
+}
+
 export function findSectionInTrees(
   trees: Array<LibraryTreePayload | undefined>,
   sectionId: string,

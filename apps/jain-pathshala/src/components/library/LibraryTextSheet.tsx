@@ -23,6 +23,7 @@ import {
   type LibraryTextLang,
 } from "@/lib/library-sanitize-html";
 import { cn } from "@/lib/utils";
+import { LibraryTarjLine } from "@/components/library/LibraryTarjLine";
 
 function pickDefaultLang(item: LibraryItemDto, preferHi: boolean): LibraryTextLang {
   const langs = availableTextLangs(item);
@@ -120,6 +121,9 @@ export function LibraryTextSheet({ item, open, onOpenChange }: LibraryTextSheetP
           <SheetTitle className="font-display text-lg text-secondary line-clamp-2">
             {title}
           </SheetTitle>
+          {/* §17.1.3 — melody first, controls after: a reader who opened this
+              to sing needs the Tarj before the font buttons. */}
+          {item ? <LibraryTarjLine item={item} hi={hi} className="text-sm leading-6 text-muted-foreground" /> : null}
           <div className="flex flex-wrap items-center gap-2">
             <Button
               type="button"

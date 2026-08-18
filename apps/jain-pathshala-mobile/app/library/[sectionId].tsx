@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Ionicons } from "@expo/vector-icons";
 import { Alert, Pressable, TextInput, View } from "react-native";
-import { useLocalSearchParams, router } from "expo-router";
+import { useLocalSearchParams, router, type Href } from "expo-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { LibraryItemDto, LibrarySectionDto } from "@workspace/api-zod";
+import { t } from "@workspace/i18n";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useColors } from "@/hooks/useColors";
@@ -22,6 +23,20 @@ import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/compo
 import { LibraryTextSheet } from "@/components/LibraryTextSheet";
 import { LibraryAudioButton } from "@/components/LibraryAudioButton";
 import { LibraryOfflineButton } from "@/components/LibraryOfflineButton";
+import { LibraryTarjLine } from "@/components/LibraryTarjLine";
+import { LibraryPdfButton } from "@/components/LibraryPdfButton";
+import { reportLibraryAccess } from "@/lib/library/access-log";
+import {
+  type GranthAvailabilityMap,
+  type GranthTab,
+  fetchGranthAvailability,
+  fetchGranthDirectory,
+  granthDirectoryKey,
+  isGranthTab,
+  offlineGranthHref,
+} from "@/lib/library/granth";
+import { EMPTY_DIRECTORY, parseLibraryIds } from "@/lib/library/granth-directory";
+import { GranthDirectory } from "@/components/GranthDirectory";
 
 function matchesQuery(
   q: string,
@@ -29,6 +44,101 @@ function matchesQuery(
 ): boolean {
   if (!q) return true;
   return values.some((v) => (v ?? "").toLowerCase().includes(q));
+}
+
+/**
+ * §17.11.4 — the reverse cross-link. An online granth that is also held on a
+ * physical shelf says so, and opens the directory filtered to those
+ * libraries rather than dumping the whole catalogue on the reader.
+ */
+function AvailableAtRow({
+  sectionId,
+  libraryIds,
+  count,
+}: {
+  sectionId: string;
+  libraryIds: string[];
+  count: number;
+}) {
+  const c = useColors();
+  const { hi } = useLocale();
+  const label = hi
+    ? `${count} पुस्तकालय${count === 1 ? "" : "ों"} में उपलब्ध`
+    : `Available at ${count} ${count === 1 ? "library" : "libraries"}`;
+  return (
+    <Pressable
+      onPress={() => router.push(offlineGranthHref(sectionId, libraryIds) as Href)}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      style={{
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        marginTop: 6,
+      }}
+    >
+      <Ionicons name="business-outline" size={15} color={c.primary} />
+      <Body style={{ fontSize: 13, lineHeight: 22, color: c.primary, flexShrink: 1 }}>
+        {label}
+      </Body>
+      <Ionicons name="chevron-forward" size={14} color={c.primary} />
+    </Pressable>
+  );
+}
+
+/**
+ * §17.11.1 — a granth section is two tabs. Rendered only for type 'granth';
+ * every other section type keeps the single-list screen it always had.
+ */
+function GranthTabs({
+  tab,
+  onChange,
+}: {
+  tab: GranthTab;
+  onChange: (next: GranthTab) => void;
+}) {
+  const c = useColors();
+  const { hi } = useLocale();
+  const tabs: Array<{ id: GranthTab; label: string }> = [
+    { id: "online", label: hi ? "ऑनलाइन ग्रंथ" : "Online Granth" },
+    { id: "offline", label: hi ? "ऑफ़लाइन ग्रंथ" : "Offline Granth" },
+  ];
+  return (
+    <Row style={{ gap: 8, marginBottom: 12 }}>
+      {tabs.map((t2) => {
+        const active = t2.id === tab;
+        return (
+          <Pressable
+            key={t2.id}
+            onPress={() => onChange(t2.id)}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={t2.label}
+            style={{
+              flex: 1,
+              alignItems: "center",
+              paddingVertical: 10,
+              borderRadius: 999,
+              borderWidth: 1,
+              borderColor: active ? c.primary : c.border,
+              backgroundColor: active ? c.accent : c.card,
+            }}
+          >
+            <Body
+              numberOfLines={1}
+              style={{
+                fontSize: 14,
+                lineHeight: 22,
+                color: active ? c.primary : c.mutedForeground,
+              }}
+            >
+              {t2.label}
+            </Body>
+          </Pressable>
+        );
+      })}
+    </Row>
+  );
 }
 
 function IconAction({
@@ -109,9 +219,12 @@ function CollapsibleGroup({
 function ItemRow({
   item,
   onOpenText,
+  availableAt,
 }: {
   item: LibraryItemDto;
   onOpenText: (item: LibraryItemDto) => void;
+  /** §17.11.4 reverse cross-link — absent when nothing published holds it. */
+  availableAt?: { library_count: number; library_ids: string[] };
 }) {
   const { hi } = useLocale();
   const c = useColors();
@@ -121,6 +234,8 @@ function ItemRow({
   const hasAudio = !!item.audio_url;
   const hasVideo = !!item.youtube_url;
   const hasText = itemHasText(item);
+  const hasPdf = !!item.pdf_url;
+  const hasLink = !!item.external_url;
 
   async function openVideo() {
     const result = await openLibraryExternalUrl(item.youtube_url);
@@ -130,6 +245,22 @@ function ItemRow({
       hi
         ? "कोई ऐप यह लिंक नहीं खोल सका — YouTube या ब्राउज़र इंस्टॉल करें, फिर फिर से कोशिश करें।"
         : "No app could open this link — install YouTube or a browser, then try again.",
+    );
+  }
+
+  async function openLink() {
+    const result = await openLibraryExternalUrl(item.external_url);
+    if (result === "opened") {
+      // §17.9 — logged on the tap that actually handed off to the browser,
+      // not on a tap that failed to open anything.
+      reportLibraryAccess({ itemId: item.id }, "external_link_open");
+      return;
+    }
+    Alert.alert(
+      hi ? "लिंक नहीं खुला" : "Could not open link",
+      hi
+        ? "कोई ऐप यह लिंक नहीं खोल सका — ब्राउज़र इंस्टॉल करें, फिर फिर से कोशिश करें।"
+        : "No app could open this link — install a browser, then try again.",
     );
   }
 
@@ -159,7 +290,15 @@ function ItemRow({
           />
         </Pressable>
       </Row>
-      {hasAudio || hasVideo || hasText ? (
+      <LibraryTarjLine item={item} style={{ marginTop: 2 }} />
+      {availableAt && availableAt.library_count > 0 ? (
+        <AvailableAtRow
+          sectionId={item.section_id}
+          libraryIds={availableAt.library_ids}
+          count={availableAt.library_count}
+        />
+      ) : null}
+      {hasAudio || hasVideo || hasText || hasPdf || hasLink ? (
         <Row style={{ marginTop: 10, justifyContent: "space-evenly", alignItems: "center", width: "100%" }}>
           {hasAudio ? (
             <LibraryAudioButton item={item} compact style={{ flex: 1, borderWidth: 0 }} />
@@ -171,11 +310,23 @@ function ItemRow({
               onPress={() => onOpenText(item)}
             />
           ) : null}
+          {/* Mounted only when the item actually has a PDF — an always-present
+              button that greys out reads as a broken app, not as absent content. */}
+          {hasPdf ? (
+            <LibraryPdfButton item={item} compact style={{ flex: 1, borderWidth: 0 }} />
+          ) : null}
           {hasVideo ? (
             <IconAction
               icon="logo-youtube"
               label={hi ? "वीडियो" : "Video"}
               onPress={() => void openVideo()}
+            />
+          ) : null}
+          {hasLink ? (
+            <IconAction
+              icon="open-outline"
+              label={hi ? "लिंक खोलें" : "Open link"}
+              onPress={() => void openLink()}
             />
           ) : null}
           {hasAudio ? (
@@ -192,15 +343,22 @@ function ItemRow({
 }
 
 export default function LibrarySectionScreen() {
-  const { sectionId: raw, itemId: rawItemId } = useLocalSearchParams<{
+  const {
+    sectionId: raw,
+    itemId: rawItemId,
+    tab: rawTab,
+    libraryIds: rawLibraryIds,
+  } = useLocalSearchParams<{
     sectionId: string;
     itemId?: string | string[];
+    tab?: string | string[];
+    libraryIds?: string | string[];
   }>();
   const sectionId = String(raw ?? "");
   const itemIdParam = Array.isArray(rawItemId)
     ? String(rawItemId[0] ?? "")
     : String(rawItemId ?? "");
-  const { hi } = useLocale();
+  const { hi, locale } = useLocale();
   const c = useColors();
   const { user } = useAuth();
   const authed = !!user;
@@ -210,6 +368,17 @@ export default function LibrarySectionScreen() {
   const [bookmarksOnly, setBookmarksOnly] = useState(false);
   const { ids: bookmarkIds } = useLibraryBookmarks();
   const openedItemIdRef = useRef<string | null>(null);
+  const tabParam = Array.isArray(rawTab) ? rawTab[0] : rawTab;
+  const [granthTab, setGranthTab] = useState<GranthTab>(
+    isGranthTab(tabParam) ? tabParam : "online",
+  );
+  const [availability, setAvailability] = useState<GranthAvailabilityMap>({});
+  const granthLoggedRef = useRef<string | null>(null);
+  // Cross-link arrival: show only the libraries that hold that granth,
+  // clearable so the reader is never stuck inside a filter they did not set.
+  const [libraryFilter, setLibraryFilter] = useState<string[] | null>(() =>
+    parseLibraryIds(rawLibraryIds),
+  );
 
   const { data, isLoading, isError, refetch, isRefetching } = useQuery({
     queryKey: ["library", authed ? "member" : "public"],
@@ -239,6 +408,45 @@ export default function LibrarySectionScreen() {
     openedItemIdRef.current = itemIdParam;
     setReaderItem(found.item);
   }, [itemIdParam, section, data, qc]);
+
+  // §17.11.2 — a granth section is an ordinary item_list plus a second tab.
+  // Behaviour switches on type ONLY; the section's name is data an admin
+  // owns and is never read here (v2 rule).
+  const isGranth = section?.type === "granth";
+
+  // §17.9 — granth_view on section open. Once per section per mount: the
+  // server counts distinct reach anyway, but re-reporting on every render
+  // would be a request per keystroke in the search box.
+  useEffect(() => {
+    if (!isGranth || !section) return;
+    if (granthLoggedRef.current === section.id) return;
+    granthLoggedRef.current = section.id;
+    reportLibraryAccess({ sectionId: section.id }, "granth_view");
+  }, [isGranth, section]);
+
+  // §17.11.4 — the directory is cached beside the section tree (the query
+  // key sits under "library", which the persist allow-list already covers),
+  // so it is fully browsable offline and pre-login.
+  const directoryQuery = useQuery({
+    queryKey: granthDirectoryKey(sectionId),
+    queryFn: () => fetchGranthDirectory(sectionId),
+    enabled: isGranth && !!sectionId,
+  });
+
+  // §17.11.4 — one lookup per section open, never per card.
+  useEffect(() => {
+    if (!isGranth || !section) {
+      setAvailability({});
+      return;
+    }
+    let cancelled = false;
+    void fetchGranthAvailability(section.id).then((map) => {
+      if (!cancelled) setAvailability(map);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isGranth, section]);
 
   const query = searchText.trim().toLowerCase();
 
@@ -291,7 +499,7 @@ export default function LibrarySectionScreen() {
     );
   }
 
-  if (!section || section.type !== "item_list") {
+  if (!section || (section.type !== "item_list" && section.type !== "granth")) {
     return (
       <Screen>
           <StateView
@@ -336,12 +544,29 @@ export default function LibrarySectionScreen() {
     filteredSubs.length === 0 &&
     filteredLoose.length === 0;
   const emptySection = !hasSubs && filteredLoose.length === 0 && !query && !bookmarksOnly;
+  // Only a granth section has a second tab to be on.
+  const showOffline = isGranth && granthTab === "offline";
 
   return (
     <>
     <Screen refreshing={isRefetching} onRefresh={refetch}>
       <Title style={{ fontSize: 22, lineHeight: 30, marginBottom: 12 }}>{title}</Title>
 
+      {isGranth ? <GranthTabs tab={granthTab} onChange={setGranthTab} /> : null}
+
+      {showOffline ? (
+        <GranthDirectory
+          sectionId={sectionId}
+          directory={directoryQuery.data ?? EMPTY_DIRECTORY}
+          viewerCityId={user?.city_id ?? null}
+          filterLibraryIds={libraryFilter}
+          onClearFilter={() => setLibraryFilter(null)}
+          loading={directoryQuery.isLoading}
+        />
+      ) : null}
+
+      {showOffline ? null : (
+      <>
       <View
         style={{
           flexDirection: "row",
@@ -428,7 +653,12 @@ export default function LibrarySectionScreen() {
             return (
               <CollapsibleGroup key={sub.id} title={subTitle} count={items.length}>
                 {items.map((item) => (
-                  <ItemRow key={item.id} item={item} onOpenText={setReaderItem} />
+                  <ItemRow
+                    key={item.id}
+                    item={item}
+                    onOpenText={setReaderItem}
+                    availableAt={availability[item.id]}
+                  />
                 ))}
               </CollapsibleGroup>
             );
@@ -442,13 +672,23 @@ export default function LibrarySectionScreen() {
             count={filteredLoose.length}
           >
             {filteredLoose.map((item) => (
-              <ItemRow key={item.id} item={item} onOpenText={setReaderItem} />
+              <ItemRow
+                key={item.id}
+                item={item}
+                onOpenText={setReaderItem}
+                availableAt={availability[item.id]}
+              />
             ))}
           </CollapsibleGroup>
         ) : (
           <View style={{ gap: 10 }}>
             {filteredLoose.map((item) => (
-              <ItemRow key={item.id} item={item} onOpenText={setReaderItem} />
+              <ItemRow
+                key={item.id}
+                item={item}
+                onOpenText={setReaderItem}
+                availableAt={availability[item.id]}
+              />
             ))}
           </View>
         )
@@ -475,6 +715,29 @@ export default function LibrarySectionScreen() {
           emptyText={hi ? "इस खंड में अभी कोई सामग्री नहीं है।" : "No items in this section yet."}
         />
       ) : null}
+      </>
+      )}
+
+      {/*
+        §17.10.1 — the same "Request content" action as library home, prefilled
+        with this section. A reader who has just looked through a section and
+        not found what they wanted is exactly who this is for, so it sits at the
+        foot of the list rather than competing with the content above it.
+      */}
+      <View style={{ marginTop: 8, alignItems: "center" }}>
+        <Button
+          label={t("libraryRequests.action", locale)}
+          icon="add-circle-outline"
+          variant="outline"
+          compact
+          onPress={() =>
+            router.push({
+              pathname: "/library/request",
+              params: { sectionId: String(sectionId) },
+            } as never)
+          }
+        />
+      </View>
     </Screen>
       {/* Outside ScrollView — BottomSheetModal fails to present when nested in Screen scroll on iOS */}
       <LibraryTextSheet item={readerItem} onClose={() => setReaderItem(null)} />

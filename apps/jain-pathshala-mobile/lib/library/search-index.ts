@@ -2,9 +2,11 @@
  * Build / query the offline library FTS index.
  */
 import type { QueryClient } from "@tanstack/react-query";
+import type { GranthDirectoryDto } from "@workspace/api-zod";
 import type { LibraryTreePayload } from "@/lib/library/helpers";
 import { collectFtsRows } from "@/lib/library/search-collect";
 import { getSearchDb, type SearchDb } from "@/lib/library/search-db";
+import { hitFromMatchRow } from "@/lib/library/search-row";
 import {
   buildFtsPrefixQuery,
   type SearchHit,
@@ -14,10 +16,11 @@ export { collectFtsRows } from "@/lib/library/search-collect";
 
 export async function rebuildLibrarySearchIndex(
   tree: LibraryTreePayload,
+  directory?: GranthDirectoryDto | null,
   db: SearchDb = getSearchDb(),
 ): Promise<void> {
   await db.ensureSchema();
-  const rows = collectFtsRows(tree);
+  const rows = collectFtsRows(tree, directory);
   await db.clearAll();
   await db.insertRows(rows);
 }
@@ -44,18 +47,12 @@ export function preferredLibraryTree(
 
 export async function ensureLibrarySearchIndex(
   tree: LibraryTreePayload | undefined,
+  directory?: GranthDirectoryDto | null,
   db: SearchDb = getSearchDb(),
 ): Promise<void> {
   if (!tree?.sections?.length) return;
   if (!(await isLibrarySearchIndexEmpty(db))) return;
-  await rebuildLibrarySearchIndex(tree, db);
-}
-
-function pickSnippet(titleSnip: string, bodySnip: string): string {
-  const bodyHasMark = bodySnip.includes("«");
-  if (bodyHasMark) return bodySnip;
-  if (titleSnip.includes("«")) return titleSnip;
-  return bodySnip.trim() || titleSnip;
+  await rebuildLibrarySearchIndex(tree, directory, db);
 }
 
 export async function searchLibrary(
@@ -73,18 +70,5 @@ export async function searchLibrary(
     // Malformed FTS query — treat as no hits.
     return [];
   }
-  return rows.map((r) => {
-    const hasText = (r.body ?? "").trim().length > 0;
-    const bodyHasMark = (r.body_snip ?? "").includes("«");
-    return {
-      itemId: r.item_id,
-      sectionId: r.section_id,
-      subsectionId: r.subsection_id,
-      resultKind: r.result_kind === "panchang" ? "panchang" : "item",
-      title: r.title,
-      sectionTitle: r.section_title,
-      snippet: pickSnippet(r.title_snip ?? "", r.body_snip ?? ""),
-      isTextMatch: bodyHasMark || hasText,
-    } satisfies SearchHit;
-  });
+  return rows.map((r) => hitFromMatchRow(r, localeHi));
 }

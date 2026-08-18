@@ -1,7 +1,11 @@
 /**
  * Pure helpers for library content-version cold-start sync.
  */
-import type { LibraryItemDto, LibrarySectionDto } from "@workspace/api-zod";
+import type {
+  GranthDirectoryDto,
+  LibraryItemDto,
+  LibrarySectionDto,
+} from "@workspace/api-zod";
 import type { LibraryTreePayload } from "@/lib/library/helpers";
 import type { LibraryVersionManifest } from "@/lib/library/version-manifest";
 
@@ -16,9 +20,58 @@ export type VersionSyncPlan = {
   staleItemIds: string[];
   /** Section ids to refetch and merge. */
   sectionsToRefetch: string[];
-  /** Downloaded item ids to silently re-enqueue after merge. */
-  audioToRedownload: string[];
+  /**
+   * Downloaded item ids to silently re-enqueue after merge — audio, PDF, or
+   * both (§17.7). Named for what it is rather than for audio: a downloaded
+   * PDF whose content_version moved is just as stale as an MP3, and the
+   * caller is the one that knows which local stores hold the id.
+   */
+  downloadsToRefresh: string[];
+  /**
+   * §17.7 — granth ids the manifest no longer lists. Removed from the
+   * cached directory and de-indexed WITHOUT waiting for a refetch: an
+   * unpublished library must stop being offered even if the device is
+   * offline when it finds out.
+   */
+  removedGranthLibraryIds: string[];
+  removedGranthEntryIds: string[];
+  /**
+   * True when any granth row appeared or moved version. The directory is
+   * fetched as one payload, so this drives a single refetch rather than a
+   * per-row one — the same rule as sections, applied at the payload's own
+   * granularity.
+   */
+  granthChanged: boolean;
 };
+
+/** Ids the previous snapshot knew and the server no longer lists. */
+function missingIds(
+  previous: Record<string, number> | undefined,
+  server: Record<string, number> | undefined,
+): string[] {
+  const b = server ?? {};
+  return Object.keys(previous ?? {}).filter((id) => b[id] == null);
+}
+
+/**
+ * True when any id appeared, disappeared, or moved version. Additions and
+ * removals both count: a newly published library must show up without
+ * waiting for an unrelated edit, and an unpublished one must leave.
+ */
+function versionMapChanged(
+  previous: Record<string, number> | undefined,
+  server: Record<string, number> | undefined,
+): boolean {
+  const a = previous ?? {};
+  const b = server ?? {};
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return true;
+  for (const key of bKeys) {
+    if (a[key] !== b[key]) return true;
+  }
+  return false;
+}
 
 function collectTreeItemIds(tree: LibraryTreePayload | undefined): Set<string> {
   const ids = new Set<string>();
@@ -52,7 +105,7 @@ function findItemSectionId(
 
 /**
  * Diff previous local snapshot + current tree against the server manifest.
- * `downloadedItemIds` = complete (or any) DownloadedAudio itemIds for re-download.
+ * `downloadedItemIds` = every locally downloaded item id (audio and PDF).
  */
 export function planVersionSync(args: {
   previous: LibraryVersionManifest | null;
@@ -69,7 +122,12 @@ export function planVersionSync(args: {
       removedItemIds: [],
       staleItemIds: [],
       sectionsToRefetch: [],
-      audioToRedownload: [],
+      downloadsToRefresh: [],
+      removedGranthLibraryIds: [],
+      removedGranthEntryIds: [],
+      // Baseline: nothing to compare against, so the caller loads the
+      // directory fresh rather than treating it as unchanged.
+      granthChanged: true,
     };
   }
 
@@ -95,7 +153,7 @@ export function planVersionSync(args: {
 
   const staleItemIds: string[] = [];
   const sectionsToRefetch = new Set<string>();
-  const audioToRedownload: string[] = [];
+  const downloadsToRefresh: string[] = [];
 
   for (const [itemId, serverVer] of Object.entries(server.items)) {
     const prevVer = previous.items[itemId];
@@ -105,7 +163,7 @@ export function planVersionSync(args: {
       const sectionId = findItemSectionId(tree, itemId);
       if (sectionId) sectionsToRefetch.add(sectionId);
       if (downloadedItemIds.includes(itemId)) {
-        audioToRedownload.push(itemId);
+        downloadsToRefresh.push(itemId);
       }
     }
   }
@@ -129,7 +187,12 @@ export function planVersionSync(args: {
     removedItemIds,
     staleItemIds,
     sectionsToRefetch: [...sectionsToRefetch],
-    audioToRedownload,
+    downloadsToRefresh,
+    removedGranthLibraryIds: missingIds(previous.granth_libraries, server.granth_libraries),
+    removedGranthEntryIds: missingIds(previous.granth_entries, server.granth_entries),
+    granthChanged:
+      versionMapChanged(previous.granth_libraries, server.granth_libraries) ||
+      versionMapChanged(previous.granth_entries, server.granth_entries),
   };
 }
 
@@ -161,6 +224,29 @@ function clearText(item: LibraryItemDto): LibraryItemDto {
     text_content_en: null,
     text_content_hi: null,
     text_content_gu: null,
+  };
+}
+
+/**
+ * §17.7 — drop granth rows the manifest no longer lists, and every
+ * availability join that pointed at one.
+ *
+ * Returns the same object when nothing is removed so callers can skip a
+ * pointless cache write. Never clears the payload: an unpublished library
+ * must not take the rest of the directory with it.
+ */
+export function pruneGranthDirectory(
+  directory: GranthDirectoryDto,
+  removedLibraryIds: Set<string>,
+  removedEntryIds: Set<string>,
+): GranthDirectoryDto {
+  if (removedLibraryIds.size === 0 && removedEntryIds.size === 0) return directory;
+  return {
+    libraries: directory.libraries.filter((l) => !removedLibraryIds.has(l.id)),
+    entries: directory.entries.filter((e) => !removedEntryIds.has(e.id)),
+    availability: directory.availability.filter(
+      (a) => !removedLibraryIds.has(a.library_id) && !removedEntryIds.has(a.granth_id),
+    ),
   };
 }
 

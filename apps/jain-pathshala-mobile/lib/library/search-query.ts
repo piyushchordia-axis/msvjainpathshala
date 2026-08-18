@@ -54,7 +54,12 @@ export function parseSnippetHighlight(snippet: string): HighlightPart[] {
   return parts.filter((p) => p.text.length > 0);
 }
 
-export type SearchHitKind = "item" | "panchang";
+/**
+ * §17.11.4 — a granth match opens the entry detail, a library match opens
+ * the library detail. Distinct kinds because the destinations differ; the
+ * search screen must not have to guess from the shape of a row.
+ */
+export type SearchHitKind = "item" | "panchang" | "granth_entry" | "granth_library";
 
 export type SearchHit = {
   itemId: string;

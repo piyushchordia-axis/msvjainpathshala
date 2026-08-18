@@ -1,6 +1,7 @@
 /** Admin DTO mirrors for `/v1/admin/library` draft/published tree. */
 
-export type LibrarySectionType = "item_list" | "deeplink" | "panchang";
+/** Mirrors LIBRARY_SECTION_TYPES — `granth` added in v3 §17.11.1. */
+export type LibrarySectionType = "item_list" | "deeplink" | "panchang" | "granth";
 
 export interface LibraryDraftPublishedNames {
   name_en: string;
@@ -35,6 +36,14 @@ export interface LibraryAdminItem {
     text_content_en: string | null;
     text_content_hi: string | null;
     text_content_gu: string | null;
+    /** §17.1.3 — plain single-line melody caption; EN/HI only, no GU column. */
+    tarj_en: string | null;
+    tarj_hi: string | null;
+    /** §17.1.3 PDF + external-link modalities. */
+    pdf_url: string | null;
+    pdf_size_bytes: number | null;
+    pdf_page_count: number | null;
+    external_url: string | null;
   };
   published: {
     title_en: string;
@@ -48,6 +57,14 @@ export interface LibraryAdminItem {
     text_content_en: string | null;
     text_content_hi: string | null;
     text_content_gu: string | null;
+    /** §17.1.3 — plain single-line melody caption; EN/HI only, no GU column. */
+    tarj_en: string | null;
+    tarj_hi: string | null;
+    /** §17.1.3 PDF + external-link modalities. */
+    pdf_url: string | null;
+    pdf_size_bytes: number | null;
+    pdf_page_count: number | null;
+    external_url: string | null;
   };
 }
 

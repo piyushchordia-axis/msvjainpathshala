@@ -41,6 +41,34 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
   next();
 }
 
+/**
+ * Attach `req.authUser` when a valid token is present; otherwise continue as a
+ * guest. NEVER fails the request — an expired or malformed token is treated
+ * exactly like no token at all.
+ *
+ * For surfaces open to guests by design (Q13: submission is an action, not
+ * content — no tier applies, and no `requires_login` concept exists). A guest
+ * whose token happens to have expired must not be handed a 401 on a form that
+ * signed-out visitors are explicitly allowed to use.
+ */
+export async function optionalAuth(req: Request, _res: Response, next: NextFunction): Promise<void> {
+  const token = extractToken(req);
+  if (!token) {
+    next();
+    return;
+  }
+  const verified = verifyAccessToken(token);
+  if (!verified) {
+    next();
+    return;
+  }
+  const user = await loadAuthUser(verified.uid);
+  if (user && user.is_active && !user.deleted_at) {
+    req.authUser = user as User;
+  }
+  next();
+}
+
 export function requireRole(...roles: Role[]) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const role = req.authUser?.role as Role | undefined;

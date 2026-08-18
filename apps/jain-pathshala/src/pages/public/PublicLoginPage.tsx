@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useLocation, useSearch } from 'wouter';
-import { ulid } from 'ulid';
+import { getDeviceId } from '@/lib/device-id';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,17 +12,6 @@ import { useLocale, useSetLocale } from '@/lib/locale-context';
 import { canAccessAdminPanel, type SessionUser } from '@/lib/auth';
 
 type Phase = 'phone' | 'otp';
-
-function getDeviceId(): string {
-  if (typeof window === 'undefined') return 'web-ssr';
-  const key = 'jp.web.device_id';
-  let id = window.localStorage.getItem(key);
-  if (!id) {
-    id = `web-${ulid()}`;
-    window.localStorage.setItem(key, id);
-  }
-  return id;
-}
 
 interface OtpSendResponse {
   otp_token: string;

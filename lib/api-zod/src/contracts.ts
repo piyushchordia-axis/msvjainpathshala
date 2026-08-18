@@ -191,7 +191,8 @@ export function formatAgeGroups(codes: string[] | null | undefined, lang: "en" |
 
 export const enrolmentStatusSchema = z.enum(["pending", "approved", "rejected", "waitlisted"]);
 export const studentStatusSchema = z.enum(["active", "inactive"]);
-export const librarySectionTypeSchema = z.enum(["item_list", "deeplink", "panchang"]);
+/** Mirrors LIBRARY_SECTION_TYPES — `granth` added by Section 17 v3 §17.1.2. */
+export const librarySectionTypeSchema = z.enum(["item_list", "deeplink", "panchang", "granth"]);
 export const libraryDownloadStatusSchema = z.enum([
   "queued",
   "downloading",
@@ -579,6 +580,23 @@ export const noticeWriteSchema = z
   });
 export type NoticeWrite = z.infer<typeof noticeWriteSchema>;
 
+/**
+ * v3 §17.1.3 — a Tarj is one short caption line ("sung to the tune of X"),
+ * never rich text and never a paragraph. Normalising server-side rather than
+ * only in the admin UI stops a pasted multi-line value from breaking the
+ * single-line caption in every surface that renders it.
+ */
+export const TARJ_MAX_LEN = 200;
+
+/** Collapse a Tarj to one line; blank becomes null so "set" and "cleared" differ. */
+export function normalizeTarj(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const line = String(raw).replace(/\s+/g, " ").trim();
+  return line.length === 0 ? null : line.slice(0, TARJ_MAX_LEN);
+}
+
+export const tarjLineSchema = z.string().max(TARJ_MAX_LEN);
+
 export const libraryItemSchema = z.object({
   id: z.string().uuid(),
   section_id: z.string().uuid(),
@@ -595,6 +613,20 @@ export const libraryItemSchema = z.object({
   text_content_en: z.string().nullable(),
   text_content_hi: z.string().nullable(),
   text_content_gu: z.string().nullable(),
+  /** §17.1.3 — optional melody caption; both null means render nothing. */
+  tarj_en: z.string().nullable(),
+  tarj_hi: z.string().nullable(),
+  /**
+   * §17.1.3 PDF modality. pdf_url is freshly signed on every read (1h TTL),
+   * so a cached tree's copy expires — clients re-fetch the item at download
+   * time rather than reusing what the tree gave them.
+   */
+  pdf_url: z.string().nullable(),
+  pdf_size_bytes: z.number().int().nullable(),
+  /** Extracted asynchronously post-upload; null until the job lands. */
+  pdf_page_count: z.number().int().nullable(),
+  /** §17.1.3 external-link modality — documents only, never video (Q7). */
+  external_url: z.string().nullable(),
   content_version: z.number().int(),
   is_published: z.boolean(),
 });
@@ -641,8 +673,121 @@ export const libraryItemWriteSchema = z.object({
   text_content_en: z.string().nullable().optional(),
   text_content_hi: z.string().nullable().optional(),
   text_content_gu: z.string().nullable().optional(),
+  tarj_en: tarjLineSchema.nullable().optional(),
+  tarj_hi: tarjLineSchema.nullable().optional(),
+  external_url: httpUrl(2000).nullable().optional(),
 });
 export type LibraryItemWrite = z.infer<typeof libraryItemWriteSchema>;
+
+/**
+ * v3 §17.9 — access-log events. Distinct reach per (item, actor, event):
+ * the server upserts and bumps a count, so a client may report the same
+ * event as often as it likes without inflating anything.
+ *
+ * Analytics only. Nothing on this path awards Punya (§17.8).
+ */
+export const LIBRARY_ACCESS_EVENTS = [
+  "view",
+  "pdf_view",
+  "pdf_download",
+  "granth_view",
+  "external_link_open",
+] as const;
+export const libraryAccessEventSchema = z.enum(LIBRARY_ACCESS_EVENTS);
+export type LibraryAccessEvent = z.infer<typeof libraryAccessEventSchema>;
+
+/**
+ * Exactly one target. Most events fire on a piece of content, but
+ * `granth_view` is a SECTION open (§17.9) and a section id is not an item
+ * id — sent in the wrong field it silently matches nothing.
+ */
+/* ── v3 §17.11.3 Granth directory ──────────────────────────────────────── */
+
+/**
+ * A physical library that holds granths. Contact details live HERE and
+ * nowhere else (§17.11.3) — entries never duplicate them, so a phone number
+ * that changes is corrected in one row.
+ */
+export const granthLibrarySchema = z.object({
+  id: z.string().uuid(),
+  name_en: z.string(),
+  name_hi: z.string().nullable(),
+  address_en: z.string(),
+  address_hi: z.string().nullable(),
+  city_id: z.string().uuid(),
+  /** Denormalised so the client can group and filter offline. */
+  city_name: z.string(),
+  contact_name: z.string().nullable(),
+  contact_phone: z.string().nullable(),
+  has_whatsapp: z.boolean(),
+  timings_en: z.string().nullable(),
+  timings_hi: z.string().nullable(),
+  /** Numbers, not the numeric-as-string Postgres hands back. */
+  lat: z.number().nullable(),
+  lng: z.number().nullable(),
+  note_en: z.string().nullable(),
+  note_hi: z.string().nullable(),
+  order_index: z.number().int(),
+  content_version: z.number().int(),
+});
+export type GranthLibraryDto = z.infer<typeof granthLibrarySchema>;
+
+export const granthEntrySchema = z.object({
+  id: z.string().uuid(),
+  title_en: z.string(),
+  title_hi: z.string().nullable(),
+  author_en: z.string().nullable(),
+  author_hi: z.string().nullable(),
+  /** Free text — granths run to Prakrit, Sanskrit and Gujarati. */
+  language: z.string().nullable(),
+  description_en: z.string().nullable(),
+  description_hi: z.string().nullable(),
+  /** "Read online" — the library item carrying the PDF / text / link. */
+  linked_item_id: z.string().uuid().nullable(),
+  order_index: z.number().int(),
+  content_version: z.number().int(),
+});
+export type GranthEntryDto = z.infer<typeof granthEntrySchema>;
+
+/** The M2M join, shipped flat so the client can index it both ways. */
+export const granthAvailabilitySchema = z.object({
+  granth_id: z.string().uuid(),
+  library_id: z.string().uuid(),
+  note: z.string().nullable(),
+});
+export type GranthAvailabilityDto = z.infer<typeof granthAvailabilitySchema>;
+
+/**
+ * One payload, cached beside the section tree (§17.11.4): the directory has
+ * to be fully browsable offline, and three separate fetches would leave a
+ * reader with libraries but no catalogue the first time one of them failed.
+ */
+export const granthDirectorySchema = z.object({
+  libraries: z.array(granthLibrarySchema),
+  entries: z.array(granthEntrySchema),
+  availability: z.array(granthAvailabilitySchema),
+});
+export type GranthDirectoryDto = z.infer<typeof granthDirectorySchema>;
+
+export const libraryAccessLogWriteSchema = z
+  .object({
+    item_id: z.string().uuid().optional(),
+    section_id: z.string().uuid().optional(),
+    event: libraryAccessEventSchema,
+    /** Guests only — signed-in callers are keyed by their session. */
+    device_id: z.string().min(1).max(128).optional(),
+  })
+  .superRefine((v, ctx) => {
+    const targets = [v.item_id, v.section_id].filter(Boolean).length;
+    if (targets !== 1) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Send exactly one of item_id or section_id.",
+        path: ["item_id"],
+      });
+    }
+  });
+export type LibraryAccessLogWrite = z.infer<typeof libraryAccessLogWriteSchema>;
 
 export const librarySectionSchema = z.object({
   id: z.string().uuid(),
@@ -667,6 +812,221 @@ export const libraryVersionManifestSchema = z.object({
   items: z.record(z.string().uuid(), z.number().int()),
 });
 export type LibraryVersionManifest = z.infer<typeof libraryVersionManifestSchema>;
+
+/* ------------------------------------------------------------------ */
+/* Library content requests — Section 17 v3 §17.10                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * A URL field that must use the http(s) scheme.
+ *
+ * Plain `z.string().url()` ACCEPTS dangerous schemes (`javascript:`, `data:`,
+ * `vbscript:`) — when such a value is later rendered into an `<a href>` (admin
+ * review screens, public library) or opened via `Linking.openURL`, it becomes a
+ * stored XSS that crosses a privilege boundary (guest → admin). Use this for
+ * any user-supplied URL that is later linked or opened.
+ *
+ * Lives here rather than in api-server so the request contract and the routes
+ * cannot end up with two different ideas of what a safe URL is;
+ * `apps/api-server/src/lib/validation.ts` re-exports it.
+ */
+export function httpUrl(max = 2000) {
+  return z
+    .string()
+    .url()
+    .max(max)
+    // Scheme checked on the string, not via `new URL(...).protocol`. This
+    // module is consumed by React Native, whose built-in URL is partial, and a
+    // contracts package should not depend on a platform global for a security
+    // check. The scheme is the prefix, so a prefix test is exact — and it is
+    // marginally STRICTER than the parser was: `http:x.com` (a scheme with no
+    // authority, which WHATWG happily parses) is now rejected too.
+    .refine((u) => /^https?:\/\//i.test(u.trim()), "URL must use http(s).");
+}
+
+/** §17.10.6 abuse controls. One place, so route, tests and client copy agree. */
+export const LIBRARY_REQUEST_LIMITS = {
+  /** Submissions per day per device-or-user. */
+  perRequesterPerDay: 3,
+  /** Submissions per day per IP — stops one script fanning out over devices. */
+  perIpPerDay: 10,
+  /** Requests a single requester may hold in `pending` at once. */
+  maxPending: 3,
+  windowSeconds: 24 * 60 * 60,
+} as const;
+
+export const libraryContentRequestStatusSchema = z.enum([
+  "pending",
+  "accepted",
+  "rejected",
+  "published",
+]);
+export type LibraryContentRequestStatus = z.infer<typeof libraryContentRequestStatusSchema>;
+
+/**
+ * Accepts a 10-digit Indian mobile, `91XXXXXXXXXX`, or an already-E.164 number.
+ *
+ * Guests type what is on their phone, not what the database wants. Rejecting
+ * "9876543210" from the one audience this feature exists for would be perverse,
+ * so the shape is permissive here and normalised to E.164 on write.
+ */
+export const contactPhoneSchema = z
+  .string()
+  .trim()
+  .min(10)
+  .max(20)
+  .refine((v) => {
+    const d = v.replace(/\D/g, "");
+    const shapeOk = v.startsWith("+")
+      ? /^\+[1-9]\d{6,14}$/.test(v.replace(/\s/g, ""))
+      : d.length === 10 || (d.length === 12 && d.startsWith("91"));
+    // The phone columns are varchar(15). A 15-digit E.164 number is 16
+    // characters with the "+", so a shape check alone would let a value
+    // through that the INSERT then rejects with a raw 22001 — a 500 where the
+    // caller should have got a field error.
+    return shapeOk && contactPhoneToE164(v).length <= 15;
+  }, "Enter a 10-digit mobile number, or the full number with country code.");
+
+/** Normalise a validated contact phone to E.164. India-default, like the join flow. */
+export function contactPhoneToE164(raw: string): string {
+  const trimmed = raw.replace(/\s/g, "");
+  if (trimmed.startsWith("+")) return trimmed;
+  const d = trimmed.replace(/\D/g, "");
+  if (d.length === 12 && d.startsWith("91")) return `+${d}`;
+  return `+91${d}`;
+}
+
+/* ── v3 §17.11.5 Granth admin writes ───────────────────────────────────── */
+
+/** Latitude/longitude within real bounds — a typo'd 751.85 is not a place. */
+const latitude = z.number().min(-90).max(90);
+const longitude = z.number().min(-180).max(180);
+
+export const granthLibraryWriteSchema = z
+  .object({
+    name_en: z.string().min(1).max(200),
+    name_hi: z.string().max(200).nullable().optional(),
+    address_en: z.string().min(1).max(500),
+    address_hi: z.string().max(500).nullable().optional(),
+    /** Same representation centres use — a cities.id, never a name string. */
+    city_id: z.string().uuid(),
+    contact_name: z.string().max(120).nullable().optional(),
+    contact_phone: contactPhoneSchema.nullable().optional(),
+    has_whatsapp: z.boolean().optional(),
+    timings_en: z.string().max(300).nullable().optional(),
+    timings_hi: z.string().max(300).nullable().optional(),
+    lat: latitude.nullable().optional(),
+    lng: longitude.nullable().optional(),
+    note_en: z.string().max(1000).nullable().optional(),
+    note_hi: z.string().max(1000).nullable().optional(),
+  })
+  .superRefine((v, ctx) => {
+    // Half a coordinate is not a location. One without the other would send
+    // the maps hand-off to a point on the equator or the prime meridian.
+    const hasLat = v.lat != null;
+    const hasLng = v.lng != null;
+    if (hasLat !== hasLng) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Give both latitude and longitude, or neither.",
+        path: [hasLat ? "lng" : "lat"],
+      });
+    }
+    // WhatsApp needs a number to address, and one with a country code:
+    // wa.me without one deep-links to whatever country the reader is in.
+    if (v.has_whatsapp && !v.contact_phone) {
+      ctx.addIssue({
+        code: "custom",
+        message: "Add a contact phone before turning WhatsApp on.",
+        path: ["contact_phone"],
+      });
+    }
+  });
+export type GranthLibraryWrite = z.infer<typeof granthLibraryWriteSchema>;
+
+export const granthEntryWriteSchema = z.object({
+  title_en: z.string().min(1).max(200),
+  title_hi: z.string().max(200).nullable().optional(),
+  author_en: z.string().max(200).nullable().optional(),
+  author_hi: z.string().max(200).nullable().optional(),
+  /** Free text — granths run to Prakrit, Sanskrit and Gujarati. */
+  language: z.string().max(80).nullable().optional(),
+  description_en: z.string().max(4000).nullable().optional(),
+  description_hi: z.string().max(4000).nullable().optional(),
+  /** "Read online" — the library item carrying the PDF / text / link. */
+  linked_item_id: z.string().uuid().nullable().optional(),
+});
+export type GranthEntryWrite = z.infer<typeof granthEntryWriteSchema>;
+
+/** Which library holds this granth, and on what terms. */
+export const granthAvailabilityWriteSchema = z.object({
+  library_id: z.string().uuid(),
+  /** e.g. "reference only, not for issue" — what stops a wasted trip. */
+  note: z.string().max(300).nullable().optional(),
+});
+export type GranthAvailabilityWrite = z.infer<typeof granthAvailabilityWriteSchema>;
+
+/** Ordered id array — the same shape the library section/item reorders take. */
+export const granthReorderSchema = z.object({
+  ids: z.array(z.string().uuid()).min(1).max(500),
+});
+export type GranthReorder = z.infer<typeof granthReorderSchema>;
+
+/**
+ * POST /v1/library/requests body.
+ *
+ * `requester_name` / `requester_phone` are optional HERE and mandatory for
+ * guests: a signed-in caller has both on their profile and the server fills
+ * them in, so requiring them in the schema would force every client to echo
+ * the user's own phone number back over the wire. The route enforces the guest
+ * rule (§17.10.2) once it knows whether there is a session.
+ */
+export const libraryContentRequestCreateSchema = z
+  .object({
+    section_id: z.string().uuid().nullable().optional(),
+    suggested_section: z.string().trim().min(1).max(200).nullable().optional(),
+    title: z.string().trim().min(1).max(200),
+    details: z.string().trim().min(20).max(2000),
+    reference_url: httpUrl(500).nullable().optional(),
+    requester_name: z.string().trim().min(1).max(200).optional(),
+    requester_phone: contactPhoneSchema.optional(),
+    /** Pre-login device identifier — the same id the client sends to auth verify. */
+    requester_device_id: z.string().trim().min(1).max(128).optional(),
+  })
+  .superRefine((v, ctx) => {
+    // Exactly one targeting path: a picked section OR a free-text suggestion.
+    // Both would leave the admin guessing which the requester meant.
+    const hasSection = v.section_id != null;
+    const hasSuggestion = v.suggested_section != null && v.suggested_section !== "";
+    if (hasSection === hasSuggestion) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["section_id"],
+        message: hasSection
+          ? "Pick a section or describe a new one — not both."
+          : "Pick a section, or describe the one you want it filed under.",
+      });
+    }
+  });
+export type LibraryContentRequestCreate = z.infer<typeof libraryContentRequestCreateSchema>;
+
+/** Row shape returned by GET /v1/library/requests/mine. */
+export const libraryContentRequestSchema = z.object({
+  id: z.string().uuid(),
+  section_id: z.string().uuid().nullable(),
+  section_name_en: z.string().nullable(),
+  section_name_hi: z.string().nullable(),
+  suggested_section: z.string().nullable(),
+  title: z.string(),
+  details: z.string(),
+  reference_url: z.string().nullable(),
+  status: libraryContentRequestStatusSchema,
+  admin_note: z.string().nullable(),
+  linked_item_id: z.string().uuid().nullable(),
+  created_at: z.string(),
+  actioned_at: z.string().nullable(),
+});
+export type LibraryContentRequestDto = z.infer<typeof libraryContentRequestSchema>;
 
 /** @deprecated Use LibrarySectionDto / library tree — kept as alias during rebuild. */
 export type PublicLibraryItem = LibraryItemDto;

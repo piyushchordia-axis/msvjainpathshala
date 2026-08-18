@@ -336,6 +336,7 @@ function SectionForm({
               <SelectItem value="item_list">Item list</SelectItem>
               <SelectItem value="deeplink">Deeplink</SelectItem>
               <SelectItem value="panchang">Panchang</SelectItem>
+              <SelectItem value="granth">Granth</SelectItem>
             </SelectContent>
           </Select>
         </FormRow>

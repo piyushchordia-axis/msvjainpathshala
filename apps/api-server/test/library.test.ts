@@ -126,7 +126,7 @@ describe("library browsing tree", () => {
     expect(res.body.error.code).toBe("ERR_INTERNAL");
   });
 
-  it("has the rebuilt tables and dropped access logs", async () => {
+  it("has the rebuilt tables, access logs included", async () => {
     const { rows } = await pool.query<{ table_name: string }>(
       `select table_name from information_schema.tables
        where table_schema = 'public'
@@ -140,13 +140,32 @@ describe("library browsing tree", () => {
       "library_subsections",
     ]);
 
-    const dropped = await pool.query<{ exists: boolean }>(
+    // This assertion used to require library_access_logs be ABSENT. 0056
+    // dropped it as collateral of the flat-model rebuild — its FK pointed at
+    // the discarded items table — and the assertion recorded that fact.
+    // 0077 rebuilds it for v3 §17.9, now keyed by event and by actor, so the
+    // assertion flips rather than being deleted: something still has to fail
+    // if the table goes missing again.
+    const present = await pool.query<{ exists: boolean }>(
       `select exists(
          select 1 from information_schema.tables
          where table_schema = 'public' and table_name = 'library_access_logs'
        ) as exists`,
     );
-    expect(dropped.rows[0]?.exists).toBe(false);
+    expect(present.rows[0]?.exists).toBe(true);
+
+    const cols = await pool.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+        where table_schema = 'public' and table_name = 'library_access_logs'
+          and column_name = any($1::text[])
+        order by column_name`,
+      [["device_id", "event", "access_count"]],
+    );
+    expect(cols.rows.map((r) => r.column_name)).toEqual([
+      "access_count",
+      "device_id",
+      "event",
+    ]);
   });
 
   it("public tree lists gated sections without children; member sees content", async () => {

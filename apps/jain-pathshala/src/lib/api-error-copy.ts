@@ -28,6 +28,16 @@ const BY_CODE: Record<string, Copy> = {
     en: "We couldn't find that — refresh the page and try again.",
     hi: 'यह नहीं मिला — पृष्ठ रीफ़्रेश करें और पुनः प्रयास करें।',
   },
+  // Library content requests (§17.10.6). Both caps are ordinary outcomes of
+  // using the form, not faults — say what happened and what to do next.
+  ERR_LIBRARY_REQUEST_RATE_LIMITED: {
+    en: 'You have sent all the requests allowed for today — try again tomorrow, or add detail to a request you already sent.',
+    hi: 'आज के लिए अनुमत सभी अनुरोध भेजे जा चुके हैं — कल फिर भेजें, या पहले भेजे अनुरोध में विवरण जोड़ें।',
+  },
+  ERR_LIBRARY_REQUEST_PENDING_LIMIT: {
+    en: 'Your earlier requests are still waiting for review — wait for one to be answered before sending another.',
+    hi: 'आपके पिछले अनुरोध अभी समीक्षा की प्रतीक्षा में हैं — नया भेजने से पहले किसी एक का उत्तर आने दें।',
+  },
 };
 
 const FALLBACK: Copy = {

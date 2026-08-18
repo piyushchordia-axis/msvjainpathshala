@@ -38,6 +38,11 @@ import {
   library_sections,
   library_subsections,
   library_items,
+  library_access_logs,
+  library_content_requests,
+  granth_libraries,
+  granth_entries,
+  granth_availability,
   gallery_items,
   settings,
   courses,
@@ -143,6 +148,8 @@ async function main(): Promise<void> {
       queue_dlq_jobs, queue_stats, donations, donation_campaigns,
       exam_answers, exam_attempts, exam_question_options, exam_questions, online_exams,
       course_subsections, course_sections, courses,
+      granth_availability, granth_entries, granth_libraries, library_content_requests,
+      library_access_logs,
       gallery_items, library_items, library_subsections, library_sections, shivir_events, notices,
       niyam_streaks, niyam_submission_media, niyam_submissions, niyams,
       punya_balances, punya_transactions, punya_configs, punya_features, punya_award_limits,
@@ -1319,20 +1326,20 @@ async function main(): Promise<void> {
 
   /* ---------------- Join / gan onboarding (pre-login) ---------------- */
   const joinKinds = ["student", "shikshak", "sanchalak"] as const;
-  await db.insert(join_settings).values(
-    joinKinds.flatMap((kind) => [
-      {
-        kind,
-        key: "registration_open",
-        value: "yes",
-        label: "Registration open",
-      },
-      { kind, key: "payment_amount", value: "501", label: "Payment amount (INR)" },
-      { kind, key: "payment_upi_id", value: "msv@upi", label: "UPI ID" },
-      { kind, key: "payment_name", value: "Megh Sanskar Vatika", label: "Payee name" },
-      { kind, key: "payment_qr_image", value: "", label: "Payment QR image URL" },
-    ]),
-  );
+  await db.insert(join_settings).values([
+    ...joinKinds.map((kind) => ({
+      kind,
+      key: "registration_open",
+      value: "yes",
+      label: "Registration open",
+    })),
+    // Payment is only ever collected for the student MSV journey — Pathshala
+    // enrolment and staff seva are free, so the staff kinds get no payment rows.
+    { kind: "student" as const, key: "payment_amount", value: "501", label: "Payment amount (INR)" },
+    { kind: "student" as const, key: "payment_upi_id", value: "msv@upi", label: "UPI ID" },
+    { kind: "student" as const, key: "payment_name", value: "Megh Sanskar Vatika", label: "Payee name" },
+    { kind: "student" as const, key: "payment_qr_image", value: "", label: "Payment QR image URL" },
+  ]);
 
   type JoinFieldSeed = {
     kind: (typeof joinKinds)[number];
@@ -1373,7 +1380,7 @@ async function main(): Promise<void> {
       placeholder_en: "10 digits",
     },
     { kind: "student", field_key: "sex", label_hi: "लिंग", label_en: "Gender", field_type: "dropdown", options: ["Male", "Female"], is_required: true, display_order: 5 },
-    { kind: "student", field_key: "age", label_hi: "आयु", label_en: "Age", field_type: "number", is_required: true, display_order: 6 },
+    { kind: "student", field_key: "date_of_birth", label_hi: "जन्म तिथि", label_en: "Date of birth", field_type: "date", is_required: true, display_order: 6 },
     { kind: "student", field_key: "education", label_hi: "शिक्षा", label_en: "Education", field_type: "text", is_required: false, display_order: 7 },
     { kind: "student", field_key: "email", label_hi: "ईमेल", label_en: "Email", field_type: "text", is_required: false, display_order: 8 },
     { kind: "student", field_key: "address", label_hi: "पता", label_en: "Address", field_type: "textarea", is_required: true, display_order: 9 },
@@ -1389,7 +1396,7 @@ async function main(): Promise<void> {
   const staffFieldDefs: Omit<JoinFieldSeed, "kind">[] = [
     { field_key: "name", label_hi: "नाम", label_en: "Name", field_type: "text", is_required: true, display_order: 1 },
     { field_key: "s_o", label_hi: "पुत्र / पुत्री", label_en: "S/O or D/O", field_type: "text", is_required: false, display_order: 2 },
-    { field_key: "age", label_hi: "आयु", label_en: "Age", field_type: "number", is_required: true, display_order: 3 },
+    { field_key: "date_of_birth", label_hi: "जन्म तिथि", label_en: "Date of birth", field_type: "date", is_required: true, display_order: 3 },
     { field_key: "whatsapp_contact", label_hi: "WhatsApp नंबर", label_en: "WhatsApp number", field_type: "text", is_required: true, display_order: 4, placeholder_hi: "10 अंक", placeholder_en: "10 digits" },
     { field_key: "school_qualification", label_hi: "शैक्षणिक योग्यता", label_en: "School qualification", field_type: "text", is_required: false, display_order: 5 },
     { field_key: "religious_education", label_hi: "धार्मिक शिक्षा", label_en: "Religious education", field_type: "text", is_required: false, display_order: 6 },
@@ -1402,10 +1409,28 @@ async function main(): Promise<void> {
     { field_key: "photo", label_hi: "फ़ोटो", label_en: "Photo", field_type: "photo", is_required: true, display_order: 13 },
   ];
 
+  // A shikshak's gender is inferred from the गुरुजी / दीदी role choice on the
+  // form; a sanchalak's role is hardcoded 'संचालक' and carries no such signal,
+  // so that kind gets an explicit field slotted in after date_of_birth.
+  const sanchalakGenderField: Omit<JoinFieldSeed, "kind"> = {
+    field_key: "sex",
+    label_hi: "लिंग",
+    label_en: "Gender",
+    field_type: "dropdown",
+    options: ["Male", "Female"],
+    is_required: true,
+    display_order: 4,
+  };
+
   await db.insert(join_form_fields).values([
     ...studentFields,
     ...staffFieldDefs.map((f) => ({ ...f, kind: "shikshak" as const })),
-    ...staffFieldDefs.map((f) => ({ ...f, kind: "sanchalak" as const })),
+    ...staffFieldDefs.map((f) => ({
+      ...f,
+      kind: "sanchalak" as const,
+      display_order: f.display_order >= 4 ? f.display_order + 1 : f.display_order,
+    })),
+    { ...sanchalakGenderField, kind: "sanchalak" as const },
   ]);
 
   /* ---------------- Service requests (Wave 2) ---------------- */

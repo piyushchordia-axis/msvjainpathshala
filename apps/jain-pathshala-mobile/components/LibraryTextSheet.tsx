@@ -32,6 +32,7 @@ import {
   writeTextFontSize,
 } from "@/lib/library/text-prefs";
 import { LibraryHtmlBody } from "@/components/LibraryHtmlBody";
+import { LibraryTarjLine } from "@/components/LibraryTarjLine";
 import { Body } from "@/components/ui";
 
 export type LibraryTextSheetProps = {
@@ -144,6 +145,13 @@ export function LibraryTextSheet({ item, onClose }: LibraryTextSheetProps) {
             <Ionicons name="close" size={26} color={c.mutedForeground} />
           </Pressable>
         </View>
+
+        {/* §17.1.3 — the Tarj sits directly under the title, above the
+            toolbar: a reader about to sing needs the melody before the
+            font controls, not after them. */}
+        {item ? (
+          <LibraryTarjLine item={item} style={{ paddingHorizontal: 16, paddingBottom: 8 }} />
+        ) : null}
 
         <View
           style={{

@@ -159,6 +159,9 @@ export default function AdminRoutes() {
           <Route path="/admin/library/audio" component={AdminLibraryPage} />
           <Route path="/admin/library/panchang" component={AdminLibraryPage} />
           <Route path="/admin/library/media" component={AdminLibraryPage} />
+          <Route path="/admin/library/requests" component={AdminLibraryPage} />
+          <Route path="/admin/library/granth-libraries" component={AdminLibraryPage} />
+          <Route path="/admin/library/granth-entries" component={AdminLibraryPage} />
           <Route path="/admin/library" component={AdminLibraryPage} />
           <Route path="/admin/team" component={TeamAdminPage} />
           <Route path="/admin/donations" component={DonationsPage} />

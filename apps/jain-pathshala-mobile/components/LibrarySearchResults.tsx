@@ -7,12 +7,19 @@ import {
   parseSnippetHighlight,
   type SearchHit,
 } from "@/lib/library/search-query";
-import { Body, Card, Row, Title } from "@/components/ui";
+import { t } from "@workspace/i18n";
+import { Body, Button, Card, Row, Title } from "@/components/ui";
 
 export type LibrarySearchResultsProps = {
   hits: SearchHit[];
   loading?: boolean;
   onPressHit: (hit: SearchHit) => void;
+  /**
+   * §17.5 — the empty state offers to request what the reader could not find,
+   * carrying their query through as the request title. Omitted (no CTA) when
+   * the caller has nowhere to send them.
+   */
+  onRequestContent?: () => void;
 };
 
 function HighlightedSnippet({ snippet }: { snippet: string }) {
@@ -38,9 +45,10 @@ export function LibrarySearchResults({
   hits,
   loading,
   onPressHit,
+  onRequestContent,
 }: LibrarySearchResultsProps) {
   const c = useColors();
-  const { hi } = useLocale();
+  const { hi, locale } = useLocale();
   const groups = groupHitsBySection(hits);
 
   if (loading) {
@@ -53,9 +61,20 @@ export function LibrarySearchResults({
 
   if (hits.length === 0) {
     return (
-      <Body muted style={{ paddingVertical: 24, textAlign: "center" }}>
-        {hi ? "कोई परिणाम नहीं मिला।" : "No results found."}
-      </Body>
+      <View style={{ paddingVertical: 24, alignItems: "center", gap: 12 }}>
+        <Body muted style={{ textAlign: "center" }}>
+          {hi ? "कोई परिणाम नहीं मिला।" : "No results found."}
+        </Body>
+        {onRequestContent ? (
+          <Button
+            label={t("libraryRequests.searchCta", locale)}
+            icon="add-circle-outline"
+            variant="outline"
+            compact
+            onPress={onRequestContent}
+          />
+        ) : null}
+      </View>
     );
   }
 

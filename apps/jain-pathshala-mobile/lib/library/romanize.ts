@@ -169,12 +169,99 @@ export function romanize(input: string): string {
   return out.replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Consonants, so the schwa variant knows where an implicit "a" belongs.
+ * Derived from MAP rather than listed again — a consonant added there must
+ * not need remembering here.
+ */
+const CONSONANTS = new Set(
+  Object.keys(MAP).filter((ch) => {
+    const cp = ch.codePointAt(0) ?? 0;
+    const devanagariConsonant = cp >= 0x0915 && cp <= 0x0939;
+    const gujaratiConsonant = cp >= 0x0a95 && cp <= 0x0ab9;
+    return devanagariConsonant || gujaratiConsonant || ch.length > 1;
+  }),
+);
+
+/**
+ * True for a dependent VOWEL sign or a virama — the two things that replace or
+ * cancel a consonant's inherent vowel.
+ *
+ * Deliberately narrower than "any combining mark": anusvara, visarga and
+ * candrabindu are marks too, but they are nasals and breath, not vowels.
+ * Counting them would make संघवी "snghavee" instead of "sanghavee", and
+ * "sangh" is exactly what someone types.
+ *
+ * A following CONSONANT does not mute anything either: कल्प is "kalpa".
+ */
+function mutesInherentVowel(ch: string | undefined): boolean {
+  const cp = ch?.codePointAt(0);
+  if (cp === undefined) return false;
+  // Devanagari matras U+093E–U+094C and virama U+094D.
+  if (cp >= 0x093e && cp <= 0x094d) return true;
+  // Gujarati matras U+0ABE–U+0ACC and virama U+0ACD.
+  if (cp >= 0x0abe && cp <= 0x0acd) return true;
+  return false;
+}
+
+/**
+ * The same transliteration with the INHERENT VOWEL written out.
+ *
+ * romanize() is deliberately literal: कल्पसूत्र becomes "klpsootr", because
+ * every Devanagari consonant carries an unwritten "a" that the glyphs do not
+ * show. Nobody types "klpsootr". They type "kalpasutra", and a prefix search
+ * for "kalp" against "klpsootr" matches nothing — so a Devanagari-only title
+ * was unreachable from a Roman keyboard, which is the one thing §17.5's
+ * romanisation exists to prevent.
+ *
+ * Emitted ALONGSIDE the literal form rather than replacing it: both spellings
+ * are indexed, so nothing that matched before stops matching.
+ */
+export function romanizeWithSchwa(input: string): string {
+  if (!input) return "";
+  let out = "";
+  let i = 0;
+  while (i < input.length) {
+    let token: string | null = null;
+    for (const lig of LIGATURES) {
+      if (input.startsWith(lig, i)) {
+        token = lig;
+        break;
+      }
+    }
+    if (!token) token = input[i]!;
+    i += token.length;
+
+    const mapped = MAP[token];
+    if (mapped !== undefined) {
+      out += mapped;
+      if (CONSONANTS.has(token)) {
+        // The inherent vowel sounds unless a matra or a virama follows.
+        if (!mutesInherentVowel(input[i])) out += "a";
+      }
+      continue;
+    }
+
+    const latin = token.normalize("NFD").replace(/\p{M}/gu, "");
+    if (/[A-Za-z0-9]/.test(latin)) {
+      out += latin.toLowerCase();
+      continue;
+    }
+    if (/\s/.test(token)) out += " ";
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
+
 /** Join several strings, romanize, and collapse for the roman_title column. */
 export function buildRomanTitle(parts: Array<string | null | undefined>, bodyCap = 2000): string {
   const chunks: string[] = [];
   for (const p of parts) {
     if (!p?.trim()) continue;
-    chunks.push(romanize(p));
+    const literal = romanize(p);
+    chunks.push(literal);
+    // Both spellings, so "kalp" and "klp" both reach कल्पसूत्र.
+    const schwa = romanizeWithSchwa(p);
+    if (schwa && schwa !== literal) chunks.push(schwa);
   }
   let joined = chunks.filter(Boolean).join(" ");
   if (joined.length > bodyCap) joined = joined.slice(0, bodyCap);

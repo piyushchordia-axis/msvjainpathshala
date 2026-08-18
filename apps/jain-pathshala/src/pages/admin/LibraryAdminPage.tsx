@@ -11,14 +11,29 @@ import { LibraryItemsPanel } from "./library/LibraryItemsPanel";
 import { LibraryAudioPanel } from "./library/LibraryAudioPanel";
 import { LibraryPanchangPanel } from "./library/LibraryPanchangPanel";
 import { LibraryMediaPanel } from "./library/LibraryMediaPanel";
+import { LibraryRequestsPanel } from "./library/LibraryRequestsPanel";
+import { GranthLibrariesPanel } from "./library/GranthLibrariesPanel";
+import { GranthEntriesPanel } from "./library/GranthEntriesPanel";
 
-type TabId = "sections" | "items" | "audio" | "panchang" | "media";
+type TabId =
+  | "sections"
+  | "items"
+  | "audio"
+  | "panchang"
+  | "media"
+  | "requests"
+  | "granth-libraries"
+  | "granth-entries";
 
 function tabFromPath(path: string): TabId {
   if (path.includes("/library/items")) return "items";
   if (path.includes("/library/audio")) return "audio";
   if (path.includes("/library/panchang")) return "panchang";
   if (path.includes("/library/media")) return "media";
+  if (path.includes("/library/requests")) return "requests";
+  // Checked before the shorter "/library/granth" prefix would swallow it.
+  if (path.includes("/library/granth-entries")) return "granth-entries";
+  if (path.includes("/library/granth-libraries")) return "granth-libraries";
   return "sections";
 }
 
@@ -32,6 +47,12 @@ function pathForTab(tab: TabId): string {
       return "/admin/library/panchang";
     case "media":
       return "/admin/library/media";
+    case "requests":
+      return "/admin/library/requests";
+    case "granth-libraries":
+      return "/admin/library/granth-libraries";
+    case "granth-entries":
+      return "/admin/library/granth-entries";
     default:
       return "/admin/library";
   }
@@ -77,6 +98,9 @@ export default function LibraryAdminPage() {
           <TabsTrigger value="audio">Bulk audio</TabsTrigger>
           <TabsTrigger value="panchang">Panchang</TabsTrigger>
           <TabsTrigger value="media">Media</TabsTrigger>
+          <TabsTrigger value="requests">Requests</TabsTrigger>
+          <TabsTrigger value="granth-libraries">Granth libraries</TabsTrigger>
+          <TabsTrigger value="granth-entries">Granths</TabsTrigger>
         </TabsList>
 
         <TabsContent value="sections">
@@ -114,6 +138,29 @@ export default function LibraryAdminPage() {
 
         <TabsContent value="media">
           <LibraryMediaPanel canPublish={canPublish} />
+        </TabsContent>
+
+        {/* Reading the queue is city_admin+ (this whole page already is);
+            acting on it is state_admin+ and gated by the API's can_act, never
+            by the tab merely being visible. */}
+        {/* §17.11.5 — city_admin sees only their own city's libraries and
+            may read but not write granths. Both come off the API, never off
+            a role check here: hiding supplements enforcement, never
+            replaces it. */}
+        <TabsContent value="granth-libraries">
+          <GranthLibrariesPanel />
+        </TabsContent>
+
+        <TabsContent value="granth-entries">
+          <GranthEntriesPanel />
+        </TabsContent>
+
+        <TabsContent value="requests">
+          {loading ? (
+            <p className="text-sm text-muted-foreground">Loading requests…</p>
+          ) : (
+            <LibraryRequestsPanel sections={sections} />
+          )}
         </TabsContent>
       </Tabs>
     </AdminPageShell>

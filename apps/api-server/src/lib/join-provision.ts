@@ -9,7 +9,6 @@ import {
   centres,
   shikshak_centre_assignments,
   sanchalak_centre_assignments,
-  AGE_GROUPS,
   AGE_GROUP_META,
   type AgeGroup,
   type JoinKind,
@@ -19,7 +18,12 @@ import {
 } from "@workspace/db";
 import { and, eq, isNull } from "drizzle-orm";
 import { allocateParentCode, allocateStudentCode } from "./entity-codes";
-import { meetsStudentLoginAge, type ErrorCode } from "@workspace/api-zod";
+import {
+  ageGroupFromDob,
+  ageYearsFromDob,
+  meetsStudentLoginAge,
+  type ErrorCode,
+} from "@workspace/api-zod";
 import { syncTeamMemberForUser } from "./team-members-sync";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
@@ -50,21 +54,50 @@ function mapGender(sex: string | null | undefined): "male" | "female" | "other" 
   return "other";
 }
 
-function ageGroupFromAge(age: number | null | undefined): AgeGroup {
-  if (age == null || !Number.isFinite(age)) return "kishor";
-  for (const g of AGE_GROUPS) {
-    const meta = AGE_GROUP_META[g];
-    if (age >= meta.min && age <= meta.max) return g;
-  }
-  if (age < 5) return "bal";
-  return "yuva";
+/**
+ * Gender implied by the staff role the applicant picked. A shikshak chooses
+ * गुरुजी / दीदी on the form; the sanchalak form has an explicit `sex` field
+ * instead, because its role is hardcoded 'संचालक' and says nothing about gender.
+ */
+function genderFromStaffRole(role: string | null | undefined): "male" | "female" | null {
+  if (!role) return null;
+  const r = role.trim();
+  if (r === "गुरुजी") return "male";
+  if (r === "दीदी") return "female";
+  return null;
 }
 
-/** Approximate DOB (1 Jan) from whole-year age — enough for age-gated features. */
-function dobFromAge(age: number | null | undefined): string | null {
+/**
+ * Approximate DOB (1 Jan) from whole-year age.
+ *
+ * Legacy only. Registrations now collect a real `date_of_birth`; this covers
+ * rows submitted before that change that are still sitting in the pending
+ * queue. Do not reach for it on any new path — a fabricated 1-January date is
+ * up to a year wrong, and it is what the Q4 login gate is evaluated against.
+ */
+function legacyDobFromAge(age: number | null | undefined): string | null {
   if (age == null || !Number.isFinite(age) || age < 0 || age > 120) return null;
   const year = new Date().getFullYear() - Math.floor(age);
   return `${year}-01-01`;
+}
+
+/** Real DOB when the applicant gave one, else the legacy approximation. */
+function resolveDob(reg: { date_of_birth?: string | null; age: number | null }): string | null {
+  return reg.date_of_birth ?? legacyDobFromAge(reg.age);
+}
+
+/**
+ * Age group for a date of birth. `ageGroupFromDob` covers 5–21 and returns null
+ * outside it, but the student form accepts 3–35 — so clamp to the nearest band
+ * rather than dropping a 4-year-old or a 30-year-old into the middle one.
+ */
+function ageGroupForDob(dob: string | null): AgeGroup {
+  if (!dob) return "kishor";
+  const banded = ageGroupFromDob(dob);
+  if (banded) return banded;
+  const age = ageYearsFromDob(dob);
+  if (!Number.isFinite(age)) return "kishor";
+  return age < AGE_GROUP_META.bal.min ? "bal" : "yuva";
 }
 
 async function findUserByPhone(tx: Tx, phone: string) {
@@ -73,6 +106,7 @@ async function findUserByPhone(tx: Tx, phone: string) {
       id: users.id,
       role: users.role,
       full_name: users.full_name,
+      display_code: users.display_code,
       is_active: users.is_active,
       deleted_at: users.deleted_at,
     })
@@ -92,6 +126,12 @@ async function upsertStaffUser(
     state_id: string | null;
     centre_id: string;
     gender: "male" | "female" | "other" | null;
+    /**
+     * The SHK/SAN code already minted on the registration row at intake
+     * (join.ts allocates it off the same entity_code_counters series the manual
+     * admin-staffing path uses, so carrying it over cannot collide).
+     */
+    display_code: string;
   },
 ): Promise<string> {
   const existing = await findUserByPhone(tx, opts.phone);
@@ -111,30 +151,24 @@ async function upsertStaffUser(
         city_id: opts.city_id,
         state_id: opts.state_id,
         centre_id_default: opts.centre_id,
-        gender: opts.gender,
+        // Only write gender when we resolved one — a re-approval must not wipe a
+        // value set elsewhere, and only fill a display code that is still blank:
+        // staff created through admin-staffing already hold a good one.
+        ...(opts.gender ? { gender: opts.gender } : {}),
+        ...(existing.display_code ? {} : { display_code: opts.display_code }),
         updated_at: new Date(),
       })
       .where(eq(users.id, existing.id));
     return existing.id;
   }
 
-  const [city] = await tx
-    .select({ code: cities.code })
-    .from(cities)
-    .where(eq(cities.id, opts.city_id))
-    .limit(1);
-  if (!city?.code) {
-    throw new JoinProvisionError(422, "ERR_VALIDATION_FAILED", "Could not resolve city for staff ID.");
-  }
-
-  // Staff display codes come from Pathshala codes on registration; users.display_code
-  // for staff often mirrors that — here we leave display_code null-capable or use phone-derived.
   const [row] = await tx
     .insert(users)
     .values({
       phone: opts.phone,
       full_name: opts.full_name,
       role: opts.role,
+      display_code: opts.display_code,
       city_id: opts.city_id,
       state_id: opts.state_id,
       centre_id_default: opts.centre_id,
@@ -183,7 +217,7 @@ async function ensureCentreAssignment(
 export async function provisionStudentRegistration(
   reg: JoinStudentRegistration,
   reviewerId: string,
-): Promise<{ userId: string; studentId: string }> {
+): Promise<{ userId: string; studentId: string; studentUserId: string | null }> {
   return db.transaction(async (tx) => {
     const phone = toE164India(reg.parent_mobile);
     const existing = await findUserByPhone(tx, phone);
@@ -256,7 +290,7 @@ export async function provisionStudentRegistration(
     // MIN_STUDENT_VIEW_AGE (Q4) now holds the same value, but stays a separate
     // constant: this gate decides whether a login exists at all, that one decides
     // whether the child may write their own progress record.
-    const studentDob = dobFromAge(reg.age);
+    const studentDob = resolveDob(reg);
     const ageEligibleForOwnLogin = meetsStudentLoginAge(studentDob);
     let studentUserId: string | null = null;
     const studentDigits = (reg.mobile ?? "").replace(/\D/g, "");
@@ -314,7 +348,7 @@ export async function provisionStudentRegistration(
         gender: mapGender(reg.sex),
         // Same value the Q4 login gate above was evaluated against — one source of truth.
         dob: studentDob,
-        age_group: ageGroupFromAge(reg.age),
+        age_group: ageGroupForDob(studentDob),
         centre_id: reg.centre_id,
         photo_url: reg.photo_url,
         guardian_relation: "guardian",
@@ -322,7 +356,7 @@ export async function provisionStudentRegistration(
       })
       .returning({ id: students.id });
 
-    return { userId, studentId: stu!.id };
+    return { userId, studentId: stu!.id, studentUserId };
   });
 }
 
@@ -353,7 +387,9 @@ export async function provisionStaffRegistration(
       city_id: centre.city_id,
       state_id: centre.state_id,
       centre_id: centre.id,
-      gender: null,
+      // The explicit field wins; the गुरुजी / दीदी choice is the fallback.
+      gender: mapGender(reg.sex) ?? genderFromStaffRole(reg.role),
+      display_code: reg.display_code,
     });
     await ensureCentreAssignment(tx, kind, userId, centre.id, reviewerId);
     await syncTeamMemberForUser(userId, tx);
