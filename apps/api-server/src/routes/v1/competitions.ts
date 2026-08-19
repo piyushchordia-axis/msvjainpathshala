@@ -25,7 +25,7 @@ import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope } from "../../lib/scope";
-import { awardPunya } from "../../lib/punya";
+import { synchronizeCompetitionAwards } from "../../lib/competition-punya";
 import { auditFromReq } from "../../lib/audit";
 import { clampLimit, ownedStudentsCondition } from "../../lib/route-helpers";
 
@@ -338,6 +338,16 @@ const resultsSchema = z.object({
       }),
     )
     .min(1),
+  /**
+   * H11 — correct ranks AFTER results were published.
+   *
+   * Editing was a flat 409, which made a mis-entered rank permanent: the
+   * wrong student kept the winner bonus, the real winner could never be
+   * paid, and no surface could reverse either. Same discipline as AT25's
+   * force_cancel — an explicit opt-in, audited, and it re-synchronizes the
+   * ledger rather than silently leaving it describing the old result.
+   */
+  force_resync: z.boolean().optional(),
 });
 
 /* POST /v1/competitions/:id/results — record result rank/note per registration */
@@ -361,8 +371,14 @@ router.post("/:id/results", requireAdminPanel, requireRole("super_admin", "state
     fail(res, 404, "ERR_NOT_FOUND", "Competition not found.");
     return;
   }
-  if (comp.status === "results_published") {
-    fail(res, 409, "ERR_RESULTS_PUBLISHED", "Results already published; cannot edit.");
+  const republishing = comp.status === "results_published";
+  if (republishing && !body.force_resync) {
+    fail(
+      res,
+      409,
+      "ERR_RESULTS_PUBLISHED",
+      "Results are already published " + "—" + " pass force_resync to correct them and re-settle the Punya awarded.",
+    );
     return;
   }
 
@@ -383,20 +399,45 @@ router.post("/:id/results", requireAdminPanel, requireRole("super_admin", "state
     return;
   }
 
-  for (const r of body.results) {
-    await db
-      .update(competition_registrations)
-      .set({ result_rank: r.rank, result_note: r.note ?? null })
-      .where(eq(competition_registrations.id, r.registration_id));
-  }
+  // The rank writes and the award re-settle must commit together: a rank
+  // saved without its reversal leaves the ledger paying the previous winner.
+  const sync = await db.transaction(async (tx) => {
+    for (const r of body.results) {
+      await tx
+        .update(competition_registrations)
+        .set({ result_rank: r.rank, result_note: r.note ?? null })
+        .where(eq(competition_registrations.id, r.registration_id));
+    }
+    if (!republishing) return null;
+    const [full] = await tx
+      .select({
+        id: competitions.id,
+        name_en: competitions.name_en,
+        winner_points: competitions.winner_points,
+        participant_points: competitions.participant_points,
+      })
+      .from(competitions)
+      .where(eq(competitions.id, comp.id))
+      .limit(1);
+    if (!full) return null;
+    return synchronizeCompetitionAwards(tx, full, req.authUser!.id);
+  });
 
   await auditFromReq(req, {
     action: "update",
     entityKind: "competition",
     entityId: comp.id,
-    summary: `Recorded ${body.results.length} result(s)`,
+    summary: sync
+      ? `Corrected ${body.results.length} published result(s); ` +
+        `${sync.reversed} award(s) reversed, ${sync.awarded} re-awarded`
+      : `Recorded ${body.results.length} result(s)`,
+    metadata: sync ? { force_resync: true, ...sync } : { recorded: body.results.length },
   });
-  ok(res, { id: comp.id, recorded: body.results.length });
+  ok(res, {
+    id: comp.id,
+    recorded: body.results.length,
+    ...(sync ? { reversed: sync.reversed, re_awarded: sync.awarded } : {}),
+  });
 });
 
 /* POST /v1/competitions/:id/publish-results — idempotent: award Punya + lock */
@@ -449,40 +490,16 @@ router.post("/:id/publish-results", requireAdminPanel, requireRole("super_admin"
       return { claimed: false as const };
     }
 
-    const regs = await tx
-      .select({
-        id: competition_registrations.id,
-        student_id: competition_registrations.student_id,
-        result_rank: competition_registrations.result_rank,
-      })
-      .from(competition_registrations)
-      .where(eq(competition_registrations.competition_id, comp.id));
-
-    let awarded = 0;
-    for (const r of regs) {
-      // By design: rank-1 earns winner_points; EVERY other registrant (ranked
-      // or not) earns participant_points just for taking part. Participation
-      // points are intentionally granted to all registrants — not a bug.
-      const points = r.result_rank === 1 ? comp.winner_points : comp.participant_points;
-      if (points <= 0) continue;
-      // Compose the award into THIS publish transaction and key it per
-      // registration so a partial-loop failure followed by a republish can't
-      // double-credit: a second publish replays the same idempotency keys and
-      // awardPunya credits nothing for registrations already awarded.
-      const res = await awardPunya(
-        {
-          studentId: r.student_id,
-          featureKey: "competition",
-          points,
-          note: `${comp.name_en}${r.result_rank === 1 ? " (winner)" : ""}`,
-          awardedBy: req.authUser!.id,
-          idempotencyKey: `competition-award:${comp.id}:${r.id}`,
-        },
-        tx,
-      );
-      if (res.awarded) awarded += 1;
-    }
-    return { claimed: true as const, awarded, registrations: regs.length };
+    // Publish and a later corrected rank run the SAME synchroniser, so the
+    // two paths cannot drift: both converge on 'the ledger matches the ranks'.
+    // Still keyed per registration, so a partial failure followed by a
+    // republish credits nothing already awarded.
+    const sync = await synchronizeCompetitionAwards(tx, comp, req.authUser!.id);
+    return {
+      claimed: true as const,
+      awarded: sync.awarded,
+      registrations: sync.registrations,
+    };
   });
 
   if (!outcome.claimed) {

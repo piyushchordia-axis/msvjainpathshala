@@ -52,6 +52,9 @@ export const PUNYA_FEATURE_CATALOGUE: readonly PunyaFeatureSeed[] = [
   { key: "quiz_win", label: "Quiz win", min_points: 0, max_points: 25, is_active: true },
   { key: "push_quiz_completion", label: "Push quiz completion", min_points: 0, max_points: 5, is_active: true },
   { key: "manual_award", label: "Manual admin award", min_points: 0, max_points: 500, is_active: true },
+  // Amounts come from competitions.winner_points / participant_points, so
+  // there is deliberately no punya_configs default for this key.
+  { key: "competition", label: "Competition result", min_points: 0, max_points: 100000, is_active: true },
   // AT28 — the documented path for shivir Punya.
   { key: "msv_shivir", label: "Shivir participation", min_points: 0, max_points: 500, is_active: true },
   { key: "course_section_certified", label: "Course section certified", min_points: 0, max_points: 1000, is_active: true },
