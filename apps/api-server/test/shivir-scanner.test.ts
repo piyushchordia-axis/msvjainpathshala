@@ -53,14 +53,34 @@ async function mumbaiCityAndOtherCity(): Promise<{ mumbaiCityId: string; otherCi
   return { mumbaiCityId: mumbaiCity!.id, otherCityId: other!.id };
 }
 
-/** A seeded shivir in Mumbai, via the existing admin shivirs list. */
-async function mumbaiShivirId(token: string): Promise<string> {
+interface AdminShivirRow {
+  id: string;
+  city_name: string;
+  start_date: string;
+  end_date: string;
+  is_published: boolean;
+  msv_only: boolean;
+}
+
+/**
+ * A seeded, published, non-MSV shivir in Mumbai — plus its window.
+ *
+ * The window matters now: session_date is validated against [start_date,
+ * end_date], so a hardcoded date would break the moment the seed's relative
+ * dates moved. Published + non-MSV keeps this pointing at the ordinary camp
+ * rather than the MSV draft the seed also creates.
+ */
+async function mumbaiShivir(token: string): Promise<AdminShivirRow> {
   const res = await request(app).get("/v1/admin/shivirs?limit=200").set(auth(token));
   expect(res.status).toBe(200);
-  const items: Array<{ id: string; city_name: string }> = res.body.data.items;
-  const mumbai = items.find((s) => s.city_name === "Mumbai");
+  const items: AdminShivirRow[] = res.body.data.items;
+  const mumbai = items.find((s) => s.city_name === "Mumbai" && s.is_published && !s.msv_only);
   expect(mumbai).toBeDefined();
-  return mumbai!.id;
+  return mumbai!;
+}
+
+async function mumbaiShivirId(token: string): Promise<string> {
+  return (await mumbaiShivir(token)).id;
 }
 
 /** The first student in scope (super_admin sees all). */
@@ -91,7 +111,8 @@ describe("shivir scanner", () => {
 
   it("creates a session, scans a valid QR, rejects a tampered one, and shows live counts", async () => {
     const admin = await loginAs("super_admin");
-    const shivirId = await mumbaiShivirId(admin.token);
+    const shivir = await mumbaiShivir(admin.token);
+    const shivirId = shivir.id;
     const studentId = await firstStudentId(admin.token);
 
     // Create a session under the seeded Mumbai shivir.
@@ -100,7 +121,7 @@ describe("shivir scanner", () => {
       .set(auth(admin.token))
       .send({
         title: `Vitest Session ${Date.now()}`,
-        session_date: "2026-06-15",
+        session_date: shivir.start_date,
         attendance_mode: "present_only",
       });
     expect(createSession.status).toBe(200);
@@ -179,7 +200,8 @@ describe("shivir scanner", () => {
 
   it("404s when an admin from a different city scans a Mumbai shivir session (no PII leak)", async () => {
     const admin = await loginAs("super_admin");
-    const shivirId = await mumbaiShivirId(admin.token);
+    const shivir = await mumbaiShivir(admin.token);
+    const shivirId = shivir.id;
 
     // super_admin creates a session under the Mumbai shivir.
     const createSession = await request(app)
@@ -187,7 +209,7 @@ describe("shivir scanner", () => {
       .set(auth(admin.token))
       .send({
         title: `Cross-city Session ${Date.now()}`,
-        session_date: "2026-06-15",
+        session_date: shivir.start_date,
         attendance_mode: "present_only",
       });
     expect(createSession.status).toBe(200);
@@ -229,7 +251,8 @@ describe("shivir scanner", () => {
 
   it("422s when scan_kind is incompatible with the session's attendance_mode", async () => {
     const admin = await loginAs("super_admin");
-    const shivirId = await mumbaiShivirId(admin.token);
+    const shivir = await mumbaiShivir(admin.token);
+    const shivirId = shivir.id;
     const studentId = await firstStudentId(admin.token);
 
     // A present_only session must reject check_in / check_out.
@@ -238,7 +261,7 @@ describe("shivir scanner", () => {
       .set(auth(admin.token))
       .send({
         title: `Mode Session ${Date.now()}`,
-        session_date: "2026-06-15",
+        session_date: shivir.start_date,
         attendance_mode: "present_only",
       });
     expect(createSession.status).toBe(200);

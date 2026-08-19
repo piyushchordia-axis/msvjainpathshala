@@ -254,6 +254,41 @@ export function canViewDonations(role: Role | null | undefined): boolean {
   return !!role && DONATION_VIEW_ROLES.includes(role);
 }
 
+/**
+ * Who may create, edit, unpublish or export a shivir (SPEC 6.14 "city_admin+").
+ *
+ * Deliberately NARROWER than canAccessAdminPanel — sanchalak and shikshak can
+ * open the admin panel but must NOT author or delete shivirs. Do not "fix" this
+ * by reusing ADMIN_PANEL_ROLES.
+ */
+export const SHIVIR_ADMIN_ROLES: Role[] = ["super_admin", "state_admin", "city_admin"];
+
+export function canAdministerShivirs(role: Role | null | undefined): boolean {
+  return !!role && SHIVIR_ADMIN_ROLES.includes(role);
+}
+
+/**
+ * Who may run a shivir day-to-day: create sessions, assign and revoke
+ * volunteers, watch the live dashboard, and scan without a volunteer row
+ * (SPEC 6.14 grants the live dashboard and volunteer assignment to sanchalak).
+ *
+ * Deliberately NARROWER than canAccessAdminPanel — **shikshak is excluded on
+ * purpose**. A Guruji at the venue scans because they were assigned as a
+ * volunteer for that shivir, not because they hold a teaching role somewhere in
+ * the city; the assignment is what makes the scan attributable. Do not "fix"
+ * this by reusing ADMIN_PANEL_ROLES.
+ */
+export const SHIVIR_OPS_ROLES: Role[] = [
+  "super_admin",
+  "state_admin",
+  "city_admin",
+  "sanchalak",
+];
+
+export function canOperateShivirs(role: Role | null | undefined): boolean {
+  return !!role && SHIVIR_OPS_ROLES.includes(role);
+}
+
 /* ------------------------------------------------------------------ */
 /* Auth                                                               */
 /* ------------------------------------------------------------------ */
@@ -508,30 +543,121 @@ export const publicBatchRowSchema = z.object({
 });
 export type PublicBatchRow = z.infer<typeof publicBatchRowSchema>;
 
+/**
+ * Bilingual per CLAUDE.md. `_hi` is nullable, so every render site is
+ * `hi ? (x_hi ?? x_en) : x_en` — an admin who has the dates but not yet the
+ * Devanagari is not blocked from publishing, and a Hindi reader still gets
+ * something rather than a blank.
+ */
 export const shivirRowSchema = z.object({
   id: z.string(),
-  name: z.string(),
-  description: z.string().nullable(),
+  name_en: z.string(),
+  name_hi: z.string().nullable(),
+  description_en: z.string().nullable(),
+  description_hi: z.string().nullable(),
   start_date: z.string(),
   end_date: z.string(),
   location_text: z.string().nullable(),
   city_name: z.string(),
+  // Present on the row so a card can badge MSV and show remaining places
+  // without a second request.
+  capacity: z.number().nullable(),
+  msv_only: z.boolean(),
 });
 export type ShivirRow = z.infer<typeof shivirRowSchema>;
 
 export const shivirDetailSchema = z.object({
   id: z.string(),
-  name: z.string(),
-  description: z.string().nullable(),
+  name_en: z.string(),
+  name_hi: z.string().nullable(),
+  description_en: z.string().nullable(),
+  description_hi: z.string().nullable(),
   start_date: z.string(),
   end_date: z.string(),
   location_text: z.string().nullable(),
   city_name: z.string(),
   state_name: z.string(),
   capacity: z.number().nullable(),
+  msv_only: z.boolean(),
+  attendance_mode: z.enum(["in_out", "present_only"]),
   contact_info: z.string().nullable(),
+  registered_count: z.number(),
 });
 export type ShivirDetail = z.infer<typeof shivirDetailSchema>;
+
+export const shivirSessionRowSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  day_number: z.number().nullable(),
+  session_date: z.string(),
+  start_time: z.string().nullable(),
+  end_time: z.string().nullable(),
+});
+export type ShivirSessionRow = z.infer<typeof shivirSessionRowSchema>;
+
+/** What the detail screens need to render the right CTA per child. */
+export const shivirMyRegistrationsSchema = z.object({
+  shivir_id: z.string(),
+  capacity: z.number().nullable(),
+  registered_count: z.number(),
+  is_full: z.boolean(),
+  registration_open: z.boolean(),
+  msv_only: z.boolean(),
+  students: z.array(
+    z.object({
+      student_id: z.string(),
+      full_name: z.string(),
+      status: z.enum(["registered", "not_registered"]),
+      registered_at: z.string().nullable(),
+      eligible: z.boolean(),
+    }),
+  ),
+});
+export type ShivirMyRegistrations = z.infer<typeof shivirMyRegistrationsSchema>;
+
+/** A shivir the caller volunteers at — the mobile "My shivirs" surface. */
+export const shivirVolunteeringRowSchema = z.object({
+  id: z.string(),
+  name_en: z.string(),
+  name_hi: z.string().nullable(),
+  start_date: z.string(),
+  end_date: z.string(),
+  location_text: z.string().nullable(),
+  city_name: z.string(),
+  attendance_mode: z.enum(["in_out", "present_only"]),
+  role_label: z.string().nullable(),
+  session_count: z.number(),
+});
+export type ShivirVolunteeringRow = z.infer<typeof shivirVolunteeringRowSchema>;
+
+/**
+ * One line of the venue roster. `state` is the single word a Sanchalak needs:
+ * counts alone answered neither "who is here?" nor "who is missing?".
+ */
+export const shivirRosterRowSchema = z.object({
+  student_id: z.string(),
+  full_name: z.string(),
+  student_code: z.string().nullable(),
+  registered: z.boolean(),
+  last_scan_kind: z.enum(["present", "check_in", "check_out"]).nullable(),
+  last_scanned_at: z.string().nullable(),
+  scan_count: z.number(),
+  state: z.enum(["registered", "scanned", "walk_in", "not_arrived"]),
+});
+export type ShivirRosterRow = z.infer<typeof shivirRosterRowSchema>;
+
+export const shivirVolunteerRowSchema = z.object({
+  id: z.string(),
+  user_id: z.string(),
+  full_name: z.string(),
+  role: z.string(),
+  phone: z.string().nullable(),
+  role_label: z.string().nullable(),
+  assigned_at: z.string(),
+  revoked_at: z.string().nullable(),
+  is_active: z.boolean(),
+});
+export type ShivirVolunteerRow = z.infer<typeof shivirVolunteerRowSchema>;
 
 export const noticeItemSchema = z.object({
   id: z.string(),

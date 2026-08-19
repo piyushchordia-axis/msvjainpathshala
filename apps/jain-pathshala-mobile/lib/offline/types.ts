@@ -54,9 +54,15 @@ export type PendingShivirScanOp = {
    * be permanently lost rather than retried.
    */
   qr_signature: string;
-  /** Defaults to "present" server-side; carried so an offline scan keeps its intent. */
+  /**
+   * Omitted in in_out mode so the SERVER derives the next leg from the
+   * student's last scan (SPEC 8.6). Carried only when a volunteer deliberately
+   * overrode the derived kind.
+   */
   scan_kind?: "present" | "check_in" | "check_out";
   scanned_at: string;
+  /** AT19 per-item ULID — the server's idempotency anchor for this scan. */
+  client_op_id?: string;
   client_timestamp: string;
 };
 

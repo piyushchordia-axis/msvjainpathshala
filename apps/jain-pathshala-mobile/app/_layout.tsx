@@ -94,6 +94,7 @@ function RootLayoutNav() {
       <Stack.Screen name="notices" options={{ title: hi ? "सूचनाएँ" : "Notices" }} />
       <Stack.Screen name="centre/[id]" options={{ title: hi ? "केंद्र" : "Centre" }} />
       <Stack.Screen name="shivir/[id]" options={{ title: hi ? "शिविर" : "Shivir" }} />
+      <Stack.Screen name="my-shivirs" options={{ title: hi ? "मेरे शिविर" : "My shivirs" }} />
       <Stack.Screen
         name="shivir-scan/[id]"
         options={{ title: hi ? "उपस्थिति स्कैन" : "Scan attendance" }}

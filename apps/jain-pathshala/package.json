@@ -82,6 +82,7 @@
     "@jp/shared": "workspace:*",
     "@tanstack/react-virtual": "^3.14.9",
     "@workspace/i18n": "workspace:*",
+    "socket.io-client": "^4.8.3",
     "ulid": "^3.0.2"
   }
 }

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ScanLine, RefreshCw, Plus } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ScanLine, RefreshCw, Plus, Wifi, WifiOff } from 'lucide-react';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow } from '@/components/admin/AdminPageShell';
+import { useShivirLiveFeed } from '@/hooks/useShivirLiveFeed';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -18,7 +19,8 @@ import {
 
 interface ShivirRow {
   id: string;
-  name: string;
+  name_en: string;
+  name_hi: string | null;
   city_name: string;
   start_date: string;
   end_date: string;
@@ -33,11 +35,14 @@ interface SessionCountRow {
   checked_in: number;
   checked_out: number;
   distinct_students: number;
+  /** Scanned without a registration — allowed, but the venue should see it. */
+  walk_ins: number;
 }
 
 interface DashboardData {
   sessions: SessionCountRow[];
   registered_total: number;
+  cancelled_total: number;
 }
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -160,27 +165,45 @@ export default function ShivirDashboardPage() {
     };
   }, []);
 
-  async function loadDashboard(shivirId: string) {
-    if (!shivirId) {
-      setDash(null);
-      return;
-    }
-    setDashLoading(true);
-    setDashError(null);
-    try {
-      const res = await apiGet<DashboardData>(`/v1/shivir-scanner/shivirs/${shivirId}/dashboard`);
-      setDash(res);
-    } catch (err) {
-      setDashError(err instanceof ApiError ? err.message : 'Failed to load dashboard.');
-      setDash(null);
-    } finally {
-      setDashLoading(false);
-    }
-  }
+  /**
+   * `seq` is the stale-response guard. With a live feed the dashboard reloads
+   * on every scan, so slow and fast responses genuinely overlap — without it
+   * an older payload can land last and roll the counts backwards.
+   */
+  const seq = useRef(0);
+  const loadDashboard = useCallback(
+    async (shivirId: string, opts: { quiet?: boolean } = {}) => {
+      if (!shivirId) {
+        setDash(null);
+        return;
+      }
+      const mine = ++seq.current;
+      // A background refresh must not flash the table into its loading state.
+      if (!opts.quiet) setDashLoading(true);
+      setDashError(null);
+      try {
+        const res = await apiGet<DashboardData>(`/v1/shivir-scanner/shivirs/${shivirId}/dashboard`);
+        if (seq.current !== mine) return;
+        setDash(res);
+      } catch (err) {
+        if (seq.current !== mine) return;
+        setDashError(err instanceof ApiError ? err.message : 'Failed to load dashboard.');
+        setDash(null);
+      } finally {
+        if (seq.current === mine && !opts.quiet) setDashLoading(false);
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
-    loadDashboard(selectedId);
-  }, [selectedId]);
+    void loadDashboard(selectedId);
+  }, [selectedId, loadDashboard]);
+
+  const onScan = useCallback(() => {
+    void loadDashboard(selectedId, { quiet: true });
+  }, [loadDashboard, selectedId]);
+  const live = useShivirLiveFeed(selectedId, onScan);
 
   const selected = useMemo(
     () => shivirs.find((s) => s.id === selectedId) ?? null,
@@ -214,7 +237,7 @@ export default function ShivirDashboardPage() {
               ) : (
                 shivirs.map((s) => (
                   <option key={s.id} value={s.id}>
-                    {s.name} — {s.city_name}
+                    {s.name_en} — {s.city_name}
                   </option>
                 ))
               )}
@@ -235,6 +258,19 @@ export default function ShivirDashboardPage() {
                 Registered: <span className="font-medium text-foreground">{dash.registered_total}</span>
               </span>
             ) : null}
+            {/* Honest about the transport: a dashboard that says "Live" while
+                silently polling is the drift this whole page had. */}
+            <span className="flex items-center gap-1 text-xs text-muted-foreground">
+              {live.connected ? (
+                <>
+                  <Wifi className="h-3.5 w-3.5 text-emerald-600" /> Live
+                </>
+              ) : (
+                <>
+                  <WifiOff className="h-3.5 w-3.5" /> Refreshing every 10s
+                </>
+              )}
+            </span>
           </div>
         </div>
         {selected ? (
@@ -249,13 +285,13 @@ export default function ShivirDashboardPage() {
       {dashError ? <AdminError message={dashError} /> : null}
 
       <AdminTable
-        columns={['Session', 'Date', 'Mode', 'Present', 'Checked in', 'Checked out', 'Distinct students']}
+        columns={['Session', 'Date', 'Mode', 'Attendance', 'Distinct students', 'Walk-ins']}
         loading={dashLoading}
         empty=""
-        colSpan={7}
+        colSpan={6}
       >
         {dash && dash.sessions.length === 0 && !dashLoading ? (
-          <AdminEmptyRow colSpan={7} message="No sessions yet for this shivir." />
+          <AdminEmptyRow colSpan={6} message="No sessions yet for this shivir." />
         ) : null}
         {(dash?.sessions ?? []).map((s) => (
           <tr key={s.id} className="hover:bg-muted/30">
@@ -264,10 +300,24 @@ export default function ShivirDashboardPage() {
               {new Date(s.session_date).toLocaleDateString('en-GB')}
             </td>
             <td className="px-4 py-3 text-xs capitalize">{s.attendance_mode.replace('_', ' ')}</td>
-            <td className="px-4 py-3">{s.present}</td>
-            <td className="px-4 py-3">{s.checked_in}</td>
-            <td className="px-4 py-3">{s.checked_out}</td>
+            {/* Only the counts this mode can produce. Rendering all four put
+                three permanent zeros next to every present_only session. */}
+            <td className="px-4 py-3">
+              {s.attendance_mode === 'present_only' ? (
+                <span>{s.present} present</span>
+              ) : (
+                <span>
+                  {s.checked_in} in · {s.checked_out} out
+                  {s.checked_in - s.checked_out > 0 ? (
+                    <span className="ml-2 text-xs text-muted-foreground">
+                      ({s.checked_in - s.checked_out} still inside)
+                    </span>
+                  ) : null}
+                </span>
+              )}
+            </td>
             <td className="px-4 py-3 font-medium">{s.distinct_students}</td>
+            <td className="px-4 py-3">{s.walk_ins}</td>
           </tr>
         ))}
       </AdminTable>

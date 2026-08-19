@@ -5,6 +5,8 @@ import {
   cities,
   states,
   batches,
+  msv_enrolments,
+  students,
   shivir_events,
   courses,
   course_sections,
@@ -13,6 +15,9 @@ import {
 import { and, asc, eq, gte, ilike, isNull, ne, or, sql } from "drizzle-orm";
 import { ok, fail } from "../../lib/envelope";
 import { clampLimit } from "../../lib/route-helpers";
+import { optionalAuth } from "../../middlewares/auth";
+import { canAccessAdminPanel, type Role } from "@workspace/api-zod";
+import { todayIst } from "../../services/session-materialise";
 import { buildLibraryTree, buildLibrarySection, buildLibraryItem } from "../../lib/library-tree";
 import { buildLibraryManifest } from "../../lib/library-manifest";
 
@@ -164,25 +169,74 @@ router.get("/centres/:id", async (req: Request, res: Response) => {
   ok(res, { centre, batches: batchRows });
 });
 
+/**
+ * Whether the caller may see msv_only shivirs (SPEC 6.14 — guests get public
+ * shivirs only).
+ *
+ * These routes are open by design, so eligibility is resolved from an OPTIONAL
+ * token: a guest, or a signed-in parent with no MSV child, sees public shivirs;
+ * a parent with an approved MSV child, an MSV student, or any staff member sees
+ * everything. Being unauthenticated is never an error here, only a narrower view.
+ */
+async function callerIsMsvEligible(req: Request): Promise<boolean> {
+  const user = req.authUser;
+  if (!user) return false;
+  if (canAccessAdminPanel(user.role as Role)) return true;
+
+  const [row] = await db
+    .select({ id: students.id })
+    .from(students)
+    .innerJoin(msv_enrolments, eq(msv_enrolments.student_id, students.id))
+    .where(
+      and(
+        or(eq(students.parent_id, user.id), eq(students.user_id, user.id)),
+        eq(students.status, "active"),
+        isNull(students.deleted_at),
+        eq(msv_enrolments.status, "approved"),
+      ),
+    )
+    .limit(1);
+  return !!row;
+}
+
 /* GET /v1/public/shivirs */
-router.get("/shivirs", async (req: Request, res: Response) => {
+router.get("/shivirs", optionalAuth, async (req: Request, res: Response) => {
   // Previously unbounded — the only public list with no cap at all.
   const limit = clampLimit(req.query.limit, 100, 300);
   const offset = parseOffset(req.query.offset);
-  const today = new Date().toISOString().slice(0, 10);
+  // Asia/Kolkata, not UTC: the UTC day flips at 05:30 IST, so a shivir that
+  // ended yesterday stayed listed all morning and one ending today vanished
+  // before breakfast.
+  const today = todayIst();
+  const msvEligible = await callerIsMsvEligible(req);
+
   const rows = await db
     .select({
       id: shivir_events.id,
-      name: shivir_events.name,
-      description: shivir_events.description,
+      name_en: shivir_events.name_en,
+      name_hi: shivir_events.name_hi,
+      description_en: shivir_events.description_en,
+      description_hi: shivir_events.description_hi,
       start_date: shivir_events.start_date,
       end_date: shivir_events.end_date,
       location_text: shivir_events.location_text,
+      capacity: shivir_events.capacity,
+      msv_only: shivir_events.msv_only,
       city_name: cities.name,
     })
     .from(shivir_events)
     .innerJoin(cities, eq(cities.id, shivir_events.city_id))
-    .where(and(eq(shivir_events.is_published, true), gte(shivir_events.end_date, today)))
+    .where(
+      and(
+        eq(shivir_events.is_published, true),
+        isNull(shivir_events.deleted_at),
+        gte(shivir_events.end_date, today),
+        // SPEC 6.14: a guest sees public shivirs only. An MSV-only camp was
+        // listed to everyone, so families who could never attend one were
+        // shown it and had to be turned away by hand.
+        msvEligible ? undefined : eq(shivir_events.msv_only, false),
+      ),
+    )
     .orderBy(asc(shivir_events.start_date), asc(shivir_events.id))
     .offset(offset)
     .limit(limit + 1);
@@ -192,29 +246,45 @@ router.get("/shivirs", async (req: Request, res: Response) => {
 });
 
 /* GET /v1/public/shivirs/:id */
-router.get("/shivirs/:id", async (req: Request, res: Response) => {
+router.get("/shivirs/:id", optionalAuth, async (req: Request, res: Response) => {
   const id = String(req.params.id);
   if (!UUID_RE.test(id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Shivir not found.");
     return;
   }
+  const msvEligible = await callerIsMsvEligible(req);
   const [shivir] = await db
     .select({
       id: shivir_events.id,
-      name: shivir_events.name,
-      description: shivir_events.description,
+      name_en: shivir_events.name_en,
+      name_hi: shivir_events.name_hi,
+      description_en: shivir_events.description_en,
+      description_hi: shivir_events.description_hi,
       start_date: shivir_events.start_date,
       end_date: shivir_events.end_date,
       location_text: shivir_events.location_text,
       city_name: cities.name,
       state_name: states.name,
       capacity: shivir_events.capacity,
+      msv_only: shivir_events.msv_only,
+      attendance_mode: shivir_events.attendance_mode,
       contact_info: shivir_events.contact_info,
+      registered_count: sql<number>`(
+        select count(*)::int from shivir_registrations r
+        where r.shivir_id = ${shivir_events.id} and r.status = 'registered'
+      )`,
     })
     .from(shivir_events)
     .innerJoin(cities, eq(cities.id, shivir_events.city_id))
     .innerJoin(states, eq(states.id, cities.state_id))
-    .where(and(eq(shivir_events.id, id), eq(shivir_events.is_published, true)))
+    .where(
+      and(
+        eq(shivir_events.id, id),
+        eq(shivir_events.is_published, true),
+        isNull(shivir_events.deleted_at),
+        msvEligible ? undefined : eq(shivir_events.msv_only, false),
+      ),
+    )
     .limit(1);
 
   if (!shivir) {

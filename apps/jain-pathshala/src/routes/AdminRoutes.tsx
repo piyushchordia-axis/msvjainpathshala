@@ -32,6 +32,7 @@ const CompetitionsAdminPage = lazy(() => import("@/pages/admin/CompetitionsPage"
 const QuizzesAdminPage = lazy(() => import("@/pages/admin/QuizzesPage"));
 const MsvAdminPage = lazy(() => import("@/pages/admin/MsvAdminPage"));
 const ShivirDashboardPage = lazy(() => import("@/pages/admin/ShivirDashboardPage"));
+const ShivirAdminDetailPage = lazy(() => import("@/pages/admin/ShivirAdminDetailPage"));
 const EnquiriesAdminPage = lazy(() => import("@/pages/admin/EnquiriesPage"));
 
 const AdminCentresPage = lazy(() =>
@@ -142,7 +143,8 @@ export default function AdminRoutes() {
           <Route path="/admin/progress" component={ProgressAdminPage} />
           <Route path="/admin/competitions" component={CompetitionsAdminPage} />
           <Route path="/admin/quizzes" component={QuizzesAdminPage} />
-          <Route path="/admin/shivirs" component={AdminShivirsPage} />
+          <Route path="/admin/shivirs/:id" component={ShivirAdminDetailPage} />
+        <Route path="/admin/shivirs" component={AdminShivirsPage} />
           <Route path="/admin/punya/manual-award" component={PunyaAwardPage} />
           <Route path="/admin/punya/configs" component={PunyaConfigsPage} />
           <Route path="/admin/punya/audit" component={PunyaAuditPage} />

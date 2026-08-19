@@ -5,108 +5,65 @@
  * Pathshala attendance_percentage, attendance streaks, or automatic attendance
  * Punya. Shivir Punya is awarded only via the manual `msv_shivir` feature.
  *
- * Shivirs are CITY-scoped. Admin-panel routes (session create/list + dashboard)
- * verify the shivir's city is in the caller's city scope (404 out of scope).
+ * Shivirs are CITY-scoped. Authorization and the scan state machine both live in
+ * services/shivir-scan.ts + lib/shivir-access.ts, NOT here — this router used to
+ * own a second copy of the scan transaction, which is how the /v1/sync/batch
+ * path came to enforce nothing. The route is now transport only.
  *
- * The scan endpoint is open to any authed caller who is EITHER a registered
- * shivir volunteer for that shivir OR an admin-panel user whose city scope
- * includes the shivir's city (super_admin = unrestricted); out-of-scope callers
- * get a 404 (the session is not revealed). It then validates scan_kind against
- * the session's attendance_mode, verifies the signed ID-card QR with the shared
- * idcard-crypto HMAC, and — inside one transaction holding a per-student advisory
- * lock — re-checks the live digital_id_cards row before inserting, so a
- * stale/revoked QR (bumped version_no or is_active=false), even if revoked
- * concurrently, no longer records a scan (the same revocation rule as the
- * id-cards module, made atomic).
+ * Roles (SPEC 6.14, see SHIVIR_OPS_ROLES): sessions and the dashboard need an
+ * ops role; scanning needs an ops role in city scope OR a live volunteer
+ * assignment. Out-of-scope callers get a 404 — never a 403, which would confirm
+ * the shivir exists.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
 import {
   db,
-  shivir_events,
   shivir_sessions,
   shivir_attendance_scans,
-  shivir_volunteers,
   shivir_registrations,
-  digital_id_cards,
   students,
-  centres,
-  cities,
   type User,
 } from "@workspace/db";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { z } from "zod";
-import { canAccessAdminPanel } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
-import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
-import { resolveAdminScope } from "../../lib/scope";
-import { verifyCardSignature, parseCardPayload } from "../../lib/idcard-crypto";
+import { requireAuth, requireShivirOps } from "../../middlewares/auth";
+import { auditFromReq } from "../../lib/audit";
+import { cityIdsForUser } from "../../lib/scope";
+import {
+  assertShivirScanAccess,
+  canActOnShivir,
+  cityInScope,
+  getShivir,
+} from "../../lib/shivir-access";
+import { applyShivirScan, ShivirScanError } from "../../services/shivir-scan";
+import { emitShivirScan } from "../../lib/shivir-feed";
+import { enqueueParentShivirNotify } from "../../lib/shivir-notify";
 
 const router: IRouter = Router();
 router.use(requireAuth);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/* ---- city scope: null = all (super_admin); [] = nothing; else city ids ---- */
-async function cityScopeForUser(user: User): Promise<string[] | null> {
-  if (user.role === "super_admin") return null;
-  if (user.role === "city_admin") return user.city_id ? [user.city_id] : [];
-  if (user.role === "state_admin") {
-    if (!user.state_id) return [];
-    const rows = await db
-      .select({ id: cities.id })
-      .from(cities)
-      .where(eq(cities.state_id, user.state_id));
-    return rows.map((r) => r.id);
+function clampLimit(raw: unknown, fallback: number, max: number): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(Math.floor(n), max);
+}
+
+/** Ops-role + city-scope gate for the admin-facing shivir routes. */
+async function requireShivirInScope(req: Request, res: Response, shivirId: string) {
+  if (!UUID_RE.test(shivirId)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Shivir not found.");
+    return null;
   }
-  const scope = await resolveAdminScope(user);
-  if (scope.centreIds === null) return null;
-  if (scope.centreIds.length === 0) return [];
-  const rows = await db
-    .select({ city_id: centres.city_id })
-    .from(centres)
-    .where(inArray(centres.id, scope.centreIds));
-  return Array.from(new Set(rows.map((r) => r.city_id)));
-}
-
-function cityInScope(cityIds: string[] | null, cityId: string | null): boolean {
-  if (cityIds === null) return true;
-  if (!cityId) return false;
-  return cityIds.includes(cityId);
-}
-
-/** Fetch a shivir row (id + city + name) or null. */
-async function getShivir(shivirId: string) {
-  const [row] = await db
-    .select({ id: shivir_events.id, city_id: shivir_events.city_id, name: shivir_events.name })
-    .from(shivir_events)
-    .where(eq(shivir_events.id, shivirId))
-    .limit(1);
-  return row ?? null;
-}
-
-/**
- * The scan/scan-context authorization rule, shared by every volunteer-facing
- * route: the caller may act on a shivir if they are EITHER a registered
- * volunteer for THIS shivir, OR an admin-panel user whose city scope includes
- * the shivir's city (super_admin = unrestricted). Out-of-scope callers get a
- * 404 (the shivir/session is never revealed).
- */
-async function canActOnShivir(user: User, shivirCityId: string | null, shivirId: string): Promise<boolean> {
-  if (canAccessAdminPanel(user.role)) {
-    const cityIds = await cityScopeForUser(user);
-    if (cityInScope(cityIds, shivirCityId)) return true;
+  const cityIds = await cityIdsForUser(req.authUser!);
+  const shivir = await getShivir(shivirId);
+  if (!shivir || !cityInScope(cityIds, shivir.city_id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Shivir not found.");
+    return null;
   }
-  const [vol] = await db
-    .select({ id: shivir_volunteers.id })
-    .from(shivir_volunteers)
-    .where(
-      and(
-        eq(shivir_volunteers.shivir_id, shivirId),
-        eq(shivir_volunteers.user_id, user.id),
-      ),
-    )
-    .limit(1);
-  return !!vol;
+  return shivir;
 }
 
 /* ═══════════════════════════ ADMIN — sessions ═══════════════════════════ */
@@ -114,13 +71,16 @@ async function canActOnShivir(user: User, shivirCityId: string | null, shivirId:
 const createSessionSchema = z.object({
   title: z.string().min(1).max(300),
   session_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  day_number: z.coerce.number().int().min(1).max(365).optional(),
+  start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
+  end_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),
   attendance_mode: z.enum(["in_out", "present_only"]).default("present_only"),
 });
 
 /* POST /v1/shivir-scanner/shivirs/:shivirId/sessions — create a session (scoped) */
 router.post(
   "/shivirs/:shivirId/sessions",
-  requireAdminPanel,
+  requireShivirOps,
   async (req: Request, res: Response) => {
     let body: z.infer<typeof createSessionSchema>;
     try {
@@ -131,26 +91,69 @@ router.post(
     }
 
     const shivirId = String(req.params.shivirId);
-    if (!UUID_RE.test(shivirId)) {
-      fail(res, 404, "ERR_NOT_FOUND", "Shivir not found.");
+    const shivir = await requireShivirInScope(req, res, shivirId);
+    if (!shivir) return;
+
+    // A session dated outside the shivir is always a typo, and it renders as a
+    // ghost day on the dashboard that no volunteer can explain.
+    if (body.session_date < shivir.start_date || body.session_date > shivir.end_date) {
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        `That date is outside the shivir — it runs from ${shivir.start_date} to ${shivir.end_date}.`,
+      );
       return;
     }
-    const cityIds = await cityScopeForUser(req.authUser!);
-    const shivir = await getShivir(shivirId);
-    if (!shivir || !cityInScope(cityIds, shivir.city_id)) {
-      fail(res, 404, "ERR_NOT_FOUND", "Shivir not found.");
+    if (body.start_time && body.end_time && body.end_time <= body.start_time) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "The end time must be after the start time.");
       return;
     }
 
-    const [row] = await db
-      .insert(shivir_sessions)
-      .values({
+    // Default day_number to the next free slot so the volunteer-facing session
+    // list is ordered even when the admin does not supply one.
+    let dayNumber = body.day_number ?? null;
+    if (dayNumber === null) {
+      const [max] = await db
+        .select({ n: sql<number | null>`max(${shivir_sessions.day_number})` })
+        .from(shivir_sessions)
+        .where(eq(shivir_sessions.shivir_id, shivirId));
+      dayNumber = (max?.n ?? 0) + 1;
+    }
+
+    let row: { id: string };
+    try {
+      const inserted = await db
+        .insert(shivir_sessions)
+        .values({
+          shivir_id: shivirId,
+          title: body.title,
+          day_number: dayNumber,
+          session_date: body.session_date,
+          start_time: body.start_time ?? null,
+          end_time: body.end_time ?? null,
+          attendance_mode: body.attendance_mode,
+        })
+        .returning({ id: shivir_sessions.id });
+      row = inserted[0]!;
+    } catch {
+      fail(res, 409, "ERR_CONFLICT", "A session already uses that day number.");
+      return;
+    }
+
+    await auditFromReq(req, {
+      action: "create",
+      entityKind: "shivir_session",
+      entityId: row.id,
+      summary: `Created shivir session "${body.title}".`,
+      metadata: {
         shivir_id: shivirId,
-        title: body.title,
         session_date: body.session_date,
+        day_number: dayNumber,
         attendance_mode: body.attendance_mode,
-      })
-      .returning({ id: shivir_sessions.id });
+      },
+    });
+
     ok(res, { id: row.id });
   },
 );
@@ -158,25 +161,20 @@ router.post(
 /* GET /v1/shivir-scanner/shivirs/:shivirId/sessions — list sessions (scoped) */
 router.get(
   "/shivirs/:shivirId/sessions",
-  requireAdminPanel,
+  requireShivirOps,
   async (req: Request, res: Response) => {
     const shivirId = String(req.params.shivirId);
-    if (!UUID_RE.test(shivirId)) {
-      fail(res, 404, "ERR_NOT_FOUND", "Shivir not found.");
-      return;
-    }
-    const cityIds = await cityScopeForUser(req.authUser!);
-    const shivir = await getShivir(shivirId);
-    if (!shivir || !cityInScope(cityIds, shivir.city_id)) {
-      fail(res, 404, "ERR_NOT_FOUND", "Shivir not found.");
-      return;
-    }
+    const shivir = await requireShivirInScope(req, res, shivirId);
+    if (!shivir) return;
 
     const rows = await db
       .select({
         id: shivir_sessions.id,
         title: shivir_sessions.title,
+        day_number: shivir_sessions.day_number,
         session_date: shivir_sessions.session_date,
+        start_time: shivir_sessions.start_time,
+        end_time: shivir_sessions.end_time,
         attendance_mode: shivir_sessions.attendance_mode,
         created_at: shivir_sessions.created_at,
       })
@@ -188,13 +186,12 @@ router.get(
   },
 );
 
-/* ═══════════════ SCAN CONTEXT (volunteer/shikshak/admin) ═══════════════ */
+/* ═══════════════ SCAN CONTEXT (volunteer / ops admin) ═══════════════ */
 
 /*
  * GET /v1/shivir-scanner/shivirs/:shivirId/scan-context
- * The data the scanner screen needs before it can scan: the shivir name and its
- * sessions (with a live per-kind count). Open to the same callers as the scan
- * endpoint (registered volunteer OR in-scope admin); out-of-scope is a 404.
+ * The data the scanner screen needs before it can scan. Open to the same callers
+ * as the scan endpoint; out-of-scope is a 404.
  */
 router.get("/shivirs/:shivirId/scan-context", async (req: Request, res: Response) => {
   const shivirId = String(req.params.shivirId);
@@ -202,21 +199,43 @@ router.get("/shivirs/:shivirId/scan-context", async (req: Request, res: Response
     fail(res, 404, "ERR_NOT_FOUND", "Shivir not found.");
     return;
   }
-  const shivir = await getShivir(shivirId);
-  if (!shivir || !(await canActOnShivir(req.authUser!, shivir.city_id, shivirId))) {
-    fail(res, 404, "ERR_NOT_FOUND", "Shivir not found.");
+  const access = await assertShivirScanAccess(req.authUser!, shivirId);
+  if (!access.ok) {
+    fail(res, 404, access.code, access.message);
     return;
   }
 
-  const sessions = await db
+  const sessions = await sessionCounts(shivirId);
+  ok(
+    res,
+    {
+      shivir: {
+        id: access.shivir.id,
+        name_en: access.shivir.name_en,
+        name_hi: access.shivir.name_hi,
+      },
+      sessions,
+    },
+    { count: sessions.length },
+  );
+});
+
+/** Per-session scan tallies, shared by scan-context and the dashboard. */
+async function sessionCounts(shivirId: string) {
+  return db
     .select({
       id: shivir_sessions.id,
       title: shivir_sessions.title,
+      day_number: shivir_sessions.day_number,
       session_date: shivir_sessions.session_date,
+      start_time: shivir_sessions.start_time,
+      end_time: shivir_sessions.end_time,
       attendance_mode: shivir_sessions.attendance_mode,
       present: sql<number>`count(${shivir_attendance_scans.id}) filter (where ${shivir_attendance_scans.scan_kind} = 'present')::int`,
       checked_in: sql<number>`count(${shivir_attendance_scans.id}) filter (where ${shivir_attendance_scans.scan_kind} = 'check_in')::int`,
       checked_out: sql<number>`count(${shivir_attendance_scans.id}) filter (where ${shivir_attendance_scans.scan_kind} = 'check_out')::int`,
+      distinct_students: sql<number>`count(distinct ${shivir_attendance_scans.student_id})::int`,
+      walk_ins: sql<number>`count(distinct ${shivir_attendance_scans.student_id}) filter (where ${shivir_attendance_scans.was_registered} = false)::int`,
     })
     .from(shivir_sessions)
     .leftJoin(
@@ -226,19 +245,34 @@ router.get("/shivirs/:shivirId/scan-context", async (req: Request, res: Response
     .where(eq(shivir_sessions.shivir_id, shivirId))
     .groupBy(shivir_sessions.id)
     .orderBy(asc(shivir_sessions.session_date), asc(shivir_sessions.created_at));
+}
 
-  ok(res, { shivir: { id: shivir.id, name: shivir.name }, sessions }, { count: sessions.length });
-});
-
-/* ═══════════════════════════ SCAN (volunteer/shikshak/admin) ═══════════════════════════ */
+/* ═══════════════════════════ SCAN ═══════════════════════════ */
 
 const scanSchema = z.object({
   qr_payload: z.string().min(1).max(2000),
   qr_signature: z.string().min(1).max(256),
-  scan_kind: z.enum(["check_in", "check_out", "present"]).default("present"),
+  /**
+   * Optional on purpose. Omitting it in in_out mode lets the server derive the
+   * next leg from the student's last scan (SPEC 8.6) instead of trusting a
+   * toggle the volunteer may have forgotten to flip.
+   */
+  scan_kind: z.enum(["check_in", "check_out", "present"]).optional(),
+  scanned_at: z.string().datetime().optional(),
+  client_op_id: z.string().length(26).optional(),
 });
 
-/* POST /v1/shivir-scanner/sessions/:sessionId/scan — record one QR scan */
+/*
+ * POST /v1/shivir-scanner/sessions/:sessionId/scan — record one QR scan.
+ *
+ * Deliberately NOT written to audit_logs. Every field an audit entry would
+ * carry — who scanned, which student, when, from which transport — is already a
+ * column on shivir_attendance_scans, and the table is append-only in practice
+ * (nothing updates or deletes a scan). Duplicating a few hundred rows per shivir
+ * into audit_logs would bury the admin actions that log exists to make findable.
+ * Session create, volunteer assignment and shivir edits ARE audited, because
+ * those leave no other record of who decided what.
+ */
 router.post("/sessions/:sessionId/scan", async (req: Request, res: Response) => {
   let body: z.infer<typeof scanSchema>;
   try {
@@ -254,131 +288,56 @@ router.post("/sessions/:sessionId/scan", async (req: Request, res: Response) => 
     return;
   }
 
-  // Resolve the session -> its shivir (for the authorization + mode checks).
-  const [session] = await db
-    .select({
-      id: shivir_sessions.id,
-      shivir_id: shivir_sessions.shivir_id,
-      attendance_mode: shivir_sessions.attendance_mode,
-    })
-    .from(shivir_sessions)
-    .where(eq(shivir_sessions.id, sessionId))
-    .limit(1);
-  if (!session) {
-    fail(res, 404, "ERR_NOT_FOUND", "Session not found.");
-    return;
-  }
-
-  // Authorization (city-scoped): the caller must EITHER be a registered
-  // volunteer for THIS shivir, OR an admin-panel user whose city scope includes
-  // the shivir's city. Out-of-scope is a 404 (do not reveal the session exists).
-  const authUser = req.authUser!;
-  const shivir = await getShivir(session.shivir_id);
-  if (!shivir || !(await canActOnShivir(authUser, shivir.city_id, session.shivir_id))) {
-    fail(res, 404, "ERR_NOT_FOUND", "Session not found.");
-    return;
-  }
-
-  // The scan_kind must be compatible with the session's attendance_mode.
-  const validKinds =
-    session.attendance_mode === "present_only"
-      ? (["present"] as const)
-      : (["check_in", "check_out"] as const);
-  if (!(validKinds as readonly string[]).includes(body.scan_kind)) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "scan_kind is not valid for this session's attendance mode.");
-    return;
-  }
-
-  // Verify the signed ID-card QR (HMAC) — bad signature -> 401.
-  if (!verifyCardSignature(body.qr_payload, body.qr_signature)) {
-    fail(res, 401, "ERR_SIGNATURE_INVALID", "Signature is invalid.");
-    return;
-  }
-  const parsed = parseCardPayload(body.qr_payload);
-  if (!parsed || !UUID_RE.test(parsed.student_id)) {
-    fail(res, 401, "ERR_SIGNATURE_INVALID", "Signature is invalid.");
-    return;
-  }
-
-  // Atomic revocation re-check + insert: serialize per-student with an advisory
-  // xact lock so a card revoked/version-bumped concurrently cannot still record a
-  // scan (TOCTOU between the revocation read and the insert).
-  const result = await db.transaction(async (tx) => {
-    await tx.execute(
-      sql`select pg_advisory_xact_lock(hashtextextended(${parsed.student_id}::text, 0))`,
-    );
-
-    // Revocation rule: the card must still be active and at the same version_no.
-    const [card] = await tx
-      .select({ version_no: digital_id_cards.version_no, is_active: digital_id_cards.is_active })
-      .from(digital_id_cards)
-      .where(eq(digital_id_cards.student_id, parsed.student_id))
-      .limit(1);
-    if (!card || !card.is_active || card.version_no !== parsed.v) {
-      return { status: "revoked" as const };
+  let data;
+  try {
+    data = await applyShivirScan({
+      sessionId,
+      actor: req.authUser as User,
+      qr_payload: body.qr_payload,
+      qr_signature: body.qr_signature,
+      scan_kind: body.scan_kind,
+      scanned_at: body.scanned_at,
+      client_op_id: body.client_op_id,
+      device_offline: false,
+    });
+  } catch (err) {
+    if (err instanceof ShivirScanError) {
+      fail(res, err.httpStatus, err.code, err.message);
+      return;
     }
-
-    const [student] = await tx
-      .select({ id: students.id, full_name: students.full_name, student_code: students.student_code })
-      .from(students)
-      .where(eq(students.id, parsed.student_id))
-      .limit(1);
-    if (!student) {
-      return { status: "no_student" as const };
-    }
-
-    // Idempotent against shivir_attendance_scans_session_student_kind_unique:
-    // a re-scan of the same (session, student, kind) is a no-op, so duplicate
-    // scans never inflate the live counts. An empty returning => the scan
-    // already existed (duplicate); a row => this scan recorded it fresh.
-    const inserted = await tx
-      .insert(shivir_attendance_scans)
-      .values({
-        shivir_session_id: sessionId,
-        student_id: student.id,
-        volunteer_user_id: authUser.id,
-        scan_kind: body.scan_kind,
-        scanned_at: new Date(),
-      })
-      .onConflictDoNothing({
-        target: [
-          shivir_attendance_scans.shivir_session_id,
-          shivir_attendance_scans.student_id,
-          shivir_attendance_scans.scan_kind,
-        ],
-      })
-      .returning({ id: shivir_attendance_scans.id });
-
-    return { status: "ok" as const, student, duplicate: inserted.length === 0 };
-  });
-
-  if (result.status === "revoked") {
-    fail(res, 401, "ERR_SIGNATURE_INVALID", "Signature is invalid.");
-    return;
-  }
-  if (result.status === "no_student") {
-    fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
-    return;
+    throw err;
   }
 
-  // A live running count for this session+kind so the scanner can show progress
-  // without a separate round-trip (cheap: indexed on shivir_session_id).
-  const [{ count }] = await db
+  if (!data.duplicate) {
+    // Both best-effort: a push or socket hiccup must never fail a scan that is
+    // already committed and is the only record this child was here (AT28).
+    void enqueueParentShivirNotify(data.student_id, sessionId, data.scan_kind);
+    emitShivirScan(data.shivir_id, {
+      session_id: sessionId,
+      student_id: data.student_id,
+      scan_kind: data.scan_kind,
+      was_registered: data.was_registered,
+      scanned_at: data.scanned_at,
+    });
+  }
+
+  const [countRow] = await db
     .select({
-      count: sql<number>`count(*) filter (where ${shivir_attendance_scans.scan_kind} = ${body.scan_kind})::int`,
+      count: sql<number>`count(*) filter (where ${shivir_attendance_scans.scan_kind} = ${data.scan_kind})::int`,
     })
     .from(shivir_attendance_scans)
     .where(eq(shivir_attendance_scans.shivir_session_id, sessionId));
 
   ok(res, {
     student: {
-      id: result.student.id,
-      full_name: result.student.full_name,
-      student_code: result.student.student_code,
+      id: data.student_id,
+      full_name: data.full_name,
+      student_code: data.student_code,
     },
-    scan_kind: body.scan_kind,
-    duplicate: result.duplicate,
-    count: count ?? 0,
+    scan_kind: data.scan_kind,
+    duplicate: data.duplicate,
+    was_registered: data.was_registered,
+    count: countRow?.count ?? 0,
   });
 });
 
@@ -387,50 +346,171 @@ router.post("/sessions/:sessionId/scan", async (req: Request, res: Response) => 
 /* GET /v1/shivir-scanner/shivirs/:shivirId/dashboard — live per-session counts */
 router.get(
   "/shivirs/:shivirId/dashboard",
-  requireAdminPanel,
+  requireShivirOps,
   async (req: Request, res: Response) => {
     const shivirId = String(req.params.shivirId);
-    if (!UUID_RE.test(shivirId)) {
-      fail(res, 404, "ERR_NOT_FOUND", "Shivir not found.");
-      return;
-    }
-    const cityIds = await cityScopeForUser(req.authUser!);
-    const shivir = await getShivir(shivirId);
-    if (!shivir || !cityInScope(cityIds, shivir.city_id)) {
-      fail(res, 404, "ERR_NOT_FOUND", "Shivir not found.");
-      return;
-    }
+    const shivir = await requireShivirInScope(req, res, shivirId);
+    if (!shivir) return;
 
-    const sessions = await db
+    const sessions = await sessionCounts(shivirId);
+
+    const [reg] = await db
       .select({
-        id: shivir_sessions.id,
-        title: shivir_sessions.title,
-        session_date: shivir_sessions.session_date,
-        attendance_mode: shivir_sessions.attendance_mode,
-        present: sql<number>`count(${shivir_attendance_scans.id}) filter (where ${shivir_attendance_scans.scan_kind} = 'present')::int`,
-        checked_in: sql<number>`count(${shivir_attendance_scans.id}) filter (where ${shivir_attendance_scans.scan_kind} = 'check_in')::int`,
-        checked_out: sql<number>`count(${shivir_attendance_scans.id}) filter (where ${shivir_attendance_scans.scan_kind} = 'check_out')::int`,
-        distinct_students: sql<number>`count(distinct ${shivir_attendance_scans.student_id})::int`,
+        registered: sql<number>`count(*) filter (where ${shivir_registrations.status} = 'registered')::int`,
+        cancelled: sql<number>`count(*) filter (where ${shivir_registrations.status} = 'cancelled')::int`,
       })
-      .from(shivir_sessions)
-      .leftJoin(
-        shivir_attendance_scans,
-        eq(shivir_attendance_scans.shivir_session_id, shivir_sessions.id),
-      )
-      .where(eq(shivir_sessions.shivir_id, shivirId))
-      .groupBy(shivir_sessions.id)
-      .orderBy(asc(shivir_sessions.session_date), asc(shivir_sessions.created_at));
-
-    const [{ registered }] = await db
-      .select({ registered: sql<number>`count(*)::int` })
       .from(shivir_registrations)
       .where(eq(shivir_registrations.shivir_id, shivirId));
 
     ok(res, {
+      shivir: {
+        id: shivir.id,
+        name_en: shivir.name_en,
+        name_hi: shivir.name_hi,
+        start_date: shivir.start_date,
+        end_date: shivir.end_date,
+        capacity: shivir.capacity,
+        attendance_mode: shivir.attendance_mode,
+      },
       sessions,
-      registered_total: registered ?? 0,
+      registered_total: reg?.registered ?? 0,
+      cancelled_total: reg?.cancelled ?? 0,
     });
   },
 );
+
+/*
+ * GET /v1/shivir-scanner/shivirs/:shivirId/roster?session_id=&status=
+ *
+ * Who is here, who is missing. A live count answers almost no question anyone
+ * actually asks at a venue — the Sanchalak needs names.
+ */
+router.get(
+  "/shivirs/:shivirId/roster",
+  requireShivirOps,
+  async (req: Request, res: Response) => {
+    const shivirId = String(req.params.shivirId);
+    const shivir = await requireShivirInScope(req, res, shivirId);
+    if (!shivir) return;
+
+    const sessionId = req.query.session_id ? String(req.query.session_id) : null;
+    if (sessionId && !UUID_RE.test(sessionId)) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid session_id.");
+      return;
+    }
+    const limit = clampLimit(req.query.limit, 200, 500);
+
+    const rows = await buildRoster(shivirId, sessionId, limit);
+    ok(res, { items: rows }, { count: rows.length });
+  },
+);
+
+export interface RosterRow {
+  student_id: string;
+  full_name: string;
+  student_code: string | null;
+  registered: boolean;
+  last_scan_kind: "present" | "check_in" | "check_out" | null;
+  last_scanned_at: string | null;
+  scan_count: number;
+  /** registered | scanned | walk_in | not_arrived — one word for the venue. */
+  state: "registered" | "scanned" | "walk_in" | "not_arrived";
+}
+
+/**
+ * The roster is a UNION of two populations: everyone registered (whether or not
+ * they turned up) and everyone scanned (whether or not they registered). Either
+ * side alone hides exactly the person you are looking for.
+ */
+export async function buildRoster(
+  shivirId: string,
+  sessionId: string | null,
+  limit: number,
+): Promise<RosterRow[]> {
+  const scanWhere = sessionId
+    ? and(
+        eq(shivir_attendance_scans.shivir_id, shivirId),
+        eq(shivir_attendance_scans.shivir_session_id, sessionId),
+      )
+    : eq(shivir_attendance_scans.shivir_id, shivirId);
+
+  const scanRows = await db
+    .select({
+      student_id: shivir_attendance_scans.student_id,
+      scan_kind: shivir_attendance_scans.scan_kind,
+      scanned_at: shivir_attendance_scans.scanned_at,
+      was_registered: shivir_attendance_scans.was_registered,
+    })
+    .from(shivir_attendance_scans)
+    .where(scanWhere)
+    .orderBy(desc(shivir_attendance_scans.scanned_at));
+
+  const regRows = await db
+    .select({ student_id: shivir_registrations.student_id })
+    .from(shivir_registrations)
+    .where(
+      and(
+        eq(shivir_registrations.shivir_id, shivirId),
+        eq(shivir_registrations.status, "registered"),
+      ),
+    );
+
+  const registered = new Set(regRows.map((r) => r.student_id));
+  const latest = new Map<
+    string,
+    { kind: "present" | "check_in" | "check_out"; at: Date; count: number }
+  >();
+  for (const s of scanRows) {
+    const prev = latest.get(s.student_id);
+    if (!prev) {
+      latest.set(s.student_id, { kind: s.scan_kind, at: s.scanned_at, count: 1 });
+    } else {
+      prev.count += 1;
+      if (s.scanned_at > prev.at) {
+        prev.kind = s.scan_kind;
+        prev.at = s.scanned_at;
+      }
+    }
+  }
+
+  const ids = Array.from(new Set([...registered, ...latest.keys()])).slice(0, limit);
+  if (ids.length === 0) return [];
+
+  const studentRows = await db
+    .select({
+      id: students.id,
+      full_name: students.full_name,
+      student_code: students.student_code,
+    })
+    .from(students)
+    .where(inArray(students.id, ids));
+
+  return studentRows
+    .map((s): RosterRow => {
+      const scan = latest.get(s.id);
+      const isRegistered = registered.has(s.id);
+      const state: RosterRow["state"] = scan
+        ? isRegistered
+          ? "scanned"
+          : "walk_in"
+        : isRegistered
+          ? "not_arrived"
+          : "registered";
+      return {
+        student_id: s.id,
+        full_name: s.full_name,
+        student_code: s.student_code,
+        registered: isRegistered,
+        last_scan_kind: scan?.kind ?? null,
+        last_scanned_at: scan?.at.toISOString() ?? null,
+        scan_count: scan?.count ?? 0,
+        state,
+      };
+    })
+    .sort((a, b) => a.full_name.localeCompare(b.full_name));
+}
+
+/** Re-exported so the admin export route shares one authorization rule. */
+export { canActOnShivir };
 
 export default router;

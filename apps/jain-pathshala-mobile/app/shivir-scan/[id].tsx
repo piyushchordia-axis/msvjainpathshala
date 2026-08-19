@@ -24,6 +24,12 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { apiGet, apiPost, ApiError } from "@/lib/api";
 import { bodyFamily } from "@/constants/typography";
 import { Body, Button, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { SyncOpStatus } from "@/components/SyncOpStatus";
+import { useQueueSyncOps } from "@/hooks/useQueueSyncOps";
+import { QUEUE_KEYS } from "@/lib/offline/queue-keys";
+import { retryOp } from "@/lib/offline/sync-engine";
+import type { PendingShivirScanOp } from "@/lib/offline/types";
+import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 
 type ScanKind = "check_in" | "check_out" | "present";
 type AttendanceMode = "in_out" | "present_only";
@@ -38,34 +44,61 @@ interface ScanSession {
   checked_out: number;
 }
 interface ScanContext {
-  shivir: { id: string; name: string };
+  shivir: { id: string; name_en: string; name_hi: string | null };
   sessions: ScanSession[];
 }
 interface ScanResult {
   student: { id: string; full_name: string | null; student_code: string };
+  /** The leg the SERVER chose — in in_out mode the client does not decide. */
   scan_kind: ScanKind;
   duplicate: boolean;
+  /** False when this student has no registration — recorded, not refused. */
+  was_registered: boolean;
   count: number;
 }
 
-/** A QR may encode the combined card token (payload + signature) or — for
- * forward-compat with a bare-payload QR — just the payload JSON. We pull both
- * fields out of whatever shape we can parse; the endpoint rejects anything that
- * doesn't carry a valid signature, so we never send a guess. */
+/**
+ * A QR encodes the combined card token: `{ qr_payload, qr_signature }`, or the
+ * short `{ p, s }` form.
+ *
+ * There is deliberately NO bare-payload branch. An earlier version of this
+ * comment promised one "for forward-compat", but the body never implemented it
+ * and could not: the scan endpoint requires a signature, so a payload-only QR
+ * would be rejected server-side anyway. Claiming support the code does not have
+ * sends the next reader hunting for a bug in the wrong place.
+ */
 function extractCardToken(raw: string): { qr_payload: string; qr_signature: string } | null {
   const text = raw.trim();
   try {
     const obj = JSON.parse(text) as Record<string, unknown>;
-    // Combined token: { qr_payload, qr_signature } (or short {p,s}).
     const payload = obj.qr_payload ?? obj.p;
     const signature = obj.qr_signature ?? obj.s;
     if (typeof payload === "string" && typeof signature === "string") {
       return { qr_payload: payload, qr_signature: signature };
     }
   } catch {
-    // not JSON — fall through
+    // Not JSON — a poster QR, a URL, somebody's UPI code. Not a card.
   }
   return null;
+}
+
+/**
+ * Should this failure fall back to the offline queue?
+ *
+ * Gating on `code === "ERR_NETWORK"` alone was too narrow: lib/api mints that
+ * code only when fetch itself throws with a recognised message, so a captive
+ * portal's 502, a 503, a 429, or the ERR_CONFIG path (statusCode 0) all fell
+ * through to "Scan failed" and the scan was DISCARDED. Per AT28 these scans are
+ * the only record that the child was there, so a discarded one is unrecoverable.
+ *
+ * 401/403 are excluded on purpose: they are the server refusing this caller, and
+ * queuing them would hide a real authorization problem behind a sync spinner.
+ */
+function isTransportFailure(err: unknown): boolean {
+  if (!(err instanceof ApiError)) return false;
+  if (err.code === "ERR_NETWORK") return true;
+  const status = err.statusCode;
+  return status === 0 || status === 429 || status >= 500;
 }
 
 /** Per-kind running count for the selected session. */
@@ -95,6 +128,8 @@ export default function ShivirScanScreen() {
   const [permission, requestPermission] = useCameraPermissions();
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [scanKind, setScanKind] = useState<ScanKind>("present");
+  /** What the server recorded for the most recent scan — display only. */
+  const [lastScanKind, setLastScanKind] = useState<ScanKind | null>(null);
   const [liveCount, setLiveCount] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<{
     tone: "success" | "warning" | "error" | "info";
@@ -112,28 +147,58 @@ export default function ShivirScanScreen() {
 
   const selectedSession = ctx.data?.sessions.find((s) => s.id === sessionId) ?? null;
 
+  /**
+   * Queued / failed scans for this session.
+   *
+   * jp.queue.shivir_scans had NO reader anywhere in the app, so a scan that
+   * went terminal (a revoked card scanned offline, say) sat in storage
+   * invisible and unretryable — a direct violation of the six-state failure
+   * table in CLAUDE.md's offline sync §8.
+   */
+  const { ops: syncOps, refresh: refreshSync } = useQueueSyncOps(
+    [QUEUE_KEYS.shivir_scans],
+    (payload) => (payload as PendingShivirScanOp).shivir_session_id === sessionId,
+  );
+  const pendingScans = syncOps.filter((o) => o.state === "queued" || o.state === "syncing").length;
+  const blockedSyncOp = syncOps.find((o) => o.state === "failed" || o.state === "conflict") ?? null;
+
   const scan = useMutation({
     mutationFn: async (vars: { qr_payload: string; qr_signature: string }): Promise<ScanResult> => {
+      const scannedAt = new Date().toISOString();
+      /**
+       * In in_out mode the kind is the SERVER's decision (SPEC 8.6): it reads
+       * the student's last scan and alternates. The on-screen toggle is a
+       * display of what will happen next, not an instruction — a volunteer who
+       * forgot to flip it used to silently drop a child's exit.
+       */
+      const sendKind = selectedSession?.attendance_mode === "in_out" ? undefined : "present";
       try {
         return await apiPost<ScanResult>(`/v1/shivir-scanner/sessions/${sessionId}/scan`, {
           qr_payload: vars.qr_payload,
           qr_signature: vars.qr_signature,
-          scan_kind: scanKind,
+          scan_kind: sendKind,
+          scanned_at: scannedAt,
         });
       } catch (err) {
         // Only a transport failure falls back to the queue. A domain rejection
         // (revoked QR, closed session, wrong scan kind) would fail identically on
         // replay, so queuing it would just defer a certain failure and lie to the
         // volunteer in the meantime.
-        const isNetwork = err instanceof ApiError && err.code === "ERR_NETWORK";
-        if (!isNetwork) throw err;
+        if (!isTransportFailure(err)) throw err;
 
         const { enqueueShivirScan } = await import("@/lib/offline/sync-engine");
         await enqueueShivirScan({
           shivir_session_id: sessionId!,
           qr_payload: vars.qr_payload,
           qr_signature: vars.qr_signature,
-          scan_kind: scanKind,
+          // Omitted in in_out mode so the SERVER derives the next leg from this
+          // student's last scan by the time the queue drains — which may be
+          // hours later, after other scans have landed.
+          scan_kind: sendKind,
+          // The moment the card was held to the camera, not the moment the
+          // queue drained: a scan at 23:55 synced after midnight belongs to the
+          // day it happened.
+          scanned_at: scannedAt,
         });
         // Deliberately NOT drained here: the sync loop owns delivery, so there is
         // exactly one retry mechanism (CLAUDE.md offline sync §4).
@@ -142,20 +207,27 @@ export default function ShivirScanScreen() {
     },
     onSuccess: (res) => {
       setLiveCount(res.count);
+      // The server chose the leg; reflect its decision rather than our guess.
+      setScanKind(res.scan_kind);
+      setLastScanKind(res.scan_kind);
       const name = res.student.full_name || res.student.student_code;
+      const legEn = res.scan_kind === "check_out" ? "Checked out" : res.scan_kind === "check_in" ? "Checked in" : "Recorded";
+      const legHi = res.scan_kind === "check_out" ? "निकास दर्ज" : res.scan_kind === "check_in" ? "प्रवेश दर्ज" : "दर्ज किया गया";
       if (res.duplicate) {
         if (Platform.OS !== "web") void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
         setFeedback({
           tone: "warning",
           title: hi ? "पहले से दर्ज" : "Already scanned",
-          detail: hi ? `${name} इस सत्र में पहले ही दर्ज है।` : `${name} was already recorded for this session.`,
+          detail: hi ? `${name} अभी-अभी दर्ज हुए हैं।` : `${name} was scanned a moment ago.`,
         });
       } else {
         if (Platform.OS !== "web") void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
         setFeedback({
           tone: "success",
-          title: hi ? "दर्ज किया गया" : "Recorded",
-          detail: name,
+          // Naming the leg matters now that the server picks it: the volunteer
+          // must be able to see that a child was checked OUT, not in.
+          title: hi ? legHi : legEn,
+          detail: res.was_registered === false ? (hi ? `${name} — बिना पंजीकरण` : `${name} — walk-in`) : name,
         });
       }
     },
@@ -189,12 +261,15 @@ export default function ShivirScanScreen() {
             : "This ID card is invalid or has been revoked. Ask for a fresh card.",
         });
       } else if (status === 404) {
+        // Sessions are never deleted, so "no longer available" was always the
+        // wrong story — the real cause is that this account may not act on this
+        // shivir. Say the thing that is true, and what to do about it.
         setFeedback({
           tone: "error",
-          title: hi ? "उपलब्ध नहीं" : "Not available",
+          title: hi ? "अनुमति नहीं" : "Not available to you",
           detail: hi
-            ? "यह सत्र अब उपलब्ध नहीं है। कृपया पुनः खोलें।"
-            : "This session is no longer available. Please reopen the scanner.",
+            ? "इस शिविर के लिए आपकी स्वयंसेवक अनुमति नहीं है। संचालक से कहें कि वे आपको जोड़ें।"
+            : "You are not a volunteer for this shivir. Ask the Sanchalak to assign you.",
         });
       } else if (status === 422) {
         setFeedback({
@@ -249,11 +324,6 @@ export default function ShivirScanScreen() {
     setFeedback(null);
   }
 
-  function switchKind(kind: ScanKind) {
-    setScanKind(kind);
-    if (selectedSession) setLiveCount(countFor(selectedSession, kind));
-    setFeedback(null);
-  }
 
   // ---- Loading / error / empty (scan context) ----
   if (ctx.isLoading) {
@@ -323,7 +393,7 @@ export default function ShivirScanScreen() {
   if (!selectedSession) {
     return (
       <Screen refreshing={ctx.isRefetching} onRefresh={ctx.refetch}>
-        <Title style={{ fontSize: 19, marginLeft: 2 }}>{ctx.data.shivir.name}</Title>
+        <Title style={{ fontSize: 19, marginLeft: 2 }}>{(hi ? ctx.data.shivir.name_hi : null) ?? ctx.data.shivir.name_en}</Title>
         <Body muted style={{ marginLeft: 2, marginTop: -6 }}>
           {hi ? "स्कैन करने के लिए एक सत्र चुनें" : "Pick a session to scan"}
         </Body>
@@ -407,6 +477,9 @@ export default function ShivirScanScreen() {
   const displayCount = liveCount ?? countFor(selectedSession, scanKind);
 
   return (
+    // Same shivir accent the browse and detail screens carry; the scanner was
+    // the only screen in the flow that dropped it.
+    <ActivityThemed accent="shivirs">
     <View style={{ flex: 1, backgroundColor: c.background }}>
       <View style={{ paddingHorizontal: 18, paddingTop: 10, paddingBottom: 8, gap: 4 }}>
         <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
@@ -414,39 +487,62 @@ export default function ShivirScanScreen() {
           <Button label={hi ? "सत्र" : "Session"} variant="ghost" icon="swap-horizontal" onPress={() => setSessionId(null)} />
         </Row>
 
-        {/* Scan-kind toggle (in_out sessions only) */}
+        {/*
+          in_out mode: a STATUS LINE, not a control.
+          The server decides each scan's leg from the student's last scan
+          (SPEC 8.6), so there is nothing here for a volunteer to get wrong —
+          and re-entry after a check-out now works, which a manual toggle could
+          never express. What is shown is what the server did last.
+        */}
         {selectedSession.attendance_mode === "in_out" ? (
-          <Row style={{ gap: 10, marginTop: 4 }}>
-            {(["check_in", "check_out"] as const).map((k) => {
-              const active = scanKind === k;
-              return (
-                <Pressable
-                  key={k}
-                  onPress={() => switchKind(k)}
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    gap: 6,
-                    paddingHorizontal: 14,
-                    paddingVertical: 8,
-                    borderRadius: 999,
-                    backgroundColor: active ? c.primary : c.muted,
-                  }}
-                >
-                  <Ionicons
-                    name={k === "check_in" ? "log-in-outline" : "log-out-outline"}
-                    size={16}
-                    color={active ? c.primaryForeground : c.mutedForeground}
-                  />
-                  <Body style={{ color: active ? c.primaryForeground : c.mutedForeground, fontFamily: bodyFamily(hi, "semibold"), fontSize: 13 }}>
-                    {k === "check_in" ? (hi ? "प्रवेश" : "Check in") : hi ? "निकास" : "Check out"}
-                  </Body>
-                </Pressable>
-              );
-            })}
+          <Row style={{ gap: 8, marginTop: 6, alignItems: "center" }}>
+            <Ionicons name="swap-vertical-outline" size={15} color={c.mutedForeground} />
+            <Body muted style={{ fontSize: 13, flex: 1 }}>
+              {hi
+                ? "प्रवेश और निकास अपने आप तय होते हैं — बस कार्ड स्कैन करें।"
+                : "Check in and check out alternate automatically — just scan the card."}
+            </Body>
+            {lastScanKind ? (
+              <Pill
+                tone={lastScanKind === "check_in" ? "success" : "info"}
+                label={
+                  lastScanKind === "check_in"
+                    ? hi
+                      ? "अंतिम: प्रवेश"
+                      : "Last: in"
+                    : hi
+                      ? "अंतिम: निकास"
+                      : "Last: out"
+                }
+              />
+            ) : null}
+          </Row>
+        ) : null}
+
+        {/* Offline queue for THIS session — queued/failed scans were invisible. */}
+        {pendingScans > 0 ? (
+          <Row style={{ gap: 8, marginTop: 6, alignItems: "center" }}>
+            <Ionicons name="cloud-upload-outline" size={15} color={c.warningText} />
+            <Body style={{ fontSize: 13, color: c.warningText }}>
+              {hi
+                ? `${pendingScans} स्कैन सिंक होने बाकी हैं`
+                : `${pendingScans} scan${pendingScans === 1 ? "" : "s"} waiting to sync`}
+            </Body>
           </Row>
         ) : null}
       </View>
+
+      {blockedSyncOp ? (
+        <View style={{ paddingHorizontal: 18, paddingBottom: 8 }}>
+          <SyncOpStatus
+            state={blockedSyncOp.state}
+            error={blockedSyncOp.error}
+            onRetry={() => {
+              void retryOp(blockedSyncOp.queue, blockedSyncOp.submission_op_id).then(refreshSync);
+            }}
+          />
+        </View>
+      ) : null}
 
       {/* Camera viewport */}
       <View style={{ marginHorizontal: 18, borderRadius: c.radius, overflow: "hidden", aspectRatio: 1, backgroundColor: "#000" }}>
@@ -463,7 +559,7 @@ export default function ShivirScanScreen() {
               width: "62%",
               aspectRatio: 1,
               borderWidth: 3,
-              borderColor: fbTone === "success" ? c.successText : fbTone === "error" ? c.errorText : "rgba(255,255,255,0.85)",
+              borderColor: fbTone === "success" ? c.successText : fbTone === "error" ? c.errorText : c.primaryForeground,
               borderRadius: 18,
             }}
           />
@@ -524,5 +620,6 @@ export default function ShivirScanScreen() {
         )}
       </View>
     </View>
+    </ActivityThemed>
   );
 }

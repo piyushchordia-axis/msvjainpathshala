@@ -33,6 +33,9 @@ import type {
   ShikshakSessionRow,
   ShivirDetail,
   ShivirRow,
+  ShivirSessionRow,
+  ShivirMyRegistrations,
+  ShivirVolunteeringRow,
   StudentAbsencesPayload,
 } from "@/lib/types";
 import type { SessionUser } from "@/lib/auth";
@@ -45,6 +48,10 @@ export const qk = {
   centre: (id: string) => ["public", "centre", id] as const,
   shivirs: ["public", "shivirs"] as const,
   shivir: (id: string) => ["public", "shivir", id] as const,
+  shivirSessions: (id: string) => ["public", "shivir", id, "sessions"] as const,
+  shivirMyRegistrations: (id: string) => ["me", "shivir", id, "registrations"] as const,
+  shivirVolunteering: ["me", "shivirs", "volunteering"] as const,
+  shivirScanContext: (id: string) => ["me", "shivir", id, "scan-context"] as const,
   notices: ["public", "notices"] as const,
   /** Home carousel — distinct from wall so caches never collide. */
   galleryHome: galleryHomeKey,
@@ -174,6 +181,62 @@ export function useShivir(id?: string) {
   });
 }
 
+
+/** Day list for a published shivir. */
+export function useShivirSessions(id?: string) {
+  return useQuery({
+    queryKey: qk.shivirSessions(id ?? ""),
+    queryFn: () => apiGet<List<ShivirSessionRow>>(`/v1/shivirs/${id}/sessions`),
+    enabled: !!id,
+  });
+}
+
+/**
+ * The caller's children and their registration state for one shivir.
+ *
+ * Drives the Register / Registered CTA. Before this existed the detail screen
+ * offered a parent exactly one action: a volunteer scanner they could not use.
+ */
+export function useShivirMyRegistrations(id?: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.shivirMyRegistrations(id ?? ""),
+    queryFn: () => apiGet<ShivirMyRegistrations>(`/v1/shivirs/${id}/registrations/mine`),
+    enabled: !!id && enabled,
+  });
+}
+
+/** Shivirs the caller is an assigned volunteer for (mobile 'My shivirs'). */
+export function useMyShivirVolunteering(enabled = true) {
+  return useQuery({
+    queryKey: qk.shivirVolunteering,
+    queryFn: () => apiGet<List<ShivirVolunteeringRow>>("/v1/shivirs/mine"),
+    enabled,
+  });
+}
+
+export function useRegisterForShivir(shivirId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ student_id }: { student_id: string }) =>
+      apiPost<{ id: string; status: string }>(`/v1/shivirs/${shivirId}/register`, { student_id }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.shivirMyRegistrations(shivirId ?? "") });
+      qc.invalidateQueries({ queryKey: qk.shivir(shivirId ?? "") });
+    },
+  });
+}
+
+export function useCancelShivirRegistration(shivirId?: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ student_id }: { student_id: string }) =>
+      apiDelete<{ id: string }>(`/v1/shivirs/${shivirId}/register/${student_id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: qk.shivirMyRegistrations(shivirId ?? "") });
+      qc.invalidateQueries({ queryKey: qk.shivir(shivirId ?? "") });
+    },
+  });
+}
 
 export function useNotices() {
   return useQuery({

@@ -1,6 +1,12 @@
 import type { NextFunction, Request, Response } from "express";
 import type { User } from "@workspace/db";
-import { canAccessAdminPanel, canViewDonations, type Role } from "@workspace/api-zod";
+import {
+  canAccessAdminPanel,
+  canAdministerShivirs,
+  canOperateShivirs,
+  canViewDonations,
+  type Role,
+} from "@workspace/api-zod";
 import { verifyAccessToken } from "../lib/tokens";
 import { fail } from "../lib/envelope";
 import { loadAuthUser } from "../lib/auth-user-cache";
@@ -98,6 +104,32 @@ export function requireDonationView(req: Request, res: Response, next: NextFunct
   const role = req.authUser?.role as Role | undefined;
   if (!canViewDonations(role)) {
     fail(res, 403, "ERR_FORBIDDEN", "You do not have access to donation records.");
+    return;
+  }
+  next();
+}
+
+/**
+ * Running a shivir: sessions, volunteer assignment, the live dashboard.
+ *
+ * Narrower than requireAdminPanel — shikshak is excluded (SPEC 6.14). A Guruji
+ * reaches a shivir through a volunteer assignment, not through their teaching
+ * role, so that every scan traces to someone deliberately put on that shivir.
+ */
+export function requireShivirOps(req: Request, res: Response, next: NextFunction): void {
+  const role = req.authUser?.role as Role | undefined;
+  if (!canOperateShivirs(role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Only a sanchalak or city admin can manage a shivir.");
+    return;
+  }
+  next();
+}
+
+/** Authoring a shivir: create, edit, unpublish, delete, export (SPEC 6.14). */
+export function requireShivirAdmin(req: Request, res: Response, next: NextFunction): void {
+  const role = req.authUser?.role as Role | undefined;
+  if (!canAdministerShivirs(role)) {
+    fail(res, 403, "ERR_FORBIDDEN", "Only national, state or city admins can manage shivirs.");
     return;
   }
   next();

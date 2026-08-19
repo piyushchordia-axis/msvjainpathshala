@@ -385,8 +385,14 @@ export async function enqueueShivirScan(input: {
   qr_signature: string;
   scan_kind?: "present" | "check_in" | "check_out";
   scanned_at?: string;
+  /**
+   * Caller-minted so the scanner screen can watch this specific op's state
+   * (matching enqueueCheckIn/enqueueCheckOut). Without it a screen could queue a
+   * scan and then have no way to say whether it synced.
+   */
+  submission_op_id?: string;
 }): Promise<string> {
-  const submission_op_id = ulid();
+  const submission_op_id = input.submission_op_id ?? ulid();
   const client_timestamp = new Date().toISOString();
   const payload: PendingShivirScanOp = {
     submission_op_id,
@@ -396,6 +402,9 @@ export async function enqueueShivirScan(input: {
     scan_kind: input.scan_kind,
     // The moment the card was scanned, not the moment it synced.
     scanned_at: input.scanned_at ?? client_timestamp,
+    // AT19 per-item id. The server keys idempotency on this, so a queue drained
+    // twice writes one row.
+    client_op_id: ulid(),
     client_timestamp,
   };
   await enqueueOp(QUEUE_KEYS.shivir_scans, {
@@ -467,7 +476,15 @@ export async function dropNiyamMedia(input: {
   );
 }
 
-/** Manual retry — never silently discard failed ops. */
+/**
+ * Manual retry — never silently discard failed ops.
+ *
+ * `attempts` resets too. Leaving it at 10 meant a maxed-out op got exactly one
+ * more shot per press and then went straight back to `failed` on the first
+ * hiccup, so the retry button looked broken precisely when a volunteer needed
+ * it. A person pressing Retry is new information about the world, not a
+ * continuation of the automatic schedule.
+ */
 export async function retryOp(queue: QueueKey, submissionOpId: string): Promise<void> {
   const queues = await readAllQueues();
   const arr = queues[queue] ?? [];
@@ -476,6 +493,7 @@ export async function retryOp(queue: QueueKey, submissionOpId: string): Promise<
   arr[idx] = {
     ...arr[idx]!,
     state: "queued",
+    attempts: 0,
     next_attempt_at: 0,
     last_error: undefined,
   };

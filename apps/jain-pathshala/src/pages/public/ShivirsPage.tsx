@@ -4,14 +4,19 @@ import { Card } from '@/components/ui/card';
 import { useLocale } from '@/lib/locale-context';
 import { GuestError, GuestLoading } from '@/components/public/GuestLoadState';
 
+/** Mirrors the API projection exactly (snake_case, bilingual per CLAUDE.md). */
 interface ShivirRow {
   id: string;
-  name: string;
-  description: string | null;
+  name_en: string;
+  name_hi: string | null;
+  description_en: string | null;
+  description_hi: string | null;
   start_date: string;
   end_date: string;
   location_text: string | null;
   city_name: string;
+  capacity: number | null;
+  msv_only: boolean;
 }
 
 function fmt(d: string): string {
@@ -73,15 +78,28 @@ export default function ShivirsPage() {
           {items.map((s) => (
             <Link key={s.id} href={`/shivirs/${s.id}`}>
               <Card className="h-full cursor-pointer p-6 transition-shadow hover:shadow-lg">
-                <div className="font-display text-xl text-secondary">{s.name}</div>
+                <div className="flex items-start justify-between gap-3">
+                  {/* Fall back to English when there is no Devanagari yet — a
+                      blank card would be worse than an untranslated one. */}
+                  <div className="font-display text-xl text-secondary">
+                    {(hi ? s.name_hi : null) ?? s.name_en}
+                  </div>
+                  {s.msv_only ? (
+                    <span className="shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-900">
+                      {hi ? 'केवल एमएसवी' : 'MSV only'}
+                    </span>
+                  ) : null}
+                </div>
                 <div className="mt-2 text-sm text-muted-foreground">
                   {fmt(s.start_date)} – {fmt(s.end_date)} · {s.city_name}
                 </div>
                 {s.location_text ? (
                   <div className="mt-1 text-xs text-ink-sub">{s.location_text}</div>
                 ) : null}
-                {s.description ? (
-                  <p className="mt-3 line-clamp-2 text-sm text-muted-foreground">{s.description}</p>
+                {((hi ? s.description_hi : null) ?? s.description_en) ? (
+                  <p className="mt-3 line-clamp-2 text-sm text-muted-foreground">
+                    {(hi ? s.description_hi : null) ?? s.description_en}
+                  </p>
                 ) : null}
               </Card>
             </Link>

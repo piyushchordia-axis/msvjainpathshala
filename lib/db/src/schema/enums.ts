@@ -99,6 +99,12 @@ export const NOTICE_AUDIENCES = ["batch", "centre", "city", "state", "national",
 export const SHIVIR_ATTENDANCE_MODES = ["in_out", "present_only"] as const;
 export const SHIVIR_SCAN_KINDS = ["check_in", "check_out", "present"] as const;
 /**
+ * A registration is cancelled, never deleted (Q11 spirit) — the row stays so a
+ * parent who cancels and re-registers keeps one history, and so capacity can be
+ * recomputed from the ledger rather than trusted from a projection.
+ */
+export const SHIVIR_REGISTRATION_STATUSES = ["registered", "cancelled"] as const;
+/**
  * Section.type drives client rendering — never key UI off section name_*.
  * `granth` renders the two-tab screen (Online Granth + physical library
  * directory) — Section 17 v3 §17.1.2.
@@ -242,6 +248,10 @@ export const examAttemptStatusEnum = pgEnum("exam_attempt_status_enum", EXAM_ATT
 export const noticeAudienceEnum = pgEnum("notice_audience_enum", NOTICE_AUDIENCES);
 export const shivirAttendanceModeEnum = pgEnum("shivir_attendance_mode_enum", SHIVIR_ATTENDANCE_MODES);
 export const shivirScanKindEnum = pgEnum("shivir_scan_kind_enum", SHIVIR_SCAN_KINDS);
+export const shivirRegistrationStatusEnum = pgEnum(
+  "shivir_registration_status_enum",
+  SHIVIR_REGISTRATION_STATUSES,
+);
 export const librarySectionTypeEnum = pgEnum("library_section_type_enum", LIBRARY_SECTION_TYPES);
 export const libraryContentRequestStatusEnum = pgEnum(
   "library_content_request_status_enum",

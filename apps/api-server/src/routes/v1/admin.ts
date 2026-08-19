@@ -35,6 +35,7 @@ import { setAuthCookies, setImpersonationCookies, clearAuthCookies } from "../..
 import { toSessionUser } from "../../lib/session-user";
 import { signUploadUrl } from "../../lib/file-tokens";
 import adminResourcesRouter from "./admin-resources";
+import adminShivirsRouter from "./admin-shivirs";
 import adminModulesRouter from "./admin-modules";
 import adminCoursesRouter from "./admin-courses";
 import adminStaffingRouter from "./admin-staffing";
@@ -123,6 +124,7 @@ router.post("/impersonate/stop", async (req: Request, res: Response) => {
 
 router.use(requireAuth, requireAdminPanel);
 router.use(adminResourcesRouter);
+router.use(adminShivirsRouter);
 router.use(adminModulesRouter);
 router.use(adminCoursesRouter);
 router.use(adminStaffingRouter);

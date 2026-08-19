@@ -293,24 +293,54 @@ async function handleCheckout(
   }
 }
 
+/**
+ * Offline shivir scans. Authorization and the whole scan state machine live in
+ * services/shivir-scan.ts, which this and the online route both call — this
+ * handler is transport only.
+ *
+ * That is the fix for the hole this path used to be: it reached applyShivirScan
+ * with nothing but `requireAuth` behind it, so any parent could replay their own
+ * child's signed QR into any session of any shivir in the country.
+ */
 async function handleShivirScan(
   actor: User,
   submissionOpId: string,
   payload: unknown,
 ): Promise<SyncResult> {
-  // Delegate to the same scan path via dynamic import of route helpers would be
-  // heavy; call the scanner service surface by replaying through HTTP-shaped logic.
-  const p = z
-    .object({
-      shivir_session_id: z.string().uuid(),
-      qr_payload: z.string().min(1),
-      qr_signature: z.string().optional(),
-      scan_kind: z.enum(["present", "check_in", "check_out"]).optional(),
-      scanned_at: z.string().optional(),
-    })
-    .parse(payload);
+  let p: {
+    shivir_session_id: string;
+    qr_payload: string;
+    qr_signature?: string;
+    scan_kind?: "present" | "check_in" | "check_out";
+    scanned_at?: string;
+    client_op_id?: string;
+  };
+  try {
+    p = z
+      .object({
+        shivir_session_id: z.string().uuid(),
+        qr_payload: z.string().min(1),
+        qr_signature: z.string().optional(),
+        scan_kind: z.enum(["present", "check_in", "check_out"]).optional(),
+        scanned_at: z.string().optional(),
+        client_op_id: z.string().length(26).optional(),
+      })
+      .parse(payload);
+  } catch (err) {
+    // A bare .parse() here let a ZodError escape to the batch catch-all and
+    // surface as ERR_INTERNAL, which the client treats as retryable — so a
+    // malformed op retried forever instead of failing once, visibly.
+    const message =
+      err instanceof z.ZodError
+        ? (err.issues[0]?.message ?? "Invalid shivir scan payload.")
+        : "Invalid shivir scan payload.";
+    return {
+      submission_op_id: submissionOpId,
+      status: "failed",
+      error: { code: "ERR_VALIDATION_FAILED", message },
+    };
+  }
 
-  // Minimal: store as acknowledged deferred if signature missing — require signature.
   if (!p.qr_signature) {
     return {
       submission_op_id: submissionOpId,
@@ -330,7 +360,29 @@ async function handleShivirScan(
       qr_payload: p.qr_payload,
       qr_signature: p.qr_signature,
       scan_kind: p.scan_kind,
+      // The moment the card was scanned, not the moment the queue drained. This
+      // was parsed and then dropped, so every offline scan was dated at sync
+      // time — a 23:55 scan synced after midnight landed on the wrong day.
+      scanned_at: p.scanned_at,
+      client_op_id: p.client_op_id ?? submissionOpId,
+      device_offline: true,
     });
+
+    if (!data.duplicate) {
+      const [{ enqueueParentShivirNotify }, { emitShivirScan }] = await Promise.all([
+        import("../lib/shivir-notify"),
+        import("../lib/shivir-feed"),
+      ]);
+      void enqueueParentShivirNotify(data.student_id, p.shivir_session_id, data.scan_kind);
+      emitShivirScan(data.shivir_id, {
+        session_id: p.shivir_session_id,
+        student_id: data.student_id,
+        scan_kind: data.scan_kind,
+        was_registered: data.was_registered,
+        scanned_at: data.scanned_at,
+      });
+    }
+
     return {
       submission_op_id: submissionOpId,
       status: data.duplicate ? "duplicate" : "success",
@@ -341,6 +393,9 @@ async function handleShivirScan(
     if (err instanceof ShivirScanError) {
       return {
         submission_op_id: submissionOpId,
+        // 403/404 stay `failed`, deliberately not `conflict`: a scan the caller
+        // was never allowed to make must be terminal and must not offer the
+        // client a retry affordance.
         status: err.httpStatus === 409 ? "conflict" : "failed",
         error: { code: err.code, message: err.message },
       };

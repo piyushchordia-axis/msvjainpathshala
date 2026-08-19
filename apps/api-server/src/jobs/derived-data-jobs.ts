@@ -74,6 +74,33 @@ export function registerDerivedDataJobs(): void {
       await sendParentAttendancePush(studentId, sessionId);
       return;
     }
+    if (kind === "shivir_scanned") {
+      // SPEC 8.6 step 6. The `shivir` notification kind has existed in the enum
+      // since the baseline migration and no code had ever sent it, so a parent
+      // whose child arrived at a camp heard nothing.
+      const studentId = String((data as { student_id?: string }).student_id ?? "");
+      const sessionId = String((data as { session_id?: string }).session_id ?? "");
+      const scanKind = String((data as { scan_kind?: string }).scan_kind ?? "present");
+      if (!studentId || !sessionId) {
+        throw new Error("notifications.parent shivir_scanned missing ids");
+      }
+      const { sendParentShivirPush } = await import("../lib/shivir-notify");
+      await sendParentShivirPush(
+        studentId,
+        sessionId,
+        scanKind === "check_in" || scanKind === "check_out" ? scanKind : "present",
+      );
+      return;
+    }
+    if (kind === "shivir_published") {
+      // Unbounded fan-out (every parent in the city), so it belongs on the
+      // worker rather than inside the API request that published the shivir.
+      const shivirId = String((data as { shivir_id?: string }).shivir_id ?? "");
+      if (!shivirId) throw new Error("notifications.parent shivir_published missing shivir_id");
+      const { announceShivirPublished } = await import("../lib/shivir-notify");
+      await announceShivirPublished(shivirId);
+      return;
+    }
     if (kind === "gallery_wall_featured") {
       const raw = (data as { gallery_item_ids?: unknown }).gallery_item_ids;
       const ids = Array.isArray(raw)

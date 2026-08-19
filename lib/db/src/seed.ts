@@ -35,6 +35,9 @@ import {
   niyam_submission_media,
   notices,
   shivir_events,
+  shivir_sessions,
+  shivir_volunteers,
+  shivir_registrations,
   library_sections,
   library_subsections,
   library_items,
@@ -134,7 +137,7 @@ async function main(): Promise<void> {
     truncate table
       audit_logs,
       enquiries, notifications, device_push_tokens,
-      shivir_attendance_scans, shivir_sessions,
+      shivir_attendance_scans, shivir_sessions, shivir_registrations, shivir_volunteers,
       competition_registrations, competitions,
       push_quiz_attempts, push_quiz_questions, push_quizzes,
       quiz_attempts, quiz_event_questions, quiz_events, questions,
@@ -181,6 +184,10 @@ async function main(): Promise<void> {
     { key: "quiz_win", label: "Quiz win", is_active: true, min_points: 0, max_points: 25 },
     { key: "push_quiz_completion", label: "Push quiz completion", is_active: true, min_points: 0, max_points: 5 },
     { key: "manual_award", label: "Manual admin award", is_active: true, min_points: 0, max_points: 500 },
+    // AT28's documented path for shivir Punya. Migration 0087 also inserts this,
+    // but the seed TRUNCATES punya_features first — so without a copy here a
+    // migrate-then-seed database silently loses the key again.
+    { key: "msv_shivir", label: "Shivir participation", is_active: true, min_points: 0, max_points: 500 },
     { key: "course_section_certified", label: "Course section certified", is_active: true, min_points: 0, max_points: 1000 },
     { key: "course_completed", label: "Course completed", is_active: true, min_points: 0, max_points: 2000 },
   ]);
@@ -997,42 +1004,123 @@ async function main(): Promise<void> {
   ]);
 
   /* ---------------- Shivirs ---------------- */
-  await db.insert(shivir_events).values([
+  const seededShivirs = await db
+    .insert(shivir_events)
+    .values([
+      {
+        name_en: "Summer Sanskar Shivir 2026",
+        name_hi: "ग्रीष्म संस्कार शिविर 2026",
+        description_en: "A 5-day residential shivir focused on Jain values and meditation.",
+        description_hi: "जैन मूल्यों और ध्यान पर केंद्रित 5-दिवसीय आवासीय शिविर।",
+        state_id: maharashtra.id,
+        city_id: mumbai.id,
+        start_date: isoDate(daysFromNow(20)),
+        end_date: isoDate(daysFromNow(24)),
+        location_text: "Ghatkopar Upashray, Mumbai",
+        capacity: 120,
+        contact_info: "Call +91 98000 00004 for registration.",
+        attendance_mode: "in_out" as const,
+        is_published: true,
+      },
+      {
+        name_en: "Pune Youth Shibir",
+        name_hi: "पुणे युवा शिबिर",
+        description_en: "Weekend shibir for tarun and yuva age groups.",
+        state_id: maharashtra.id,
+        city_id: pune.id,
+        start_date: isoDate(daysFromNow(40)),
+        end_date: isoDate(daysFromNow(41)),
+        location_text: "Kothrud Hall, Pune",
+        capacity: 60,
+        contact_info: "Email kothrud@example.org",
+        is_published: true,
+      },
+      {
+        name_en: "Past Diwali Shivir 2025",
+        description_en: "Archived event (should not appear in upcoming list).",
+        state_id: gujarat.id,
+        city_id: ahmedabad.id,
+        start_date: isoDate(daysAgo(120)),
+        end_date: isoDate(daysAgo(118)),
+        location_text: "Maninagar, Ahmedabad",
+        is_published: true,
+      },
+      // Draft + MSV-only, so the admin "Draft" label and the guest msv_only
+      // filter both have something to be true about.
+      {
+        name_en: "MSV Sadhak Retreat (draft)",
+        name_hi: "एमएसवी साधक शिविर (प्रारूप)",
+        description_en: "MSV-only retreat, unpublished — used to exercise draft and MSV gating.",
+        state_id: maharashtra.id,
+        city_id: mumbai.id,
+        start_date: isoDate(daysFromNow(60)),
+        end_date: isoDate(daysFromNow(62)),
+        location_text: "Ghatkopar Upashray, Mumbai",
+        capacity: 2,
+        msv_only: true,
+        is_published: false,
+      },
+    ])
+    .returning({ id: shivir_events.id, name_en: shivir_events.name_en });
+
+  const summerShivir = seededShivirs[0]!;
+
+  /**
+   * Sessions, one volunteer and a few registrations.
+   *
+   * None of this existed before: shivir_registrations and shivir_volunteers had
+   * no writers anywhere in the repo, so the "registered volunteer" arm of the
+   * scan authorization had never once had a row to match and the dashboard's
+   * Registered figure was structurally zero.
+   */
+  const seededShivirSessions = await db
+    .insert(shivir_sessions)
+    .values([
+      {
+        shivir_id: summerShivir.id,
+        title: "Day 1 — Arrival and Mangalacharan",
+        day_number: 1,
+        session_date: isoDate(daysFromNow(20)),
+        start_time: "09:00",
+        end_time: "17:00",
+        attendance_mode: "in_out" as const,
+      },
+      {
+        shivir_id: summerShivir.id,
+        title: "Day 2 — Samayik and Swadhyay",
+        day_number: 2,
+        session_date: isoDate(daysFromNow(21)),
+        start_time: "09:00",
+        end_time: "17:00",
+        attendance_mode: "in_out" as const,
+      },
+    ])
+    .returning({ id: shivir_sessions.id });
+
+  await db.insert(shivir_volunteers).values([
     {
-      name: "Summer Sanskar Shivir 2026",
-      description: "A 5-day residential shivir focused on Jain values and meditation.",
-      state_id: maharashtra.id,
-      city_id: mumbai.id,
-      start_date: isoDate(daysFromNow(20)),
-      end_date: isoDate(daysFromNow(24)),
-      location_text: "Ghatkopar Upashray, Mumbai",
-      capacity: 120,
-      contact_info: "Call +91 98000 00004 for registration.",
-      is_published: true,
+      shivir_id: summerShivir.id,
+      user_id: shikshak.id,
+      role_label: "Gate scanning",
+      assigned_by: sanchalak.id,
     },
     {
-      name: "Pune Youth Shibir",
-      description: "Weekend shibir for tarun and yuva age groups.",
-      state_id: maharashtra.id,
-      city_id: pune.id,
-      start_date: isoDate(daysFromNow(40)),
-      end_date: isoDate(daysFromNow(41)),
-      location_text: "Kothrud Hall, Pune",
-      capacity: 60,
-      contact_info: "Email kothrud@example.org",
-      is_published: true,
-    },
-    {
-      name: "Past Diwali Shivir 2025",
-      description: "Archived event (should not appear in upcoming list).",
-      state_id: gujarat.id,
-      city_id: ahmedabad.id,
-      start_date: isoDate(daysAgo(120)),
-      end_date: isoDate(daysAgo(118)),
-      location_text: "Maninagar, Ahmedabad",
-      is_published: true,
+      shivir_id: summerShivir.id,
+      user_id: sanchalak.id,
+      role_label: "Coordinator",
+      assigned_by: cityAdmin.id,
     },
   ]);
+
+  await db.insert(shivir_registrations).values(
+    insertedStudents.slice(0, 3).map((s) => ({
+      shivir_id: summerShivir.id,
+      student_id: s.id,
+      registered_by_user_id: parent.id,
+    })),
+  );
+
+  void seededShivirSessions;
 
   /* ---------------- Library (Section → SubSection → Item) ---------------- */
   await seedLibraryContent(db);

@@ -64,6 +64,9 @@ export const SHIKSHAK_ACTIONS: QuickAction[] = [
   // author centre/batch notices — but mobile had no entry point at all, on the
   // surface this persona actually uses.
   { href: "/notices", icon: "megaphone-outline", en: "Notices", hi: "सूचनाएँ", accent: "notices" },
+  // A Guruji reaches a shivir through a volunteer assignment (SPEC 6.14), so
+  // the entry point is "the shivirs I was assigned to", not the public list.
+  { href: "/my-shivirs", icon: "bonfire-outline", en: "My shivirs", hi: "मेरे शिविर", accent: "shivirs" },
   { href: "/shikshak/profile", icon: "person-circle-outline", en: "Profile", hi: "प्रोफ़ाइल", accent: "profile" },
 ];
 
@@ -92,6 +95,7 @@ export const SANCHALAK_ACTIONS: QuickAction[] = [
   { href: "/gallery", icon: "ribbon-outline", en: "Punya Wall", hi: "पुण्य दीवार", accent: "punya" },
   { href: "/library", icon: "library-outline", en: "Library", hi: "पुस्तकालय", accent: "library" },
   { href: "/shivirs", icon: "bonfire-outline", en: "Shivirs", hi: "शिविर", accent: "shivirs" },
+  { href: "/my-shivirs", icon: "scan-outline", en: "My shivirs", hi: "मेरे शिविर", accent: "shivirs" },
 ];
 
 /** City+ extras that sit on the same manage grid (web nav items that exist on mobile). */

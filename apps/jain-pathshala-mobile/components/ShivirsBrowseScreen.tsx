@@ -9,7 +9,7 @@ import { useShivirs } from "@/lib/queries";
 import type { ShivirRow } from "@/lib/types";
 import { formatDateRange } from "@/lib/format";
 import { AppHeader } from "@/components/AppHeader";
-import { Body, Button, Card, Row, Screen, StateView, Title } from "@/components/ui";
+import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
 function truncate(text: string, n: number) {
   return text.length > n ? `${text.slice(0, n).trim()}…` : text;
@@ -37,31 +37,42 @@ export function ShivirsBrowseScreen({ tabBarInset = false }: { tabBarInset?: boo
   // FlatList so long shivir lists virtualise instead of mounting every card
   // inside one ScrollView (GST-PRF-02).
   const renderItem = useCallback<ListRenderItem<ShivirItem>>(
-    ({ item: shivir }) => (
-      <Pressable onPress={() => router.push(`/shivir/${shivir.id}`)}>
-        {({ pressed }) => (
-          <Card style={{ opacity: pressed ? 0.85 : 1 }}>
-            <Title style={{ fontSize: 19 }}>{shivir.name}</Title>
-            {shivir.description ? (
-              <Body muted style={{ marginTop: 6 }}>{truncate(shivir.description, 120)}</Body>
-            ) : null}
-            <Row style={{ marginTop: 12, gap: 6 }}>
-              <Ionicons name="calendar-outline" size={15} color={c.primary} />
-              <Body style={{ fontSize: 13, color: c.primary }}>
-                {formatDateRange(shivir.start_date, shivir.end_date)}
-              </Body>
-            </Row>
-            <Row style={{ marginTop: 6, gap: 6 }}>
-              <Ionicons name="location-outline" size={15} color={c.mutedForeground} />
-              <Body muted style={{ fontSize: 13 }}>
-                {[shivir.location_text, shivir.city_name].filter(Boolean).join(", ") || "—"}
-              </Body>
-            </Row>
-          </Card>
-        )}
-      </Pressable>
-    ),
-    [c, router],
+    ({ item: shivir }) => {
+      // Fall back to English when a shivir has no Devanagari yet — a blank card
+      // would be worse than an untranslated one.
+      const name = (hi ? shivir.name_hi : null) ?? shivir.name_en;
+      const description = (hi ? shivir.description_hi : null) ?? shivir.description_en;
+      return (
+        <Pressable onPress={() => router.push(`/shivir/${shivir.id}`)}>
+          {({ pressed }) => (
+            <Card style={{ opacity: pressed ? 0.85 : 1 }}>
+              <Row style={{ gap: 8, alignItems: "flex-start" }}>
+                <Title style={{ fontSize: 19, flex: 1 }}>{name}</Title>
+                {shivir.msv_only ? (
+                  <Pill tone="warning" label={hi ? "केवल एमएसवी" : "MSV only"} />
+                ) : null}
+              </Row>
+              {description ? (
+                <Body muted style={{ marginTop: 6 }}>{truncate(description, 120)}</Body>
+              ) : null}
+              <Row style={{ marginTop: 12, gap: 6 }}>
+                <Ionicons name="calendar-outline" size={15} color={c.primary} />
+                <Body style={{ fontSize: 13, color: c.primary }}>
+                  {formatDateRange(shivir.start_date, shivir.end_date)}
+                </Body>
+              </Row>
+              <Row style={{ marginTop: 6, gap: 6 }}>
+                <Ionicons name="location-outline" size={15} color={c.mutedForeground} />
+                <Body muted style={{ fontSize: 13 }}>
+                  {[shivir.location_text, shivir.city_name].filter(Boolean).join(", ") || "—"}
+                </Body>
+              </Row>
+            </Card>
+          )}
+        </Pressable>
+      );
+    },
+    [c, hi, router],
   );
 
   return (

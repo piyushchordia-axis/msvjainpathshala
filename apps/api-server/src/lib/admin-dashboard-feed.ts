@@ -12,8 +12,9 @@ import type { User } from "@workspace/db";
 import { verifyAccessToken } from "./tokens";
 import { loadAuthUser } from "./auth-user-cache";
 import { userCanAccessCity } from "./scope";
-import { corsOriginDelegate } from "./cors-origins";
 import { logger } from "./logger";
+import { attachSocketServer, onSocketServer } from "./socket-server";
+import { attachShivirFeed } from "./shivir-feed";
 
 export const WINDOW_MS = 10_000;
 
@@ -25,9 +26,8 @@ const localBuckets = new Map<string, CityBucket>();
 const scheduledWindows = new Set<string>();
 
 let io: import("socket.io").Server | null = null;
+// Counter/window Redis only — the pub/sub adapter pair lives in socket-server.ts.
 let feedRedis: IORedis | null = null;
-let adapterPub: IORedis | null = null;
-let adapterSub: IORedis | null = null;
 
 /** @internal — deterministic AT31 window key (Redis + tests). */
 export function adminFeedAggregateKey(cityId: string, now = Date.now()): string {
@@ -116,49 +116,39 @@ export async function authenticateAdminDashboardSocket(handshake: {
   return { user: user as User, cityId };
 }
 
+/**
+ * Attach the admin-dashboard namespace.
+ *
+ * The Socket.IO server itself now lives in lib/socket-server.ts: this module
+ * used to call `new Server` directly, which was fine while it was the only
+ * feed. The shivir feed (CLAUDE.md's /shivirs/:shivirId) is the second, and two
+ * `new Server` calls on one HTTP server install two engine.io handlers on the
+ * same path that then fight over every upgrade.
+ */
 export function attachAdminDashboardFeed(httpServer: HttpServer): void {
-  void Promise.all([import("socket.io"), import("@socket.io/redis-adapter")])
-    .then(async ([{ Server }, { createAdapter }]) => {
-      const redis = getFeedRedis();
-      io = new Server(httpServer, {
-        path: "/socket.io",
-        cors: {
-          origin: corsOriginDelegate,
-          credentials: true,
-        },
-      });
-
-      if (redis) {
-        adapterPub = redis.duplicate();
-        adapterSub = redis.duplicate();
-        io.adapter(createAdapter(adapterPub, adapterSub));
-        logger.info("Socket.IO Redis adapter attached");
-      } else {
-        logger.warn("REDIS_URL unset — Socket.IO admin feed is single-process only");
+  void attachSocketServer(httpServer);
+  onSocketServer((server) => {
+    io = server;
+    const nsp = server.of("/admin-dashboard");
+    nsp.use(async (socket, next) => {
+      const result = await authenticateAdminDashboardSocket(socket.handshake);
+      if ("error" in result) {
+        next(new Error(result.error));
+        return;
       }
-
-      const nsp = io.of("/admin-dashboard");
-      nsp.use(async (socket, next) => {
-        const result = await authenticateAdminDashboardSocket(socket.handshake);
-        if ("error" in result) {
-          next(new Error(result.error));
-          return;
-        }
-        socket.data.user = result.user;
-        socket.data.cityId = result.cityId;
-        next();
-      });
-
-      nsp.on("connection", (socket) => {
-        const cityId = String(socket.data.cityId ?? "");
-        if (cityId) socket.join(`city:${cityId}`);
-      });
-
-      logger.info("Socket.IO admin-dashboard namespace ready");
-    })
-    .catch((err) => {
-      logger.warn({ err }, "socket.io unavailable; admin feed aggregates are in-memory only");
+      socket.data.user = result.user;
+      socket.data.cityId = result.cityId;
+      next();
     });
+
+    nsp.on("connection", (socket) => {
+      const cityId = String(socket.data.cityId ?? "");
+      if (cityId) socket.join(`city:${cityId}`);
+    });
+
+    logger.info("Socket.IO admin-dashboard namespace ready");
+  });
+  attachShivirFeed();
 }
 
 /**

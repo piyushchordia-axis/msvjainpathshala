@@ -610,6 +610,13 @@
       "when": 1791888000013,
       "tag": "0086_staff_assignment_unique_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1791888000014,
+      "tag": "0087_shivir_lifecycle",
+      "breakpoints": true
     }
   ]
 }

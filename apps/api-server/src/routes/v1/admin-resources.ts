@@ -30,12 +30,17 @@ import {
   shikshak_centre_assignments,
 } from "@workspace/db";
 import { ageGroupFromDob } from "@workspace/db";
-import { and, asc, count, desc, eq, gte, inArray, isNull, lte, lt, ne, or, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lte, lt, ne, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { isValidCitySlug, slugifyCityName } from "@jp/shared/city-slug";
-import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
+import {
+  requireAuth,
+  requireAdminPanel,
+  requireRole,
+  requireShivirAdmin,
+} from "../../middlewares/auth";
 import {
   resolveAdminScope,
   cityIdsForState,
@@ -44,6 +49,7 @@ import {
   type AdminScope,
 } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
+import { enqueueShivirPublishedAnnouncement } from "../../lib/shivir-notify";
 import { awardPunya } from "../../lib/punya";
 import {
   allocateParentCode,
@@ -266,25 +272,79 @@ router.post("/gallery/:id/unfeature", async (req: Request, res: Response) => {
 /* GET /v1/admin/library — moved to admin-library router (draft/publish CRUD). */
 /* (stub removed) */
 
-/* GET /v1/admin/shivirs */
+/* GET /v1/admin/shivirs?q=&is_published=&limit=&offset= */
 router.get("/shivirs", async (req: Request, res: Response) => {
+  /**
+   * This handler used to take no scope at all — it had a `where` clause of
+   * nothing, so every admin-panel role listed every shivir in the country,
+   * unpublished drafts included. The dashboard dropdown was fed from here and
+   * then 404'd on anything out of the caller's city.
+   */
+  const cityIds = await cityIdsForUser(req.authUser!);
   const limit = clampLimit(req.query.limit, 100, 200);
+  /**
+   * The admin list hook pages on `cursor` / `next_cursor`, not offset — an
+   * offset-shaped response makes hasMore permanently false and the "Load more"
+   * button never renders, which is precisely the silently-inert pagination that
+   * hook's own comment was written about. The cursor here is just the offset in
+   * string form, which is all an ordered-by-start_date list needs.
+   */
+  const cursorRaw = typeof req.query.cursor === "string" ? req.query.cursor : req.query.offset;
+  const offset = Math.max(0, Number(cursorRaw) || 0);
+  const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  const publishedFilter =
+    req.query.is_published === "true" ? true : req.query.is_published === "false" ? false : null;
+
   const rows = await db
     .select({
       id: shivir_events.id,
-      name: shivir_events.name,
+      name_en: shivir_events.name_en,
+      name_hi: shivir_events.name_hi,
+      description_en: shivir_events.description_en,
+      description_hi: shivir_events.description_hi,
       start_date: shivir_events.start_date,
       end_date: shivir_events.end_date,
       location_text: shivir_events.location_text,
+      contact_info: shivir_events.contact_info,
+      city_id: shivir_events.city_id,
       city_name: cities.name,
       is_published: shivir_events.is_published,
+      msv_only: shivir_events.msv_only,
+      attendance_mode: shivir_events.attendance_mode,
       capacity: shivir_events.capacity,
     })
     .from(shivir_events)
     .innerJoin(cities, eq(cities.id, shivir_events.city_id))
+    .where(
+      and(
+        isNull(shivir_events.deleted_at),
+        cityIds === null
+          ? undefined
+          : cityIds.length === 0
+            ? sql`false`
+            : inArray(shivir_events.city_id, cityIds),
+        publishedFilter === null ? undefined : eq(shivir_events.is_published, publishedFilter),
+        q
+          ? or(
+              ilike(shivir_events.name_en, `%${q}%`),
+              ilike(shivir_events.name_hi, `%${q}%`),
+              ilike(shivir_events.location_text, `%${q}%`),
+              ilike(cities.name, `%${q}%`),
+            )
+          : undefined,
+      ),
+    )
     .orderBy(desc(shivir_events.start_date))
-    .limit(limit);
-  ok(res, { items: rows }, { count: rows.length });
+    .offset(offset)
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const items = rows.slice(0, limit);
+  ok(
+    res,
+    { items, next_cursor: hasMore ? String(offset + limit) : null },
+    { count: items.length, has_more: hasMore, next_cursor: hasMore ? String(offset + limit) : null },
+  );
 });
 
 /* GET /v1/admin/niyams */
@@ -2024,56 +2084,197 @@ router.post("/students", async (req: Request, res: Response) => {
  * (noticeWriteSchema + LIVE visibility). The only caller was unrouted dead code
  * in AdminListPages.NoticesPage. */
 
-const createShivirSchema = z.object({
-  name: z.string().min(1).max(300),
-  description: z.string().max(2000).optional(),
-  city_id: z.string().uuid(),
-  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  location_text: z.string().max(500).optional(),
-  capacity: z.coerce.number().int().min(1).optional(),
-  is_published: z.boolean().default(true),
-  msv_only: z.boolean().default(false),
-});
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+const createShivirSchema = z
+  .object({
+    name_en: z.string().min(1).max(300),
+    name_hi: z.string().max(300).optional(),
+    description_en: z.string().max(2000).optional(),
+    description_hi: z.string().max(2000).optional(),
+    city_id: z.string().uuid(),
+    start_date: z.string().regex(DATE_RE),
+    end_date: z.string().regex(DATE_RE),
+    location_text: z.string().max(500).optional(),
+    // Rendered on both public detail pages since day one and never settable
+    // from any surface, so the Contact block could not appear for any shivir
+    // created through the app.
+    contact_info: z.string().max(500).optional(),
+    capacity: z.coerce.number().int().min(1).optional(),
+    attendance_mode: z.enum(["in_out", "present_only"]).default("present_only"),
+    is_published: z.boolean().default(true),
+    msv_only: z.boolean().default(false),
+  })
+  .superRefine((v, ctx) => {
+    // An inverted range was accepted silently, and the shivir then rendered
+    // backwards everywhere and — being already "ended" — never appeared publicly.
+    if (v.end_date < v.start_date) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["end_date"],
+        message: "The end date is before the start date.",
+      });
+    }
+  });
+
+const patchShivirSchema = z
+  .object({
+    name_en: z.string().min(1).max(300).optional(),
+    name_hi: z.string().max(300).nullable().optional(),
+    description_en: z.string().max(2000).nullable().optional(),
+    description_hi: z.string().max(2000).nullable().optional(),
+    start_date: z.string().regex(DATE_RE).optional(),
+    end_date: z.string().regex(DATE_RE).optional(),
+    location_text: z.string().max(500).nullable().optional(),
+    contact_info: z.string().max(500).nullable().optional(),
+    capacity: z.coerce.number().int().min(1).nullable().optional(),
+    attendance_mode: z.enum(["in_out", "present_only"]).optional(),
+    is_published: z.boolean().optional(),
+    msv_only: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: "Nothing to update." });
+
+/** The caller's allowed city ids for a shivir write; null = unrestricted. */
+async function shivirWriteCityIds(req: Request): Promise<string[] | null> {
+  const role = req.authUser!.role;
+  if (role === "city_admin") return req.authUser!.city_id ? [req.authUser!.city_id] : [];
+  if (role === "state_admin") {
+    return req.authUser!.state_id ? cityIdsForState(req.authUser!.state_id) : [];
+  }
+  return null;
+}
 
 /* POST /v1/admin/shivirs */
-router.post("/shivirs", async (req: Request, res: Response) => {
+router.post("/shivirs", requireShivirAdmin, async (req: Request, res: Response) => {
   let body: z.infer<typeof createShivirSchema>;
   try { body = createShivirSchema.parse(req.body); }
-  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid shivir data."); return; }
-  const role = req.authUser!.role;
-  if (role !== "super_admin" && role !== "state_admin" && role !== "city_admin") {
-    fail(res, 403, "ERR_FORBIDDEN", "Only national/state/city admins can create shivirs."); return;
+  catch (err) {
+    const message =
+      err instanceof z.ZodError ? (err.issues[0]?.message ?? "Invalid shivir data.") : "Invalid shivir data.";
+    fail(res, 422, "ERR_VALIDATION_FAILED", message); return;
   }
-  // The target city must be in the caller's scope. Resolve the caller's allowed
-  // city ids (null = unrestricted for super_admin) and 403 on an out-of-scope city.
-  let allowedCityIds: string[] | null = null;
-  if (role === "city_admin") allowedCityIds = req.authUser!.city_id ? [req.authUser!.city_id] : [];
-  else if (role === "state_admin") allowedCityIds = req.authUser!.state_id ? (await cityIdsForState(req.authUser!.state_id)) : [];
+  const allowedCityIds = await shivirWriteCityIds(req);
   const [cityRow] = await db.select({ state_id: cities.state_id }).from(cities).where(eq(cities.id, body.city_id)).limit(1);
   if (!cityRow || (allowedCityIds !== null && !allowedCityIds.includes(body.city_id))) {
     fail(res, 403, "ERR_FORBIDDEN", "That city is outside your scope."); return;
   }
   const [row] = await db.insert(shivir_events).values({
-    name: body.name,
-    description: body.description ?? null,
+    name_en: body.name_en,
+    name_hi: body.name_hi ?? null,
+    description_en: body.description_en ?? null,
+    description_hi: body.description_hi ?? null,
     city_id: body.city_id,
     state_id: cityRow?.state_id ?? null,
     start_date: body.start_date,
     end_date: body.end_date,
     location_text: body.location_text ?? null,
+    contact_info: body.contact_info ?? null,
     capacity: body.capacity ?? null,
+    attendance_mode: body.attendance_mode,
     is_published: body.is_published,
     msv_only: body.msv_only,
-  }).returning({ id: shivir_events.id, name: shivir_events.name });
+  }).returning({ id: shivir_events.id, name_en: shivir_events.name_en });
   await auditFromReq(req, {
     action: "create",
     entityKind: "shivir_event",
     entityId: row.id,
-    summary: `Created shivir "${row.name}".`,
+    summary: `Created shivir "${row.name_en}".`,
     metadata: { city_id: body.city_id, start_date: body.start_date, end_date: body.end_date },
   });
+  if (body.is_published) {
+    void enqueueShivirPublishedAnnouncement(row.id);
+  }
   ok(res, row);
+});
+
+/**
+ * PATCH /v1/admin/shivirs/:id
+ *
+ * Creation used to be the only write: a typo in the name, a venue change or a
+ * cancelled camp was permanent and stayed on the public site until end_date.
+ */
+router.patch("/shivirs/:id", requireShivirAdmin, async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  let body: z.infer<typeof patchShivirSchema>;
+  try { body = patchShivirSchema.parse(req.body); }
+  catch (err) {
+    const message =
+      err instanceof z.ZodError ? (err.issues[0]?.message ?? "Invalid shivir data.") : "Invalid shivir data.";
+    fail(res, 422, "ERR_VALIDATION_FAILED", message); return;
+  }
+
+  const [existing] = await db
+    .select({
+      id: shivir_events.id,
+      city_id: shivir_events.city_id,
+      name_en: shivir_events.name_en,
+      start_date: shivir_events.start_date,
+      end_date: shivir_events.end_date,
+      is_published: shivir_events.is_published,
+    })
+    .from(shivir_events)
+    .where(and(eq(shivir_events.id, id), isNull(shivir_events.deleted_at)))
+    .limit(1);
+  const allowedCityIds = await shivirWriteCityIds(req);
+  if (!existing || (allowedCityIds !== null && !allowedCityIds.includes(existing.city_id))) {
+    fail(res, 404, "ERR_NOT_FOUND", "Shivir not found."); return;
+  }
+
+  // Validate the range against the MERGED row, not the patch alone — moving
+  // only start_date can invert a range that was valid before.
+  const nextStart = body.start_date ?? existing.start_date;
+  const nextEnd = body.end_date ?? existing.end_date;
+  if (nextEnd < nextStart) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "The end date is before the start date."); return;
+  }
+
+  await db
+    .update(shivir_events)
+    .set({ ...body, updated_at: new Date() })
+    .where(eq(shivir_events.id, id));
+
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "shivir_event",
+    entityId: id,
+    summary: `Updated shivir "${body.name_en ?? existing.name_en}".`,
+    metadata: { fields: Object.keys(body) },
+  });
+
+  // Announce only on the false -> true edge, so editing a published shivir does
+  // not re-notify every family in the city.
+  if (body.is_published === true && !existing.is_published) {
+    void enqueueShivirPublishedAnnouncement(id);
+  }
+
+  ok(res, { id });
+});
+
+/* DELETE /v1/admin/shivirs/:id — soft delete; scans and registrations are kept. */
+router.delete("/shivirs/:id", requireShivirAdmin, async (req: Request, res: Response) => {
+  const id = String(req.params.id);
+  const [existing] = await db
+    .select({ id: shivir_events.id, city_id: shivir_events.city_id, name_en: shivir_events.name_en })
+    .from(shivir_events)
+    .where(and(eq(shivir_events.id, id), isNull(shivir_events.deleted_at)))
+    .limit(1);
+  const allowedCityIds = await shivirWriteCityIds(req);
+  if (!existing || (allowedCityIds !== null && !allowedCityIds.includes(existing.city_id))) {
+    fail(res, 404, "ERR_NOT_FOUND", "Shivir not found."); return;
+  }
+
+  await db
+    .update(shivir_events)
+    .set({ deleted_at: new Date(), is_published: false, updated_at: new Date() })
+    .where(eq(shivir_events.id, id));
+
+  await auditFromReq(req, {
+    action: "delete",
+    entityKind: "shivir_event",
+    entityId: id,
+    summary: `Cancelled shivir "${existing.name_en}".`,
+  });
+  ok(res, { id });
 });
 
 export default router;
