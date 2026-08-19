@@ -16,6 +16,7 @@ import {
 } from "../services/attendance-post-process";
 import { notifyParentsOfGalleryWallFeature } from "../lib/gallery-wall-notify";
 import { snapshotMonthlyLeaderboard } from "../services/monthly-leaderboard-snapshot";
+import { reconcilePunyaBalances } from "../services/punya-reconcile";
 import { todayIst } from "../services/session-materialise";
 import { sweepPushReceipts } from "../lib/push";
 import { db, dbWorker } from "@workspace/db";
@@ -140,17 +141,10 @@ export function registerDerivedDataJobs(): void {
   });
 
   registerQueueHandler(QUEUE_NAMES.PUNYA_RECONCILE, async () => {
-    // Recompute balances from ledger (idempotent safety net).
-    // dbWorker: full-ledger aggregate can exceed the API statement_timeout.
-    await dbWorker.execute(sql`
-      insert into punya_balances (student_id, total_points, tier)
-      select student_id, coalesce(sum(points), 0)::int, 'jigyasu'
-      from punya_transactions
-      group by student_id
-      on conflict (student_id) do update
-        set total_points = excluded.total_points,
-            updated_at = now()
-    `);
+    // H3 — recompute balances AND tiers from the ledger, then alert on drift.
+    // The service owns the full-outer-join scan and the locked per-student
+    // repair; see services/punya-reconcile.ts for why it is two phases.
+    await reconcilePunyaBalances();
   });
 
   registerQueueHandler(QUEUE_NAMES.ANALYTICS_REFRESH_VIEWS, async () => {
