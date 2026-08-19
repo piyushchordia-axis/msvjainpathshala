@@ -43,6 +43,7 @@ import centresRouter from "./v1/centres";
 import translateRouter from "./v1/translate";
 import certificatesRouter from "./v1/certificates";
 import teamRouter from "./v1/team";
+import leaderboardRouter from "./v1/leaderboard";
 
 const router: IRouter = Router();
 
@@ -54,6 +55,8 @@ router.use("/admin", adminRouter);
 router.use("/settings/public", clientSettingsRouter);
 router.use("/notices", noticesRouter);
 router.use("/gallery", galleryRouter);
+// BRD 7.6 — scoped Punya leaderboards (H2).
+router.use("/leaderboard", leaderboardRouter);
 router.use("/me", meRouter);
 router.use("/uploads", uploadsRouter);
 // Frozen table only — no /v1/attendance aliases.

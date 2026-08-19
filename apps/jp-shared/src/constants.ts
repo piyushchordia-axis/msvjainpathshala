@@ -61,7 +61,15 @@ export const CRON_EXPRESSIONS = {
   NOTIFICATIONS_PUSH_RECEIPTS: "*/30 * * * *",
   NIYAM_STREAK_LAPSE: "0 5 * * *", // ReplitAgent §9.5 — zero lapsed current_streak
   NOTIFICATIONS_MONTHLY_REPORTS: "0 2 1 * *", // 1st of month 02:00 IST
-  PUNYA_LEADERBOARD_REFRESH: "*/5 * * * *",
+  /**
+   * H1 — monthly, on the 1st at 00:30 IST.
+   *
+   * It ran every five minutes, so the snapshot fired ~8,640 times a month:
+   * the first tick after midnight IST on the 1st won the ON CONFLICT DO
+   * NOTHING and the other ~8,600 were full-table window-function scans over
+   * punya_transactions x students x centres that changed nothing.
+   */
+  PUNYA_LEADERBOARD_REFRESH: "30 0 1 * *",
   PUNYA_RECONCILE: "0 3 * * *",
   ANALYTICS_REFRESH_VIEWS: "0 4 * * *",
   DIGEST_WEEKLY_EMAIL: "0 7 * * 1", // Monday 07:00 IST

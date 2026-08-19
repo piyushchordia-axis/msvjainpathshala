@@ -346,7 +346,7 @@ Source of truth: `CRON_EXPRESSIONS` in `apps/jp-shared/src/constants.ts` (`@jp/s
 | `notifications.push_receipts` | `*/30 * * * *` | queue | Expo receipt sweep / dead-token reap |
 | `niyam-streak-lapse` | `0 5 * * *` | schedule | Zero lapsed `current_streak` (not BullMQ) |
 | `notifications.monthly_reports` | `0 2 1 * *` (1st 02:00 IST) | queue | Fan-out: insert last-month `centre_monthly_reports` per active centre (UNIQUE centre+month) and enqueue `report.generation` |
-| `punya.leaderboard.refresh` | `*/5 * * * *` | queue | Monthly leaderboard snapshot |
+| `punya.leaderboard.refresh` | `30 0 1 * *` (1st 00:30 IST) | queue | Monthly leaderboard snapshot — ranks the month's ledger SUM, top 20 per city (BRD §7.6). Was `*/5` and ranked LIFETIME balances. |
 | `punya.reconcile` | `0 3 * * *` | queue | Balance rebuild from ledger |
 | `analytics.refresh_views` | `0 4 * * *` | queue | Materialised view refresh |
 | `digest.weekly.email` | `0 7 * * 1` (Monday 07:00 IST) | schedule | Tick stub today |
