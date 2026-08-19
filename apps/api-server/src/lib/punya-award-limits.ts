@@ -122,9 +122,17 @@ export async function resolveAwardLimit(role: string): Promise<AwardLimit> {
 
 /**
  * Sum of manual_award credits by this user since start of today (Asia/Kolkata).
+ *
+ * `exec` lets the caller read this INSIDE the award transaction, under the
+ * per-awarder advisory lock. Read on the pool instead and two concurrent
+ * awards both see the pre-award total, both pass the cap check, and both
+ * commit — which is how 40/50 used became 60 against a 50 cap (H7).
  */
-export async function pointsAwardedTodayBy(userId: string): Promise<number> {
-  const [row] = await db
+export async function pointsAwardedTodayBy(
+  userId: string,
+  exec: Pick<typeof db, "select"> = db,
+): Promise<number> {
+  const [row] = await exec
     .select({
       total: sql<number>`coalesce(sum(${punya_transactions.points}), 0)::int`,
     })

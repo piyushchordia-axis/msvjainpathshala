@@ -660,52 +660,89 @@ router.post("/punya/award", async (req: Request, res: Response) => {
   }
 
   const idemKey = body.idempotency_key?.trim() || null;
-  let isReplay = false;
-  if (idemKey) {
-    const [existing] = await db
-      .select({ id: punya_transactions.id })
-      .from(punya_transactions)
-      .where(eq(punya_transactions.idempotency_key, idemKey))
-      .limit(1);
-    isReplay = Boolean(existing);
-  }
-
   const limit = await resolveAwardLimit(req.authUser!.role);
-  const pointsAwardedToday = await pointsAwardedTodayBy(req.authUser!.id);
 
-  if (!isReplay) {
-    if (body.points > limit.maxPerAward) {
-      fail(
-        res,
-        422,
-        ErrorCode.AWARD_LIMIT_EXCEEDED,
-        `That is more than you can award at once — the limit is ${limit.maxPerAward} Punya per award.`,
-      );
-      return;
-    }
-    if (limit.maxPerDay != null && pointsAwardedToday + body.points > limit.maxPerDay) {
-      fail(
-        res,
-        429,
-        ErrorCode.AWARD_DAILY_LIMIT_EXCEEDED,
-        `You have reached today's award limit (${limit.maxPerDay} Punya) — try again tomorrow or ask a higher role to award.`,
-      );
-      return;
-    }
-  }
+  // H7 — the ceiling checks used to run on the pool, before a separate
+  // awardPunya transaction. Two awards of 10 issued concurrently at 40/50 used
+  // both read 40, both passed, and both committed: 60 against a 50 cap, with no
+  // row lock, no post-award verification, and no reconciliation that would ever
+  // notice. Everything that reads the day's total and everything that changes it
+  // now happens inside ONE transaction, serialized per awarder by an advisory
+  // xact lock (same idiom as donations.ts / enrolments.ts). The lock is on the
+  // awarder, not the student: the cap is per-admin, so that is the contended row.
+  type AwardOutcome =
+    | { kind: "ok"; result: Awaited<ReturnType<typeof awardPunya>>; awardedToday: number }
+    | { kind: "per_award" }
+    | { kind: "daily" };
 
-  // Atomic + idempotent: the ledger insert, balance upsert, and tier recompute
-  // all commit together inside awardPunya's transaction. Passing an idempotency
-  // key makes a double-submit a no-op instead of double-crediting (the previous
-  // select-then-insert here was both non-atomic AND non-idempotent).
-  const result = await awardPunya({
-    studentId: student.id,
-    featureKey: MANUAL_AWARD_FEATURE_KEY,
-    points: body.points,
-    note: body.note ?? null,
-    awardedBy: req.authUser!.id,
-    idempotencyKey: idemKey,
+  const outcome = await db.transaction(async (tx): Promise<AwardOutcome> => {
+    await tx.execute(
+      sql`select pg_advisory_xact_lock(hashtextextended(${`punya:award:${req.authUser!.id}`}::text, 0))`,
+    );
+
+    // M15 — scoped to this student AND this awarder. Matching on the key
+    // alone let any caller quote an arbitrary transaction's idempotency key to
+    // skip both limit checks below and read back someone else's award.
+    let isReplay = false;
+    if (idemKey) {
+      const [existing] = await tx
+        .select({ id: punya_transactions.id })
+        .from(punya_transactions)
+        .where(
+          and(
+            eq(punya_transactions.idempotency_key, idemKey),
+            eq(punya_transactions.student_id, student.id),
+            eq(punya_transactions.awarded_by, req.authUser!.id),
+          ),
+        )
+        .limit(1);
+      isReplay = Boolean(existing);
+    }
+
+    const awardedToday = await pointsAwardedTodayBy(req.authUser!.id, tx);
+
+    if (!isReplay) {
+      if (body.points > limit.maxPerAward) return { kind: "per_award" };
+      if (limit.maxPerDay != null && awardedToday + body.points > limit.maxPerDay) {
+        return { kind: "daily" };
+      }
+    }
+
+    // Composed into the SAME tx, so the ledger insert, balance upsert and tier
+    // recompute commit with the cap check that authorised them.
+    const result = await awardPunya(
+      {
+        studentId: student.id,
+        featureKey: MANUAL_AWARD_FEATURE_KEY,
+        points: body.points,
+        note: body.note ?? null,
+        awardedBy: req.authUser!.id,
+        idempotencyKey: idemKey,
+      },
+      tx,
+    );
+    return { kind: "ok", result, awardedToday };
   });
+
+  if (outcome.kind === "per_award") {
+    fail(
+      res,
+      422,
+      ErrorCode.AWARD_LIMIT_EXCEEDED,
+      `That is more than you can award at once — the limit is ${limit.maxPerAward} Punya per award.`,
+    );
+    return;
+  }
+  if (outcome.kind === "daily") {
+    fail(
+      res,
+      429,
+      ErrorCode.AWARD_DAILY_LIMIT_EXCEEDED,
+      `You have reached today's award limit (${limit.maxPerDay} Punya) — try again tomorrow or ask a higher role to award.`,
+    );
+    return;
+  }
+  const { result, awardedToday: pointsAwardedToday } = outcome;
 
   // Only audit a real credit; an idempotent replay didn't change anything.
   if (result.awarded) {
