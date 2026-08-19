@@ -28,8 +28,13 @@ export function examCompletionKey(
   return generation <= 0 ? base : `${base}:g${generation}`;
 }
 
-export function examTopScoreKey(examId: string, studentId: string): string {
-  return `exam:${examId}:${studentId}:top_score`;
+export function examTopScoreKey(
+  examId: string,
+  studentId: string,
+  generation = 0,
+): string {
+  const base = `exam:${examId}:${studentId}:top_score`;
+  return generation <= 0 ? base : `${base}:g${generation}`;
 }
 
 function generationFromKey(key: string): number {
@@ -166,7 +171,44 @@ export async function awardExamCompletionPunya(
  * Cron path (no examId): only exams with window_end or updated_at in the last 30 days —
  * release-results is the primary trigger and passes exam_id explicitly.
  */
-export async function runExamTopScoreAwards(examId?: string): Promise<{ awarded: number }> {
+/** Unreversed top-score awards standing against one exam. */
+async function findLiveTopScoreAwards(
+  examId: string,
+): Promise<Array<{ student_id: string; points: number; idempotency_key: string }>> {
+  const result = await db.execute(sql`
+    select t.student_id, t.points, t.idempotency_key
+    from punya_transactions t
+    where t.source_entity_kind = ${EXAM_TOP_SCORE_FEATURE_KEY}
+      and t.source_entity_id = ${examId}::uuid
+      and t.points > 0
+      and t.idempotency_key is not null
+      and not exists (
+        select 1 from punya_transactions r where r.reversal_of = t.id
+      )
+  `);
+  const rows =
+    (result as unknown as {
+      rows?: Array<{ student_id: string; points: number; idempotency_key: string }>;
+    }).rows ?? [];
+  return rows.map((r) => ({ ...r, points: Number(r.points) }));
+}
+
+/** How many top-score awards this student has ever held for this exam. */
+async function countTopScoreAwards(examId: string, studentId: string): Promise<number> {
+  const result = await db.execute(sql`
+    select count(*)::int as n
+    from punya_transactions t
+    where t.student_id = ${studentId}::uuid
+      and t.source_entity_kind = ${EXAM_TOP_SCORE_FEATURE_KEY}
+      and t.source_entity_id = ${examId}::uuid
+      and t.points > 0
+  `);
+  return Number((result as unknown as { rows?: Array<{ n: number }> }).rows?.[0]?.n ?? 0);
+}
+
+export async function runExamTopScoreAwards(
+  examId?: string,
+): Promise<{ awarded: number; reversed: number }> {
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const exams = await db
     .select({
@@ -186,6 +228,7 @@ export async function runExamTopScoreAwards(examId?: string): Promise<{ awarded:
     );
 
   let awarded = 0;
+  let reversed = 0;
   for (const exam of exams) {
     const points = await resolveExamTopScorePoints(exam.city_id, exam.top_score_points);
     if (points <= 0) continue;
@@ -216,15 +259,42 @@ export async function runExamTopScoreAwards(examId?: string): Promise<{ awarded:
 
     // Distinct students (multiple attempts at the same top score).
     const seen = new Set<string>();
-    for (const row of toppers) {
-      if (seen.has(row.student_id)) continue;
-      seen.add(row.student_id);
+    for (const row of toppers) seen.add(row.student_id);
+
+    // H10 — synchronize, do not merely add.
+    //
+    // This was award-only. A re-grade that raised another student above the
+    // previous topper left the old award standing and added a new one, so the
+    // exam paid two top scorers, permanently, with no path to correct it from
+    // any surface. Exam COMPLETION already got this right (AT18
+    // reverse-then-award); the bonus beside it did not.
+    const live = await findLiveTopScoreAwards(exam.id);
+    for (const prior of live) {
+      if (seen.has(prior.student_id)) continue;
+      await reversePunya({
+        studentId: prior.student_id,
+        featureKey: EXAM_TOP_SCORE_FEATURE_KEY,
+        points: prior.points,
+        note: `Exam top score reversed after re-grade: ${exam.title_en}`,
+        idempotencyKey: `${prior.idempotency_key}:reversal`,
+      });
+      reversed += 1;
+    }
+    const liveByStudent = new Map(live.map((p) => [p.student_id, p]));
+
+    for (const studentId of seen) {
+      // Already holds an unreversed award for this exam — nothing to do.
+      if (liveByStudent.has(studentId)) continue;
+      // Generation-suffixed so a student who tops, loses it to a re-grade, and
+      // tops again is awarded a second time instead of being silently skipped
+      // by ON CONFLICT DO NOTHING on the base key.
+      const generation = await countTopScoreAwards(exam.id, studentId);
       const result = await awardPunya({
-        studentId: row.student_id,
+        studentId,
         featureKey: EXAM_TOP_SCORE_FEATURE_KEY,
         points,
         note: `Exam top score: ${exam.title_en}`,
-        idempotencyKey: examTopScoreKey(exam.id, row.student_id),
+        idempotencyKey: examTopScoreKey(exam.id, studentId, generation),
         sourceEntityKind: EXAM_TOP_SCORE_FEATURE_KEY,
         sourceEntityId: exam.id,
       });
@@ -232,6 +302,9 @@ export async function runExamTopScoreAwards(examId?: string): Promise<{ awarded:
     }
   }
 
-  logger.info({ examId: examId ?? null, awarded }, "exam.top_score awards processed");
-  return { awarded };
+  logger.info(
+    { examId: examId ?? null, awarded, reversed },
+    "exam.top_score awards processed",
+  );
+  return { awarded, reversed };
 }
