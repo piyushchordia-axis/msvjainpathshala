@@ -167,12 +167,24 @@ router.get("/", async (req: Request, res: Response) => {
     return;
   }
 
+  // SPEC 6.9 — a batch may be set to show tiers instead of ordinals.
+  let displayMode: "rank" | "tier" = "rank";
+  if (scope === "batch" && scopeId) {
+    const [b] = await db
+      .select({ mode: batches.leaderboard_mode })
+      .from(batches)
+      .where(eq(batches.id, scopeId))
+      .limit(1);
+    displayMode = b?.mode === "tier" ? "tier" : "rank";
+  }
+
   const result = await getLeaderboard({
     scope,
     scopeId,
     period,
     limit,
     selfStudentId: authorized.selfStudentId,
+    displayMode,
   });
   ok(res, result, { count: result.items.length });
 });

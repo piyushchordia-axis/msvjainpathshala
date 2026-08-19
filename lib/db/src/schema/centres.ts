@@ -15,7 +15,7 @@ import {
 } from "drizzle-orm/pg-core";
 
 import { softDelete, timestamps } from "./_helpers";
-import { ageGroupEnum, languageEnum, studentStatusEnum } from "./enums";
+import { ageGroupEnum, languageEnum, leaderboardModeEnum, studentStatusEnum } from "./enums";
 import { cities, states } from "./geography";
 import { users } from "./identity";
 
@@ -72,6 +72,15 @@ export const batches = pgTable(
     capacity: integer("capacity").notNull().default(30),
     language_preference: languageEnum("language_preference"),
     status: studentStatusEnum("status").notNull().default("active"),
+    /**
+     * SPEC 6.9 — show ranks, or tiers instead, on this batch's leaderboard.
+     *
+     * For a Bal batch of eight-year-olds a public ordinal ranking of children
+     * is a different thing from a tier badge, and which one a centre wants is
+     * a pastoral judgement rather than a platform default. 'rank' preserves
+     * existing behaviour.
+     */
+    leaderboard_mode: leaderboardModeEnum("leaderboard_mode").notNull().default("rank"),
     ...softDelete(),
     ...timestamps(),
   },

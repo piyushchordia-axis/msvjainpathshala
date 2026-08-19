@@ -1182,6 +1182,9 @@ export const childRowSchema = z.object({
   student_code: z.string(),
   age_group: z.string(),
   centre_id: z.string().uuid().nullable().optional(),
+  /** Needed for the batch leaderboard (BRD 7.6) — the board a child is most
+   *  likely to care about is the one with their own classmates on it. */
+  batch_id: z.string().uuid().nullable().optional(),
   centre_name: z.string().nullable(),
   batch_name: z.string().nullable(),
   msv_status: z.string(),

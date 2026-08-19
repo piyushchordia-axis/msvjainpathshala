@@ -3,7 +3,7 @@ import { FlatList, Platform, Pressable, RefreshControl, View, type ListRenderIte
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
-import { usePunya, PUNYA_LEDGER_PAGE } from "@/lib/queries";
+import { usePunya, usePunyaLeaderboard, PUNYA_LEDGER_PAGE } from "@/lib/queries";
 import type { PunyaTransaction } from "@/lib/types";
 import { formatDate } from "@/lib/format";
 import { punyaFeatureLabel, punyaTierLabel } from "@/lib/punya-labels";
@@ -35,6 +35,12 @@ export default function StudentPunya() {
   // Grows on "show older", so the whole ledger is reachable.
   const [limit, setLimit] = useState(PUNYA_LEDGER_PAGE);
   const punya = usePunya(activeStudentId ?? undefined, { limit });
+  // BRD 7.6 — the board a child cares about most is the one with their own
+  // classmates on it. Monthly, because that is the one that resets and so
+  // the one a child can still change.
+  const leaderboard = usePunyaLeaderboard("batch", activeChild?.batch_id ?? null, {
+    limit: 5,
+  });
 
   const summary = punya.data;
   const transactions = summary?.transactions ?? [];
@@ -161,6 +167,68 @@ export default function StudentPunya() {
                   </Body>
                 ) : null}
               </Card>
+
+              {/* H2 — a child could not see where they stand anywhere, at any
+                  scope. The board shows the top few AND their own rank, so a
+                  child outside the top still learns something about
+                  themselves rather than reading a list of other people. */}
+              {leaderboard.data && leaderboard.data.items.length > 0 ? (
+                <>
+                  <Title style={{ fontSize: 17, marginLeft: 2, marginTop: 4 }}>
+                    {hi ? "इस महीने की कक्षा" : "Your class this month"}
+                  </Title>
+                  <Card style={{ padding: 0, overflow: "hidden" }}>
+                    {leaderboard.data.items.map((row, i) => {
+                      const isMe = row.student_id === activeStudentId;
+                      return (
+                        <Row
+                          key={row.student_id}
+                          style={{
+                            justifyContent: "space-between",
+                            alignItems: "center",
+                            paddingHorizontal: 14,
+                            paddingVertical: 10,
+                            borderBottomWidth:
+                              i < leaderboard.data!.items.length - 1 ? 1 : 0,
+                            borderBottomColor: c.border,
+                            backgroundColor: isMe ? c.accent : undefined,
+                          }}
+                        >
+                          <Body style={{ fontSize: 14, flex: 1, paddingRight: 8 }}>
+                            {row.rank}. {row.full_name}
+                          </Body>
+                          <Numeric style={{ fontSize: 16 }}>{row.points}</Numeric>
+                        </Row>
+                      );
+                    })}
+                    {/* SPEC 6.9 — show the caller's own rank when they are not in
+                        the visible top. */}
+                    {leaderboard.data.me &&
+                    !leaderboard.data.items.some(
+                      (r) => r.student_id === leaderboard.data!.me!.student_id,
+                    ) ? (
+                      <Row
+                        style={{
+                          justifyContent: "space-between",
+                          alignItems: "center",
+                          paddingHorizontal: 14,
+                          paddingVertical: 10,
+                          borderTopWidth: 1,
+                          borderTopColor: c.border,
+                          backgroundColor: c.accent,
+                        }}
+                      >
+                        <Body style={{ fontSize: 14, flex: 1, paddingRight: 8 }}>
+                          {leaderboard.data.me.rank}. {leaderboard.data.me.full_name}
+                        </Body>
+                        <Numeric style={{ fontSize: 16 }}>
+                          {leaderboard.data.me.points}
+                        </Numeric>
+                      </Row>
+                    ) : null}
+                  </Card>
+                </>
+              ) : null}
 
               <Title style={{ fontSize: 17, marginLeft: 2, marginTop: 4 }}>
                 {hi ? "लेन-देन" : "Transactions"}

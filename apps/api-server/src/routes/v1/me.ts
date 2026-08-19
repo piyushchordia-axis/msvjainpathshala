@@ -188,6 +188,7 @@ router.get("/children", async (req: Request, res: Response) => {
       student_code: students.student_code,
       age_group: students.age_group,
       centre_id: students.centre_id,
+      batch_id: students.batch_id,
       centre_name: centres.name,
       batch_name: batches.name,
       msv_status: students.msv_status,

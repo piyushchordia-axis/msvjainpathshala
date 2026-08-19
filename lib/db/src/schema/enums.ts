@@ -281,6 +281,10 @@ export const homeworkStatusEnum = pgEnum("homework_status_enum", HOMEWORK_STATUS
 export const serviceRequestStatusEnum = pgEnum("service_request_status_enum", SERVICE_REQUEST_STATUSES);
 export const curriculumLevelEnum = pgEnum("curriculum_level_enum", CURRICULUM_LEVELS);
 export const courseStatusEnum = pgEnum("course_status_enum", COURSE_STATUSES);
+/** SPEC 6.9 — ranked board, or tier badges for younger batches. */
+export const LEADERBOARD_MODES = ["rank", "tier"] as const;
+export const leaderboardModeEnum = pgEnum("leaderboard_mode_enum", LEADERBOARD_MODES);
+
 export const auditActionEnum = pgEnum("audit_action_enum", AUDIT_ACTIONS);
 export const quizScopeEnum = pgEnum("quiz_scope_enum", QUIZ_SCOPES);
 export const competitionStatusEnum = pgEnum("competition_status_enum", COMPETITION_STATUSES);

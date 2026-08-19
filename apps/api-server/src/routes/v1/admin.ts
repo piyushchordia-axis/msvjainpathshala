@@ -734,6 +734,53 @@ router.get("/batches", async (req: Request, res: Response) => {
  *
  * One query, window functions, no N+1.
  */
+/**
+ * POST /v1/admin/batches/:id/leaderboard-mode — SPEC 6.9.
+ *
+ * For a Bal batch of eight-year-olds a public ordinal ranking of children is
+ * a different thing from a tier badge, and which one a centre wants is a
+ * pastoral judgement rather than a platform-wide default. Batch-scoped and
+ * audited; 'rank' is the existing behaviour.
+ */
+router.post(
+  "/batches/:batchId/leaderboard-mode",
+  requireRole("super_admin", "state_admin", "city_admin", "sanchalak"),
+  async (req: Request, res: Response) => {
+    const batchId = String(req.params.batchId);
+    const mode = (req.body as { mode?: unknown })?.mode;
+    if (mode !== "rank" && mode !== "tier") {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "mode must be rank or tier.");
+      return;
+    }
+    if (!UUID_RE.test(batchId)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Batch not found.");
+      return;
+    }
+    const [batch] = await db
+      .select({ id: batches.id, centre_id: batches.centre_id, name: batches.name })
+      .from(batches)
+      .where(eq(batches.id, batchId))
+      .limit(1);
+    const scope = await resolveAdminScope(req.authUser!);
+    if (!batch || !inBatchWriteScope(scope, batch.id, batch.centre_id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Batch not found.");
+      return;
+    }
+
+    await db.update(batches).set({ leaderboard_mode: mode }).where(eq(batches.id, batchId));
+    const { clearLeaderboardCache } = await import("../../services/punya-leaderboard");
+    clearLeaderboardCache();
+
+    await auditFromReq(req, {
+      action: "config_change",
+      entityKind: "batch",
+      entityId: batch.id,
+      summary: `Leaderboard for ${batch.name} now shows ${mode === "tier" ? "tiers" : "ranks"}.`,
+      metadata: { leaderboard_mode: mode },
+    });
+    ok(res, { id: batch.id, leaderboard_mode: mode });
+  },
+);
 router.get("/batches/:batchId/punya-standings", async (req: Request, res: Response) => {
   const batchId = String(req.params.batchId);
   if (!UUID_RE.test(batchId)) {

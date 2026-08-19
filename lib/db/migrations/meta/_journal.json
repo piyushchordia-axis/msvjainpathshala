@@ -673,6 +673,13 @@
       "when": 1791888000022,
       "tag": "0095_notification_kind_punya_tier",
       "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1791888000023,
+      "tag": "0096_batch_leaderboard_mode",
+      "breakpoints": true
     }
   ]
 }

@@ -2752,3 +2752,53 @@ export function useCertifyCourseNode() {
     },
   });
 }
+
+/* ---------------- Punya leaderboards (BRD §7.6, H2) ---------------- */
+
+export interface LeaderboardRow {
+  rank: number;
+  student_id: string;
+  full_name: string;
+  student_code: string | null;
+  tier: string;
+  points: number;
+}
+
+export interface LeaderboardResponse {
+  scope: "batch" | "centre" | "city" | "msv";
+  scope_id: string | null;
+  period: "month" | "all_time";
+  month: string | null;
+  items: LeaderboardRow[];
+  /** The caller's own child, even when outside the top N (SPEC §6.9). */
+  me: LeaderboardRow | null;
+  total_ranked: number;
+}
+
+/**
+ * A scoped Punya leaderboard.
+ *
+ * There was no leaderboard endpoint at any scope, so nothing on any client
+ * could show a child where they stand. Monthly by default because BRD §7.6
+ * says the centre and city boards reset monthly.
+ */
+export function usePunyaLeaderboard(
+  scope: "batch" | "centre" | "city" | "msv",
+  scopeId?: string | null,
+  opts?: { period?: "month" | "all_time"; limit?: number; enabled?: boolean },
+) {
+  const period = opts?.period ?? "month";
+  const limit = opts?.limit ?? 20;
+  const needsId = scope !== "msv";
+  return useQuery({
+    queryKey: ["leaderboard", scope, scopeId ?? "all", period, limit],
+    queryFn: () => {
+      const params = new URLSearchParams({ scope, period, limit: String(limit) });
+      if (scopeId) params.set("id", scopeId);
+      return apiGet<LeaderboardResponse>(`/v1/leaderboard?${params.toString()}`);
+    },
+    enabled: (opts?.enabled ?? true) && (!needsId || !!scopeId),
+    // A board that lags a minute is fine; refetching it per focus is not.
+    staleTime: 60_000,
+  });
+}

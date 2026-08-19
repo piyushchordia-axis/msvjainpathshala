@@ -37,6 +37,13 @@ export interface LeaderboardRow {
 export interface LeaderboardResult {
   scope: LeaderboardScope;
   scope_id: string | null;
+  /**
+   * SPEC 6.9 — 'rank' shows ordinal positions, 'tier' hides them and shows
+   * tier badges instead. Served rather than decided per client, so the two
+   * apps cannot disagree about whether a batch of eight-year-olds is
+   * publicly ranked.
+   */
+  display_mode: "rank" | "tier";
   period: LeaderboardPeriod;
   month: string | null;
   items: LeaderboardRow[];
@@ -77,12 +84,15 @@ export async function getLeaderboard(opts: {
   period: LeaderboardPeriod;
   limit: number;
   selfStudentId?: string | null;
+  /** Batch boards can be set to hide ordinals (SPEC 6.9). */
+  displayMode?: "rank" | "tier";
 }): Promise<LeaderboardResult> {
   const { scope, scopeId, period, limit } = opts;
   const selfId = opts.selfStudentId ?? null;
   const monthStart = period === "month" ? currentMonthStartIst() : null;
 
-  const cacheKey = `${scope}:${scopeId ?? "all"}:${period}:${limit}:${selfId ?? "-"}`;
+  const displayMode = opts.displayMode ?? "rank";
+  const cacheKey = `${scope}:${scopeId ?? "all"}:${period}:${limit}:${selfId ?? "-"}:${displayMode}`;
   const hit = await cache.get(cacheKey);
   if (hit) return hit;
 
@@ -159,6 +169,7 @@ export async function getLeaderboard(opts: {
   const out: LeaderboardResult = {
     scope,
     scope_id: scopeId,
+    display_mode: displayMode,
     period,
     month: monthStart,
     items,
