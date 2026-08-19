@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import request from "supertest";
 import app from "../src/app";
 import { pool } from "@workspace/db";
-import { loginAs, auth, withQueryCount } from "./helpers";
+import { auth, loginAs, withLedgerMaintenance, withQueryCount } from "./helpers";
 import * as queues from "../src/lib/queues";
 import * as push from "../src/lib/push";
 
@@ -23,7 +23,37 @@ afterEach(async () => {
   );
 });
 
+/** Planted fixtures, removed in afterAll — see removePlantedStudents. */
+const plantedStudentIds: string[] = [];
+
+/**
+ * These students were never torn down, so every run left dozens more
+ * attached to the same shared batch. Nothing in THIS file noticed; what
+ * broke was enrolments.test.ts, whose auto-approve began returning 409 once
+ * the batch passed its capacity of 25 — a failure with no visible
+ * connection to the file that caused it.
+ *
+ * The ledger is append-only at the database (0090) and students cascade into
+ * it, so the teardown declares itself.
+ */
+async function removePlantedStudents(): Promise<void> {
+  if (plantedStudentIds.length === 0) return;
+  await withLedgerMaintenance(async (c) => {
+    await c.query(`delete from homework_submissions where student_id = any($1::uuid[])`, [
+      plantedStudentIds,
+    ]);
+    await c.query(`delete from student_course_progress where student_id = any($1::uuid[])`, [
+      plantedStudentIds,
+    ]);
+    await c.query(`delete from course_certificates where student_id = any($1::uuid[])`, [
+      plantedStudentIds,
+    ]);
+    await c.query(`delete from students where id = any($1::uuid[])`, [plantedStudentIds]);
+  });
+}
+
 afterAll(async () => {
+  await removePlantedStudents();
   const { workerPool } = await import("@workspace/db");
   await Promise.all([pool.end(), workerPool.end()]);
 });
@@ -62,6 +92,7 @@ async function plantSubmittedAssignment(
       [centreId, batchId, parentId, `Perf11 Bulk ${i}`, `P11B${Date.now()}${i}`],
     );
     studentIds.push(r.rows[0]!.id);
+    plantedStudentIds.push(r.rows[0]!.id);
   }
 
   const create = await request(app)

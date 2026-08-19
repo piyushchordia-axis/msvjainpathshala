@@ -3,7 +3,7 @@ import request from "supertest";
 import { randomUUID } from "node:crypto";
 import app from "../src/app";
 import { pool } from "@workspace/db";
-import { loginAs, auth } from "./helpers";
+import { auth, loginAs, withLedgerMaintenance } from "./helpers";
 
 /**
  * Enrolments (Centre & Batch) — POST /v1/enrolments creation path.
@@ -81,7 +81,10 @@ afterAll(async () => {
   // Also clean any enrolments that point at students/batches we created.
   if (createdStudents.length) {
     await pool.query(`delete from enrolments where student_id = any($1::uuid[])`, [createdStudents]);
-    await pool.query(`delete from students where id = any($1::uuid[])`, [createdStudents]);
+    // Hard-deleting a student cascades into the append-only ledger (0090).
+    await withLedgerMaintenance((c) =>
+      c.query(`delete from students where id = any($1::uuid[])`, [createdStudents]),
+    );
   }
   if (createdBatches.length) {
     await pool.query(`delete from batches where id = any($1::uuid[])`, [createdBatches]);

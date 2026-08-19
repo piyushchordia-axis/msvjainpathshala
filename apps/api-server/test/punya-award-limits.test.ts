@@ -17,6 +17,39 @@ beforeEach(() => {
   clearAwardLimitCache();
 });
 
+/** Restore the seeded shikshak ceilings (10 per award, 50 per day). */
+async function restoreShikshakLimits(): Promise<void> {
+  await pool.query(
+    `update punya_award_limits
+        set max_points_per_award = 10, max_points_per_day = 50
+      where role = 'shikshak'`,
+  );
+  clearAwardLimitCache();
+}
+
+
+/**
+ * Run `fn` with `headroom` points of daily budget above what this awarder has
+ * already spent today, then restore the seeded ceilings.
+ */
+async function withDailyHeadroom(
+  userId: string,
+  headroom: number,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const spent = await sumManualToday(userId);
+  await pool.query(
+    `update punya_award_limits set max_points_per_day = $1 where role = 'shikshak'`,
+    [spent + headroom],
+  );
+  clearAwardLimitCache();
+  try {
+    await fn();
+  } finally {
+    await restoreShikshakLimits();
+  }
+}
+
 async function aaravId(): Promise<string> {
   const { rows } = await pool.query<{ id: string }>(
     `select id from students
@@ -97,13 +130,20 @@ describe("POST /v1/admin/punya/award — scope + limits", () => {
   it("shikshak awarding to a student in their assigned batch succeeds", async () => {
     const shikshak = await loginAs("shikshak");
     const studentId = await aaravId();
-    const res = await request(app)
-      .post("/v1/admin/punya/award")
-      .set(auth(shikshak.token))
-      .send({ student_id: studentId, points: 5, note: "scope ok" });
-    expect(res.status).toBe(200);
-    expect(res.body.data.points_awarded).toBe(5);
-    expect(res.body.data.student_id).toBe(studentId);
+    // Headroom, not a fresh budget: the ledger is append-only (0090) so a
+    // previous run's spend cannot be deleted, and the daily cap is now
+    // enforced correctly (H7), which makes a second run of the day fail
+    // deterministically rather than intermittently. Widen this role's cap
+    // relative to what it has already spent, then restore it.
+    await withDailyHeadroom(shikshak.user.id, 50, async () => {
+      const res = await request(app)
+        .post("/v1/admin/punya/award")
+        .set(auth(shikshak.token))
+        .send({ student_id: studentId, points: 5, note: "scope ok" });
+      expect(res.status).toBe(200);
+      expect(res.body.data.points_awarded).toBe(5);
+      expect(res.body.data.student_id).toBe(studentId);
+    });
   });
 
   it("shikshak awarding to same-centre batch they do NOT teach gets 404", async () => {
@@ -144,10 +184,17 @@ describe("POST /v1/admin/punya/award — scope + limits", () => {
     const shikshak = await loginAs("shikshak");
     const studentId = await aaravId();
 
-    // Drain remaining daily budget with 10-point awards (shikshak day cap = 50).
+    // Give this run exactly 50 points of headroom above whatever earlier runs
+    // already spent, so the drain-then-refuse assertion holds on any run.
     const before = await sumManualToday(shikshak.user.id);
+    const cap = before + 50;
+    await pool.query(
+      `update punya_award_limits set max_points_per_day = $1 where role = 'shikshak'`,
+      [cap],
+    );
+    clearAwardLimitCache();
     let spent = before;
-    while (spent + 10 <= 50) {
+    while (spent + 10 <= cap) {
       const r = await request(app)
         .post("/v1/admin/punya/award")
         .set(auth(shikshak.token))
@@ -170,7 +217,8 @@ describe("POST /v1/admin/punya/award — scope + limits", () => {
 
     const acceptedAfter = await ledgerRowsToday(shikshak.user.id);
     expect(acceptedAfter).toBe(acceptedBefore);
-    expect(await sumManualToday(shikshak.user.id)).toBeLessThanOrEqual(50);
+    expect(await sumManualToday(shikshak.user.id)).toBeLessThanOrEqual(cap);
+    await restoreShikshakLimits();
   });
 
   it("replaying the same idempotency_key credits once", async () => {

@@ -3,6 +3,7 @@
  * Run against CURRENT code before any batching changes.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { withLedgerMaintenance } from "./helpers";
 import {
   pool,
   db,
@@ -62,23 +63,16 @@ async function attendanceTxnCount(sessionId: string, studentIds?: string[]): Pro
 
 async function wipeSessionLedger(sessionId: string, studentIds: string[]): Promise<void> {
   await db.delete(attendance).where(eq(attendance.session_id, sessionId));
-  await db
-    .delete(punya_transactions)
-    .where(
-      and(
-        eq(punya_transactions.source_entity_kind, "attendance"),
-        eq(punya_transactions.source_entity_id, sessionId),
-      ),
-    );
-  // Also clear streak rows keyed on this session.
-  await db
-    .delete(punya_transactions)
-    .where(
-      and(
-        eq(punya_transactions.source_entity_kind, "attendance_streak"),
-        eq(punya_transactions.source_entity_id, sessionId),
-      ),
-    );
+  // The ledger is append-only at the database (0090); fixture teardown has
+  // to declare itself. Streak rows keyed on this session go too.
+  await withLedgerMaintenance((c) =>
+    c.query(
+      `delete from punya_transactions
+        where source_entity_kind in ('attendance', 'attendance_streak')
+          and source_entity_id = $1::uuid`,
+      [sessionId],
+    ),
+  );
   for (const id of studentIds) {
     const ledger = await sumAttendanceLedger(id);
     // Reset balance to attendance-ledger only for these students (test isolation).

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { withLedgerMaintenance } from "./helpers";
 import { db, pool, students, punya_transactions, punya_balances } from "@workspace/db";
 import { eq, inArray } from "drizzle-orm";
 import { awardPunya, reversePunya } from "../src/lib/punya";
@@ -20,10 +21,13 @@ describe("punya idempotency (dedicated idempotency_key)", () => {
     expect(row?.id).toBeTruthy();
     studentId = row!.id;
 
-    // Clean any prior rows from this test key pair
-    await db
-      .delete(punya_transactions)
-      .where(inArray(punya_transactions.idempotency_key, [idempotencyKey, reversalKey]));
+    // Clean any prior rows from this test key pair. The ledger is
+    // append-only at the database (0090), so teardown declares itself.
+    await withLedgerMaintenance((c) =>
+      c.query(`delete from punya_transactions where idempotency_key = any($1::text[])`, [
+        [idempotencyKey, reversalKey],
+      ]),
+    );
   });
 
   it("awardPunya twice with the same key credits once", async () => {

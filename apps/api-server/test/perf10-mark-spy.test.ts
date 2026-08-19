@@ -6,7 +6,7 @@ import { pool, db, sessions, students, attendance, punya_transactions, users } f
 import { and, eq, isNull } from "drizzle-orm";
 import { ulid } from "../src/lib/ulid";
 import { markAttendance } from "../src/services/attendance-mark";
-import { withQueryCount } from "./helpers";
+import { withLedgerMaintenance, withQueryCount } from "./helpers";
 
 afterAll(async () => {
   const { workerPool } = await import("@workspace/db");
@@ -96,12 +96,16 @@ describe("PERF #10 mark statement count", () => {
       expect(correction).toBeGreaterThan(0);
     } finally {
       await pool.query(`delete from attendance where session_id = $1`, [session!.id]);
-      await pool.query(
-        `delete from punya_transactions where source_entity_id = $1::uuid`,
-        [session!.id],
+      await withLedgerMaintenance((c) =>
+        c.query(`delete from punya_transactions where source_entity_id = $1::uuid`, [
+          session!.id,
+        ]),
       );
       await pool.query(`delete from punya_balances where student_id = any($1::uuid[])`, [planted]);
-      await pool.query(`delete from students where id = any($1::uuid[])`, [planted]);
+      // Hard-deleting a student cascades into punya_transactions.
+      await withLedgerMaintenance((c) =>
+        c.query(`delete from students where id = any($1::uuid[])`, [planted]),
+      );
       await pool.query(`delete from sessions where id = $1 and topic = 'perf10-spy-count'`, [
         session!.id,
       ]);

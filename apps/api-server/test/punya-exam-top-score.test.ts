@@ -11,10 +11,33 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 import { pool, db, online_exams, exam_attempts } from "@workspace/db";
+import { withLedgerMaintenance } from "./helpers";
 import { eq } from "drizzle-orm";
 import { runExamTopScoreAwards } from "../src/lib/exam-punya";
 
+/** Planted fixtures, torn down in afterAll so they cannot fill the batch. */
+const plantedStudentIds: string[] = [];
+
+/**
+ * The ledger is append-only at the database (0090) and students cascade into
+ * it, so teardown declares itself. Without this these fixtures accumulate
+ * across runs and push the shared batch past capacity, failing unrelated
+ * tests (enrolments' auto-approve begins returning 409).
+ */
+async function removePlantedStudents(): Promise<void> {
+  if (plantedStudentIds.length === 0) return;
+  await withLedgerMaintenance(async (c) => {
+    await c.query(`delete from student_course_progress where student_id = any($1::uuid[])`, [
+      plantedStudentIds,
+    ]);
+    await c.query(`delete from course_certificates where student_id = any($1::uuid[])`, [
+      plantedStudentIds,
+    ]);
+    await c.query(`delete from students where id = any($1::uuid[])`, [plantedStudentIds]);
+  });
+}
 afterAll(async () => {
+  await removePlantedStudents();
   const { workerPool } = await import("@workspace/db");
   await Promise.all([pool.end(), workerPool.end()]);
 });
@@ -31,6 +54,7 @@ async function plantStudent(tag: string): Promise<string> {
      returning id`,
     [centre_id, batch_id, `TopScore ${tag}`, `TS${tag}`.slice(0, 24)],
   );
+  plantedStudentIds.push(rows[0]!.id);
   return rows[0]!.id;
 }
 

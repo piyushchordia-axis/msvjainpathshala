@@ -141,3 +141,38 @@ export async function withQueryCount<T>(fn: () => Promise<T>): Promise<QueryCoun
     restoreWorker();
   }
 }
+
+/**
+ * Run ledger cleanup under the append-only escape hatch (migration 0090).
+ *
+ * punya_transactions is enforced append-only by a BEFORE UPDATE OR DELETE
+ * trigger, because the reconcile rebuilds punya_balances FROM the ledger and
+ * would otherwise launder a stray UPDATE into the authoritative record. Test
+ * fixtures that tear down ledger rows — or that hard-delete a student and take
+ * ledger rows with them via ON DELETE CASCADE — have to say so explicitly.
+ *
+ * The flag is set transaction-locally on purpose. A session-scoped one would
+ * return to the pool still set and silently disarm the guard for whatever ran
+ * next on that connection.
+ *
+ * @example
+ *   await withLedgerMaintenance((c) =>
+ *     c.query(`delete from punya_transactions where source_entity_id = $1`, [id]),
+ *   );
+ */
+export async function withLedgerMaintenance(
+  fn: (client: import("pg").PoolClient) => Promise<unknown>,
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("begin");
+    await client.query("select set_config('jp.ledger_maintenance', 'on', true)");
+    await fn(client);
+    await client.query("commit");
+  } catch (err) {
+    await client.query("rollback").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}

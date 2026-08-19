@@ -631,6 +631,13 @@
       "when": 1791888000016,
       "tag": "0089_punya_competition_feature",
       "breakpoints": true
+    },
+    {
+      "idx": 90,
+      "version": "7",
+      "when": 1791888000017,
+      "tag": "0090_punya_ledger_immutable",
+      "breakpoints": true
     }
   ]
 }
