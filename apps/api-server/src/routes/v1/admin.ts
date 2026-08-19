@@ -704,6 +704,147 @@ router.get("/batches", async (req: Request, res: Response) => {
   ok(res, { items: rows }, { count: rows.length });
 });
 
+/**
+ * GET /v1/admin/batches/:batchId/punya-standings?month=YYYY-MM
+ *
+ * Per-student Punya standings for one batch. The Guruji's answer to "how is my
+ * class doing this month" — the mobile screen app/shikshak/punya.tsx has been
+ * calling this since it shipped, but the route was never written, so it 404'd.
+ *
+ * Q12 — batch-bound: a shikshak sees only batches they are assigned to;
+ * sanchalak+ resolve to centre membership via inBatchWriteScope. 404 rather
+ * than 403 throughout, matching the rest of the module (no existence leak).
+ *
+ * One query, window functions, no N+1.
+ */
+router.get("/batches/:batchId/punya-standings", async (req: Request, res: Response) => {
+  const batchId = String(req.params.batchId);
+  if (!UUID_RE.test(batchId)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Batch not found.");
+    return;
+  }
+
+  const [batch] = await db
+    .select({ id: batches.id, name: batches.name, centre_id: batches.centre_id })
+    .from(batches)
+    .where(eq(batches.id, batchId))
+    .limit(1);
+
+  const scope = await resolveAdminScope(req.authUser!);
+  if (!batch || !inBatchWriteScope(scope, batch.id, batch.centre_id)) {
+    fail(res, 404, "ERR_NOT_FOUND", "Batch not found.");
+    return;
+  }
+
+  // Default to the current Asia/Kolkata month — the platform's calendar.
+  const monthRaw = typeof req.query.month === "string" ? req.query.month.trim() : "";
+  if (monthRaw && !/^\d{4}-\d{2}$/.test(monthRaw)) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "month must be YYYY-MM.");
+    return;
+  }
+  const month =
+    monthRaw ||
+    new Date().toLocaleDateString("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+    }).slice(0, 7);
+  const monthStart = `${month}-01`;
+
+  const result = await db.execute(sql`
+    with month_window as (
+      select
+        ${monthStart}::date as start_date,
+        (${monthStart}::date + interval '1 month')::date as end_date
+    ),
+    roster as (
+      select
+        st.id, st.full_name, st.student_code, st.age_group,
+        coalesce(pb.total_points, 0)::int as total_points,
+        coalesce(pb.tier, 'jigyasu')::text as tier
+      from students st
+      left join punya_balances pb on pb.student_id = st.id
+      -- Q11: deactivated students keep their history but leave the roster.
+      where st.batch_id = ${batchId}::uuid
+        and st.deleted_at is null
+        and st.status = 'active'
+    ),
+    month_tx as (
+      select
+        pt.student_id,
+        pt.feature_key,
+        sum(pt.points)::int as points
+      from punya_transactions pt
+      cross join month_window w
+      where pt.student_id in (select id from roster)
+        and pt.created_at >= w.start_date
+        and pt.created_at < w.end_date
+      -- SUM, not a filter: reversals are negative rows and must net off.
+      group by pt.student_id, pt.feature_key
+    ),
+    month_totals as (
+      select student_id,
+             sum(points)::int as month_points,
+             jsonb_object_agg(feature_key, points) as by_source
+      from month_tx
+      group by student_id
+    )
+    select
+      r.id as student_id,
+      r.full_name,
+      r.student_code,
+      r.age_group,
+      r.total_points,
+      r.tier,
+      dense_rank() over (order by r.total_points desc)::int as rank,
+      coalesce(mt.month_points, 0)::int as month_points,
+      coalesce(mt.by_source, '{}'::jsonb) as by_source
+    from roster r
+    left join month_totals mt on mt.student_id = r.id
+    order by rank asc, r.full_name asc
+  `);
+
+  type Row = {
+    student_id: string;
+    full_name: string;
+    student_code: string | null;
+    age_group: string | null;
+    total_points: number;
+    tier: string;
+    rank: number;
+    month_points: number;
+    by_source: Record<string, number> | null;
+  };
+  const rows = ((result as unknown as { rows?: Row[] }).rows ?? []).map((r) => ({
+    ...r,
+    by_source: r.by_source ?? {},
+  }));
+
+  const batchTotal = rows.reduce((sum, r) => sum + r.total_points, 0);
+  const tierCounts: Record<string, number> = {};
+  const bySourceTotals: Record<string, number> = {};
+  for (const r of rows) {
+    tierCounts[r.tier] = (tierCounts[r.tier] ?? 0) + 1;
+    for (const [key, value] of Object.entries(r.by_source)) {
+      bySourceTotals[key] = (bySourceTotals[key] ?? 0) + Number(value);
+    }
+  }
+
+  ok(res, {
+    items: rows,
+    meta: {
+      batch_id: batch.id,
+      batch_name: batch.name,
+      month,
+      student_count: rows.length,
+      batch_total: batchTotal,
+      batch_average: rows.length > 0 ? Math.round(batchTotal / rows.length) : 0,
+      tier_counts: tierCounts,
+      by_source: bySourceTotals,
+    },
+  });
+});
+
 const patchTimetableSchema = z.object({
   day_of_week: z.array(z.number().int().min(1).max(7)).optional(),
   start_time: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/).optional(),

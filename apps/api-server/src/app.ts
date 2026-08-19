@@ -200,6 +200,19 @@ app.use(legalRouter);
 // Multer LIMIT_* → typed envelope (413/422) before the generic 500 handler.
 app.use(handleMulterError);
 
+/**
+ * Unmatched API path → the standard error envelope, not Express's HTML page.
+ *
+ * Scoped to the API prefixes so the legal pages and static /uploads keep their
+ * current behaviour. This exists because a missing route used to answer with
+ * `Cannot GET /v1/...` as text/html: a caller checking `res.body.error.code`
+ * got `undefined`, which disguised an entirely unimplemented endpoint as a
+ * scope/permission bug and cost real time to diagnose.
+ */
+app.use(["/v1", "/api"], (_req: Request, res: import("express").Response) => {
+  fail(res, 404, "ERR_NOT_FOUND", "That endpoint does not exist.");
+});
+
 // Terminal error handler: never leak stack traces / internal errors to clients.
 // Express 5 forwards rejected async handlers here. Logs the full error, returns
 // the standard envelope.

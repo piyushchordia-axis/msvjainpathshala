@@ -162,6 +162,12 @@ export const NOTIFICATION_KINDS = [
   "exam",
   "shivir",
   "niyam_rejected",
+  /**
+   * A review-mode submission approved by a Guruji. Only rejection and badges
+   * were ever notified, so a child whose niyam was approved heard nothing —
+   * the one outcome worth telling them about.
+   */
+  "niyam_approved",
   "niyam_badge",
   "attendance",
   "attendance_streak",

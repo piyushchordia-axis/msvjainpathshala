@@ -141,11 +141,27 @@ Both thresholds are **8**: a child old enough to sign in on their own is treated
 
 Both are enforced server-side; a missing or unparseable DOB fails both, and is reported as its own distinct message ("date of birth is not on record") rather than as "too young" — roughly 12% of seeded students have no DOB, so conflating the two sends families arguing with the wrong thing. Under-age children are still enrolled normally — they simply get no independent login and reach the app through their parent. Provisioning must **never throw** on an under-age child: it runs inside the sanchalak/city_admin approval transaction, and failing would reject a legitimate enrolment.
 
-### Q5 — Niyam rejection: 30-day window only
-A niyam submission can only be rejected within 30 days of submission. After 30 days, the reject button in admin UI is disabled AND the API returns `ERR_NIYAM_REVERSAL_WINDOW_EXPIRED` (409). On rejection: Punya is reversed, streak is recomputed, gallery item (if any) is hidden.
+### Q5 — Niyam rejection: 30-day window only (with one exemption)
+A niyam submission that **awarded points** can only be rejected within 30 days of submission. After 30 days, the reject button in admin UI is disabled AND the API returns `ERR_NIYAM_REVERSAL_WINDOW_EXPIRED` (409). On rejection: Punya is reversed, streak is recomputed, gallery item (if any) is hidden.
+
+**A still-`pending` submission is exempt from the window and may be rejected at any age.** It never awarded anything, so there is nothing to reverse; gating it would strand a stale queue item forever with no way to clear it. This is implemented in `canRejectSubmission` (`lib/niyam-constants.ts`) and was previously recorded only in `.cursor/rules/20-niyam-fix-pass.mdc` — it is authoritative here now. Never hardcode 30 in a client: the API returns `reversal_window_expires_at` and `can_reject`.
+
+**Auto-approve is the default.** `niyams.approval_mode` defaults to `'auto'`, so retroactive rejection is the *primary* admin workflow, not an edge case. Any admin surface that lists only `pending` rows is broken by definition.
+
+### Q5a — Badge Punya is permanent (decided 2026-08-18)
+Rejecting a submission reverses **only** that submission's own award (`feature_key='niyam_submission'`). The 25-point `niyam_badge` bonus that a streak milestone triggered is **not** reversed, and the badge row itself survives — badges are historical achievements (`lib/niyam-badges.ts`).
+
+This is a deliberate trade-off, not an oversight. The known consequence is that the bonus is farmable: submit 7 days, collect +25 at the `daily_7` milestone, then have the 7th submission rejected, and repeat. That was accepted because reversing a bonus whose milestone was genuinely reached at the time punishes a child for an adult's later review decision, and because `longest_streak = max(stored, recomputed)` already guarantees a peak can never decrease. If this is ever revisited, the reversal must reference the badge's own idempotency key (`badge:{student}:{niyam}:{key}`) and follow the AT18 reverse-then-award discipline — do not bare-debit.
 
 ### Q6 — Gallery opt-in: blanket, per parent (query-time; no backfill)
 `users.gallery_visibility_opt_in` is a **single toggle per parent** covering all their children. Parents set it via `PATCH /v1/me/gallery-visibility`. Consent is resolved at **query time** by the join in `GET /v1/gallery` (and admin `can_publish`) — toggling is instant and needs **no backfill**. Gallery rows are created for every approved submission regardless of opt-in; visibility is decided on read. Do not replace this with a write-time check or a per-item hide/restore job. (Older wording that described a backfill is stale; the shipped design is query-time — see `.cursor/rules/20-niyam-fix-pass.mdc` and SPEC.md § gallery consent.)
+
+### Q6a — Niyam submission is offline-first (shipped reality, reconciled 2026-08-18)
+There is **no online-only submit path on any client**. `useSubmitNiyam` enqueues into `jp.queue.niyam_submissions` and drains through `POST /v1/sync/batch`; nothing in the mobile or web app calls `POST /v1/niyam-submissions` to create a submission. The HTTP route still exists and is still tested, but in production it is the *secondary* caller.
+
+Both entry points call **`services/niyam-submit.ts` → `submitNiyam()`**, which owns ownership, audience, the date window, media resolution, the advisory lock, and the award + gallery + streak + badge sequence. Rate limiting lives on the HTTP route only — applying it inside the service would reject a parent syncing a week of offline niyams, and a 429 backoff capped at 5 min / 10 attempts cannot outlast an hour-long bucket.
+
+**Why this is written down:** the offline queue writer shipped before the sync handler was fixed, so for a period every submission ran through a parallel handler that awarded nothing — children were told "approved" and received 0 Punya. If you add a second submit path, or "simplify" the route by re-inlining the transaction, that regression returns silently. Submission ownership is **parent/self only** on both paths (`ownedStudentsCondition`); no staff role may submit on a child's behalf.
 
 ### Q7 — Library videos: embed URLs only
 Library items of `type='video_embed'` store a YouTube or Vimeo URL in `embed_url`. No video files are uploaded to S3/R2. Validate that the URL is a valid YouTube or Vimeo link on creation. The mobile and web apps render these as embedded iframes/WebViews.

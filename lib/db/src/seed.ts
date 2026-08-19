@@ -168,6 +168,11 @@ async function main(): Promise<void> {
   await db.insert(punya_features).values([
     { key: "attendance", label: "Attendance", is_active: true, min_points: 0, max_points: 10 },
     { key: "niyam_completion", label: "Niyam completion", is_active: true, min_points: 0, max_points: 1000 },
+    // AT21 — these two are what the runtime actually awards under
+    // (niyam-submit.ts / niyam-approve.ts / niyam-badges.ts). Unregistered,
+    // the parent ledger showed a raw key and the monthly-report join was NULL.
+    { key: "niyam_submission", label: "Niyam completed", is_active: true, min_points: 0, max_points: 1000 },
+    { key: "niyam_badge", label: "Niyam streak badge", is_active: true, min_points: 0, max_points: 500 },
     { key: "homework", label: "Homework approved", is_active: true, min_points: 0, max_points: 10 },
     { key: "homework_starred", label: "Homework starred", is_active: true, min_points: 0, max_points: 12 },
     { key: "exam_completion", label: "Exam completion (pass)", is_active: true, min_points: 0, max_points: 500 },

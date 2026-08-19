@@ -28,10 +28,8 @@ export type {
   PanchangYearPayload,
 } from "@workspace/api-zod";
 
-/** Flatten Zod issues into envelope `details` entries. */
-export function zodDetails(err: z.ZodError): Array<{ path: string; message: string }> {
-  return err.issues.map((i) => ({
-    path: i.path.join("."),
-    message: i.message,
-  }));
-}
+/**
+ * Re-exported from lib/envelope, where it now lives beside the `fail()` whose
+ * `details` argument it feeds. Kept here so existing importers keep working.
+ */
+export { zodDetails } from "./envelope";

@@ -30,6 +30,13 @@ export type DrainOpResult = {
   status: "success" | "duplicate" | "conflict" | "failed";
   server_id?: string;
   error?: { code: string; message: string };
+  /**
+   * Domain payload the handler echoed back. The server has always sent this;
+   * the type omitted it, so callers could not read the submission's real
+   * status or its new_badges and every niyam submit reported "sent for review"
+   * with no badge celebration, even when it was auto-approved.
+   */
+  data?: unknown;
 };
 
 type SyncBatchResult = DrainOpResult;
@@ -339,6 +346,8 @@ export async function enqueueNiyamSubmission(input: {
   student_id: string;
   media?: PendingProofMedia[];
   notes?: string;
+  /** YYYY-MM-DD (IST). Today when omitted; the server allows yesterday too. */
+  submission_date?: string;
 }): Promise<string> {
   const submission_op_id = ulid();
   const client_timestamp = new Date().toISOString();
@@ -348,6 +357,9 @@ export async function enqueueNiyamSubmission(input: {
     student_id: input.student_id,
     media: input.media,
     notes: input.notes,
+    // Carried through so an op queued last night is recorded against the day
+    // it was kept, not the day it happened to drain.
+    submission_date: input.submission_date,
     client_timestamp,
   };
   await enqueueOp(QUEUE_KEYS.niyam_submissions, {

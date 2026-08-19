@@ -84,7 +84,15 @@ export async function loadAuthUser(uid: string): Promise<AuthUserRow | null> {
     }
   }
   const hit = memCache.get(uid);
-  if (hit && hit.expiresAt > Date.now()) return hit.user;
+  // A COPY, not the cached instance. lib/scope.ts memoizes resolveAdminScope on
+  // the User object identity, documented as "per-request" — but handing back the
+  // same instance for 45s made that a cross-request cache of a materialised
+  // centre-id list. A city_admin could not touch a centre created in their own
+  // city until the TTL expired, and (worse) a REVOKED sanchalak/shikshak
+  // assignment kept working just as long. The Redis branch above already returns
+  // a fresh object via JSON.parse, which is why this only ever bit deployments
+  // without REDIS_URL.
+  if (hit && hit.expiresAt > Date.now()) return { ...hit.user };
 
   const [row] = await db.select(AUTH_USER_COLUMNS).from(users).where(eq(users.id, uid)).limit(1);
   if (!row) return null;

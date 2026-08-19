@@ -39,10 +39,11 @@ export function NiyamCatalogEntry({ row, hi, onPress }: Props) {
 
   return (
     <View>
+      {/* points: the RESOLVED award, not the authored value — see H11. */}
       <NiyamListRow
         title={title}
         meta={meta}
-        points={row.points}
+        points={row.award_points ?? row.points}
         niyamType={row.niyam_type}
         emphasizedMeta={submitted}
         statusLabel={submitted ? (tag ?? (hi ? "प्रस्तुत" : "Submitted")) : null}

@@ -151,7 +151,11 @@ export default function StudentNiyams() {
             <NiyamCatalogEntry
               row={row}
               hi={hi}
-              onPress={() => router.push("/niyam-submit")}
+              // Carry the tapped niyam through. Without it the child lands on a
+              // blank picker under copy that just told them to tap a Niyam.
+              onPress={() =>
+                router.push({ pathname: "/niyam-submit", params: { niyam_id: row.id } })
+              }
             />
           </View>
         )}

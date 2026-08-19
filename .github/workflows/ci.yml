@@ -91,6 +91,69 @@ jobs:
             node:22-alpine \
             sh -c "npm init -y >/dev/null 2>&1 && npm install --omit=dev --no-audit --no-fund $pkgs && node /tmp/smoke-externals.mjs"
 
+  # The API test job below builds its schema with `drizzle-kit push`, so the
+  # migration chain is never exercised by CI. That is exactly how the whole
+  # post-baseline Niyam schema came to exist only in schema.ts — a fresh
+  # `pnpm db:migrate` produced a database on which every submit threw
+  # `column "period_key" does not exist`, and nothing caught it.
+  #
+  # This job runs the chain from an EMPTY database and then asserts the result
+  # matches schema.ts. It is deliberately separate from the test job so it can
+  # fail loudly on drift without taking the suite with it.
+  migrate:
+    name: Migration chain from zero
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: jp
+          POSTGRES_PASSWORD: jp_dev_pwd
+          POSTGRES_DB: jp_migrate_check
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jp -d jp_migrate_check"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgres://jp:jp_dev_pwd@localhost:5432/jp_migrate_check
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile=false
+
+      # Every .sql file must be registered in meta/_journal.json and vice versa.
+      # 0043_per_batch_rate_functions.sql sat on disk unregistered for months —
+      # drizzle-kit migrate never applied it, so the AT5 per-batch rate
+      # functions that attendance-rate.ts calls did not exist on a migrated DB.
+      - name: Journal covers every migration file
+        run: node lib/db/scripts/check-migration-journal.mjs
+
+      - name: Apply migration chain to an empty database
+        run: pnpm db:migrate
+
+      # drizzle-kit exits non-zero / prints a diff when the live database does
+      # not match schema.ts. A clean chain leaves nothing to generate.
+      - name: Assert no drift against schema.ts
+        run: node lib/db/scripts/check-migration-drift.mjs
+
   test:
     name: API tests
     runs-on: ubuntu-latest
@@ -143,6 +206,16 @@ jobs:
         # TRUNCATE guard). NODE_ENV=test here also keeps the prod guard happy.
         run: ALLOW_SEED=1 pnpm --filter @workspace/db run seed
 
+      # `pnpm run test` is the UNIT suite. It now excludes test/integration/**,
+      # which had been swallowed by the include glob and run under the wrong
+      # config (20s timeout against Docker container startup, testcontainers
+      # bundled instead of externalised) — that is what wedged the run partway
+      # through and stopped the suite ever finishing.
+      #
+      # The integration suite has its own config and is NOT run here: it needs
+      # testcontainers and takes minutes. Run it with
+      # `pnpm --filter @workspace/api-server run test:integration`, and add a
+      # dedicated job here once it is confirmed green on a runner.
       - name: Run API tests
         working-directory: apps/api-server
         run: pnpm run test

@@ -568,6 +568,48 @@
       "when": 1791888000007,
       "tag": "0080_granth_reference_pack",
       "breakpoints": true
+    },
+    {
+      "idx": 81,
+      "version": "7",
+      "when": 1791888000008,
+      "tag": "0081_punya_config_scope_and_niyam_features",
+      "breakpoints": true
+    },
+    {
+      "idx": 82,
+      "version": "7",
+      "when": 1791888000009,
+      "tag": "0082_notification_kind_niyam_approved",
+      "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1791888000010,
+      "tag": "0083_niyam_chain_residues",
+      "breakpoints": true
+    },
+    {
+      "idx": 84,
+      "version": "7",
+      "when": 1791888000011,
+      "tag": "0084_per_batch_rate_functions",
+      "breakpoints": true
+    },
+    {
+      "idx": 85,
+      "version": "7",
+      "when": 1791888000012,
+      "tag": "0085_niyams_title_hi_nullable",
+      "breakpoints": true
+    },
+    {
+      "idx": 86,
+      "version": "7",
+      "when": 1791888000013,
+      "tag": "0086_staff_assignment_unique_indexes",
+      "breakpoints": true
     }
   ]
 }

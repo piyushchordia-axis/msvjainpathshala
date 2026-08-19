@@ -22,6 +22,29 @@ export const SUBMISSION_BACKDATE_DAYS = 1;
  */
 export const STREAK_RECOMPUTE_LOOKBACK_DAYS = 400;
 
+/**
+ * Lookback window in DAYS for a given niyam frequency.
+ *
+ * A flat 400 days is ~57 weeks for a weekly niyam but only ~13 periods for a
+ * monthly one — so a monthly streak longer than 13 could never be rebuilt, and
+ * the `monthly_3` badge ladder had far less headroom than the daily one. Each
+ * frequency gets a window covering comfortably more periods than its top
+ * milestone (daily_100 / weekly_4 / monthly_3).
+ */
+export function streakLookbackDays(type: NiyamPeriodType): number {
+  switch (type) {
+    case "weekly":
+      // ~2 years of weeks.
+      return 730;
+    case "monthly":
+      // ~5 years of months.
+      return 1830;
+    case "daily":
+    default:
+      return STREAK_RECOMPUTE_LOOKBACK_DAYS;
+  }
+}
+
 /** Parse YYYY-MM-DD as a UTC noon Date (avoids DST edge cases; dates are IST calendar). */
 function parseYmd(ymd: string): Date {
   const [y, m, d] = ymd.split("-").map(Number);

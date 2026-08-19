@@ -95,6 +95,12 @@ export type PendingNiyamSubmissionOp = {
    */
   media?: PendingProofMedia[];
   notes?: string;
+  /**
+   * YYYY-MM-DD (IST) the niyam was kept. Omitted = today. Without this the
+   * server stamped the DRAIN date, so a niyam logged at 23:55 and synced after
+   * midnight was recorded against the wrong day.
+   */
+  submission_date?: string;
   client_timestamp: string;
 };
 

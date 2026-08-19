@@ -12,22 +12,22 @@ import {
   niyam_submission_media,
   niyam_streaks,
   students,
-  centres,
   batches,
   gallery_items,
   punya_transactions,
   users,
 } from "@workspace/db";
+import { NIYAM_SUBMISSION_STATUSES } from "@workspace/db/enums";
 import { and, asc, desc, eq, gt, gte, inArray, lt, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { QUEUE_NAMES, CRON_EXPRESSIONS } from "@jp/shared/constants";
-import { ok, fail } from "../../lib/envelope";
+import { ok, fail, zodDetails } from "../../lib/envelope";
 import { httpUrl } from "../../lib/validation";
 import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, inBatchWriteScope, inCentreScope as inScope } from "../../lib/scope";
-import { awardPunya, reversePunya } from "../../lib/punya";
-import { auditFromReq, writeAudit } from "../../lib/audit";
+import { reversePunya } from "../../lib/punya";
+import { auditFromReq, writeAudit, impersonatorIdFromReq } from "../../lib/audit";
 import {
   clampLimit,
   ownedStudentId,
@@ -35,29 +35,31 @@ import {
 } from "../../lib/route-helpers";
 import { rejectionWindowFields, canRejectSubmission } from "../../lib/niyam-constants";
 import { notifyUsers } from "../../lib/notify";
-import { studentCanAccessNiyam } from "../../lib/niyam-audience";
-import { awardNewlyReachedBadges, notifyBadgesPush, type AwardedBadge } from "../../lib/niyam-badges";
-import { resolveNiyamAwardPoints } from "../../lib/niyam-points";
+import { notifyBadgesPush } from "../../lib/niyam-badges";
 import { rateLimit } from "../../lib/ratelimit";
 import { registerCron } from "../../lib/scheduler";
 import { logger } from "../../lib/logger";
 import { MIME_BY_EXT } from "../../lib/upload";
-import { resolveSubmissionMedia, type ProofMediaKind } from "../../lib/niyam-media";
+import type { ProofMediaKind } from "../../lib/niyam-media";
 import {
-  allowedMediaKinds,
   addCalendarDays,
   istCalendarDate,
   periodKey,
   previousPeriodKey,
-  STREAK_RECOMPUTE_LOOKBACK_DAYS,
-  SUBMISSION_BACKDATE_DAYS,
+  streakLookbackDays,
   type NiyamPeriodType,
 } from "../../lib/niyam-period";
+import { approveNiyamSubmission } from "../../services/niyam-approve";
 import {
-  approveNiyamSubmission,
-  maybeInsertGalleryFromSubmission,
-} from "../../services/niyam-approve";
-import type { Role } from "@workspace/api-zod";
+  submitNiyam,
+  NiyamSubmitError,
+  type SubmitNiyamOutcome,
+} from "../../services/niyam-submit";
+import {
+  NIYAM_REJECT_REASON_MIN,
+  NIYAM_REJECT_REASON_MAX,
+  type Role,
+} from "@workspace/api-zod";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
@@ -70,13 +72,9 @@ function todayIstDate(): string {
   return istCalendarDate();
 }
 
-/** Earliest submission_date allowed relative to today (IST). */
-function earliestAllowedSubmissionDate(today: string): string {
-  return addCalendarDays(today, -SUBMISSION_BACKDATE_DAYS);
-}
-
-// Media types + resolution moved to lib/niyam-media.ts so the offline
-// /v1/sync/batch handler validates identically (CLAUDE.md offline sync §4).
+// Media types + resolution live in lib/niyam-media.ts, and the whole submit
+// sequence in services/niyam-submit.ts, so the offline /v1/sync/batch handler
+// runs identical code (CLAUDE.md offline sync §4).
 
 /** Derive photo/video/audio from stored content_type (or key extension fallback). */
 export function kindFromUploadContentType(
@@ -97,7 +95,7 @@ export function kindFromUploadContentType(
 }
 
 /**
- * Rebuild streak from non-rejected submissions in the last STREAK_RECOMPUTE_LOOKBACK_DAYS.
+ * Rebuild streak from non-rejected submissions inside the type-aware lookback window.
  * longest_streak = max(stored, recomputed) so a rejection never lowers a peak already reached.
  *
  * Badges are NOT revoked here — see awardNewlyReachedBadges.
@@ -111,7 +109,9 @@ export async function recomputeStreak(
   exec: Tx | typeof db = db,
 ): Promise<{ current: number; longest: number }> {
   const today = todayIstDate();
-  const cutoff = addCalendarDays(today, -STREAK_RECOMPUTE_LOOKBACK_DAYS);
+  // Type-aware: a flat 400 days is only ~13 periods for a monthly niyam, so a
+  // longer monthly streak could never be rebuilt (L10).
+  const cutoff = addCalendarDays(today, -streakLookbackDays(niyamType));
 
   const rows = await exec
     .select({
@@ -352,7 +352,10 @@ router.post("/", async (req: Request, res: Response) => {
 
   let body: z.infer<typeof createSubmissionSchema>;
   try { body = createSubmissionSchema.parse(req.body); }
-  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid submission data."); return; }
+  catch (err) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid submission data.", zodDetails(err));
+    return;
+  }
 
   if (!(await ownedStudentId(req, body.student_id))) {
     fail(res, 404, "ERR_NOT_FOUND", "Student not found."); return;
@@ -370,247 +373,33 @@ router.post("/", async (req: Request, res: Response) => {
     return;
   }
 
-  const [studentCtx] = await db
-    .select({
-      msv_status: students.msv_status,
-      parent_id: students.parent_id,
-      full_name: students.full_name,
-      city_id: centres.city_id,
-      state_id: centres.state_id,
-    })
-    .from(students)
-    .leftJoin(centres, eq(centres.id, students.centre_id))
-    .where(eq(students.id, body.student_id))
-    .limit(1);
-  if (!studentCtx) {
-    fail(res, 404, "ERR_NOT_FOUND", "Student not found."); return;
-  }
-
-  const [niyam] = await db
-    .select({
-      id: niyams.id,
-      proof_type: niyams.proof_type,
-      proof_required: niyams.proof_required,
-      approval_mode: niyams.approval_mode,
-      max_uploads: niyams.max_uploads,
-      niyam_type: niyams.niyam_type,
-      points: niyams.points,
-      start_date: niyams.start_date,
-      end_date: niyams.end_date,
-      msv_audience: niyams.msv_audience,
-      scope: niyams.scope,
-      state_id: niyams.state_id,
-      city_id: niyams.city_id,
-    })
-    .from(niyams)
-    .where(and(eq(niyams.id, body.niyam_id), eq(niyams.is_active, true)))
-    .limit(1);
-  if (!niyam) {
-    fail(res, 404, "ERR_NOT_FOUND", "Niyam not found."); return;
-  }
-
-  if (
-    !studentCanAccessNiyam(
-      {
-        msv_audience: niyam.msv_audience,
-        scope: niyam.scope,
-        state_id: niyam.state_id,
-        city_id: niyam.city_id,
-      },
-      {
-        msv_status: studentCtx.msv_status,
-        city_id: studentCtx.city_id,
-        state_id: studentCtx.state_id,
-      },
-    )
-  ) {
-    fail(res, 403, "ERR_FORBIDDEN", "This niyam is not available for this student.");
-    return;
-  }
-
-  const today = todayIstDate();
-  const submissionDate = body.submission_date ?? today;
-  if (submissionDate > today) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "submission_date cannot be in the future."); return;
-  }
-  if (submissionDate < earliestAllowedSubmissionDate(today)) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "submission_date too old."); return;
-  }
-
-  // Spec §8.4 step 6 — compare submission_date to the niyam window, not now().
-  if (niyam.start_date && submissionDate < niyam.start_date) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "submission_date is before this niyam starts."); return;
-  }
-  if (niyam.end_date && submissionDate > niyam.end_date) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "submission_date is after this niyam ended."); return;
-  }
-
-  let media = body.media ?? [];
-  if (media.length === 0 && body.proof_url) {
-    // kind is a wire placeholder — resolveSubmissionMedia derives the real kind.
-    media = [{ url: body.proof_url, kind: "photo" }];
-  }
-
-  if (niyam.max_uploads === 0 && media.length > 0) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "This niyam does not accept media."); return;
-  }
-  if (media.length > niyam.max_uploads) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", `At most ${niyam.max_uploads} file(s) allowed.`); return;
-  }
-  if (niyam.proof_required && media.length === 0) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Proof required."); return;
-  }
-
-  const allowed = allowedMediaKinds(niyam.proof_type);
-  const resolved = await resolveSubmissionMedia(uid, media, allowed);
-  if (!resolved.ok) {
-    fail(res, 422, "ERR_VALIDATION_FAILED", resolved.message);
-    return;
-  }
-  const verifiedMedia = resolved.items;
-
-  const pKey = periodKey(niyam.niyam_type as NiyamPeriodType, submissionDate);
-  const autoApprove = niyam.approval_mode === "auto";
-  const awardPoints = autoApprove
-    ? await resolveNiyamAwardPoints(niyam.points, studentCtx.city_id)
-    : 0;
-  const status = autoApprove ? "auto_approved" : "pending";
-  const pointsAwarded = autoApprove ? awardPoints : 0;
-  const firstUrl = verifiedMedia[0]?.url ?? null;
-
-  const lockKey = `niyam:${niyam.id}:${body.student_id}:${pKey}`;
-  type TxResult = {
-    row: typeof niyam_submissions.$inferSelect;
-    newBadges: AwardedBadge[];
-  };
-  const outcome = await db.transaction(async (tx): Promise<TxResult | null> => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
-    const [dup] = await tx
-      .select({ id: niyam_submissions.id })
-      .from(niyam_submissions)
-      .where(
-        and(
-          eq(niyam_submissions.niyam_id, niyam.id),
-          eq(niyam_submissions.student_id, body.student_id),
-          eq(niyam_submissions.period_key, pKey),
-          ne(niyam_submissions.status, "rejected"),
-        ),
-      )
-      .limit(1);
-    if (dup) return null;
-    const [created] = await tx
-      .insert(niyam_submissions)
-      .values({
-        niyam_id: niyam.id,
-        student_id: body.student_id,
-        submission_date: submissionDate,
-        period_key: pKey,
-        status,
-        points_awarded: pointsAwarded,
-        proof_url: firstUrl,
-        notes: body.notes ?? null,
-        submitted_by: uid,
-      })
-      .returning();
-    if (verifiedMedia.length > 0) {
-      await tx.insert(niyam_submission_media).values(
-        verifiedMedia.map((m, i) => ({
-          submission_id: created.id,
-          url: m.url,
-          kind: m.kind,
-          mime: m.mime ?? null,
-          size_bytes: m.size_bytes ?? null,
-          ordinal: i,
-        })),
-      );
-    }
-
-    let row = created;
-    let newBadges: AwardedBadge[] = [];
-
-    if (autoApprove) {
-      const award = await awardPunya(
-        {
-          studentId: body.student_id,
-          featureKey: "niyam_submission",
-          points: awardPoints,
-          note: body.notes ?? null,
-          awardedBy: uid,
-          idempotencyKey: `submission:${created.id}`,
-        },
-        tx,
-      );
-      const now = new Date();
-      const [updated] = await tx
-        .update(niyam_submissions)
-        .set({
-          approved_at: now,
-          punya_transaction_id: award.transaction_id,
-        })
-        .where(eq(niyam_submissions.id, created.id))
-        .returning();
-      row = updated ?? created;
-
-      await maybeInsertGalleryFromSubmission(tx, {
-        submissionId: created.id,
-        studentId: body.student_id,
-        niyamId: niyam.id,
-        media: verifiedMedia,
-      });
-
-      const streak = await recomputeStreak(
-        body.student_id,
-        niyam.id,
-        niyam.niyam_type as NiyamPeriodType,
-        tx,
-      );
-      newBadges = await awardNewlyReachedBadges(
-        {
-          studentId: body.student_id,
-          niyamId: niyam.id,
-          niyamType: niyam.niyam_type as NiyamPeriodType,
-          currentStreak: streak.current,
-          awardedBy: uid,
-        },
-        tx,
-      );
-    }
-
-    return { row, newBadges };
-  });
-  if (!outcome) {
-    fail(res, 409, "ERR_NIYAM_PERIOD_DUPLICATE", `Already submitted for this ${niyam.niyam_type} period (${pKey}).`);
-    return;
-  }
-
-  const { row, newBadges } = outcome;
-
-  if (autoApprove) {
-    await auditFromReq(req, {
-      action: "award",
-      entityKind: "niyam_submission",
-      entityId: row.id,
-      summary: `Auto-approved niyam submission (+${awardPoints}).`,
-      metadata: {
-        niyam_id: niyam.id,
-        student_id: body.student_id,
-        points: awardPoints,
-        submission_date: submissionDate,
-        period_key: pKey,
-      },
+  // The whole submit sequence — ownership, audience, date window, media
+  // resolution, advisory lock, award, gallery, streak, badges — lives in
+  // services/niyam-submit.ts so POST /v1/sync/batch executes exactly the same
+  // code (CLAUDE.md offline sync §4). Rate limiting stays above, on this route.
+  let outcome: SubmitNiyamOutcome;
+  try {
+    outcome = await submitNiyam({
+      actorUserId: uid,
+      actorRole: req.authUser!.role as Role,
+      actorIp: req.ip ?? null,
+      impersonatorId: impersonatorIdFromReq(req),
+      niyamId: body.niyam_id,
+      studentId: body.student_id,
+      submissionDate: body.submission_date,
+      media: body.media,
+      proofUrl: body.proof_url,
+      notes: body.notes,
     });
-    await notifyBadgesPush({
-      parentUserId: studentCtx.parent_id,
-      studentName: studentCtx.full_name,
-      badges: newBadges,
-    });
+  } catch (err) {
+    if (err instanceof NiyamSubmitError) {
+      fail(res, err.httpStatus, err.code, err.message);
+      return;
+    }
+    throw err;
   }
 
-  const mediaRows = await db
-    .select()
-    .from(niyam_submission_media)
-    .where(eq(niyam_submission_media.submission_id, row.id))
-    .orderBy(asc(niyam_submission_media.ordinal));
+  const { row, newBadges, media: mediaRows } = outcome;
 
   ok(res, {
     id: row.id,
@@ -700,6 +489,37 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
     typeFilter = eq(niyams.niyam_type, niyamTypeRaw as "daily" | "weekly" | "monthly");
   }
 
+  /**
+   * H1 — this route hardcoded status='pending' while niyams.approval_mode
+   * defaults to 'auto', so the queue Q12 makes the Sanchalak's safety net was
+   * empty by construction on a default-configured platform: nothing ever
+   * reaches 'pending'. Retroactive rejection is the PRIMARY admin workflow
+   * (CLAUDE.md Q5), so the reviewer must be able to see auto-approved work.
+   *
+   * Repeatable `?status=` (…&status=pending&status=auto_approved), defaulting
+   * to ['pending'] so existing callers are unaffected.
+   */
+  const statusRaw = req.query.status;
+  const requestedStatuses = (
+    Array.isArray(statusRaw) ? statusRaw : statusRaw === undefined ? [] : [statusRaw]
+  ).map((s) => String(s).trim());
+  for (const s of requestedStatuses) {
+    if (!NIYAM_SUBMISSION_STATUSES.includes(s as (typeof NIYAM_SUBMISSION_STATUSES)[number])) {
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        `status must be one of: ${NIYAM_SUBMISSION_STATUSES.join(", ")}.`,
+      );
+      return;
+    }
+  }
+  const statuses = requestedStatuses.length > 0 ? requestedStatuses : ["pending"];
+  const statusFilter = inArray(
+    niyam_submissions.status,
+    statuses as (typeof NIYAM_SUBMISSION_STATUSES)[number][],
+  );
+
   const rows = await db
     .select({
       id: niyam_submissions.id,
@@ -718,6 +538,10 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
       submission_date: niyam_submissions.submission_date,
       period_key: niyam_submissions.period_key,
       status: niyam_submissions.status,
+      // Needed now that the list can show approved / rejected tabs, not just
+      // the (always-zero) pending rows.
+      points_awarded: niyam_submissions.points_awarded,
+      rejection_reason: niyam_submissions.rejection_reason,
       created_at: niyam_submissions.created_at,
     })
     .from(niyam_submissions)
@@ -726,7 +550,7 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
     .leftJoin(batches, eq(batches.id, students.batch_id))
     .where(
       and(
-        eq(niyam_submissions.status, "pending"),
+        statusFilter,
         centreFilter,
         batchFilter,
         studentFilter,
@@ -774,6 +598,8 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
     submission_date: r.submission_date,
     period_key: r.period_key,
     status: r.status,
+    points_awarded: r.points_awarded,
+    rejection_reason: r.rejection_reason,
     created_at: r.created_at.toISOString(),
     // Q12 — list stays centre-scoped; clients disable actions when false.
     can_decide: inBatchWriteScope(scope, r.batch_id, r.centre_id),
@@ -791,7 +617,10 @@ router.get("/pending", requireAdminPanel, async (req: Request, res: Response) =>
 });
 
 const rejectSchema = z.object({
-  reason: z.string().trim().min(20).max(300),
+  // Shared with both review surfaces (@workspace/api-zod) so the client gate
+  // and this one cannot drift. NOT the generic REJECT_REASON_MIN in contracts,
+  // which is 10 and gates enrolment rejections.
+  reason: z.string().trim().min(NIYAM_REJECT_REASON_MIN).max(NIYAM_REJECT_REASON_MAX),
 });
 
 const bulkApproveSchema = z.object({
@@ -803,8 +632,8 @@ router.post("/bulk-approve", requireAdminPanel, async (req: Request, res: Respon
   let body: z.infer<typeof bulkApproveSchema>;
   try {
     body = bulkApproveSchema.parse(req.body);
-  } catch {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid bulk approve payload.");
+  } catch (err) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid bulk approve payload.", zodDetails(err));
     return;
   }
 
@@ -916,7 +745,10 @@ router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Respons
 router.post("/:id/reject", requireAdminPanel, async (req: Request, res: Response) => {
   let body: z.infer<typeof rejectSchema>;
   try { body = rejectSchema.parse(req.body); }
-  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid reject payload."); return; }
+  catch (err) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid reject payload.", zodDetails(err));
+    return;
+  }
 
   const scope = await resolveAdminScope(req.authUser!);
   const [sub] = await db

@@ -6,7 +6,15 @@ import { AdminPageShell, AdminTable, AdminError, AdminEmptyRow } from '@/compone
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { safeHref } from '@/lib/safe-url';
+import {
+  NIYAM_REJECT_REASON_MIN,
+  NIYAM_REJECT_REASON_MAX,
+  NIYAM_REJECT_REASON_PRESETS,
+  isNiyamRejectReasonValid,
+  trimRejectReason,
+} from '@workspace/api-zod';
 import {
   Dialog,
   DialogContent,
@@ -46,6 +54,8 @@ interface ReviewRow {
   points_awarded: number;
   created_at: string;
   can_reject: boolean;
+  /** Q12 — false when the row is outside the caller's batch write scope. */
+  can_decide?: boolean;
   reversal_window_expires_at: string;
 }
 
@@ -97,9 +107,9 @@ function AdminStatusPill({ status, hi }: { status: string; hi: boolean }) {
             : status;
   const cls =
     status === 'pending'
-      ? 'rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-700'
+      ? 'rounded-full bg-status-warning-soft px-2 py-0.5 text-xs font-semibold text-status-warning'
       : status === 'auto_approved' || status === 'approved'
-        ? 'rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-semibold text-emerald-700'
+        ? 'rounded-full bg-status-success-soft px-2 py-0.5 text-xs font-semibold text-status-success'
         : status === 'rejected'
           ? 'rounded-full bg-destructive/10 px-2 py-0.5 text-xs font-semibold text-destructive'
           : 'rounded-full bg-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground';
@@ -142,9 +152,15 @@ function ProofCell({ row, hi }: { row: ReviewRow; hi: boolean }) {
               className="block overflow-hidden rounded-md border border-border"
               title={t(hi, 'Open proof', 'प्रमाण खोलें')}
             >
+              {/* The proof IS the content being reviewed — an empty alt told a
+                  screen-reader user the decisive evidence was decoration. */}
               <img
                 src={href}
-                alt=""
+                alt={
+                  hi
+                    ? `${row.student_name} का ${row.niyam_title_hi ?? row.niyam_title_en} के लिए प्रमाण`
+                    : `Proof from ${row.student_name} for ${row.niyam_title_en}`
+                }
                 className="h-14 w-14 object-cover"
                 loading="lazy"
               />
@@ -224,8 +240,11 @@ function RejectDialog({
   const [reason, setReason] = useState('');
   const [inlineError, setInlineError] = useState<string | null>(null);
 
-  const trimmed = reason.trim();
-  const valid = trimmed.length >= 20 && trimmed.length <= 300;
+  // Bounds and presets come from @workspace/api-zod, shared with the mobile
+  // review sheet — this page used to inline 20/300 and offer no presets, so a
+  // Guruji on web hand-typed 20+ characters for every rejection.
+  const trimmed = trimRejectReason(reason);
+  const valid = isNiyamRejectReasonValid(reason);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -304,25 +323,56 @@ function RejectDialog({
         <form className="space-y-4 pt-2" onSubmit={submit}>
           <div className="space-y-1">
             <Label className="text-xs font-medium">
-              {t(hi, 'Reason (required, min 20 characters)', 'कारण (आवश्यक, न्यूनतम 20 अक्षर)')}
+              {t(
+                hi,
+                `Reason (required, min ${NIYAM_REJECT_REASON_MIN} characters)`,
+                `कारण (आवश्यक, न्यूनतम ${NIYAM_REJECT_REASON_MIN} अक्षर)`,
+              )}
             </Label>
-            <Input
+            <div className="flex flex-wrap gap-1.5">
+              {NIYAM_REJECT_REASON_PRESETS.map((p) => (
+                <button
+                  key={p.en}
+                  type="button"
+                  onClick={() => setReason(hi ? p.hi : p.en)}
+                  className="rounded-full border border-border bg-muted/40 px-2.5 py-1 text-left text-xs hover:bg-muted"
+                >
+                  {hi ? p.hi : p.en}
+                </button>
+              ))}
+            </div>
+            <Textarea
               value={reason}
               onChange={(e) => setReason(e.target.value)}
               placeholder={t(hi, 'Why is this being rejected?', 'यह क्यों अस्वीकृत किया जा रहा है?')}
-              maxLength={300}
+              maxLength={NIYAM_REJECT_REASON_MAX}
+              rows={3}
             />
             <div className="flex justify-between text-xs text-muted-foreground">
               <span>
-                {trimmed.length < 20
-                  ? t(hi, `${20 - trimmed.length} more needed`, `${20 - trimmed.length} और चाहिए`)
+                {trimmed.length < NIYAM_REJECT_REASON_MIN
+                  ? t(
+                      hi,
+                      `${NIYAM_REJECT_REASON_MIN - trimmed.length} more needed`,
+                      `${NIYAM_REJECT_REASON_MIN - trimmed.length} और चाहिए`,
+                    )
                   : t(hi, 'Looks good', 'ठीक है')}
               </span>
               <span>
-                {trimmed.length}/300
+                {trimmed.length}/{NIYAM_REJECT_REASON_MAX}
               </span>
             </div>
           </div>
+          {/* M9 — rejection is terminal: Punya is reversed, the streak
+              recomputed and any gallery item hidden, with no undo. Say so
+              before the click, not after. */}
+          <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+            {t(
+              hi,
+              'This cannot be undone: Punya is taken back, the streak is recalculated, and any photo is removed from the gallery. The parent is notified with your reason.',
+              'यह वापस नहीं लिया जा सकता: पुण्य वापस लिया जाएगा, श्रृंखला दोबारा गिनी जाएगी, और फ़ोटो गैलरी से हट जाएगी। अभिभावक को आपका कारण भेजा जाएगा।',
+            )}
+          </p>
           {inlineError ? (
             <p className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm text-destructive">
               {inlineError}
@@ -363,10 +413,28 @@ export default function NiyamReviewPage() {
   const [students, setStudents] = useState<StudentOption[]>([]);
   const [niyamOptions, setNiyamOptions] = useState<NiyamOption[]>([]);
 
+  const [studentQuery, setStudentQuery] = useState('');
+
+  // Bulk approve (L7). The endpoint is scope-checked, audited and tested — only
+  // mobile ever called it, so a Sanchalak on web cleared 30 rows one at a time.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  // Server-side ?q= search, same as PunyaAwardPage (CTY-PRF-02). The old
+  // ?limit=500 <select> silently truncated: a student past the first 500 could
+  // not be filtered for at all, with nothing on screen saying so.
   useEffect(() => {
-    void apiGet<{ items: StudentOption[] }>('/v1/admin/students?limit=500').then((r) =>
-      setStudents(r?.items ?? []),
-    );
+    const q = studentQuery.trim();
+    const timer = window.setTimeout(() => {
+      const url = q
+        ? `/v1/admin/students?limit=20&q=${encodeURIComponent(q)}`
+        : '/v1/admin/students?limit=20';
+      void apiGet<{ items: StudentOption[] }>(url).then((r) => setStudents(r?.items ?? []));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [studentQuery]);
+
+  useEffect(() => {
     void apiGet<{ items: NiyamOption[] }>('/v1/admin/niyams').then((r) =>
       setNiyamOptions(r?.items ?? []),
     );
@@ -399,6 +467,8 @@ export default function NiyamReviewPage() {
       const res = await apiGet<{ items: ReviewRow[]; next_cursor: string | null }>(buildPath(null));
       setItems(res?.items ?? []);
       setNextCursor(res?.next_cursor ?? null);
+      // Ids from the previous view are meaningless against the new one.
+      setSelected(new Set());
     } catch (err) {
       setError(err instanceof Error ? err.message : t(hi, 'Could not load data.', 'डेटा लोड नहीं हुआ।'));
       setItems([]);
@@ -411,6 +481,65 @@ export default function NiyamReviewPage() {
   useEffect(() => {
     void loadFirst();
   }, [loadFirst]);
+
+  /** Only a pending row the caller may decide can be bulk-approved. */
+  const selectableIds = useMemo(
+    () => items.filter((s) => s.status === 'pending' && s.can_decide !== false).map((s) => s.id),
+    [items],
+  );
+
+  function toggleOne(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function bulkApprove() {
+    const ids = selectableIds.filter((id) => selected.has(id));
+    if (ids.length === 0 || bulkBusy) return;
+    if (
+      !window.confirm(
+        t(
+          hi,
+          `Approve ${ids.length} submission(s)? Punya is awarded immediately.`,
+          `${ids.length} जमा स्वीकृत करें? पुण्य तुरंत दिया जाएगा।`,
+        ),
+      )
+    ) {
+      return;
+    }
+    setBulkBusy(true);
+    try {
+      const res = await apiPost<{ results: Array<{ id: string; status: string }> }>(
+        '/v1/niyam-submissions/bulk-approve',
+        { submission_ids: ids },
+      );
+      const results = res?.results ?? [];
+      const approved = results.filter((r) => r.status === 'approved').length;
+      const skipped = results.length - approved;
+      // Report skips rather than claiming a clean sweep — the server skips rows
+      // that raced another reviewer or fell outside batch scope.
+      if (skipped > 0) {
+        toast.success(
+          t(hi, `Approved ${approved}. ${skipped} skipped.`, `${approved} स्वीकृत। ${skipped} छोड़े गए।`),
+        );
+      } else {
+        toast.success(t(hi, `Approved ${approved}.`, `${approved} स्वीकृत।`));
+      }
+      setSelected(new Set());
+      void loadFirst();
+    } catch (err) {
+      toast.error(
+        t(hi, 'Bulk approve failed.', 'सामूहिक स्वीकृति विफल।'),
+        err instanceof ApiError ? err.message : undefined,
+      );
+    } finally {
+      setBulkBusy(false);
+    }
+  }
 
   async function loadMore() {
     if (!nextCursor || loadingMore) return;
@@ -465,6 +594,12 @@ export default function NiyamReviewPage() {
       <div className="mb-4 flex flex-wrap items-end gap-3">
         <div className="space-y-1">
           <Label className="text-xs">{t(hi, 'Student', 'छात्र')}</Label>
+          <Input
+            className="h-9 min-w-[12rem]"
+            value={studentQuery}
+            onChange={(e) => setStudentQuery(e.target.value)}
+            placeholder={t(hi, 'Search students…', 'छात्र खोजें…')}
+          />
           <select
             className="h-9 min-w-[12rem] rounded-md border border-input bg-background px-2 text-sm"
             value={studentId}
@@ -494,19 +629,55 @@ export default function NiyamReviewPage() {
             ))}
           </select>
         </div>
+        {/* submission_date is an IST calendar date server-side, and the filter is
+            compared against it as a plain date. Label the fields so a reviewer in
+            another timezone does not read them as local. */}
         <div className="space-y-1">
-          <Label className="text-xs">{t(hi, 'From', 'से')}</Label>
+          <Label className="text-xs">{t(hi, 'From (IST)', 'से (IST)')}</Label>
           <Input type="date" className="h-9 w-40" value={from} onChange={(e) => setFrom(e.target.value)} />
         </div>
         <div className="space-y-1">
-          <Label className="text-xs">{t(hi, 'To', 'तक')}</Label>
+          <Label className="text-xs">{t(hi, 'To (IST)', 'तक (IST)')}</Label>
           <Input type="date" className="h-9 w-40" value={to} onChange={(e) => setTo(e.target.value)} />
         </div>
       </div>
 
       {error ? <AdminError message={error} /> : null}
+
+      {selectableIds.length > 0 ? (
+        <div className="flex items-center gap-3 rounded-md border border-border bg-muted/30 px-3 py-2">
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="rounded"
+              checked={selected.size > 0 && selected.size === selectableIds.length}
+              ref={(el) => {
+                if (el) el.indeterminate = selected.size > 0 && selected.size < selectableIds.length;
+              }}
+              onChange={(e) =>
+                setSelected(e.target.checked ? new Set(selectableIds) : new Set())
+              }
+            />
+            {t(hi, 'Select all pending', 'सभी लंबित चुनें')}
+          </label>
+          <span className="text-xs text-muted-foreground">
+            {selected.size > 0
+              ? t(hi, `${selected.size} selected`, `${selected.size} चुने गए`)
+              : t(hi, `${selectableIds.length} approvable`, `${selectableIds.length} स्वीकार्य`)}
+          </span>
+          <div className="ml-auto">
+            <Button size="sm" disabled={selected.size === 0 || bulkBusy} onClick={() => void bulkApprove()}>
+              {bulkBusy
+                ? t(hi, 'Approving…', 'स्वीकृत हो रहा…')
+                : t(hi, `Approve ${selected.size}`, `${selected.size} स्वीकृत करें`)}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       <AdminTable
         columns={[
+          '',
           t(hi, 'Student', 'छात्र'),
           'Niyam',
           t(hi, 'Date', 'तिथि'),
@@ -518,7 +689,7 @@ export default function NiyamReviewPage() {
         ]}
         loading={loading}
         empty=""
-        colSpan={8}
+        colSpan={9}
         footer={
           nextCursor ? (
             <div className="flex justify-center p-3">
@@ -533,7 +704,7 @@ export default function NiyamReviewPage() {
       >
         {items.length === 0 && !loading ? (
           <AdminEmptyRow
-            colSpan={8}
+            colSpan={9}
             message={t(hi, 'No submissions in this view.', 'इस दृश्य में कोई जमा नहीं।')}
           />
         ) : null}
@@ -541,6 +712,17 @@ export default function NiyamReviewPage() {
           const chip = s.can_reject ? daysLeftChip(s.reversal_window_expires_at, hi) : null;
           return (
             <tr key={s.id} className="hover:bg-muted/30">
+              <td className="px-4 py-3">
+                {s.status === 'pending' && s.can_decide !== false ? (
+                  <input
+                    type="checkbox"
+                    className="rounded"
+                    checked={selected.has(s.id)}
+                    onChange={() => toggleOne(s.id)}
+                    aria-label={t(hi, `Select ${s.student_name}`, `${s.student_name} चुनें`)}
+                  />
+                ) : null}
+              </td>
               <td className="px-4 py-3">
                 <div className="font-medium">{s.student_name}</div>
                 <div className="font-mono text-xs text-muted-foreground">{s.student_code}</div>
@@ -558,7 +740,7 @@ export default function NiyamReviewPage() {
                 {s.status === 'rejected' ? (
                   '—'
                 ) : chip ? (
-                  <span className="rounded-full bg-sky-500/10 px-2 py-0.5 font-semibold text-sky-700">
+                  <span className="rounded-full bg-status-info-soft px-2 py-0.5 font-semibold text-status-info">
                     {chip}
                   </span>
                 ) : s.can_reject ? (
@@ -574,21 +756,31 @@ export default function NiyamReviewPage() {
               </td>
               <td className="px-4 py-3 text-xs text-muted-foreground">{s.notes ?? '—'}</td>
               <td className="px-4 py-3">
-                <div className="flex flex-wrap gap-1">
-                  {s.status === 'pending' ? (
-                    <ApproveButton id={s.id} onChanged={loadFirst} hi={hi} />
-                  ) : null}
-                  {s.status === 'pending' ||
-                  s.status === 'auto_approved' ||
-                  s.status === 'approved' ? (
-                    <RejectDialog
-                      id={s.id}
-                      canReject={s.can_reject}
-                      onChanged={loadFirst}
-                      hi={hi}
-                    />
-                  ) : null}
-                </div>
+                {/* Q12 — the list is centre-wide but the decide writes are
+                    batch-bound. Explain rather than render a button that fails
+                    with a bare "Submission not found." toast, exactly as the
+                    mobile review screen does. */}
+                {s.can_decide === false ? (
+                  <span className="text-xs text-muted-foreground">
+                    {t(hi, "Another Guruji's batch", 'अन्य गुरुजी का बैच')}
+                  </span>
+                ) : (
+                  <div className="flex flex-wrap gap-1">
+                    {s.status === 'pending' ? (
+                      <ApproveButton id={s.id} onChanged={loadFirst} hi={hi} />
+                    ) : null}
+                    {s.status === 'pending' ||
+                    s.status === 'auto_approved' ||
+                    s.status === 'approved' ? (
+                      <RejectDialog
+                        id={s.id}
+                        canReject={s.can_reject}
+                        onChanged={loadFirst}
+                        hi={hi}
+                      />
+                    ) : null}
+                  </div>
+                )}
               </td>
             </tr>
           );

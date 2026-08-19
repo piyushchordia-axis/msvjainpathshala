@@ -368,13 +368,23 @@ describe("granth directory", () => {
         availability: Array<{ granth_id: string; library_id: string }>;
       };
 
-      expect(libraries.map((l) => l.id).sort()).toEqual([...fx.libraryIds].sort());
+      // The directory is a GLOBAL payload by design (§17.11.4 — one payload,
+      // browsable offline); section_id is only the auth gate. So narrow to this
+      // fixture's rows before asserting. Absolute equality here also swept in
+      // the seeded MSV Granth Bhandar library and its two entries.
+      const ourLibraries = libraries.filter((l) => fx.libraryIds.includes(l.id));
+      const ourEntries = entries.filter((e) => e.id === fx.entryId);
+      const ourAvailability = availability.filter((a) => a.granth_id === fx.entryId);
+
+      expect(ourLibraries.map((l) => l.id).sort()).toEqual([...fx.libraryIds].sort());
       // Denormalised so the client can group and filter with no network and
-      // no cities table of its own.
-      expect(libraries[0]!.city_name).toBeTruthy();
-      expect(entries.map((e) => e.id)).toEqual([fx.entryId]);
-      expect(entries[0]!.linked_item_id).toBe(fx.itemId);
-      expect(availability).toHaveLength(2);
+      // no cities table of its own. Indexed by id, not position — `libraries[0]`
+      // was asserting against the seeded row, so it passed without testing the
+      // fixture at all.
+      expect(ourLibraries.find((l) => l.id === fx.libraryIds[0])!.city_name).toBeTruthy();
+      expect(ourEntries.map((e) => e.id)).toEqual([fx.entryId]);
+      expect(ourEntries[0]!.linked_item_id).toBe(fx.itemId);
+      expect(ourAvailability).toHaveLength(2);
     } finally {
       await cleanupFixture(fx);
     }
@@ -415,10 +425,17 @@ describe("granth directory", () => {
         libraries: Array<{ id: string }>;
         availability: Array<{ library_id: string }>;
       };
-      expect(data.libraries.map((l) => l.id)).toEqual([fx.libraryIds[1]]);
+      // Assert ABSENCE of the unpublished one and presence of the other. The
+      // old absolute toEqual compared against the whole global directory, so it
+      // was really asserting the seed's contents, not the fixture's.
+      const libraryIds = data.libraries.map((l) => l.id);
+      expect(libraryIds).not.toContain(fx.libraryIds[0]);
+      expect(libraryIds).toContain(fx.libraryIds[1]);
       // A join row pointing at a library the reader cannot see would render
       // as a place to go that does not exist for them.
-      expect(data.availability.map((a) => a.library_id)).toEqual([fx.libraryIds[1]]);
+      const availLibraryIds = data.availability.map((a) => a.library_id);
+      expect(availLibraryIds).not.toContain(fx.libraryIds[0]);
+      expect(availLibraryIds).toContain(fx.libraryIds[1]);
     } finally {
       await cleanupFixture(fx);
     }
@@ -442,7 +459,12 @@ describe("granth directory", () => {
         .get(`/v1/library/granth/directory?section_id=${fx.sectionId}`)
         .set(auth(token));
       expect(member.status).toBe(200);
-      expect(member.body.data.libraries).toHaveLength(2);
+      // Both fixture libraries are visible once signed in. Counted within the
+      // fixture, not across the global directory, which also carries the seed's.
+      const visible = (member.body.data.libraries as Array<{ id: string }>).filter((l) =>
+        fx.libraryIds.includes(l.id),
+      );
+      expect(visible).toHaveLength(2);
     } finally {
       await cleanupFixture(fx);
     }

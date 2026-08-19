@@ -1655,8 +1655,20 @@ router.get("/push", requireAdminPanel, async (req: Request, res: Response) => {
   ok(res, { items }, { count: items.length });
 });
 
-/* POST /v1/quizzes/push — admin starts a live push quiz for selected targets */
-router.post("/push", requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
+/**
+ * POST /v1/quizzes/push — start a live push quiz for selected targets.
+ *
+ * Gate is requireAdminPanel, matching the sibling GET /push. A narrower
+ * requireRole(super/state/city) locked out the shikshak, contradicting SPEC
+ * §15 ("Push quiz lifecycle (Shikshak posts → student banner appears)" and the
+ * exit criterion "A shikshak launches a push quiz mid-session") — and this
+ * handler still stamps shikshak_user_id on the row it creates.
+ *
+ * The real authorization is authorizeQuizTargets below, which resolves the
+ * caller's admin scope and confines a shikshak to centre/batch targets inside
+ * their own centres. The middleware was duplicating that check and over-tightening it.
+ */
+router.post("/push", requireAdminPanel, async (req: Request, res: Response) => {
   if (!canAccessAdminPanel(req.authUser?.role)) {
     fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
     return;

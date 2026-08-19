@@ -154,7 +154,10 @@ export default function ParentNiyams() {
             <NiyamCatalogEntry
               row={row}
               hi={hi}
-              onPress={() => router.push("/niyam-submit")}
+              // Carry the tapped niyam through — see student/niyams.tsx.
+              onPress={() =>
+                router.push({ pathname: "/niyam-submit", params: { niyam_id: row.id } })
+              }
             />
           </View>
         )}

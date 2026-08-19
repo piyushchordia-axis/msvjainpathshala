@@ -64,8 +64,11 @@ export function NiyamSubmissionsList({ items, hi, preview = false }: Props) {
     <View style={{ gap: 8 }}>
       {rows.map((n) => {
         const title = hi ? n.niyam_title_hi ?? n.niyam_title_en : n.niyam_title_en;
-        const featured = n.is_featured ? (hi ? "विशेष" : "Featured") : null;
-        const meta = [n.niyam_type, formatDate(n.submission_date), featured]
+        // H8 — the "Featured" chip is gone: nothing in production ever wrote
+        // niyam_submissions.is_featured (only the seed did), so it could only
+        // ever appear on demo data. Real featuring lives on
+        // gallery_items.featured_gallery and belongs on the gallery surface.
+        const meta = [n.niyam_type, formatDate(n.submission_date)]
           .filter(Boolean)
           .join(" · ");
         const previewProof = firstProofPreview(n);

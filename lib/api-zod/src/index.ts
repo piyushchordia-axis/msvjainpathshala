@@ -5,3 +5,4 @@ export * from "./panchang";
 export * from "./granth";
 export * from "./granth-links";
 export * from "./errors";
+export * from "./niyam-reject-reason";

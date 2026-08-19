@@ -51,6 +51,35 @@ export function decodeTimeCursor(raw: unknown): { createdAt: Date; id: string } 
   }
 }
 
+/**
+ * Opaque keyset cursor over a (date, timestamp, uuid) triple — for lists sorted
+ * by a calendar `submission_date` rather than a timestamp.
+ *
+ * `created_at` is in the key, not just the id, because a random-uuid tiebreak is
+ * deterministic but arbitrary: a parent who has many submissions on one date
+ * would not reliably see the one they just made, since its uuid sorts nowhere in
+ * particular. Ordering newest-created-first within the date puts it at the top.
+ */
+export function encodeDateCursor(date: string, createdAt: Date, id: string): string {
+  return Buffer.from(`${date}|${createdAt.toISOString()}|${id}`, "utf8").toString("base64url");
+}
+
+export function decodeDateCursor(
+  raw: unknown,
+): { date: string; createdAt: Date; id: string } | null {
+  if (typeof raw !== "string" || !raw) return null;
+  try {
+    const [date, tsIso, id] = Buffer.from(raw, "base64url").toString("utf8").split("|");
+    if (!date || !tsIso || !id) return null;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !CURSOR_UUID_RE.test(id)) return null;
+    const createdAt = new Date(tsIso);
+    if (!Number.isFinite(createdAt.getTime())) return null;
+    return { date, createdAt, id };
+  } catch {
+    return null;
+  }
+}
+
 export function clampLimit(raw: unknown, fallback: number, max: number): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return fallback;

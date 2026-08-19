@@ -15,6 +15,7 @@ import {
   attendance,
   punya_transactions,
   punya_configs,
+  punya_features,
   msv_enrolments,
   notices,
   gallery_items,
@@ -35,7 +36,13 @@ import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { isValidCitySlug, slugifyCityName } from "@jp/shared/city-slug";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
-import { resolveAdminScope, cityIdsForState, inBatchWriteScope, type AdminScope } from "../../lib/scope";
+import {
+  resolveAdminScope,
+  cityIdsForState,
+  cityIdsForUser,
+  inBatchWriteScope,
+  type AdminScope,
+} from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { awardPunya } from "../../lib/punya";
 import {
@@ -281,7 +288,25 @@ router.get("/shivirs", async (req: Request, res: Response) => {
 });
 
 /* GET /v1/admin/niyams */
-router.get("/niyams", async (_req: Request, res: Response) => {
+router.get("/niyams", async (req: Request, res: Response) => {
+  /**
+   * M2 — this handler took `_req`: no scope narrowing and no limit, so a
+   * shikshak or city_admin read every niyam in the country in one unpaginated
+   * response. Narrow to what the caller administers: national niyams are
+   * visible to everyone (they apply to every centre), plus their own
+   * state's / city's.
+   */
+  const cityIds = await cityIdsForUser(req.authUser!);
+  const geoFilter =
+    cityIds === null
+      ? undefined
+      : or(
+          eq(niyams.scope, "national"),
+          cityIds.length ? inArray(niyams.city_id, cityIds) : undefined,
+          req.authUser!.state_id ? eq(niyams.state_id, req.authUser!.state_id) : undefined,
+        );
+  const limit = clampLimit(req.query.limit, 100, 300);
+
   const rows = await db
     .select({
       id: niyams.id,
@@ -302,11 +327,16 @@ router.get("/niyams", async (_req: Request, res: Response) => {
       state_name: states.name,
       city_name: cities.name,
       msv_audience: niyams.msv_audience,
+      // H14 — the edit dialog authors these, so the list has to read them back.
+      start_date: niyams.start_date,
+      end_date: niyams.end_date,
     })
     .from(niyams)
     .leftJoin(states, eq(states.id, niyams.state_id))
     .leftJoin(cities, eq(cities.id, niyams.city_id))
-    .orderBy(desc(niyams.points));
+    .where(geoFilter)
+    .orderBy(desc(niyams.points), asc(niyams.id))
+    .limit(limit);
   ok(res, { items: rows }, { count: rows.length });
 });
 
@@ -360,6 +390,11 @@ router.get("/niyam-submissions", async (req: Request, res: Response) => {
       points_awarded: niyam_submissions.points_awarded,
       is_featured: niyam_submissions.is_featured,
       created_at: niyam_submissions.created_at,
+      // Q12 — needed to compute can_decide per row. The list is centre-scoped
+      // but approve/reject are batch-bound, so without these the web panel
+      // rendered Approve on rows the caller could not act on.
+      centre_id: students.centre_id,
+      batch_id: students.batch_id,
     })
     .from(niyam_submissions)
     .innerJoin(students, eq(students.id, niyam_submissions.student_id))
@@ -440,6 +475,10 @@ router.get("/niyam-submissions", async (req: Request, res: Response) => {
     points_awarded: r.points_awarded,
     is_featured: r.is_featured,
     created_at: r.created_at.toISOString(),
+    // Q12 — same field the mobile /pending list returns, so the web panel can
+    // grey out rows outside write scope instead of failing the click with a
+    // bare "Submission not found." toast.
+    can_decide: inBatchWriteScope(scope, r.batch_id, r.centre_id),
     ...rejectionWindowFields(r.status, r.created_at),
   }));
   ok(res, { items, next_cursor: nextCursor }, { count: items.length });
@@ -447,15 +486,39 @@ router.get("/niyam-submissions", async (req: Request, res: Response) => {
 
 /* GET /v1/admin/punya/configs */
 router.get("/punya/configs", async (_req: Request, res: Response) => {
+  // city_id was omitted entirely, so a GLOBAL row (which re-prices every city)
+  // and a city override rendered identically and nobody could tell which was
+  // which after the fact.
   const rows = await db
     .select({
       id: punya_configs.id,
       feature_key: punya_configs.feature_key,
       points: punya_configs.points,
       is_active: punya_configs.is_active,
+      city_id: punya_configs.city_id,
+      city_name: cities.name,
     })
     .from(punya_configs)
-    .orderBy(asc(punya_configs.feature_key));
+    .leftJoin(cities, eq(cities.id, punya_configs.city_id))
+    .orderBy(asc(punya_configs.feature_key), asc(cities.name));
+  ok(res, { items: rows }, { count: rows.length });
+});
+
+/* GET /v1/admin/punya/features — the catalogue a config's feature_key must
+   name. The create form free-texted the key, so a typo silently produced a
+   config nothing ever reads. */
+router.get("/punya/features", async (_req: Request, res: Response) => {
+  const rows = await db
+    .select({
+      key: punya_features.key,
+      label: punya_features.label,
+      min_points: punya_features.min_points,
+      max_points: punya_features.max_points,
+      is_active: punya_features.is_active,
+    })
+    .from(punya_features)
+    .where(eq(punya_features.is_active, true))
+    .orderBy(asc(punya_features.key));
   ok(res, { items: rows }, { count: rows.length });
 });
 

@@ -13,6 +13,7 @@ import { open, unlink } from "node:fs/promises";
 import { z } from "zod";
 import { db, upload_objects } from "@workspace/db";
 import { ok, fail } from "../../lib/envelope";
+import { logger } from "../../lib/logger";
 import { requireAuth } from "../../middlewares/auth";
 import { canAccessAdminPanel } from "@workspace/api-zod";
 import {
@@ -68,12 +69,39 @@ async function readMagicSample(filePath: string): Promise<Buffer> {
   }
 }
 
+/**
+ * Delete a temp file, tolerating "already gone".
+ *
+ * Retries once on EBUSY/EPERM, then LOGS rather than discarding. It used to
+ * swallow every error in an empty `catch {}`, which is how the leak below went
+ * unnoticed for as long as it did.
+ *
+ * KNOWN RESIDUAL (Windows only): a WebP upload still leaves its multer temp
+ * behind. libvips' WebP loader holds the input open past `sharp.destroy()` —
+ * longer than any reasonable inline retry — and Windows refuses to unlink an
+ * open file. Linux (the Docker runtime image) unlinks regardless, so deployed
+ * environments are unaffected; this costs a dev machine one 68-byte file per
+ * WebP upload. The only complete fix is to hand sharp a Buffer instead of a
+ * path, and MAX_UPLOAD_BYTES is 50 MB — buffering that per request would undo
+ * the deliberate "files land on disk, not in heap" design this module is built
+ * around. Not worth the trade; the warning above makes it visible if it grows.
+ */
 async function safeUnlink(filePath: string | undefined): Promise<void> {
   if (!filePath) return;
-  try {
-    await unlink(filePath);
-  } catch {
-    /* already gone */
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await unlink(filePath);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "ENOENT") return; // already gone — the normal case
+      if (attempt === 0 && (code === "EBUSY" || code === "EPERM")) {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        continue;
+      }
+      logger.warn({ err, filePath }, "upload temp cleanup failed");
+      return;
+    }
   }
 }
 
@@ -211,11 +239,21 @@ router.post("/", uploadMultipart.single("file"), async (req: Request, res: Respo
       .values({ key, uploaded_by: req.authUser!.id, content_type: storeMime })
       .onConflictDoNothing();
     const assetId = folder === "team-photos" ? assetIdFromTeamPhotoKey(key) : null;
+    // Reclaim the temps BEFORE responding. This used to happen only in the
+    // `finally`, i.e. after `ok()` had already flushed the 200 — so the files
+    // were still being unlinked once the client held its response, and nothing
+    // downstream could observe that cleanup had finished.
+    await Promise.all([safeUnlink(tempPath), safeUnlink(`${tempPath}.norm`)]);
     ok(res, assetId ? { ...stored, asset_id: assetId, purpose: "team_photo" } : stored);
   } finally {
-    await safeUnlink(tempPath);
-    // normalised sibling may exist even when put failed mid-flight
-    await safeUnlink(`${tempPath}.norm`);
+    // Net for the error and early-return paths (429, validation refusals, a
+    // throw mid-upload). safeUnlink treats ENOENT as success, so repeating it
+    // on the happy path is a no-op.
+    await Promise.all([
+      safeUnlink(tempPath),
+      // normalised sibling may exist even when put failed mid-flight
+      safeUnlink(`${tempPath}.norm`),
+    ]);
   }
 });
 

@@ -93,20 +93,26 @@ export async function stripImageMetadataToFile(
   }
 
   if (HEIC.has(base)) {
+    const pipeline = sharp(inputPath).rotate();
     try {
-      await sharp(inputPath).rotate().jpeg({ quality: 88 }).toFile(outputPath);
+      await pipeline.jpeg({ quality: 88 }).toFile(outputPath);
       return { path: outputPath, mime: "image/jpeg" };
     } catch {
       throw new ImageNormaliseError(
         ERROR_MESSAGES.ERR_UPLOAD_FORMAT_UNSUPPORTED.en,
         "ERR_UPLOAD_FORMAT_UNSUPPORTED",
       );
+    } finally {
+      // Release libvips' handle on inputPath. Without this, sharp holds the
+      // input open until GC and the caller's unlink of the temp file fails with
+      // EPERM on Windows — silently, leaving one orphan per upload.
+      pipeline.destroy();
     }
   }
 
   if (ROTATABLE.has(base)) {
+    const pipeline = sharp(inputPath).rotate();
     try {
-      const pipeline = sharp(inputPath).rotate();
       if (base === "image/png") {
         await pipeline.png().toFile(outputPath);
       } else if (base === "image/webp") {
@@ -119,6 +125,9 @@ export async function stripImageMetadataToFile(
       throw new ImageNormaliseError(
         "Could not process this image. The file may be corrupt — please try another photo.",
       );
+    } finally {
+      // See above — this is the branch WebP takes, and the one that leaked.
+      pipeline.destroy();
     }
   }
 

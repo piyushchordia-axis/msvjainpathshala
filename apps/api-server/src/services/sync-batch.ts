@@ -374,24 +374,37 @@ async function handleNiyamSubmission(
         .max(10)
         .optional(),
       notes: z.string().max(500).optional(),
+      // Without this the server stamped the drain date, so a niyam kept on
+      // Sunday and synced on Monday was recorded against the wrong day. The
+      // service applies the same backdate window as the online route.
+      submission_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     })
     .parse(payload);
 
-  const { applyNiyamSubmission, NiyamSubmitError } = await import("./niyam-submit-sync");
+  const { submitNiyam, NiyamSubmitError } = await import("./niyam-submit");
   try {
-    const data = await applyNiyamSubmission({
-      actor,
+    const outcome = await submitNiyam({
+      actorUserId: actor.id,
+      actorRole: actor.role,
       niyamId: p.niyam_id,
       studentId: p.student_id,
-      proofAssetId: p.proof_asset_id,
+      submissionDate: p.submission_date,
+      proofUrl: p.proof_asset_id,
       media: p.media,
       notes: p.notes,
     });
     return {
       submission_op_id: submissionOpId,
       status: "success",
-      server_id: data.id,
-      data,
+      server_id: outcome.row.id,
+      data: {
+        id: outcome.row.id,
+        status: outcome.row.status,
+        points_awarded: outcome.row.points_awarded,
+        submission_date: outcome.row.submission_date,
+        period_key: outcome.row.period_key,
+        new_badges: outcome.newBadges,
+      },
     };
   } catch (err) {
     if (err instanceof NiyamSubmitError) {

@@ -21,7 +21,8 @@ export const niyams = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     title_en: text("title_en").notNull(),
-    title_hi: text("title_hi").notNull(),
+    /** Null = no Hindi title yet; every render site does `title_hi ?? title_en`. */
+    title_hi: text("title_hi"),
     description_en: text("description_en"),
     description_hi: text("description_hi"),
     niyam_type: niyamTypeEnum("niyam_type").notNull().default("daily"),
@@ -67,6 +68,14 @@ export const niyam_submissions = pgTable(
     period_key: text("period_key").notNull(),
     status: niyamSubmissionStatusEnum("status").notNull().default("auto_approved"),
     points_awarded: integer("points_awarded").notNull().default(0),
+    /**
+     * @deprecated Nothing in production has ever written this — only seed.ts.
+     * The mobile "Featured" chip it drove was removed (H8); real featuring
+     * lives on `gallery_items.featured_gallery` and is curated on the gallery
+     * surface. Still projected by several endpoints for wire compatibility;
+     * dropping the column is a separate migration once those are cleaned up.
+     * Do not build anything new on it.
+     */
     is_featured: boolean("is_featured").notNull().default(false),
     // Denormalized first media URL for legacy readers; source of truth is media table.
     proof_url: text("proof_url"),

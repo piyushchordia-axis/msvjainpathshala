@@ -18,15 +18,22 @@ import { cities } from "./geography";
 import { students } from "./students";
 import { users } from "./identity";
 
-export const punya_features = pgTable("punya_features", {
-  id: uuid("id").primaryKey().defaultRandom(),
-  key: text("key").notNull(),
-  label: text("label").notNull(),
-  min_points: integer("min_points"),
-  max_points: integer("max_points"),
-  is_active: boolean("is_active").notNull().default(true),
-  ...timestamps(),
-});
+export const punya_features = pgTable(
+  "punya_features",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    key: text("key").notNull(),
+    label: text("label").notNull(),
+    min_points: integer("min_points"),
+    max_points: integer("max_points"),
+    is_active: boolean("is_active").notNull().default(true),
+    ...timestamps(),
+  },
+  (t) => ({
+    /** Bounds are read by `where key = … limit 1`; duplicates made that arbitrary. */
+    key_uq: uniqueIndex("punya_features_key_uq").on(t.key),
+  }),
+);
 
 export const punya_configs = pgTable(
   "punya_configs",
@@ -41,6 +48,18 @@ export const punya_configs = pgTable(
   },
   (t) => ({
     feature_city_idx: index("idx_punya_configs_feature_city").on(t.feature_key, t.city_id),
+    /**
+     * One ACTIVE value per (feature, city). Two partial indexes because
+     * Postgres treats NULLs as distinct, so a single UNIQUE (feature_key,
+     * city_id) would still allow unlimited global rows — the case that
+     * re-prices every city at once. See 0081.
+     */
+    feature_city_active_uq: uniqueIndex("punya_configs_feature_city_active_uq")
+      .on(t.feature_key, t.city_id)
+      .where(sql`${t.city_id} is not null and ${t.is_active} = true`),
+    feature_global_active_uq: uniqueIndex("punya_configs_feature_global_active_uq")
+      .on(t.feature_key)
+      .where(sql`${t.city_id} is null and ${t.is_active} = true`),
   }),
 );
 

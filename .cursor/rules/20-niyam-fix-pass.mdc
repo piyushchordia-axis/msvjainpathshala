@@ -34,7 +34,7 @@ Frequency-aware, one-time per `(student, niyam, badge_key)`:
 
 Badges live in the `niyam_badges` table (unique index makes awarding idempotent under recompute), **not** as a boolean on `niyam_streaks`.
 
-**A rejection that breaks a streak does not revoke an already-earned badge.** Badges are historical achievements. `longest_streak` is `max(stored, recomputed)` so it can never decrease.
+**A rejection that breaks a streak does not revoke an already-earned badge — nor its Punya.** Badges are historical achievements. `longest_streak` is `max(stored, recomputed)` so it can never decrease. The 25-point `niyam_badge` bonus is likewise **permanent** and is not reversed with the submission award (decided 2026-08-18; see CLAUDE.md **Q5a** for the reasoning and the accepted farming trade-off). Reject reverses `feature_key='niyam_submission'` only.
 
 > Note: `FullSpec_v4 §8.5` (7-day/30-day/4-week/3-month) and `PersonaFeatures.md:58` (7/14/30/60/100) contradict each other. The table above supersedes both.
 
@@ -44,6 +44,10 @@ Badges live in the `niyam_badges` table (unique index makes awarding idempotent 
 - The atomic balance upsert `ON CONFLICT … total_points + delta … RETURNING`.
 - Returning **404** rather than 403 for out-of-scope rows — this avoids existence leaks and is deliberate.
 - The minimised public gallery payload (first name only, no full name, no parent data).
+
+## One submit path
+
+`POST /v1/niyam-submissions` and the `niyam_submission` op of `POST /v1/sync/batch` both call `submitNiyam()` in `services/niyam-submit.ts`. Do not add a second implementation — a parallel offline handler once inserted rows as `auto_approved` with 0 points and no ledger entry, and because the mobile client submits *only* through the queue, that was every submission on the platform. See CLAUDE.md **Q6a**.
 
 ## Client-side authorization is not authorization
 

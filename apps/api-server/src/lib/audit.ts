@@ -62,17 +62,25 @@ export async function writeAudits(inputs: AuditInput[], tx?: Tx): Promise<void> 
 }
 
 /** Convenience wrapper that pulls actor + ip from the authed request. */
+/**
+ * During impersonation the actor is the SUBJECT (the session really is theirs),
+ * but the trail must never lose who was driving: every audited action carries
+ * impersonator_id (CLAUDE.md impersonation rule). jp_imp_by is HttpOnly and set
+ * only by the super_admin start route.
+ *
+ * Exported so a route that delegates its audit write to a shared service (which
+ * has no `req`) can still forward the impersonator — see services/niyam-submit.ts.
+ */
+export function impersonatorIdFromReq(req: Request): string | null {
+  const cookies = (req as Request & { cookies?: Record<string, string> }).cookies;
+  return cookies?.jp_imp_active === "true" && cookies?.jp_imp_by ? cookies.jp_imp_by : null;
+}
+
 export async function auditFromReq(
   req: Request,
   input: Omit<AuditInput, "actorId" | "actorRole" | "ip">,
 ): Promise<void> {
-  // During impersonation the actor is the SUBJECT (the session really is
-  // theirs), but the trail must never lose who was driving: every audited
-  // action carries impersonator_id (CLAUDE.md impersonation rule). jp_imp_by
-  // is HttpOnly and set only by the super_admin start route.
-  const cookies = (req as Request & { cookies?: Record<string, string> }).cookies;
-  const impersonatorId =
-    cookies?.jp_imp_active === "true" && cookies?.jp_imp_by ? cookies.jp_imp_by : null;
+  const impersonatorId = impersonatorIdFromReq(req);
   await writeAudit({
     ...input,
     ...(impersonatorId

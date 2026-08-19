@@ -1149,6 +1149,7 @@ export const niyamSubmissionRowSchema = z.object({
   submission_date: z.string(),
   status: z.string(),
   points_awarded: z.number(),
+  /** @deprecated Never written outside the seed — see niyams.ts (H8). Use the gallery. */
   is_featured: z.boolean(),
   notes: z.string().nullable().optional(),
   rejection_reason: z.string().nullable().optional(),
@@ -1167,7 +1168,8 @@ export type NiyamEarnedBadge = z.infer<typeof niyamEarnedBadgeSchema>;
 export const niyamCatalogRowSchema = z.object({
   id: z.string(),
   title_en: z.string(),
-  title_hi: z.string(),
+  /** Null when no Hindi title has been authored (H13) — render `?? title_en`. */
+  title_hi: z.string().nullable(),
   description_en: z.string().nullable().optional(),
   description_hi: z.string().nullable().optional(),
   niyam_type: z.string(),
@@ -1175,7 +1177,12 @@ export const niyamCatalogRowSchema = z.object({
   proof_required: z.boolean().optional(),
   approval_mode: z.string().optional(),
   max_uploads: z.number().optional(),
+  /** Authored value. Show `award_points` to a child, never this (H11). */
   points: z.number(),
+  /** What will ACTUALLY be awarded, with any punya_configs override applied. */
+  award_points: z.number().optional(),
+  /** review-mode: nothing is awarded until a Guruji approves. */
+  awards_on_approval: z.boolean().optional(),
   scope: z.string().optional(),
   msv_audience: z.string().optional(),
   start_date: z.string().optional(),

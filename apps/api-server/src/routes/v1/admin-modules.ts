@@ -25,17 +25,21 @@ import {
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
-import { ok, fail } from "../../lib/envelope";
+import { ok, fail, zodDetails } from "../../lib/envelope";
 import {
   requireAuth,
   requireAdminPanel,
   requireRole,
   requireDonationView,
 } from "../../middlewares/auth";
-import { resolveAdminScope, cityIdsForState } from "../../lib/scope";
+import { resolveAdminScope, cityIdsForState, cityIdsForUser } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { clampLimit, decodeTimeCursor, encodeTimeCursor } from "../../lib/route-helpers";
-import { validateNiyamPointsBounds } from "../../lib/niyam-points";
+import {
+  validateNiyamPointsBounds,
+  validatePunyaConfigPointsBounds,
+} from "../../lib/niyam-points";
+import { isUniqueViolation } from "../../lib/pg-errors";
 import { generateExamAccessCode, hashOtpCode } from "../../lib/tokens";
 
 const router: IRouter = Router();
@@ -45,21 +49,6 @@ router.use(requireAuth, requireAdminPanel);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function isUuid(v: unknown): v is string {
   return typeof v === "string" && UUID_RE.test(v);
-}
-
-/** null = unrestricted; [] = see nothing */
-async function cityIdsForUser(user: User): Promise<string[] | null> {
-  if (user.role === "super_admin") return null;
-  if (user.role === "city_admin" && user.city_id) return [user.city_id];
-  if (user.role === "state_admin" && user.state_id) return cityIdsForState(user.state_id);
-  const scope = await resolveAdminScope(user);
-  if (scope.centreIds === null) return null;
-  if (scope.centreIds.length === 0) return [];
-  const rows = await db
-    .select({ city_id: centres.city_id })
-    .from(centres)
-    .where(and(inArray(centres.id, scope.centreIds), isNull(centres.deleted_at)));
-  return Array.from(new Set(rows.map((r) => r.city_id)));
 }
 
 function cityFilter(column: PgColumn, ids: string[] | null) {
@@ -676,7 +665,7 @@ router.post("/exams", requireRole("super_admin", "state_admin", "city_admin"), a
 
 const createNiyamSchema = z.object({
   title_en: z.string().min(1).max(300),
-  title_hi: z.string().max(300).optional(),
+  title_hi: z.string().max(300).nullable().optional(),
   description_en: z.string().max(2000).optional(),
   description_hi: z.string().max(2000).optional(),
   niyam_type: z.enum(["daily", "weekly", "monthly"]).default("daily"),
@@ -776,7 +765,9 @@ router.post("/niyams", requireRole("super_admin", "state_admin", "city_admin"), 
 
   const [row] = await db.insert(niyams).values({
     title_en: body.title_en,
-    title_hi: body.title_hi ?? body.title_en,
+    // Never default to the English title (H13): that made `title_hi ?? title_en`
+    // dead at every render site and hid the missing translation entirely.
+    title_hi: body.title_hi?.trim() ? body.title_hi : null,
     description_en: body.description_en ?? null,
     description_hi: body.description_hi ?? null,
     niyam_type: body.niyam_type,
@@ -806,7 +797,7 @@ router.post("/niyams", requireRole("super_admin", "state_admin", "city_admin"), 
 const patchNiyamSchema = z.object({
   is_active: z.boolean().optional(),
   title_en: z.string().min(1).max(300).optional(),
-  title_hi: z.string().max(300).optional(),
+  title_hi: z.string().max(300).nullable().optional(),
   description_en: z.string().max(2000).nullable().optional(),
   description_hi: z.string().max(2000).nullable().optional(),
   points: z.coerce.number().int().min(0).max(1000).optional(),
@@ -897,22 +888,133 @@ const createPunyaConfigSchema = z.object({
   feature_key: z.string().min(1).max(100),
   points: z.coerce.number().int().min(0).max(10000),
   is_active: z.boolean().default(true),
+  /**
+   * null = a GLOBAL default applying to every city. Omitted = "my city" for a
+   * city_admin. The route previously accepted neither and always wrote a global
+   * row, so one city administrator typing `niyam_submission` into a free-text
+   * box silently re-priced every niyam in the country.
+   */
+  city_id: z.string().uuid().nullable().optional(),
 });
+
+/**
+ * Resolve and authorize the city scope of a punya config write.
+ *
+ * A global row (city_id null) overrides the authored per-niyam points
+ * everywhere, so writing one is a super_admin act. Everyone else is pinned to a
+ * city they actually administer.
+ */
+async function resolvePunyaConfigCity(
+  req: Request,
+  requested: string | null | undefined,
+): Promise<{ cityId: string | null } | { error: { status: number; message: string } }> {
+  const role = req.authUser!.role;
+
+  if (role === "super_admin") {
+    return { cityId: requested ?? null };
+  }
+
+  if (requested === null) {
+    return {
+      error: {
+        status: 403,
+        message: "Only a super admin can set a global points value — choose a city instead.",
+      },
+    };
+  }
+
+  if (role === "city_admin") {
+    const own = req.authUser!.city_id ?? null;
+    if (!own) {
+      return { error: { status: 403, message: "Your account is not attached to a city." } };
+    }
+    if (requested && requested !== own) {
+      return { error: { status: 403, message: "That city is outside your scope." } };
+    }
+    return { cityId: own };
+  }
+
+  if (role === "state_admin") {
+    if (!requested) {
+      return {
+        error: { status: 422, message: "Choose a city in your state for this points value." },
+      };
+    }
+    const allowed = req.authUser!.state_id ? await cityIdsForState(req.authUser!.state_id) : [];
+    if (!allowed.includes(requested)) {
+      return { error: { status: 403, message: "That city is outside your state." } };
+    }
+    return { cityId: requested };
+  }
+
+  return { error: { status: 403, message: "You cannot change points values." } };
+}
 
 /* POST /v1/admin/punya/configs */
 router.post("/punya/configs", requireRole("super_admin", "state_admin", "city_admin"), async (req: Request, res: Response) => {
   let body: z.infer<typeof createPunyaConfigSchema>;
   try { body = createPunyaConfigSchema.parse(req.body); }
-  catch { fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid punya config data."); return; }
-  const [row] = await db.insert(punya_configs).values({
-    feature_key: body.feature_key,
-    points: body.points,
-    is_active: body.is_active,
-  }).returning({ id: punya_configs.id, feature_key: punya_configs.feature_key });
+  catch (err) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid punya config data.", zodDetails(err));
+    return;
+  }
+
+  const scoped = await resolvePunyaConfigCity(req, body.city_id);
+  if ("error" in scoped) {
+    fail(
+      res,
+      scoped.error.status,
+      scoped.error.status === 422 ? "ERR_VALIDATION_FAILED" : "ERR_FORBIDDEN",
+      scoped.error.message,
+    );
+    return;
+  }
+
+  // A config overrides the authored per-niyam points, so it must respect the
+  // same punya_features min/max. The bounds check keyed on a different feature
+  // than the award resolver reads, so overrides were never bounds-checked.
+  const boundsErr = await validatePunyaConfigPointsBounds(body.feature_key, body.points);
+  if (boundsErr) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", boundsErr.message);
+    return;
+  }
+
+  let row: { id: string; feature_key: string } | undefined;
+  try {
+    [row] = await db.insert(punya_configs).values({
+      feature_key: body.feature_key,
+      points: body.points,
+      is_active: body.is_active,
+      city_id: scoped.cityId,
+    }).returning({ id: punya_configs.id, feature_key: punya_configs.feature_key });
+  } catch (err) {
+    // Unique (feature_key, city_id) — duplicates made the award resolver's
+    // unordered .limit(1) pick an arbitrary winner.
+    if (isUniqueViolation(err)) {
+      fail(
+        res,
+        409,
+        "ERR_DUPLICATE",
+        "A points value for that feature already exists here — edit the existing one instead.",
+      );
+      return;
+    }
+    throw err;
+  }
+
   const { clearAttendancePointsCache } = await import("../../lib/attendance-points");
   const { clearHomeworkPointsCache } = await import("../../lib/homework-points");
   clearAttendancePointsCache();
   clearHomeworkPointsCache();
+  await auditFromReq(req, {
+    action: "create",
+    entityKind: "punya_config",
+    entityId: row!.id,
+    summary: `Set punya config "${body.feature_key}" to ${body.points}${
+      scoped.cityId ? "" : " (global)"
+    }.`,
+    metadata: { feature_key: body.feature_key, points: body.points, city_id: scoped.cityId },
+  });
   ok(res, row);
 });
 
@@ -947,6 +1049,35 @@ router.patch(
       fail(res, 422, "ERR_VALIDATION_FAILED", "Provide points and/or is_active to update.");
       return;
     }
+
+    // Scope the EDIT too. Without this a city_admin could retune a global row,
+    // or another city's, which is the same nationwide re-pricing the create
+    // route allowed.
+    const [existing] = await db
+      .select({
+        city_id: punya_configs.city_id,
+        feature_key: punya_configs.feature_key,
+      })
+      .from(punya_configs)
+      .where(eq(punya_configs.id, id))
+      .limit(1);
+    if (!existing) {
+      fail(res, 404, "ERR_NOT_FOUND", "Punya config not found.");
+      return;
+    }
+    const scoped = await resolvePunyaConfigCity(req, existing.city_id);
+    if ("error" in scoped || scoped.cityId !== existing.city_id) {
+      fail(res, 404, "ERR_NOT_FOUND", "Punya config not found.");
+      return;
+    }
+    if (body.points !== undefined) {
+      const boundsErr = await validatePunyaConfigPointsBounds(existing.feature_key, body.points);
+      if (boundsErr) {
+        fail(res, 422, "ERR_VALIDATION_FAILED", boundsErr.message);
+        return;
+      }
+    }
+
     const [row] = await db
       .update(punya_configs)
       .set({

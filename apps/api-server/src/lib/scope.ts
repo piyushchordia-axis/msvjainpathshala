@@ -7,7 +7,7 @@ import {
   shikshak_batch_assignments,
   type User,
 } from "@workspace/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull } from "drizzle-orm";
 
 export interface AdminScope {
   /** When null, the user can see every centre (super_admin). */
@@ -143,6 +143,26 @@ export function inBatchWriteScope(
 /** @deprecated Prefer inCentreScope — kept for gradual call-site migration. */
 export function inScope(scope: AdminScope, centreId: string | null | undefined): boolean {
   return inCentreScope(scope, centreId);
+}
+
+/**
+ * Cities the user administers. `null` = unrestricted (super_admin); `[]` = none.
+ *
+ * Lifted out of admin-modules.ts so admin-resources can narrow its niyam list
+ * by the same rule instead of growing a second copy.
+ */
+export async function cityIdsForUser(user: User): Promise<string[] | null> {
+  if (user.role === "super_admin") return null;
+  if (user.role === "city_admin" && user.city_id) return [user.city_id];
+  if (user.role === "state_admin" && user.state_id) return cityIdsForState(user.state_id);
+  const scope = await resolveAdminScope(user);
+  if (scope.centreIds === null) return null;
+  if (scope.centreIds.length === 0) return [];
+  const rows = await db
+    .select({ city_id: centres.city_id })
+    .from(centres)
+    .where(and(inArray(centres.id, scope.centreIds), isNull(centres.deleted_at)));
+  return Array.from(new Set(rows.map((r) => r.city_id)));
 }
 
 /** Helper used to keep the `cities` import meaningful for state lookups elsewhere. */

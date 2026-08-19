@@ -100,6 +100,74 @@ describe("GET /v1/admin/batches/:batchId/punya-standings", () => {
     expect(res.body.error.code).toBe("ERR_NOT_FOUND");
   });
 
+  /**
+   * The mobile screen (app/shikshak/punya.tsx via useBatchPunyaStandings) reads
+   * `meta` for its header totals, but nothing asserted it — so the block could
+   * drift or vanish without a test noticing.
+   */
+  it("returns meta totals that agree with the item rows", async () => {
+    const shikshak = await loginAs("shikshak");
+    const batch = await plantScopedBatch(shikshak.user.id);
+    const tag = Date.now().toString(36).slice(-6);
+
+    await plantStudent({
+      batchId: batch.id,
+      centreId: batch.centre_id,
+      name: `Meta A ${tag}`,
+      code: `MT-A-${tag}`,
+      totalPoints: 120,
+      tier: "shravak",
+    });
+    await plantStudent({
+      batchId: batch.id,
+      centreId: batch.centre_id,
+      name: `Meta B ${tag}`,
+      code: `MT-B-${tag}`,
+      totalPoints: 80,
+      tier: "jigyasu",
+    });
+    // Excluded from every aggregate, exactly as it is from the rows (Q11).
+    await plantStudent({
+      batchId: batch.id,
+      centreId: batch.centre_id,
+      name: `Meta Inactive ${tag}`,
+      code: `MT-I-${tag}`,
+      status: "inactive",
+      totalPoints: 5000,
+      tier: "tirthankar",
+    });
+
+    const res = await request(app)
+      .get(`/v1/admin/batches/${batch.id}/punya-standings`)
+      .set(auth(shikshak.token));
+    expect(res.status).toBe(200);
+
+    const { items, meta } = res.body.data as {
+      items: Array<{ total_points: number }>;
+      meta: {
+        batch_id: string;
+        batch_name: string;
+        month: string;
+        student_count: number;
+        batch_total: number;
+        batch_average: number;
+        tier_counts: Record<string, number>;
+      };
+    };
+
+    expect(meta.batch_id).toBe(batch.id);
+    expect(meta.month).toMatch(/^\d{4}-\d{2}$/);
+    expect(meta.student_count).toBe(items.length);
+    expect(meta.student_count).toBe(2);
+    expect(meta.batch_total).toBe(items.reduce((sum, r) => sum + r.total_points, 0));
+    expect(meta.batch_total).toBe(200);
+    expect(meta.batch_average).toBe(100);
+    // The inactive tirthankar must not appear in the tier histogram either.
+    expect(meta.tier_counts.tirthankar ?? 0).toBe(0);
+    expect(meta.tier_counts.shravak).toBe(1);
+    expect(meta.tier_counts.jigyasu).toBe(1);
+  });
+
   it("uses dense ranks for tied totals and excludes inactive students", async () => {
     const shikshak = await loginAs("shikshak");
     const batch = await plantScopedBatch(shikshak.user.id);

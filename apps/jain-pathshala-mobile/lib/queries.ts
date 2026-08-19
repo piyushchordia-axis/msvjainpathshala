@@ -1009,6 +1009,8 @@ export interface PendingNiyamRow {
   submission_date: string;
   period_key?: string | null;
   status: string;
+  points_awarded?: number;
+  rejection_reason?: string | null;
   created_at?: string;
   can_reject?: boolean;
   /** Q12 — false when the caller may see the row but not approve/reject. */
@@ -1031,20 +1033,33 @@ export function usePendingNiyamInfinite(opts: {
    * rendered, onEndReached could not fire to load more.
    */
   studentId?: string | null;
+  /**
+   * Which submission statuses to list. Defaults to ['pending'] server-side.
+   * niyams.approval_mode defaults to 'auto', so a pending-only queue is empty
+   * by construction on a default platform — the Sanchalak safety net Q12
+   * mandates had nothing to catch until this existed.
+   */
+  statuses?: string[];
   enabled?: boolean;
 }) {
   const batchId = opts.batchId ?? null;
   const niyamType = opts.niyamType ?? null;
   const studentId = opts.studentId ?? null;
+  const statuses = opts.statuses ?? ["pending"];
   const enabled = opts.enabled !== false;
   return useInfiniteQuery({
-    queryKey: [...qk.pendingNiyam(batchId, niyamType), studentId ?? ""],
+    queryKey: [
+      ...qk.pendingNiyam(batchId, niyamType),
+      studentId ?? "",
+      statuses.join(","),
+    ],
     initialPageParam: null as string | null,
     queryFn: async ({ pageParam }) => {
       const qs = new URLSearchParams({ limit: "30" });
       if (batchId) qs.set("batch_id", batchId);
       if (niyamType) qs.set("niyam_type", niyamType);
       if (studentId) qs.set("student_id", studentId);
+      for (const s of statuses) qs.append("status", s);
       if (pageParam) qs.set("cursor", pageParam);
       return apiGet<PendingNiyamPage>(`/v1/niyam-submissions/pending?${qs.toString()}`);
     },
@@ -1732,8 +1747,11 @@ export interface SubmitNiyamNewBadge {
 }
 export interface SubmitNiyamResult {
   id: string;
+  /** Server submission status ('auto_approved' | 'pending'), or 'queued' when offline. */
   status: string;
   new_badges?: SubmitNiyamNewBadge[];
+  /** Points actually awarded, from the server. Absent while queued. */
+  points_awarded?: number;
   /** True when the submission was queued offline rather than confirmed by the server. */
   queued?: boolean;
   /** Present when queued — lets the screen surface queued/conflict/failed state. */
@@ -1760,6 +1778,7 @@ export function useSubmitNiyam() {
       media,
       notes,
       proof_url,
+      submission_date,
     }: SubmitNiyamInput): Promise<SubmitNiyamResult> => {
       const { enqueueNiyamSubmission, drainQueues } = await import("@/lib/offline/sync-engine");
 
@@ -1788,6 +1807,7 @@ export function useSubmitNiyam() {
         student_id,
         media: wireMedia,
         notes,
+        submission_date,
       });
 
       // Point the queued proof files at the op they belong to, so an upload that
@@ -1808,9 +1828,21 @@ export function useSubmitNiyam() {
       const results = await drainQueues();
       const mine = results.find((r) => r.submission_op_id === submission_op_id);
 
+      // The server's own view of the submission — auto_approved vs pending, and
+      // the badges the streak just completed. Reporting only "submitted"/"queued"
+      // meant an auto-approved niyam was announced as "sent for review" and the
+      // badge celebration never fired.
+      const server = (mine?.data ?? null) as {
+        status?: string;
+        points_awarded?: number;
+        new_badges?: SubmitNiyamNewBadge[];
+      } | null;
+
       return {
         id: mine?.server_id ?? "",
-        status: mine?.status === "success" ? "submitted" : "queued",
+        status: mine?.status === "success" ? (server?.status ?? "submitted") : "queued",
+        new_badges: server?.new_badges ?? [],
+        points_awarded: server?.points_awarded,
         queued: mine?.status !== "success",
         submission_op_id,
         sync_state:

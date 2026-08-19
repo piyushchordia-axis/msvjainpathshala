@@ -1,0 +1,13 @@
+-- H13 — niyams.title_hi was NOT NULL and POST /v1/admin/niyams stored title_en
+-- into it whenever the Hindi field was blank. Every render site does
+-- `title_hi ?? title_en`, so that fallback could never fire: a child using the
+-- Hindi UI read an English title, and nothing anywhere flagged the gap.
+--
+-- Nullable + the API no longer defaulting means "no Hindi yet" is now
+-- representable and the existing fallback does its job.
+--
+-- Existing rows are deliberately left alone: a row where title_hi equals
+-- title_en may be a genuine untranslated Jain term (Namokar, Samayik) rather
+-- than a missing translation, and we cannot tell the two apart. The admin list
+-- flags them instead.
+ALTER TABLE "niyams" ALTER COLUMN "title_hi" DROP NOT NULL;

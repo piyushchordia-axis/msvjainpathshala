@@ -27,6 +27,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
 import { slugifyCityName } from '@jp/shared/city-slug';
+import { formatSignedPoints } from '@/lib/punya-format';
 
 /* ─── shared form helper ─── */
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -298,7 +299,9 @@ export function ShivirsPage() {
 interface NiyamRow {
   id: string;
   title_en: string;
+  title_hi: string | null;
   description_en: string | null;
+  description_hi: string | null;
   niyam_type: string;
   proof_type: string;
   proof_required: boolean;
@@ -312,14 +315,30 @@ interface NiyamRow {
   state_name: string | null;
   city_name: string | null;
   msv_audience: string;
+  /** Campaign window — drives the mobile catalog's date-range and "ends in" chips. */
+  start_date: string | null;
+  end_date: string | null;
 }
 
 interface GeoStateOpt { id: string; name: string; }
 interface GeoCityOpt { id: string; name: string; state_id: string; state_name?: string; }
 
-function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
+/**
+ * Create AND edit a niyam.
+ *
+ * Editing did not exist: the only mutation the page performed was the
+ * is_active toggle, so a typo in a title or a wrong point value could only be
+ * remedied by disabling the niyam and creating a replacement — which orphans
+ * every submission, streak and badge already attached to the old id.
+ *
+ * `niyam_type` and geography stay immutable (the API's patchNiyamSchema omits
+ * them): changing a niyam's frequency would invalidate every period_key already
+ * recorded against it.
+ */
+function NiyamDialog({ niyam, onSaved }: { niyam?: NiyamRow; onSaved: () => void }) {
   const { user } = useAuth();
   const role = user?.role ?? '';
+  const editing = !!niyam;
   const defaultScope =
     role === 'city_admin' ? 'city' : role === 'state_admin' ? 'state' : 'national';
 
@@ -328,6 +347,9 @@ function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
   const [titleEn, setTitleEn] = useState('');
   const [titleHi, setTitleHi] = useState('');
   const [descEn, setDescEn] = useState('');
+  const [descHi, setDescHi] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [niyamType, setNiyamType] = useState('daily');
   const [proofType, setProofType] = useState('either');
   const [proofRequired, setProofRequired] = useState(false);
@@ -349,6 +371,27 @@ function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
         ? (['state', 'city'] as const)
         : (['national', 'state', 'city'] as const);
 
+  // Prefill from the row each time the dialog opens, so a cancelled edit does
+  // not leave stale values behind for the next one.
+  useEffect(() => {
+    if (!open || !niyam) return;
+    setTitleEn(niyam.title_en ?? '');
+    setTitleHi(niyam.title_hi ?? '');
+    setDescEn(niyam.description_en ?? '');
+    setDescHi(niyam.description_hi ?? '');
+    setStartDate(niyam.start_date ?? '');
+    setEndDate(niyam.end_date ?? '');
+    setNiyamType(niyam.niyam_type);
+    setProofType(niyam.proof_type);
+    setProofRequired(niyam.proof_required);
+    setApprovalMode(niyam.approval_mode);
+    setMaxUploads(String(niyam.max_uploads));
+    setPoints(String(niyam.points));
+    setIsActive(niyam.is_active);
+    setScope(niyam.scope);
+    setMsvAudience(niyam.msv_audience);
+  }, [open, niyam]);
+
   useEffect(() => {
     if (!open) return;
     void apiGet<{ states: GeoStateOpt[]; cities: GeoCityOpt[] }>('/v1/admin/geography').then((r) => {
@@ -369,39 +412,70 @@ function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!titleEn.trim()) return;
-    if (scope === 'state' && !stateId && role === 'super_admin') {
-      toast.error('Select a state.');
+    if (endDate && startDate && endDate < startDate) {
+      toast.error('End date is before the start date.');
       return;
     }
-    if (scope === 'city' && !cityId && role !== 'city_admin') {
-      toast.error('Select a city.');
-      return;
+    if (!editing) {
+      if (scope === 'state' && !stateId && role === 'super_admin') {
+        toast.error('Select a state.');
+        return;
+      }
+      if (scope === 'city' && !cityId && role !== 'city_admin') {
+        toast.error('Select a city.');
+        return;
+      }
     }
     setBusy(true);
     try {
-      await apiPost('/v1/admin/niyams', {
+      // Hindi is sent as-typed, never defaulted to the English string. The API
+      // used to store title_en into title_hi when this was blank, so the
+      // `title_hi ?? title_en` fallback at every render site could never fire
+      // and a child read English inside a Hindi UI with nothing flagging it.
+      const common = {
         title_en: titleEn.trim(),
-        title_hi: titleHi.trim() || undefined,
-        description_en: descEn.trim() || undefined,
-        niyam_type: niyamType,
+        // On edit, blank means "remove the Hindi title" (null); on create it
+        // simply means "not supplied".
+        title_hi: titleHi.trim() || (editing ? null : undefined),
+        description_en: descEn.trim() || (editing ? null : undefined),
+        description_hi: descHi.trim() || (editing ? null : undefined),
         proof_type: proofType,
         proof_required: proofRequired,
         approval_mode: approvalMode,
         max_uploads: Number(maxUploads),
         points: Number(points),
         is_active: isActive,
-        scope,
         msv_audience: msvAudience,
-        ...(scope === 'state' && stateId ? { state_id: stateId } : {}),
-        ...(scope === 'city' && cityId ? { city_id: cityId } : {}),
-      });
-      toast.success('Niyam created.');
+        // Asymmetric on purpose: niyams.start_date is NOT NULL DEFAULT
+        // current_date, so it can never be cleared — blanking the field leaves
+        // the stored value alone. end_date IS nullable, so blank means "remove
+        // the closing date" (null) on edit.
+        ...(startDate ? { start_date: startDate } : {}),
+        end_date: endDate || (editing ? null : undefined),
+      };
+
+      if (editing) {
+        await apiPatch(`/v1/admin/niyams/${niyam.id}`, common);
+        toast.success('Niyam updated.');
+      } else {
+        await apiPost('/v1/admin/niyams', {
+          ...common,
+          niyam_type: niyamType,
+          scope,
+          ...(scope === 'state' && stateId ? { state_id: stateId } : {}),
+          ...(scope === 'city' && cityId ? { city_id: cityId } : {}),
+        });
+        toast.success('Niyam created.');
+      }
       setOpen(false);
-      setTitleEn(''); setTitleHi(''); setDescEn('');
-      setProofType('either'); setProofRequired(false); setApprovalMode('auto'); setMaxUploads('3');
-      setScope(defaultScope);
-      setMsvAudience('all');
-      onAdded();
+      if (!editing) {
+        setTitleEn(''); setTitleHi(''); setDescEn(''); setDescHi('');
+        setStartDate(''); setEndDate('');
+        setProofType('either'); setProofRequired(false); setApprovalMode('auto'); setMaxUploads('3');
+        setScope(defaultScope);
+        setMsvAudience('all');
+      }
+      onSaved();
     } catch (err) {
       toast.error('Failed.', err instanceof ApiError ? err.message : undefined);
     } finally { setBusy(false); }
@@ -413,16 +487,51 @@ function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild><Button size="sm"><Plus className="mr-1 h-4 w-4" />New niyam</Button></DialogTrigger>
+      <DialogTrigger asChild>
+        {editing ? (
+          <Button size="sm" variant="outline">Edit</Button>
+        ) : (
+          <Button size="sm"><Plus className="mr-1 h-4 w-4" />New niyam</Button>
+        )}
+      </DialogTrigger>
       <DialogContent className="max-w-md max-h-[90vh] overflow-y-auto">
-        <DialogHeader><DialogTitle>Create niyam</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{editing ? 'Edit niyam' : 'Create niyam'}</DialogTitle></DialogHeader>
         <form className="space-y-4 pt-2" onSubmit={submit}>
           <FormRow label="Title (English) *"><Input value={titleEn} onChange={(e) => setTitleEn(e.target.value)} required /></FormRow>
-          <FormRow label="Title (Hindi)"><Input value={titleHi} onChange={(e) => setTitleHi(e.target.value)} /></FormRow>
-          <FormRow label="Description"><Textarea rows={2} value={descEn} onChange={(e) => setDescEn(e.target.value)} /></FormRow>
+          <FormRow label="Title (Hindi)">
+            <Input value={titleHi} onChange={(e) => setTitleHi(e.target.value)} />
+            {!titleHi.trim() ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Left blank, the app shows the English title to Hindi readers.
+              </p>
+            ) : null}
+          </FormRow>
+          <FormRow label="Description (English)"><Textarea rows={2} value={descEn} onChange={(e) => setDescEn(e.target.value)} /></FormRow>
+          <FormRow label="Description (Hindi)"><Textarea rows={2} value={descHi} onChange={(e) => setDescHi(e.target.value)} /></FormRow>
+          {/* Time-boxed niyams (Paryushan, a monthly sankalp) were unreachable:
+              no UI sent these, so every niyam ran forever from today and the
+              mobile catalog's date-range / "ends in" chips were dead code. */}
+          <div className="grid grid-cols-2 gap-3">
+            <FormRow label="Starts (IST)">
+              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+              <p className="mt-1 text-xs text-muted-foreground">
+                {editing
+                  ? 'Cannot be removed — leave blank to keep the current date.'
+                  : 'Defaults to today.'}
+              </p>
+            </FormRow>
+            <FormRow label="Ends (IST)">
+              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+              <p className="mt-1 text-xs text-muted-foreground">
+                {endDate ? 'Blank it to make this niyam run indefinitely.' : 'Runs indefinitely.'}
+              </p>
+            </FormRow>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <FormRow label="Type">
-              <Select value={niyamType} onValueChange={setNiyamType}>
+              {/* Immutable after creation: every period_key already recorded
+                  against this niyam was computed from its frequency. */}
+              <Select value={niyamType} onValueChange={setNiyamType} disabled={editing}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   {['daily', 'weekly', 'monthly'].map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
@@ -465,14 +574,23 @@ function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
             Proof required
           </label>
           <div className="grid grid-cols-2 gap-3">
-            <FormRow label="Geography">
-              <Select value={scope} onValueChange={(v) => { setScope(v); if (v === 'national') { setStateId(''); setCityId(''); } }}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {scopeOptions.map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </FormRow>
+            {editing ? (
+              <FormRow label="Geography">
+                <p className="text-sm text-muted-foreground capitalize">
+                  {niyam.scope}
+                  {niyam.city_name ? ` · ${niyam.city_name}` : niyam.state_name ? ` · ${niyam.state_name}` : ''}
+                </p>
+              </FormRow>
+            ) : (
+              <FormRow label="Geography">
+                <Select value={scope} onValueChange={(v) => { setScope(v); if (v === 'national') { setStateId(''); setCityId(''); } }}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {scopeOptions.map((t) => <SelectItem key={t} value={t} className="capitalize">{t}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </FormRow>
+            )}
             <FormRow label="MSV audience">
               <Select value={msvAudience} onValueChange={setMsvAudience}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
@@ -484,7 +602,7 @@ function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
               </Select>
             </FormRow>
           </div>
-          {scope === 'state' && role === 'super_admin' ? (
+          {!editing && scope === 'state' && role === 'super_admin' ? (
             <FormRow label="State *">
               <Select value={stateId} onValueChange={setStateId}>
                 <SelectTrigger><SelectValue placeholder="Select state" /></SelectTrigger>
@@ -494,7 +612,7 @@ function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
               </Select>
             </FormRow>
           ) : null}
-          {scope === 'city' && role !== 'city_admin' ? (
+          {!editing && scope === 'city' && role !== 'city_admin' ? (
             <>
               {role === 'super_admin' ? (
                 <FormRow label="State">
@@ -525,7 +643,9 @@ function AddNiyamDialog({ onAdded }: { onAdded: () => void }) {
           </label>
           <div className="flex justify-end gap-2 pt-2">
             <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
-            <Button type="submit" disabled={busy || !titleEn.trim()}>{busy ? 'Saving…' : 'Create'}</Button>
+            <Button type="submit" disabled={busy || !titleEn.trim()}>
+              {busy ? 'Saving…' : editing ? 'Save changes' : 'Create'}
+            </Button>
           </div>
         </form>
       </DialogContent>
@@ -577,7 +697,7 @@ export function NiyamsPage() {
     <AdminPageShell
       title="Niyams"
       subtitle="Spiritual commitments catalogue."
-      actions={canAuthor ? <AddNiyamDialog onAdded={reload} /> : undefined}
+      actions={canAuthor ? <NiyamDialog onSaved={reload} /> : undefined}
     >
       {!canAuthor ? (
         <p className="text-sm text-muted-foreground -mt-2">
@@ -585,14 +705,24 @@ export function NiyamsPage() {
         </p>
       ) : null}
       {error ? <AdminError message={error} /> : null}
-      <AdminTable columns={['Title', 'Type', 'Proof', 'Approval', 'Uploads', 'Scope', 'Audience', 'Points', 'Active']} loading={loading} empty="" colSpan={9}>
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={9} message="No niyams defined." /> : null}
+      <AdminTable columns={['Title', 'Type', 'Proof', 'Approval', 'Uploads', 'Scope', 'Audience', 'Points', 'Window', 'Active', '']} loading={loading} empty="" colSpan={11}>
+        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={11} message="No niyams defined." /> : null}
         {items.map((n) => {
           const canToggle = canToggleNiyam(user?.role, n, user?.state_id, user?.city_id);
           return (
             <tr key={n.id} className="hover:bg-muted/30">
               <td className="px-4 py-3">
-                <div className="font-medium">{n.title_en}</div>
+                <div className="font-medium">
+                  {n.title_en}
+                  {/* Flags both "never translated" (null) and the legacy rows the
+                      API used to create by copying title_en into title_hi — a
+                      child on the Hindi UI reads English in either case. */}
+                  {!n.title_hi || n.title_hi === n.title_en ? (
+                    <span className="ml-2 rounded-full bg-status-warning-soft px-2 py-0.5 text-xs font-medium text-status-warning">
+                      Hindi missing
+                    </span>
+                  ) : null}
+                </div>
                 {n.description_en ? (
                   <div className="mt-0.5 text-xs text-muted-foreground line-clamp-2">{n.description_en}</div>
                 ) : null}
@@ -607,6 +737,11 @@ export function NiyamsPage() {
               <td className="px-4 py-3 text-xs">{scopeLabel(n)}</td>
               <td className="px-4 py-3 text-xs">{audienceLabel(n.msv_audience)}</td>
               <td className="px-4 py-3">{n.points}</td>
+              <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
+                {n.start_date || n.end_date
+                  ? `${n.start_date ?? '—'} → ${n.end_date ?? '∞'}`
+                  : '—'}
+              </td>
               <td className="px-4 py-3">
                 {canToggle ? (
                   <Switch
@@ -617,6 +752,9 @@ export function NiyamsPage() {
                 ) : (
                   <span className="text-xs text-muted-foreground">{n.is_active ? 'Yes' : 'No'}</span>
                 )}
+              </td>
+              <td className="px-4 py-3">
+                {canToggle ? <NiyamDialog niyam={n} onSaved={reload} /> : null}
               </td>
             </tr>
           );
@@ -632,14 +770,45 @@ interface PunyaConfigRow {
   feature_key: string;
   points: number;
   is_active: boolean;
+  /** null = a GLOBAL default applying to every city. */
+  city_id: string | null;
+  city_name: string | null;
+}
+
+interface PunyaFeatureOpt {
+  key: string;
+  label: string;
+  min_points: number | null;
+  max_points: number | null;
 }
 
 function AddPunyaConfigDialog({ onAdded }: { onAdded: () => void }) {
+  const { user } = useAuth();
+  const isSuper = user?.role === 'super_admin';
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [featureKey, setFeatureKey] = useState('');
   const [points, setPoints] = useState('10');
   const [isActive, setIsActive] = useState(true);
+  const [features, setFeatures] = useState<PunyaFeatureOpt[]>([]);
+  // super_admin only: '' = this admin's city (n/a for super), 'global' = every city.
+  const [globalScope, setGlobalScope] = useState(false);
+  const [cityId, setCityId] = useState('');
+  const [cityOpts, setCityOpts] = useState<GeoCityOpt[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    void apiGet<{ items: PunyaFeatureOpt[] }>('/v1/admin/punya/features').then((r) =>
+      setFeatures(r?.items ?? []),
+    );
+    if (isSuper) {
+      void apiGet<{ states: GeoStateOpt[]; cities: GeoCityOpt[] }>('/v1/admin/geography').then((r) =>
+        setCityOpts(r?.cities ?? []),
+      );
+    }
+  }, [open, isSuper]);
+
+  const selectedFeature = features.find((f) => f.key === featureKey) ?? null;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -650,10 +819,14 @@ function AddPunyaConfigDialog({ onAdded }: { onAdded: () => void }) {
         feature_key: featureKey.trim(),
         points: Number(points),
         is_active: isActive,
+        // Omitted → the API defaults to the caller's own city. Only a
+        // super_admin may write the global (null) row that re-prices everywhere.
+        ...(isSuper ? { city_id: globalScope ? null : cityId || null } : {}),
       });
       toast.success('Punya config created.');
       setOpen(false);
       setFeatureKey(''); setPoints('10'); setIsActive(true);
+      setGlobalScope(false); setCityId('');
       onAdded();
     } catch (err) {
       toast.error('Failed.', err instanceof ApiError ? err.message : undefined);
@@ -666,10 +839,55 @@ function AddPunyaConfigDialog({ onAdded }: { onAdded: () => void }) {
       <DialogContent className="max-w-sm">
         <DialogHeader><DialogTitle>Add Punya config</DialogTitle></DialogHeader>
         <form className="space-y-4 pt-2" onSubmit={submit}>
-          <FormRow label="Feature key *">
-            <Input value={featureKey} onChange={(e) => setFeatureKey(e.target.value)} placeholder="e.g. attendance_full_week" className="font-mono text-xs" required />
+          {/* Was a free-text box: a typo produced a config nothing ever reads,
+              silently. The key must name a registered punya_features row. */}
+          <FormRow label="Feature *">
+            <Select value={featureKey} onValueChange={setFeatureKey}>
+              <SelectTrigger><SelectValue placeholder="Select a feature" /></SelectTrigger>
+              <SelectContent>
+                {features.map((f) => (
+                  <SelectItem key={f.key} value={f.key}>
+                    {f.label} <span className="font-mono text-xs text-muted-foreground">({f.key})</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </FormRow>
-          <FormRow label="Points"><Input type="number" min={0} value={points} onChange={(e) => setPoints(e.target.value)} /></FormRow>
+          {isSuper ? (
+            <>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={globalScope}
+                  onChange={(e) => { setGlobalScope(e.target.checked); if (e.target.checked) setCityId(''); }}
+                  className="rounded"
+                />
+                Apply to every city (global default)
+              </label>
+              {!globalScope ? (
+                <FormRow label="City *">
+                  <Select value={cityId} onValueChange={setCityId}>
+                    <SelectTrigger><SelectValue placeholder="Select city" /></SelectTrigger>
+                    <SelectContent>
+                      {cityOpts.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                </FormRow>
+              ) : null}
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              This value applies to your city only. Global defaults are set by a super admin.
+            </p>
+          )}
+          <FormRow label="Points">
+            <Input type="number" min={0} value={points} onChange={(e) => setPoints(e.target.value)} />
+            {selectedFeature && (selectedFeature.min_points != null || selectedFeature.max_points != null) ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Allowed: {selectedFeature.min_points ?? 0}–{selectedFeature.max_points ?? '∞'}
+              </p>
+            ) : null}
+          </FormRow>
           <label className="flex items-center gap-2 text-sm cursor-pointer">
             <input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} className="rounded" />
             Active
@@ -710,6 +928,17 @@ function PunyaConfigRowView({ c, onSaved }: { c: PunyaConfigRow; onSaved: () => 
   return (
     <tr className="hover:bg-muted/30">
       <td className="px-4 py-3 font-mono text-xs">{c.feature_key}</td>
+      {/* Scope was invisible: a global row and a city override rendered
+          identically, so nobody could tell which one was re-pricing what. */}
+      <td className="px-4 py-3 text-xs">
+        {c.city_id ? (
+          c.city_name ?? 'City'
+        ) : (
+          <span className="rounded-full bg-status-warning-soft px-2 py-0.5 font-medium text-status-warning">
+            Global — every city
+          </span>
+        )}
+      </td>
       <td className="px-4 py-3">
         {editing ? (
           <div className="flex items-center gap-2">
@@ -763,8 +992,8 @@ export function PunyaConfigsPage() {
   return (
     <AdminPageShell title="Punya configs" subtitle="Point values per feature key." actions={<AddPunyaConfigDialog onAdded={reload} />}>
       {error ? <AdminError message={error} /> : null}
-      <AdminTable columns={['Feature', 'Points', 'Active', 'Actions']} loading={loading} empty="" colSpan={4}>
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={4} message="No configs." /> : null}
+      <AdminTable columns={['Feature', 'Scope', 'Points', 'Active', 'Actions']} loading={loading} empty="" colSpan={5}>
+        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={5} message="No configs." /> : null}
         {items.map((c) => (
           <PunyaConfigRowView key={c.id} c={c} onSaved={reload} />
         ))}
@@ -811,7 +1040,18 @@ function PunyaAuditTable({ title, subtitle }: { title: string; subtitle: string 
               <div className="font-mono text-xs text-muted-foreground">{t.student_code}</div>
             </td>
             <td className="px-4 py-3 font-mono text-xs">{t.feature_key}</td>
-            <td className="px-4 py-3 font-semibold text-primary">+{t.points}</td>
+            {/* Reversals are real ledger rows with negative points (a niyam
+                rejection, an attendance correction). A hardcoded '+' rendered
+                them as '+-10' and coloured them like a credit. */}
+            <td
+              className={
+                t.points < 0
+                  ? 'px-4 py-3 font-semibold text-destructive'
+                  : 'px-4 py-3 font-semibold text-primary'
+              }
+            >
+              {formatSignedPoints(t.points)}
+            </td>
             <td className="px-4 py-3 text-xs">{t.awarded_by_name ?? '—'}</td>
             <td className="px-4 py-3 text-xs text-muted-foreground max-w-[12rem] truncate">
               {t.note ?? '—'}

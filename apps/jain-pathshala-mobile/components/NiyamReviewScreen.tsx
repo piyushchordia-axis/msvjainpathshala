@@ -40,23 +40,46 @@ import {
   type PendingNiyamRow,
 } from "@/lib/queries";
 import {
-  REJECT_REASON_MAX,
-  REJECT_REASON_MIN,
-  REJECT_REASON_PRESETS,
-  isRejectReasonValid,
-  rejectReasonCharCount,
-} from "@/lib/niyam-reject-reason";
+  NIYAM_REJECT_REASON_MAX,
+  NIYAM_REJECT_REASON_MIN,
+  NIYAM_REJECT_REASON_PRESETS,
+  isNiyamRejectReasonValid,
+  niyamRejectReasonCharCount,
+} from "@workspace/api-zod";
 import { Body, Button, Row, StateView, Title } from "@/components/ui";
 
 const FILTERS_KEY = "jp.shikshak.niyamReview.filters";
 
-type StoredFilters = { batchId: string | null; niyamType: string | null };
+type StoredFilters = {
+  batchId: string | null;
+  niyamType: string | null;
+  statusTab?: StatusTabKey;
+};
 
 const NIYAM_TYPES: Array<{ key: string | null; en: string; hi: string }> = [
   { key: null, en: "All types", hi: "सभी प्रकार" },
   { key: "daily", en: "Daily", hi: "दैनिक" },
   { key: "weekly", en: "Weekly", hi: "साप्ताहिक" },
   { key: "monthly", en: "Monthly", hi: "मासिक" },
+];
+
+/**
+ * Status tabs, mirroring the web panel. `approval_mode` defaults to 'auto', so
+ * a pending-only queue is permanently empty on a default platform — and this is
+ * the surface Q12 makes the Sanchalak's safety net. "Open" therefore includes
+ * auto_approved: retroactive rejection is the primary admin workflow (Q5).
+ */
+type StatusTabKey = "open" | "approved" | "rejected";
+
+const STATUS_TABS: Array<{
+  key: StatusTabKey;
+  statuses: string[];
+  en: string;
+  hi: string;
+}> = [
+  { key: "open", statuses: ["pending", "auto_approved"], en: "Open", hi: "खुले" },
+  { key: "approved", statuses: ["approved"], en: "Approved", hi: "स्वीकृत" },
+  { key: "rejected", statuses: ["rejected"], en: "Rejected", hi: "अस्वीकृत" },
 ];
 
 function RejectSheet({
@@ -80,8 +103,8 @@ function RejectSheet({
     if (open) setReason("");
   }, [open]);
 
-  const count = rejectReasonCharCount(reason);
-  const valid = isRejectReasonValid(reason);
+  const count = niyamRejectReasonCharCount(reason);
+  const valid = isNiyamRejectReasonValid(reason);
 
   const fieldStyle = {
     fontFamily: bodyFamily(hi),
@@ -135,11 +158,20 @@ function RejectSheet({
             </Body>
           ) : (
             <>
+              {/* M9 — rejection is terminal (Punya reversed, streak recomputed,
+                  gallery item hidden) and there is no undo. Say so up front. */}
               <Body muted style={{ fontSize: 12, lineHeight: 22 }}>
-                {hi ? "कारण * (कम से कम 20 अक्षर)" : "Reason * (at least 20 characters)"}
+                {hi
+                  ? "यह वापस नहीं लिया जा सकता: पुण्य वापस लिया जाएगा, श्रृंखला दोबारा गिनी जाएगी, और फ़ोटो गैलरी से हट जाएगी।"
+                  : "This cannot be undone: Punya is taken back, the streak is recalculated, and any photo is removed from the gallery."}
+              </Body>
+              <Body muted style={{ fontSize: 12, lineHeight: 22 }}>
+                {hi
+                  ? `कारण * (कम से कम ${NIYAM_REJECT_REASON_MIN} अक्षर)`
+                  : `Reason * (at least ${NIYAM_REJECT_REASON_MIN} characters)`}
               </Body>
               <Row style={{ flexWrap: "wrap", gap: 8 }}>
-                {REJECT_REASON_PRESETS.map((p) => {
+                {NIYAM_REJECT_REASON_PRESETS.map((p) => {
                   const label = hi ? p.hi ?? p.en : p.en;
                   return (
                     <Pressable
@@ -166,7 +198,7 @@ function RejectSheet({
                 onChangeText={setReason}
                 multiline
                 editable={!busy}
-                maxLength={REJECT_REASON_MAX}
+                maxLength={NIYAM_REJECT_REASON_MAX}
                 placeholder={hi ? "अभिभावक को स्पष्ट बताएँ कि क्या ठीक करें।" : "Tell the parent what to fix."}
                 placeholderTextColor={c.mutedForeground}
                 style={fieldStyle}
@@ -176,11 +208,15 @@ function RejectSheet({
                 style={{
                   fontSize: 12,
                   lineHeight: 22,
-                  color: count < REJECT_REASON_MIN ? c.destructive : c.mutedForeground,
+                  color: count < NIYAM_REJECT_REASON_MIN ? c.destructive : c.mutedForeground,
                 }}
               >
-                {count}/{REJECT_REASON_MIN}
-                {hi ? " न्यूनतम" : " minimum"}
+                {/* While short, count toward the minimum ("12/20 minimum").
+                    Once valid, show the ceiling maxLength silently enforces —
+                    it used to read "45/20 minimum" and never mention 300. */}
+                {count < NIYAM_REJECT_REASON_MIN
+                  ? `${count}/${NIYAM_REJECT_REASON_MIN}${hi ? " न्यूनतम" : " minimum"}`
+                  : `${count}/${NIYAM_REJECT_REASON_MAX}`}
               </Body>
               <Button
                 label={hi ? "अस्वीकृत करें" : "Reject"}
@@ -243,6 +279,18 @@ function ReviewRowInner({
     <Pressable
       onPress={() => (selectionMode ? onToggleSelect() : onToggleExpand())}
       onLongPress={canDecide ? onLongPress : undefined}
+      accessibilityRole="button"
+      accessibilityLabel={`${row.student_name}, ${title}, ${formatDate(row.submission_date)}`}
+      accessibilityHint={
+        selectionMode
+          ? hi
+            ? "चुनने के लिए दबाएँ"
+            : "Tap to select"
+          : hi
+            ? "विवरण देखने के लिए दबाएँ"
+            : "Tap to see details"
+      }
+      accessibilityState={{ expanded, selected, disabled: !canDecide }}
       style={{
         minHeight: 72,
         paddingVertical: 8,
@@ -277,6 +325,13 @@ function ReviewRowInner({
             if (canDecide) onToggleSelect();
           }}
           disabled={!canDecide}
+          accessibilityRole="checkbox"
+          accessibilityLabel={
+            hi
+              ? `${row.student_name} को चुनें`
+              : `Select ${row.student_name}`
+          }
+          accessibilityState={{ checked: selected, disabled: !canDecide }}
           hitSlop={10}
           style={{
             width: 28,
@@ -343,22 +398,34 @@ function ReviewRowInner({
               </Row>
             </ScrollView>
           ) : null}
+          {/* The list now spans every status, so gate on it: only a pending
+              row can be approved, and a rejected one is terminal. Matches the
+              API's own state machine rather than assuming a pending-only feed. */}
           <Row style={{ gap: 8, flexWrap: "wrap" }}>
-            <Button
-              label={hi ? "स्वीकृत" : "Approve"}
-              variant="secondary"
-              disabled={busy || !canDecide}
-              onPress={onApprove}
-              style={{ paddingVertical: 8, paddingHorizontal: 12 } as never}
-            />
-            <Button
-              label={hi ? "अस्वीकृत" : "Reject"}
-              variant="outline"
-              disabled={busy || !canReject || !canDecide}
-              onPress={onReject}
-              style={{ paddingVertical: 8, paddingHorizontal: 12 } as never}
-            />
+            {row.status === "pending" ? (
+              <Button
+                label={hi ? "स्वीकृत" : "Approve"}
+                variant="secondary"
+                disabled={busy || !canDecide}
+                onPress={onApprove}
+                style={{ paddingVertical: 8, paddingHorizontal: 12 } as never}
+              />
+            ) : null}
+            {row.status !== "rejected" ? (
+              <Button
+                label={hi ? "अस्वीकृत" : "Reject"}
+                variant="outline"
+                disabled={busy || !canReject || !canDecide}
+                onPress={onReject}
+                style={{ paddingVertical: 8, paddingHorizontal: 12 } as never}
+              />
+            ) : null}
           </Row>
+          {row.status === "rejected" && row.rejection_reason ? (
+            <Body muted style={{ fontSize: 12, lineHeight: 22 }}>
+              {hi ? "कारण" : "Reason"}: {row.rejection_reason}
+            </Body>
+          ) : null}
           {canDecide && !canReject ? (
             <Body muted style={{ fontSize: 12, lineHeight: 22 }}>
               {hi
@@ -388,6 +455,7 @@ export default function NiyamReviewScreen() {
   const batches = useAdminBatches(true);
   const [batchId, setBatchId] = useState<string | null>(null);
   const [niyamType, setNiyamType] = useState<string | null>(null);
+  const [statusTab, setStatusTab] = useState<StatusTabKey>("open");
   const [filtersReady, setFiltersReady] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -403,6 +471,7 @@ export default function NiyamReviewScreen() {
           const parsed = JSON.parse(raw) as StoredFilters;
           setBatchId(parsed.batchId ?? null);
           setNiyamType(parsed.niyamType ?? null);
+          if (parsed.statusTab) setStatusTab(parsed.statusTab);
         } catch {
           /* ignore */
         }
@@ -415,9 +484,14 @@ export default function NiyamReviewScreen() {
     if (!filtersReady) return;
     void AsyncStorage.setItem(
       FILTERS_KEY,
-      JSON.stringify({ batchId, niyamType } satisfies StoredFilters),
+      JSON.stringify({ batchId, niyamType, statusTab } satisfies StoredFilters),
     );
-  }, [batchId, niyamType, filtersReady]);
+  }, [batchId, niyamType, statusTab, filtersReady]);
+
+  const activeStatuses = useMemo(
+    () => STATUS_TABS.find((s) => s.key === statusTab)?.statuses ?? ["pending", "auto_approved"],
+    [statusTab],
+  );
 
   const list = usePendingNiyamInfinite({
     batchId,
@@ -425,6 +499,7 @@ export default function NiyamReviewScreen() {
     // Narrowed server-side now — see the hook for why client-side filtering
     // silently hid real rows and stalled pagination.
     studentId: filterStudentId ?? null,
+    statuses: activeStatuses,
     enabled: filtersReady,
   });
   const approve = useApproveNiyam();
@@ -448,6 +523,9 @@ export default function NiyamReviewScreen() {
   function toggleSelect(id: string) {
     const row = items.find((r) => r.id === id);
     if (row && row.can_decide === false) return;
+    // Bulk approve only claims 'pending' rows server-side; selecting an
+    // already-approved or rejected one would silently report a skip.
+    if (row && row.status !== "pending") return;
     setSelectionMode(true);
     setSelected((prev) => {
       const next = new Set(prev);
@@ -598,6 +676,23 @@ export default function NiyamReviewScreen() {
           gap: 8,
         }}
       >
+        {/* Status tabs first — on an auto-approve platform "Open" is the only
+            view with anything in it, and without these the screen was empty
+            forever (the web panel already had them). */}
+        <Row style={{ gap: 8 }}>
+          {STATUS_TABS.map((s) => (
+            <FilterChip
+              key={s.key}
+              label={hi ? s.hi : s.en}
+              active={statusTab === s.key}
+              onPress={() => {
+                setStatusTab(s.key);
+                setSelectionMode(false);
+                setSelected(new Set());
+              }}
+            />
+          ))}
+        </Row>
         <ScrollView horizontal showsHorizontalScrollIndicator={false}>
           <Row style={{ gap: 8 }}>
             <FilterChip
@@ -719,6 +814,11 @@ function FilterChip({
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      // A chip conveys its on/off state only by colour otherwise — a
+      // screen-reader user could not tell which filter was applied.
+      accessibilityState={{ selected: active }}
       style={{
         paddingHorizontal: 12,
         paddingVertical: 8,

@@ -17,6 +17,8 @@ import type { AdminScope } from "../lib/scope";
 import { inBatchWriteScope } from "../lib/scope";
 import { awardPunya } from "../lib/punya";
 import { writeAudit } from "../lib/audit";
+import { notifyUsers } from "../lib/notify";
+import { logger } from "../lib/logger";
 import { resolveNiyamAwardPoints } from "../lib/niyam-points";
 import { awardNewlyReachedBadges, type AwardedBadge } from "../lib/niyam-badges";
 import { uploadKeyFromUrl } from "../lib/file-tokens";
@@ -116,10 +118,15 @@ export async function approveNiyamSubmission(opts: {
       centre_id: students.centre_id,
       batch_id: students.batch_id,
       parent_id: students.parent_id,
+      /** Set when the child has their own OTP login (Q4, age 8+). */
+      student_user_id: students.user_id,
       student_name: students.full_name,
       city_id: centres.city_id,
       points: niyams.points,
       niyam_type: niyams.niyam_type,
+      // For the bilingual approval push below.
+      niyam_title_en: niyams.title_en,
+      niyam_title_hi: niyams.title_hi,
     })
     .from(niyam_submissions)
     .innerJoin(students, eq(students.id, niyam_submissions.student_id))
@@ -201,6 +208,7 @@ export async function approveNiyamSubmission(opts: {
         niyamType: sub.niyam_type as NiyamPeriodType,
         currentStreak: streak.current,
         awardedBy: opts.actor.id,
+        cityId: sub.city_id,
       },
       tx,
     );
@@ -227,6 +235,32 @@ export async function approveNiyamSubmission(opts: {
     },
     ip: opts.ip ?? null,
   });
+
+  // Post-commit, best-effort — an approval must never fail on notify. Lives
+  // here rather than in the routes so single AND bulk approve both send it;
+  // only rejection and badges were ever notified, so a child whose niyam was
+  // approved by their Guruji heard nothing at all.
+  // Parent AND the child's own login when they have one: a student aged 8+ on
+  // their own OTP account (Q4) is the person who kept the niyam, and a
+  // parent_id-only send left exactly that child hearing nothing. notifyUsers
+  // honours each recipient's notification_preferences independently.
+  const approvalRecipients = [...new Set([sub.parent_id, sub.student_user_id])].filter(
+    (id): id is string => !!id,
+  );
+  if (approvalRecipients.length > 0) {
+    await notifyUsers({
+      userIds: approvalRecipients,
+      kind: "niyam_approved",
+      title_en: "Niyam approved",
+      title_hi: "नियम स्वीकृत",
+      body_en: `${sub.student_name}'s "${sub.niyam_title_en}" was approved — +${awardPoints} Punya.`,
+      body_hi: `${sub.student_name} का "${sub.niyam_title_hi ?? sub.niyam_title_en}" स्वीकृत — +${awardPoints} पुण्य।`,
+      push: true,
+      data: { kind: "niyam_approved", submission_id: sub.id },
+    }).catch((err) => {
+      logger.warn({ err, submissionId: sub.id }, "niyam approval notify failed");
+    });
+  }
 
   return {
     status: "approved",

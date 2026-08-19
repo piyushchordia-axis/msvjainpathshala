@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Alert, TextInput, View } from "react-native";
-import { useRouter } from "expo-router";
+import { Alert, Pressable, TextInput, View } from "react-native";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { ActivityThemed } from "@/contexts/ActivityThemeContext";
@@ -25,6 +25,17 @@ import { useCelebration } from "@/hooks/useCelebration";
 import type { NiyamCatalogRow } from "@/lib/types";
 
 const ALERT_AFTER_CELEBRATE_MS = 400;
+
+/** Mirrors createSubmissionSchema's `notes: z.string().max(500)` on the API. */
+const NOTES_MAX = 500;
+
+/** Yesterday's IST calendar date — the only backdate the API accepts. */
+function yesterdayIst(): string {
+  const todayIst = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  const d = new Date(`${todayIst}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() - 1);
+  return d.toISOString().slice(0, 10);
+}
 
 function niyamsTabHref(role: string | undefined): "/student/niyams" | "/parent/niyams" {
   return role === "parent" ? "/parent/niyams" : "/student/niyams";
@@ -59,21 +70,63 @@ export default function NiyamSubmit() {
 
   const catalogRows = catalog.data?.items ?? [];
 
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Preselect the niyam the child tapped in the catalog (M10). Falls back to
+  // the picker when the screen is opened from the generic "Submit Niyam" button.
+  const { niyam_id: niyamIdParam } = useLocalSearchParams<{ niyam_id?: string }>();
+  const initialSelectedId = typeof niyamIdParam === "string" ? niyamIdParam : null;
+
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId);
   const [media, setMedia] = useState<ProofMediaItem[]>([]);
   const [notes, setNotes] = useState("");
+  /**
+   * H6 — the API has always accepted `submission_date` and allowed one day of
+   * backdating, but no client ever sent it, so the documented late-evening
+   * catch-up across midnight was unreachable and a niyam kept yesterday was
+   * simply lost.
+   */
+  const [forYesterday, setForYesterday] = useState(false);
 
   // Per-child period status — never reuse another child's selection / form.
+  // The deep-linked niyam is dropped too: it was chosen for the previous child.
   useEffect(() => {
     setSelectedId(null);
     setMedia([]);
     setNotes("");
+    setForYesterday(false);
   }, [activeStudentId]);
 
   function resetForm() {
     setSelectedId(null);
     setMedia([]);
     setNotes("");
+    setForYesterday(false);
+  }
+
+  /**
+   * Cancel discards proof the parent has already uploaded, and nothing reaps
+   * the orphaned objects (media.cleanup_unfinalized is a tick stub). Confirm
+   * first when there is something to lose — every other decisive action in this
+   * module confirms.
+   */
+  function onCancel() {
+    if (media.length === 0) {
+      resetForm();
+      return;
+    }
+    Alert.alert(
+      hi ? "प्रमाण हटाएँ?" : "Discard proof?",
+      hi
+        ? "आपने जो फ़ाइलें जोड़ी हैं वे हट जाएँगी। फिर से जोड़नी होंगी।"
+        : "The files you added will be removed. You would need to attach them again.",
+      [
+        { text: hi ? "रहने दें" : "Keep editing", style: "cancel" },
+        {
+          text: hi ? "हटाएँ" : "Discard",
+          style: "destructive",
+          onPress: resetForm,
+        },
+      ],
+    );
   }
 
   const selected: NiyamCatalogRow | null = selectedId
@@ -112,11 +165,39 @@ export default function NiyamSubmit() {
         student_id: activeStudentId,
         media: readyMedia.length ? readyMedia : undefined,
         notes: notes.trim() ? notes.trim() : undefined,
+        submission_date: forYesterday ? yesterdayIst() : undefined,
       },
       {
         onSuccess: (res) => {
           const approved = res.status === "auto_approved" || res.status === "approved";
           const badges = res.new_badges ?? [];
+
+          // A queued op has not reached the server — do not claim it was
+          // accepted, and do not celebrate points that may never be awarded.
+          if (res.queued) {
+            const terminal = res.sync_state === "conflict" || res.sync_state === "failed";
+            Alert.alert(
+              terminal
+                ? hi
+                  ? "प्रस्तुत नहीं हो सका"
+                  : "Could not submit"
+                : hi
+                  ? "ऑफ़लाइन सहेजा गया"
+                  : "Saved offline",
+              terminal
+                ? (res.sync_error?.message ??
+                  (hi
+                    ? "यह नियम प्रस्तुत नहीं हो सका। कृपया फिर से प्रयास करें।"
+                    : "This niyam could not be submitted — please try again."))
+                : hi
+                  ? "नेटवर्क आने पर यह अपने आप भेज दिया जाएगा।"
+                  : "It will sync automatically when you are back online.",
+            );
+            resetForm();
+            catalog.refetch();
+            return;
+          }
+
           celebrate({
             message: badges.length > 0
               ? hi
@@ -136,6 +217,7 @@ export default function NiyamSubmit() {
                   : `Congratulations — you earned: ${names}`,
               );
             } else {
+              const points = res.points_awarded ?? 0;
               Alert.alert(
                 approved
                   ? hi
@@ -146,8 +228,8 @@ export default function NiyamSubmit() {
                     : "Submitted",
                 approved
                   ? hi
-                    ? "आपका नियम स्वतः स्वीकृत हो गया है।"
-                    : "Your niyam was auto-approved."
+                    ? `आपका नियम स्वतः स्वीकृत हो गया है। +${points} पुण्य`
+                    : `Your niyam was auto-approved. +${points} Punya`
                   : hi
                     ? "आपका नियम समीक्षा के लिए भेज दिया गया है।"
                     : "Your niyam was submitted for review.",
@@ -238,7 +320,16 @@ export default function NiyamSubmit() {
                       {hi ? selected.title_hi ?? selected.title_en : selected.title_en}
                     </Title>
                   </View>
-                  <Pill label={`+${selected.points}`} tone="primary" />
+                  {/* Resolved award, not the authored points: a punya_configs
+                      override re-prices niyams and this pill promised the old
+                      number (H11). Review-mode qualifies it rather than
+                      implying the child already has the Punya. */}
+                  <Pill
+                    label={`+${selected.award_points ?? selected.points}${
+                      selected.awards_on_approval ? (hi ? " स्वीकृति पर" : " on approval") : ""
+                    }`}
+                    tone="primary"
+                  />
                 </Row>
                 <Row style={{ marginTop: 8, gap: 6, flexWrap: "wrap" }}>
                   <Pill label={selected.niyam_type} />
@@ -272,9 +363,55 @@ export default function NiyamSubmit() {
                   />
                 ) : null}
 
-                <Body style={{ marginTop: 14, marginBottom: 6, fontSize: 13 }}>
-                  {hi ? "टिप्पणी (वैकल्पिक)" : "Notes (optional)"}
-                </Body>
+                {/* Daily niyams only: a weekly/monthly period_key would be the
+                    same either way, so the toggle would do nothing visible. */}
+                {selected.niyam_type === "daily" && !alreadySubmitted ? (
+                  <Pressable
+                    onPress={() => setForYesterday((v) => !v)}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: forYesterday }}
+                    accessibilityLabel={hi ? "कल के लिए" : "For yesterday"}
+                    style={{
+                      marginTop: 14,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 10,
+                      paddingVertical: 10,
+                      paddingHorizontal: 12,
+                      borderWidth: 1,
+                      borderColor: forYesterday ? c.primary : c.border,
+                      backgroundColor: forYesterday ? c.primary + "12" : c.background,
+                      borderRadius: c.radius,
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 20,
+                        height: 20,
+                        borderRadius: 4,
+                        borderWidth: 2,
+                        borderColor: forYesterday ? c.primary : c.border,
+                        backgroundColor: forYesterday ? c.primary : "transparent",
+                      }}
+                    />
+                    <Body style={{ fontSize: 13, flex: 1 }}>
+                      {hi
+                        ? "यह नियम कल का है"
+                        : "This was kept yesterday"}
+                    </Body>
+                  </Pressable>
+                ) : null}
+
+                <Row style={{ marginTop: 14, marginBottom: 6, justifyContent: "space-between" }}>
+                  <Body style={{ fontSize: 13 }}>
+                    {hi ? "टिप्पणी (वैकल्पिक)" : "Notes (optional)"}
+                  </Body>
+                  {notes.length > NOTES_MAX - 100 ? (
+                    <Body style={{ fontSize: 12, color: c.mutedForeground }}>
+                      {notes.length}/{NOTES_MAX}
+                    </Body>
+                  ) : null}
+                </Row>
                 <TextInput
                   value={notes}
                   onChangeText={setNotes}
@@ -283,6 +420,10 @@ export default function NiyamSubmit() {
                   placeholderTextColor={c.mutedForeground}
                   multiline
                   numberOfLines={3}
+                  // Server caps notes at 500 (createSubmissionSchema). Without
+                  // this the parent typed past it and got the generic
+                  // "Invalid submission data." after the upload had completed.
+                  maxLength={NOTES_MAX}
                   style={{
                     fontFamily: bodyFamily(hi),
                     fontSize: 15,
@@ -347,7 +488,7 @@ export default function NiyamSubmit() {
                   <Button
                     label={hi ? "रद्द करें" : "Cancel"}
                     variant="outline"
-                    onPress={resetForm}
+                    onPress={onCancel}
                     style={{ flex: 1 }}
                   />
                   <Button

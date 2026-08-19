@@ -4,8 +4,8 @@
  * A rejection that breaks a streak does NOT revoke an earned badge — badges are
  * historical achievements. This module only inserts newly reached milestones.
  */
-import { db, niyam_badges } from "@workspace/db";
-import { and, eq } from "drizzle-orm";
+import { db, niyam_badges, punya_configs } from "@workspace/db";
+import { and, desc, eq, isNull } from "drizzle-orm";
 import { niyamBadgeLabel, niyamBadgeLadder } from "@workspace/api-zod";
 import { awardPunya } from "./punya";
 import { notifyUsers } from "./notify";
@@ -14,7 +14,53 @@ import type { NiyamPeriodType } from "./niyam-period";
 
 type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 
+/**
+ * Fallback only. AT21: point values resolve from configuration at award time —
+ * never inline a constant. This is the value used when no `niyam_badge` row
+ * exists in punya_configs, matching the shipped default.
+ */
 export const NIYAM_BADGE_BONUS_POINTS = 25;
+
+const BADGE_FEATURE_KEY = "niyam_badge";
+
+/**
+ * Resolve the badge bonus the same way attendance and niyam awards resolve
+ * theirs: city punya_configs override, then global, then the default above.
+ */
+export async function resolveBadgeBonusPoints(
+  cityId: string | null,
+  exec: Tx | typeof db = db,
+): Promise<number> {
+  if (cityId) {
+    const [cityCfg] = await exec
+      .select({ points: punya_configs.points })
+      .from(punya_configs)
+      .where(
+        and(
+          eq(punya_configs.feature_key, BADGE_FEATURE_KEY),
+          eq(punya_configs.city_id, cityId),
+          eq(punya_configs.is_active, true),
+        ),
+      )
+      .orderBy(desc(punya_configs.updated_at), desc(punya_configs.id))
+      .limit(1);
+    if (cityCfg) return cityCfg.points;
+  }
+  const [globalCfg] = await exec
+    .select({ points: punya_configs.points })
+    .from(punya_configs)
+    .where(
+      and(
+        eq(punya_configs.feature_key, BADGE_FEATURE_KEY),
+        isNull(punya_configs.city_id),
+        eq(punya_configs.is_active, true),
+      ),
+    )
+    .orderBy(desc(punya_configs.updated_at), desc(punya_configs.id))
+    .limit(1);
+  if (globalCfg) return globalCfg.points;
+  return NIYAM_BADGE_BONUS_POINTS;
+}
 
 export type AwardedBadge = {
   badge_key: string;
@@ -33,12 +79,16 @@ export async function awardNewlyReachedBadges(
     niyamType: NiyamPeriodType;
     currentStreak: number;
     awardedBy?: string | null;
+    /** Student's city, for the punya_configs override (AT21). */
+    cityId?: string | null;
   },
   tx: Tx,
 ): Promise<AwardedBadge[]> {
   const ladder = niyamBadgeLadder(opts.niyamType);
   const reached = ladder.filter((m) => opts.currentStreak >= m.length);
   if (reached.length === 0) return [];
+
+  const bonusPoints = await resolveBadgeBonusPoints(opts.cityId ?? null, tx);
 
   const existing = await tx
     .select({ badge_key: niyam_badges.badge_key })
@@ -61,7 +111,7 @@ export async function awardNewlyReachedBadges(
         niyam_id: opts.niyamId,
         badge_key: m.key,
         streak_length: m.length,
-        points_awarded: NIYAM_BADGE_BONUS_POINTS,
+        points_awarded: bonusPoints,
       })
       .onConflictDoNothing({
         target: [niyam_badges.student_id, niyam_badges.niyam_id, niyam_badges.badge_key],
@@ -73,7 +123,7 @@ export async function awardNewlyReachedBadges(
       {
         studentId: opts.studentId,
         featureKey: "niyam_badge",
-        points: NIYAM_BADGE_BONUS_POINTS,
+        points: bonusPoints,
         note: `Streak badge ${m.key}`,
         awardedBy: opts.awardedBy ?? null,
         idempotencyKey: `badge:${opts.studentId}:${opts.niyamId}:${m.key}`,
@@ -84,7 +134,7 @@ export async function awardNewlyReachedBadges(
     newly.push({
       badge_key: m.key,
       streak_length: m.length,
-      points_awarded: NIYAM_BADGE_BONUS_POINTS,
+      points_awarded: bonusPoints,
     });
   }
 

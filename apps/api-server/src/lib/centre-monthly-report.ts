@@ -9,7 +9,7 @@ import {
   getCentresHomeworkCompletionRate,
   getBatchHomeworkCompletionRates,
 } from "./homework-completion-rate";
-import { getCentresNiyamCompletionRate } from "./niyam-completion-rate";
+import { getCentresNiyamApprovalRate } from "./niyam-approval-rate";
 import { PdfBuilder } from "./pdf";
 
 const MONTH_RE = /^\d{4}-\d{2}$/;
@@ -90,7 +90,7 @@ export async function composeCentreMonthlySnapshot(
   const [attendanceRate, homeworkRate, niyamRate] = await Promise.all([
     getCentresAttendanceRate(centreIds, from, to),
     getCentresHomeworkCompletionRate(centreIds, from, to),
-    getCentresNiyamCompletionRate(centreIds, from, to),
+    getCentresNiyamApprovalRate(centreIds, from, to),
   ]);
 
   const sessionRows = await db
@@ -283,9 +283,11 @@ export async function buildCentreMonthlyReportPdf(
           },
         ]),
     {
-      en: "Niyam completion",
-      hi: "नियम पूर्णता",
-      value: formatPct(snap.niyam_rate, "n/a — no submissions"),
+      // M3 — this is an approval rate, not a completion rate: it measures the
+      // review queue, not how many children kept their niyams.
+      en: "Niyam approval rate",
+      hi: "नियम स्वीकृति दर",
+      value: formatPct(snap.niyam_rate, "n/a — nothing decided"),
     },
     {
       en: "Homework completion",

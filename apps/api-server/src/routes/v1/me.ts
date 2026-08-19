@@ -26,7 +26,7 @@ import {
   niyam_streaks,
   niyam_badges,
 } from "@workspace/db";
-import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
@@ -40,8 +40,15 @@ import { signUploadUrl, uploadKeyFromUrl } from "../../lib/file-tokens";
 import { upsertIdCardArt } from "../../lib/idcard-render";
 import { auditFromReq } from "../../lib/audit";
 import { storage } from "../../lib/storage";
-import { clampLimit, ownedStudentId, ownedStudentsCondition } from "../../lib/route-helpers";
+import {
+  clampLimit,
+  ownedStudentId,
+  ownedStudentsCondition,
+  encodeDateCursor,
+  decodeDateCursor,
+} from "../../lib/route-helpers";
 import { studentNiyamAccessWhere } from "../../lib/niyam-audience";
+import { resolveNiyamAwardOverride } from "../../lib/niyam-points";
 import { toSessionUser } from "../../lib/session-user";
 import { invalidateAuthUserCache } from "../../lib/auth-user-cache";
 import { galleryVisibilityBodySchema } from "@workspace/api-zod";
@@ -359,6 +366,25 @@ router.get("/students/:id/niyams", async (req: Request, res: Response) => {
     return;
   }
   const limit = clampLimit(req.query.limit, 40, 120);
+  const cursor = decodeDateCursor(req.query.cursor);
+  // Keyset over (submission_date, created_at, id). Ordering on submission_date
+  // alone reordered same-date rows between fetches, and with no cursor a child
+  // with more submissions than one page could never reach their own history.
+  const keyset = cursor
+    ? or(
+        lt(niyam_submissions.submission_date, cursor.date),
+        and(
+          eq(niyam_submissions.submission_date, cursor.date),
+          or(
+            lt(niyam_submissions.created_at, cursor.createdAt),
+            and(
+              eq(niyam_submissions.created_at, cursor.createdAt),
+              lt(niyam_submissions.id, cursor.id),
+            ),
+          ),
+        ),
+      )
+    : undefined;
   const rows = await db
     .select({
       id: niyam_submissions.id,
@@ -366,6 +392,7 @@ router.get("/students/:id/niyams", async (req: Request, res: Response) => {
       niyam_title_hi: niyams.title_hi,
       niyam_type: niyams.niyam_type,
       submission_date: niyam_submissions.submission_date,
+      created_at: niyam_submissions.created_at,
       status: niyam_submissions.status,
       points_awarded: niyam_submissions.points_awarded,
       is_featured: niyam_submissions.is_featured,
@@ -375,9 +402,15 @@ router.get("/students/:id/niyams", async (req: Request, res: Response) => {
     })
     .from(niyam_submissions)
     .innerJoin(niyams, eq(niyams.id, niyam_submissions.niyam_id))
-    .where(eq(niyam_submissions.student_id, id))
-    .orderBy(desc(niyam_submissions.submission_date))
-    .limit(limit);
+    .where(and(eq(niyam_submissions.student_id, id), keyset))
+    .orderBy(
+      desc(niyam_submissions.submission_date),
+      desc(niyam_submissions.created_at),
+      desc(niyam_submissions.id),
+    )
+    .limit(limit + 1);
+  const hasMore = rows.length > limit;
+  if (hasMore) rows.pop();
 
   // Same batched media shape as GET /v1/niyam-submissions/pending — no N+1.
   const ids = rows.map((r) => r.id);
@@ -425,7 +458,11 @@ router.get("/students/:id/niyams", async (req: Request, res: Response) => {
     })),
   }));
 
-  ok(res, { items }, { count: items.length });
+  const last = rows[rows.length - 1];
+  const nextCursor =
+    hasMore && last ? encodeDateCursor(last.submission_date, last.created_at, last.id) : null;
+
+  ok(res, { items, next_cursor: nextCursor }, { count: items.length });
 });
 
 /* GET /v1/me/niyam-catalog?student_id= — active niyams visible to this student */
@@ -465,7 +502,17 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
   }
 
   const today = istCalendarDate();
-  const audienceWhere = studentCtx ? studentNiyamAccessWhere(studentCtx) : undefined;
+  /**
+   * M2 — without a student_id the audience filter was skipped entirely, so any
+   * authenticated user saw MSV-only niyams and every city's and state's private
+   * ones. Client-side authorization is not authorization: when we have no
+   * student to judge against, fall back to what is public to everyone — the
+   * national, all-audience niyams — rather than to no filter at all.
+   */
+  const audienceWhere = studentCtx
+    ? studentNiyamAccessWhere(studentCtx)
+    : and(eq(niyams.scope, "national"), eq(niyams.msv_audience, "all"));
+  const limit = clampLimit(req.query.limit, 100, 200);
   const rows = await db
     .select({
       id: niyams.id,
@@ -493,9 +540,16 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
         audienceWhere,
       ),
     )
-    .orderBy(desc(niyams.points));
+    // M5 — was unbounded. A deterministic tiebreak matters because the three
+    // fan-out queries below key on exactly this page of ids.
+    .orderBy(desc(niyams.points), asc(niyams.id))
+    .limit(limit);
 
   const items = rows;
+
+  // Resolved once for the whole page, not per row (H11).
+  const awardOverride = await resolveNiyamAwardOverride(studentCtx?.city_id ?? null);
+  const awardPointsFor = (authored: number) => awardOverride ?? authored;
 
   // Current-period submission status in one query (no N+1).
   let periodByNiyam = new Map<
@@ -578,6 +632,15 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
       const earned = badgesByNiyam.get(n.id) ?? [];
       return {
         ...n,
+        /**
+         * H11 — what the child will ACTUALLY be awarded. The `points` column is
+         * the authored value; `resolveNiyamAwardPoints` prefers a city (then
+         * global) punya_configs override, so wherever a config exists the
+         * catalog pill promised a number the ledger never paid.
+         */
+        award_points: awardPointsFor(n.points),
+        /** review-mode awards nothing until a Guruji acts — qualify the pill. */
+        awards_on_approval: n.approval_mode === "review",
         current_period_key: pKey,
         period_label_en: periodLabel(n.niyam_type as "daily" | "weekly" | "monthly", pKey, "en"),
         period_label_hi: periodLabel(n.niyam_type as "daily" | "weekly" | "monthly", pKey, "hi"),
@@ -603,7 +666,17 @@ router.get("/niyam-catalog", async (req: Request, res: Response) => {
     return;
   }
 
-  ok(res, { items }, { count: items.length });
+  ok(
+    res,
+    {
+      items: items.map((n) => ({
+        ...n,
+        award_points: awardPointsFor(n.points),
+        awards_on_approval: n.approval_mode === "review",
+      })),
+    },
+    { count: items.length },
+  );
 });
 
 /* Shikshak today: use frozen GET /v1/sessions/today (no /me alias). */

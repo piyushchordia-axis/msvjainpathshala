@@ -6,7 +6,7 @@
  * assertion follows the code and the comment says why, so a reader can see the
  * difference rather than have it papered over by a loosened matcher.
  */
-import { describe, it, expect, afterAll } from "vitest";
+import { describe, it, expect, afterAll, beforeAll } from "vitest";
 import request from "supertest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -15,6 +15,7 @@ import app from "../src/app";
 import { pool } from "@workspace/db";
 import { loginAs, auth } from "./helpers";
 import { MAX_LIBRARY_PDF_BYTES } from "@workspace/api-zod";
+import { resetMemoryRateLimitsForTests } from "../src/lib/ratelimit";
 
 const SUFFIX = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 const REQ = "/v1/library/requests";
@@ -119,6 +120,25 @@ describe("1. guest request without name or phone", () => {
 });
 
 describe("2. fourth submission from one device in a day", () => {
+  /**
+   * The limiter is a deliberate no-op under NODE_ENV=test unless a test opts in
+   * (lib/ratelimit.ts). Without opting in, the 4th POST sails past it and trips
+   * the pending-request cap instead, which answers 409 — indistinguishable from
+   * describe 3 below, which asserts exactly that 409. Same opt-in/reset pattern
+   * as library-requests.test.ts, exams.test.ts and niyam-submissions.test.ts.
+   *
+   * Scoped to this describe on purpose: enabling it file-wide would also arm the
+   * shared OTP bucket that loginAs() uses in describes 3-12.
+   */
+  beforeAll(() => {
+    process.env.JP_TEST_RATE_LIMIT = "1";
+    resetMemoryRateLimitsForTests();
+  });
+  afterAll(() => {
+    delete process.env.JP_TEST_RATE_LIMIT;
+    resetMemoryRateLimitsForTests();
+  });
+
   it("is rate limited", async () => {
     const sectionId = await makeSection();
     const device = `v3-rate-${SUFFIX}`;
