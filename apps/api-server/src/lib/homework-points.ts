@@ -8,7 +8,7 @@
  * PERF #13 — same batch→city + batch-keyed points cache as attendance-points.
  */
 import { db, punya_configs, punya_features, centres, batches } from "@workspace/db";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 
 export const HOMEWORK_FEATURE_KEY = "homework";
 export const HOMEWORK_STARRED_FEATURE_KEY = "homework_starred";
@@ -169,6 +169,7 @@ async function resolveHomeworkAwardPointsForCity(
           eq(punya_configs.is_active, true),
         ),
       )
+      .orderBy(desc(punya_configs.updated_at), desc(punya_configs.id))
       .limit(1);
     if (cityCfg) {
       await cacheSet(cacheKey, cityCfg.points);
@@ -186,6 +187,7 @@ async function resolveHomeworkAwardPointsForCity(
         eq(punya_configs.is_active, true),
       ),
     )
+    .orderBy(desc(punya_configs.updated_at), desc(punya_configs.id))
     .limit(1);
   if (globalCfg) {
     await cacheSet(cacheKey, globalCfg.points);
@@ -196,6 +198,7 @@ async function resolveHomeworkAwardPointsForCity(
     .select({ max_points: punya_features.max_points, min_points: punya_features.min_points })
     .from(punya_features)
     .where(and(eq(punya_features.key, featureKey), eq(punya_features.is_active, true)))
+    .orderBy(desc(punya_features.updated_at), desc(punya_features.id))
     .limit(1);
   const fromFeature = feat?.max_points ?? feat?.min_points ?? null;
   const points = fromFeature != null && fromFeature > 0 ? fromFeature : hardcodedDefault(status);

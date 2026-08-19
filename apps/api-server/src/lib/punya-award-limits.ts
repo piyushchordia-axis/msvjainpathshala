@@ -3,7 +3,7 @@
  * Redis-with-memory-fallback cache (same pattern as exam-points.ts).
  */
 import { db, punya_award_limits, punya_features, punya_transactions } from "@workspace/db";
-import { and, eq, gt, sql } from "drizzle-orm";
+import { and, desc, eq, gt, sql } from "drizzle-orm";
 
 export const MANUAL_AWARD_FEATURE_KEY = "manual_award";
 
@@ -77,6 +77,7 @@ async function featureMaxPoints(): Promise<number | null> {
     .select({ max_points: punya_features.max_points })
     .from(punya_features)
     .where(and(eq(punya_features.key, MANUAL_AWARD_FEATURE_KEY), eq(punya_features.is_active, true)))
+    .orderBy(desc(punya_features.updated_at), desc(punya_features.id))
     .limit(1);
   if (row?.max_points == null) return null;
   return row.max_points;

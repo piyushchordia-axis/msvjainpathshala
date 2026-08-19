@@ -82,6 +82,10 @@ import {
   team_categories,
 } from "./schema";
 import { tierForPoints } from "./schema/enums";
+import {
+  PUNYA_FEATURE_CATALOGUE,
+  PUNYA_CONFIG_DEFAULTS,
+} from "./punya-catalogue";
 import { sql, eq } from "drizzle-orm";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
@@ -168,40 +172,14 @@ async function main(): Promise<void> {
   `);
 
   /* ---------------- Punya feature catalogue (AT21) ---------------- */
-  await db.insert(punya_features).values([
-    { key: "attendance", label: "Attendance", is_active: true, min_points: 0, max_points: 10 },
-    { key: "niyam_completion", label: "Niyam completion", is_active: true, min_points: 0, max_points: 1000 },
-    // AT21 — these two are what the runtime actually awards under
-    // (niyam-submit.ts / niyam-approve.ts / niyam-badges.ts). Unregistered,
-    // the parent ledger showed a raw key and the monthly-report join was NULL.
-    { key: "niyam_submission", label: "Niyam completed", is_active: true, min_points: 0, max_points: 1000 },
-    { key: "niyam_badge", label: "Niyam streak badge", is_active: true, min_points: 0, max_points: 500 },
-    { key: "homework", label: "Homework approved", is_active: true, min_points: 0, max_points: 10 },
-    { key: "homework_starred", label: "Homework starred", is_active: true, min_points: 0, max_points: 12 },
-    { key: "exam_completion", label: "Exam completion (pass)", is_active: true, min_points: 0, max_points: 500 },
-    { key: "exam_top_score", label: "Exam top score", is_active: true, min_points: 0, max_points: 500 },
-    { key: "quiz_participation", label: "Quiz participation", is_active: true, min_points: 0, max_points: 5 },
-    { key: "quiz_win", label: "Quiz win", is_active: true, min_points: 0, max_points: 25 },
-    { key: "push_quiz_completion", label: "Push quiz completion", is_active: true, min_points: 0, max_points: 5 },
-    { key: "manual_award", label: "Manual admin award", is_active: true, min_points: 0, max_points: 500 },
-    // AT28's documented path for shivir Punya. Migration 0087 also inserts this,
-    // but the seed TRUNCATES punya_features first — so without a copy here a
-    // migrate-then-seed database silently loses the key again.
-    { key: "msv_shivir", label: "Shivir participation", is_active: true, min_points: 0, max_points: 500 },
-    { key: "course_section_certified", label: "Course section certified", is_active: true, min_points: 0, max_points: 1000 },
-    { key: "course_completed", label: "Course completed", is_active: true, min_points: 0, max_points: 2000 },
-  ]);
+  // Derived from the canonical catalogue so the seed and the migrations
+  // cannot drift again. The seed TRUNCATEs punya_features above, so anything
+  // a migration inserted but this list omits is silently destroyed -- that is
+  // how `attendance_streak` disappeared from every seeded database while the
+  // admin UI went on offering to edit it (H8). See punya-catalogue.ts.
+  await db.insert(punya_features).values([...PUNYA_FEATURE_CATALOGUE]);
 
-  await db.insert(punya_configs).values([
-    { feature_key: "exam_completion", points: 20, city_id: null, is_active: true },
-    { feature_key: "exam_top_score", points: 50, city_id: null, is_active: true },
-    { feature_key: "quiz_participation", points: 5, city_id: null, is_active: true },
-    { feature_key: "quiz_win", points: 25, city_id: null, is_active: true },
-    { feature_key: "push_quiz_completion", points: 5, city_id: null, is_active: true },
-    // CU22 — integer percent multipliers (100 = 1×)
-    { feature_key: "course_section_certified", points: 100, city_id: null, is_active: true },
-    { feature_key: "course_completed", points: 100, city_id: null, is_active: true },
-  ]);
+  await db.insert(punya_configs).values([...PUNYA_CONFIG_DEFAULTS]);
 
   await db.insert(punya_award_limits).values([
     { role: "shikshak", max_points_per_award: 10, max_points_per_day: 50, is_active: true },

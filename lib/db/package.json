@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./schema": "./src/schema.ts",
-    "./enums": "./src/schema/enums.ts"
+    "./enums": "./src/schema/enums.ts",
+    "./punya-catalogue": "./src/punya-catalogue.ts"
   },
   "scripts": {
     "push": "drizzle-kit push --config ./drizzle.config.ts",

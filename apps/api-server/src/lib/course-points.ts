@@ -3,7 +3,7 @@
  * Never inline a constant (AT21). Snapshot the resolved value into the ledger.
  */
 import { db, punya_configs, punya_features } from "@workspace/db";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 
 export const COURSE_SECTION_FEATURE_KEY = "course_section_certified";
 export const COURSE_COMPLETED_FEATURE_KEY = "course_completed";
@@ -33,6 +33,7 @@ async function resolveFeature(
           eq(punya_configs.is_active, true),
         ),
       )
+      .orderBy(desc(punya_configs.updated_at), desc(punya_configs.id))
       .limit(1);
     if (cityCfg) multiplier = cityCfg.points;
   }
@@ -47,6 +48,7 @@ async function resolveFeature(
           eq(punya_configs.is_active, true),
         ),
       )
+      .orderBy(desc(punya_configs.updated_at), desc(punya_configs.id))
       .limit(1);
     if (globalCfg) multiplier = globalCfg.points;
   }
@@ -58,6 +60,7 @@ async function resolveFeature(
     })
     .from(punya_features)
     .where(and(eq(punya_features.key, featureKey), eq(punya_features.is_active, true)))
+    .orderBy(desc(punya_features.updated_at), desc(punya_features.id))
     .limit(1);
 
   const value: FeatureBounds = {

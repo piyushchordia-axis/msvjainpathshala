@@ -3,7 +3,7 @@
  * Per-exam completion_points / top_score_points are overrides only (NULL → feature default).
  */
 import { db, punya_configs, punya_features } from "@workspace/db";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 
 export const EXAM_COMPLETION_FEATURE_KEY = "exam_completion";
 export const EXAM_TOP_SCORE_FEATURE_KEY = "exam_top_score";
@@ -89,6 +89,7 @@ async function resolveFeatureDefault(
           eq(punya_configs.is_active, true),
         ),
       )
+      .orderBy(desc(punya_configs.updated_at), desc(punya_configs.id))
       .limit(1);
     if (cityCfg) {
       await cacheSet(cacheKey, cityCfg.points);
@@ -106,6 +107,7 @@ async function resolveFeatureDefault(
         eq(punya_configs.is_active, true),
       ),
     )
+    .orderBy(desc(punya_configs.updated_at), desc(punya_configs.id))
     .limit(1);
   if (globalCfg) {
     await cacheSet(cacheKey, globalCfg.points);
@@ -116,6 +118,7 @@ async function resolveFeatureDefault(
     .select({ max_points: punya_features.max_points, min_points: punya_features.min_points })
     .from(punya_features)
     .where(and(eq(punya_features.key, featureKey), eq(punya_features.is_active, true)))
+    .orderBy(desc(punya_features.updated_at), desc(punya_features.id))
     .limit(1);
   const fromFeature = feat?.max_points ?? feat?.min_points ?? null;
   const points = fromFeature != null && fromFeature > 0 ? fromFeature : hardcoded;

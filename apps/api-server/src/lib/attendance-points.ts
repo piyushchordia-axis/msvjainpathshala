@@ -6,9 +6,23 @@
  * hot mark path does not re-query centres on every hit. Zero misses stay uncached.
  */
 import { db, punya_configs, punya_features, centres, batches } from "@workspace/db";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, desc, eq, isNull } from "drizzle-orm";
 
 export const ATTENDANCE_FEATURE_KEY = "attendance";
+
+/**
+ * Last resort when the catalogue is cold, matching DEFAULT_COMPLETION in
+ * exam-points.ts and DEFAULT_APPROVED in homework-points.ts.
+ *
+ * C2: this resolver was the only one of the four with no hardcoded floor,
+ * and no migration ever registered the `attendance` feature. It returned 0,
+ * awardValueForStatus returned 0, and attendance-mark.ts short-circuited on
+ * `amount <= 0` without writing a ledger row — so a full roster marked
+ * present awarded nothing, silently. Migration 0088 now seeds the row; this
+ * floor is the belt to that migration's braces, so a truncated or
+ * half-restored catalogue degrades to the documented value, not to silence.
+ */
+const DEFAULT_ATTENDANCE = 10;
 
 type CacheEntry = { points: number; expiresAt: number };
 type CityCacheEntry = { centreId: string | null; cityId: string | null; expiresAt: number };
@@ -121,7 +135,8 @@ export function clearAttendancePointsCache(): void {
 
 /**
  * Resolve attendance award points for a centre's city (city override → global config
- * → punya_features.max_points when configured). Returns 0 only when nothing is configured.
+ * → punya_features bounds → DEFAULT_ATTENDANCE). Never returns 0 for a cold
+ * catalogue — see C2 and migration 0088.
  */
 export async function resolveAttendanceAwardPoints(centreId: string | null): Promise<number> {
   let cityId: string | null = null;
@@ -152,6 +167,7 @@ async function resolveAttendanceAwardPointsForCity(cityId: string | null): Promi
           eq(punya_configs.is_active, true),
         ),
       )
+      .orderBy(desc(punya_configs.updated_at), desc(punya_configs.id))
       .limit(1);
     if (cityCfg) {
       await cacheSet(cacheKey, cityCfg.points);
@@ -169,6 +185,7 @@ async function resolveAttendanceAwardPointsForCity(cityId: string | null): Promi
         eq(punya_configs.is_active, true),
       ),
     )
+    .orderBy(desc(punya_configs.updated_at), desc(punya_configs.id))
     .limit(1);
   if (globalCfg) {
     await cacheSet(cacheKey, globalCfg.points);
@@ -179,10 +196,11 @@ async function resolveAttendanceAwardPointsForCity(cityId: string | null): Promi
     .select({ max_points: punya_features.max_points, min_points: punya_features.min_points })
     .from(punya_features)
     .where(and(eq(punya_features.key, ATTENDANCE_FEATURE_KEY), eq(punya_features.is_active, true)))
+    .orderBy(desc(punya_features.updated_at), desc(punya_features.id))
     .limit(1);
-  const points = feat?.max_points ?? feat?.min_points ?? 0;
-  // Do not cache a zero miss — seed/config may land after the first cold resolve.
-  if (points > 0) await cacheSet(cacheKey, points);
+  const fromFeature = feat?.max_points ?? feat?.min_points ?? null;
+  const points = fromFeature != null && fromFeature > 0 ? fromFeature : DEFAULT_ATTENDANCE;
+  await cacheSet(cacheKey, points);
   return points;
 }
 
