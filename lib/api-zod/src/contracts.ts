@@ -1247,6 +1247,15 @@ export type PunyaTransaction = z.infer<typeof punyaTransactionSchema>;
 export const punyaSummarySchema = z.object({
   total_points: z.number(),
   tier: z.string(),
+  /**
+   * H4 — the next tier up and the distance to it, or null at Tirthankar.
+   *
+   * Served rather than derived because the thresholds are CONFIGURATION
+   * (AT23): a client-side copy of the ladder would be wrong the first time
+   * anyone edited it, and silently so.
+   */
+  next_tier: z.string().nullable().optional(),
+  points_to_next: z.number().nullable().optional(),
   transactions: z.array(punyaTransactionSchema),
   /**
    * True when older transactions exist beyond the returned page. Clients must

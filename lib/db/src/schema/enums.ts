@@ -180,6 +180,13 @@ export const NOTIFICATION_KINDS = [
   "donation",
   "gallery",
   "join",
+  /**
+   * H4 — the child crossed into a new Punya tier. BRD 7.5.
+   *
+   * Sent on an UPGRADE only. A reversal can move a tier downwards, and no
+   * child should be told by push that they lost one.
+   */
+  "punya_tier",
   /** Library content request published (Section 17 v3 §17.10.7). */
   "library",
 ] as const;

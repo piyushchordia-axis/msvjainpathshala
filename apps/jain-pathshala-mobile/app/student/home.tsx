@@ -11,6 +11,7 @@ import { AppHeader, HeaderHomeActions } from "@/components/AppHeader";
 import { GalleryCarousel } from "@/components/GalleryCarousel";
 import { AnimatedMount } from "@/components/AnimatedMount";
 import { Body, Button, Card, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { punyaTierLabel } from "@/lib/punya-labels";
 import { BrowseQuickActions, QuickActions } from "@/components/QuickActions";
 
 export default function StudentHome() {
@@ -125,7 +126,7 @@ export default function StudentHome() {
                     tone="primary"
                   />
                   {activeChild.tier ? (
-                    <Pill label={activeChild.tier} tone="info" />
+                    <Pill label={punyaTierLabel(activeChild.tier, hi)} tone="info" />
                   ) : null}
                   {activeChild.msv_status === "approved" ? (
                     <Pill label="MSV" tone="neutral" />

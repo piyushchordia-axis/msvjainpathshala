@@ -29,6 +29,7 @@ import {
 import { and, asc, desc, eq, gte, inArray, isNull, lt, lte, ne, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
+import { nextTierFor, resolveTierThresholds } from "../../lib/punya-tiers";
 import { requireAuth } from "../../middlewares/auth";
 import {
   periodKey,
@@ -350,9 +351,18 @@ router.get("/students/:id/punya", async (req: Request, res: Response) => {
   const hasMore = rows.length > limit;
   const txns = hasMore ? rows.slice(0, limit) : rows;
 
+  // H4 — how far to the next tier. Nothing rendered it and nothing COULD:
+  // no endpoint returned the thresholds and no client hardcoded them, so the
+  // one number a child actually wants was unreachable from every surface.
+  const total = balance?.total_points ?? 0;
+  const thresholds = await resolveTierThresholds();
+  const { next_tier, points_to_next } = nextTierFor(total, thresholds);
+
   ok(res, {
-    total_points: balance?.total_points ?? 0,
+    total_points: total,
     tier: balance?.tier ?? "jigyasu",
+    next_tier,
+    points_to_next,
     transactions: txns.map((t) => ({ ...t, created_at: t.created_at.toISOString() })),
     has_more: hasMore,
   });

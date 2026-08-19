@@ -26,6 +26,7 @@ import {
 } from "@workspace/api-zod";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
+import { nextTierFor, resolveTierThresholds } from "../../lib/punya-tiers";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
 import { auditFromReq, writeAudit } from "../../lib/audit";
@@ -600,7 +601,11 @@ router.get("/students/:id/punya", async (req: Request, res: Response) => {
     .where(eq(punya_balances.student_id, studentId))
     .limit(1);
 
-  const txns = await db
+  // H13 — the ledger was hard-capped at 50 with no cursor and no has_more,
+  // so the visible rows stopped summing to the headline total with nothing
+  // on screen to say why. Attendance alone reaches 50 rows in ~4 months.
+  const limit = clampLimit(req.query.limit, 50, 200);
+  const rows = await db
     .select({
       id: punya_transactions.id,
       feature_key: punya_transactions.feature_key,
@@ -611,12 +616,22 @@ router.get("/students/:id/punya", async (req: Request, res: Response) => {
     .from(punya_transactions)
     .where(eq(punya_transactions.student_id, studentId))
     .orderBy(desc(punya_transactions.created_at))
-    .limit(50);
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const txns = hasMore ? rows.slice(0, limit) : rows;
+
+  const total = balance?.total_points ?? 0;
+  const thresholds = await resolveTierThresholds();
+  const { next_tier, points_to_next } = nextTierFor(total, thresholds);
 
   ok(res, {
-    total_points: balance?.total_points ?? 0,
+    total_points: total,
     tier: balance?.tier ?? "jigyasu",
+    next_tier,
+    points_to_next,
     transactions: txns.map((t) => ({ ...t, created_at: t.created_at.toISOString() })),
+    has_more: hasMore,
   });
 });
 

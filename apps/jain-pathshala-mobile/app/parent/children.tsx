@@ -5,6 +5,7 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { useSessionView } from "@/contexts/SessionViewContext";
 import { AppHeader } from "@/components/AppHeader";
 import { Body, Button, Card, Kicker, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+import { punyaTierLabel } from "@/lib/punya-labels";
 import { formatAgeGroup } from "@workspace/api-zod";
 
 export default function ParentChildren() {
@@ -75,7 +76,7 @@ export default function ParentChildren() {
                     label={hi ? `${child.total_points} अंक` : `${child.total_points} pts`}
                     tone="info"
                   />
-                  <Pill label={child.tier} tone="neutral" />
+                  <Pill label={punyaTierLabel(child.tier, hi)} tone="neutral" />
                 </Row>
                 <Button
                   label={hi ? "देखें" : "View"}

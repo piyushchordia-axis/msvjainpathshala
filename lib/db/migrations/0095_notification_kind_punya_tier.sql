@@ -1,0 +1,12 @@
+-- H4 / M5 — crossing into a new Punya tier produced nothing: no animation, no
+-- parent push, no certificate. Not because they were unimplemented, but because
+-- creditBalance computed the new tier in SQL and returned only total_points, so
+-- the old tier was unavailable BY CONSTRUCTION and no code could tell an upgrade
+-- from an ordinary award.
+--
+-- `attendance_streak` was already a declared kind that nothing ever sent (M5);
+-- this one is sent.
+--
+-- Separate file: ALTER TYPE ... ADD VALUE is kept away from other DDL so a retry
+-- cannot half-apply a mixed transaction (same reasoning as 0082 and 0093).
+ALTER TYPE "notification_kind_enum" ADD VALUE IF NOT EXISTS 'punya_tier';

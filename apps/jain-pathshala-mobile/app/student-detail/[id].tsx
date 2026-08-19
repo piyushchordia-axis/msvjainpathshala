@@ -33,7 +33,7 @@ import {
   useStudentHomeworkHistory,
 } from "@/lib/queries";
 import { recordStatusLabel, attendanceStatusLabel } from "@/lib/status-labels";
-import { punyaFeatureLabel } from "@/lib/punya-labels";
+import { punyaFeatureLabel, punyaTierLabel } from "@/lib/punya-labels";
 import { Body, Button, Card, Numeric, Pill, Row, StateView, Title } from "@/components/ui";
 
 type SectionKey =
@@ -405,7 +405,7 @@ function PunyaPanel({ studentId }: { studentId: string }) {
           <Body muted style={{ fontSize: 13, lineHeight: 22 }}>
             {hi ? "कुल पुण्य अंक" : "Total Punya points"}
           </Body>
-          <Pill label={summary?.tier ?? "—"} tone="primary" />
+          <Pill label={punyaTierLabel(summary?.tier, hi)} tone="primary" />
         </Row>
         <Numeric style={{ fontSize: 44, marginTop: 8 }}>{summary?.total_points ?? 0}</Numeric>
       </Card>

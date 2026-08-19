@@ -13,6 +13,7 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import { logger } from "./logger";
 import { resolvePunyaAwardContext } from "./punya-context";
+import { notifyTierUpgrade } from "./punya-tier-notify";
 
 export interface AwardPunyaInput {
   studentId: string;
@@ -48,6 +49,8 @@ export interface AwardPunyaResult {
   points_awarded: number;
   total_points: number;
   tier: string;
+  /** Tier before this award, when known — drives the BRD 7.5 celebration. */
+  previous_tier?: string | null;
   /** True when this call actually credited; false when an idempotent replay. */
   awarded: boolean;
   /** Ledger row id (null only if the insert path had no row to resolve). */
@@ -84,8 +87,23 @@ async function readBalance(tx: Tx | Db, studentId: string, fallbackPoints: numbe
   return total;
 }
 
+export interface BalanceChange {
+  total_points: number;
+  tier: string;
+  /**
+   * The tier BEFORE this change, or null when the row did not exist yet.
+   *
+   * H4 — the old tier used to be unavailable by construction: this
+   * statement computed the new tier in SQL and returned only total_points,
+   * so nothing downstream could tell an upgrade from an ordinary award. No
+   * celebration, no parent push, no certificate — not because they were
+   * unimplemented, but because the information had already been discarded.
+   */
+  previous_tier: string | null;
+}
+
 /** Single balance-mutation path — always use RETURNING; skip no-ops.
- * PERF #10 step 4: upsert + tier in ONE statement. Thresholds from TIER_THRESHOLDS (AT23).
+ * PERF #10 step 4: upsert + tier in ONE statement. Thresholds from configuration (AT23).
  */
 export async function creditBalance(
   tx: Tx | Db,
@@ -97,26 +115,58 @@ export async function creditBalance(
    * — otherwise the MSV leaderboard would keep counting clawed-back points.
    */
   msvDelta = 0,
-): Promise<number> {
+): Promise<BalanceChange> {
   if (delta === 0) {
-    return readBalance(tx, studentId, 0);
+    const total = await readBalance(tx, studentId, 0);
+    const tier = tierForPointsWith(total, await resolveTierThresholds());
+    // A no-op cannot be a transition, so previous === current.
+    return { total_points: total, tier, previous_tier: tier };
   }
   // AT23 — one configured ladder, one builder, three call sites.
   const thresholds = await resolveTierThresholds();
   const inserted = sql`${delta}`;
   const updated = sql`punya_balances.total_points + ${delta}`;
+  const newTier = tierCaseSql(updated, thresholds);
+  // `prev` is a CTE, so it reads the row as it stood BEFORE the upsert in the
+  // same snapshot — the only way to recover the pre-image without a second
+  // round trip that another award could interleave with.
   const result = await tx.execute(
-    sql`insert into punya_balances (student_id, total_points, tier, msv_points)
-        values (${studentId}, ${delta}, ${tierCaseSql(inserted, thresholds)}, ${msvDelta})
-        on conflict (student_id) do update
-          set total_points = punya_balances.total_points + ${delta},
-              msv_points = punya_balances.msv_points + ${msvDelta},
-              tier = ${tierCaseSql(updated, thresholds)},
-              updated_at = now()
-        returning total_points`,
+    sql`with prev as (
+          select tier::text as tier from punya_balances where student_id = ${studentId}
+        ),
+        upserted as (
+          insert into punya_balances (student_id, total_points, tier, msv_points, tier_reached_at)
+          values (
+            ${studentId}, ${delta}, ${tierCaseSql(inserted, thresholds)}, ${msvDelta}, now()
+          )
+          on conflict (student_id) do update
+            set total_points = punya_balances.total_points + ${delta},
+                msv_points = punya_balances.msv_points + ${msvDelta},
+                tier = ${newTier},
+                tier_reached_at = case
+                  when ${newTier} is distinct from punya_balances.tier then now()
+                  else punya_balances.tier_reached_at
+                end,
+                updated_at = now()
+          returning total_points, tier::text as tier
+        )
+        select u.total_points, u.tier, p.tier as previous_tier
+        from upserted u left join prev p on true`,
   );
-  const rows = (result as unknown as { rows?: Array<{ total_points: number }> }).rows ?? [];
-  return Number(rows[0]?.total_points ?? delta);
+  const rows =
+    (result as unknown as {
+      rows?: Array<{ total_points: number; tier: string; previous_tier: string | null }>;
+    }).rows ?? [];
+  const row = rows[0];
+  return {
+    total_points: Number(row?.total_points ?? delta),
+    tier: row?.tier ?? tierForPointsWith(delta, thresholds),
+    // No prior row means the student had ZERO points, and zero points is a
+    // real tier — not unknown. Reporting null here made a child whose very
+    // first award vaulted them past a threshold silently not a crossing, so
+    // the one moment most worth celebrating was the one that went unnoticed.
+    previous_tier: row?.previous_tier ?? tierForPointsWith(0, thresholds),
+  };
 }
 
 /**
@@ -257,7 +307,7 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
     transactionId = row?.id ?? null;
   }
 
-  const total = await creditBalance(
+  const change = await creditBalance(
     tx,
     input.studentId,
     input.points,
@@ -266,8 +316,9 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
   return {
     student_id: input.studentId,
     points_awarded: input.points,
-    total_points: total,
-    tier: tierForPointsWith(total, await resolveTierThresholds()),
+    total_points: change.total_points,
+    tier: change.tier,
+    previous_tier: change.previous_tier,
     awarded: true,
     transaction_id: transactionId,
   };
@@ -279,10 +330,25 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
  * - Pass an existing `tx` to compose this award into a larger transaction (e.g.
  *   so a caller's row-claim + the award commit together).
  * - Omit `tx` to run in a fresh transaction of its own.
+ *
+ * H4: the tier-upgrade push fires only on the OWN-transaction path, because
+ * only there do we know the award has actually committed. A composed caller
+ * owns its own commit, so it gets `previous_tier` on the result and emits
+ * after committing — telling a family their child reached Sadhak and then
+ * rolling the award back would be worse than a late notification.
  */
 export async function awardPunya(input: AwardPunyaInput, tx?: Tx): Promise<AwardPunyaResult> {
   if (tx) return runAward(tx, input);
-  return db.transaction((t) => runAward(t, input));
+  const result = await db.transaction((t) => runAward(t, input));
+  if (result.awarded) {
+    await notifyTierUpgrade({
+      studentId: result.student_id,
+      previousTier: result.previous_tier,
+      newTier: result.tier,
+      totalPoints: result.total_points,
+    });
+  }
+  return result;
 }
 
 export interface ReversePunyaInput {
@@ -304,6 +370,8 @@ export interface ReversePunyaResult {
   points_reversed: number;
   total_points: number;
   tier: string;
+  /** Tier before this reversal, when known. */
+  previous_tier?: string | null;
   /** True when this call actually debited; false on idempotent replay. */
   reversed: boolean;
   /** Ledger row id for the reversal debit. */
@@ -437,7 +505,7 @@ async function runReverse(tx: Tx | Db, input: ReversePunyaInput): Promise<Revers
     };
   }
 
-  const total = await creditBalance(
+  const change = await creditBalance(
     tx,
     input.studentId,
     debit,
@@ -446,8 +514,9 @@ async function runReverse(tx: Tx | Db, input: ReversePunyaInput): Promise<Revers
   return {
     student_id: input.studentId,
     points_reversed: points,
-    total_points: total,
-    tier: tierForPointsWith(total, await resolveTierThresholds()),
+    total_points: change.total_points,
+    tier: change.tier,
+    previous_tier: change.previous_tier,
     reversed: true,
     transaction_id: inserted[0]!.id,
   };

@@ -44,3 +44,31 @@ export function punyaFeatureLabel(featureKey: string, hi: boolean): string {
   if (!entry) return humanize(featureKey);
   return hi ? entry.hi : entry.en;
 }
+
+/**
+ * Bilingual tier names.
+ *
+ * Every surface rendered `summary.tier` verbatim — the raw lowercase enum,
+ * "shravak", in 11px Latin, under a Devanagari heading, on the screen that is
+ * the emotional payload of the whole module. A correct bilingual mapping
+ * existed but was file-local to the shikshak standings screen, which was itself
+ * dead because its route 404'd.
+ *
+ * Jain terms stay untransliterated in both languages (CLAUDE.md): a tier is a
+ * spiritual rank, not a label to translate.
+ */
+const TIER_LABELS: Record<string, { en: string; hi: string }> = {
+  jigyasu: { en: "Jigyasu", hi: "जिज्ञासु" },
+  shravak: { en: "Shravak", hi: "श्रावक" },
+  sadhak: { en: "Sadhak", hi: "साधक" },
+  shraman: { en: "Shraman", hi: "श्रमण" },
+  tirthankar: { en: "Tirthankar", hi: "तीर्थंकर" },
+};
+
+/** Display name for a tier. Unknown values degrade to the humanised key. */
+export function punyaTierLabel(tier: string | null | undefined, hi: boolean): string {
+  if (!tier) return "—";
+  const entry = TIER_LABELS[tier];
+  if (!entry) return humanize(tier);
+  return hi ? entry.hi : entry.en;
+}

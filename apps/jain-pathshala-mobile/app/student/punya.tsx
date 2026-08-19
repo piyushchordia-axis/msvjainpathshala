@@ -6,10 +6,27 @@ import { useSessionView } from "@/contexts/SessionViewContext";
 import { usePunya, PUNYA_LEDGER_PAGE } from "@/lib/queries";
 import type { PunyaTransaction } from "@/lib/types";
 import { formatDate } from "@/lib/format";
-import { punyaFeatureLabel } from "@/lib/punya-labels";
+import { punyaFeatureLabel, punyaTierLabel } from "@/lib/punya-labels";
 import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { Body, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
+
+/**
+ * How far through the CURRENT tier the student is, as a percent.
+ *
+ * Derived from the two numbers the API returns rather than from a hardcoded
+ * ladder: the thresholds are configuration (AT23) and a client copy would be
+ * wrong the first time anyone edited them.
+ */
+function tierProgressPercent(summary: {
+  total_points: number;
+  points_to_next?: number | null;
+}): number {
+  const remaining = summary.points_to_next ?? 0;
+  const nextAt = summary.total_points + remaining;
+  if (nextAt <= 0) return 0;
+  return Math.max(2, Math.min(100, Math.round((summary.total_points / nextAt) * 100)));
+}
 
 export default function StudentPunya() {
   const c = useColors();
@@ -97,9 +114,52 @@ export default function StudentPunya() {
                   <Body muted style={{ fontSize: 13 }}>
                     {hi ? "कुल पुण्य अंक" : "Total punya points"}
                   </Body>
-                  <Pill label={summary?.tier ?? "—"} tone="primary" />
+                  <Pill label={punyaTierLabel(summary?.tier, hi)} tone="primary" />
                 </Row>
                 <Numeric style={{ fontSize: 44, marginTop: 8 }}>{summary?.total_points ?? 0}</Numeric>
+
+                {/* H4 — how far to the next tier. Nothing rendered this and
+                    nothing COULD: no endpoint returned the thresholds and no
+                    client hardcoded them, so the one number a child actually
+                    wants was unreachable from every surface. */}
+                {summary?.next_tier && summary.points_to_next != null ? (
+                  <View style={{ marginTop: 14, gap: 6 }}>
+                    <Body muted style={{ fontSize: 13, lineHeight: 22 }}>
+                      {hi
+                        ? `${punyaTierLabel(summary.next_tier, hi)} तक ${summary.points_to_next} अंक शेष`
+                        : `${summary.points_to_next} more to reach ${punyaTierLabel(summary.next_tier, hi)}`}
+                    </Body>
+                    <View
+                      accessibilityRole="progressbar"
+                      accessibilityLabel={
+                        hi
+                          ? `${punyaTierLabel(summary.next_tier, hi)} तक की प्रगति`
+                          : `Progress towards ${punyaTierLabel(summary.next_tier, hi)}`
+                      }
+                      style={{
+                        height: 8,
+                        borderRadius: 4,
+                        backgroundColor: c.muted,
+                        overflow: "hidden",
+                      }}
+                    >
+                      <View
+                        style={{
+                          height: 8,
+                          borderRadius: 4,
+                          backgroundColor: c.primary,
+                          width: `${tierProgressPercent(summary)}%`,
+                        }}
+                      />
+                    </View>
+                  </View>
+                ) : summary?.tier === "tirthankar" ? (
+                  // Nothing above Tirthankar. Say so, rather than showing an
+                  // empty bar that never fills.
+                  <Body muted style={{ fontSize: 13, lineHeight: 22, marginTop: 14 }}>
+                    {hi ? "सर्वोच्च स्तर प्राप्त" : "Highest tier reached"}
+                  </Body>
+                ) : null}
               </Card>
 
               <Title style={{ fontSize: 17, marginLeft: 2, marginTop: 4 }}>
