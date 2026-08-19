@@ -55,6 +55,30 @@ async function readLimits(): Promise<{ perAward: number; perDay: number | null }
   return { perAward: rows[0]!.a, perDay: rows[0]!.d };
 }
 
+/**
+ * Give this run `headroom` points of budget above whatever today already
+ * holds, then restore.
+ *
+ * The ledger is append-only (0090) so an earlier run's spend cannot be
+ * deleted, the daily cap is now genuinely enforced (H7), and EVERY manual
+ * category counts toward it (H6) — so without this the second run of any
+ * day fails on a 429 that has nothing to do with what is being tested.
+ */
+async function withDailyHeadroom(
+  userId: string,
+  headroom: number,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const original = await readLimits();
+  const spent = await spentToday(userId);
+  await writeLimits(original.perAward, spent + headroom);
+  try {
+    await fn();
+  } finally {
+    await writeLimits(original.perAward, original.perDay);
+  }
+}
+
 async function writeLimits(perAward: number, perDay: number | null): Promise<void> {
   await pool.query(
     `update punya_award_limits set max_points_per_award = $2, max_points_per_day = $3
@@ -125,26 +149,28 @@ describe("H7 — daily award cap is race-safe", () => {
     const studentId = await aaravId();
     const key = `h7-idem-${randomUUID()}`;
 
-    const responses = await Promise.all(
-      Array.from({ length: 5 }, () =>
-        request(app)
-          .post("/v1/admin/punya/award")
-          .set(auth(admin.token))
-          .send({
-            student_id: studentId,
-            points: 4,
-            note: "manual award needs a reason (H6)",
-            idempotency_key: key,
-          }),
-      ),
-    );
-    expect(responses.every((r) => r.status === 200)).toBe(true);
+    await withDailyHeadroom(admin.user.id, 50, async () => {
+      const responses = await Promise.all(
+        Array.from({ length: 5 }, () =>
+          request(app)
+            .post("/v1/admin/punya/award")
+            .set(auth(admin.token))
+            .send({
+              student_id: studentId,
+              points: 4,
+              note: "manual award needs a reason (H6)",
+              idempotency_key: key,
+            }),
+        ),
+      );
+      expect(responses.every((r) => r.status === 200)).toBe(true);
 
-    const { rows } = await pool.query<{ n: string }>(
-      `select count(*)::text as n from punya_transactions where idempotency_key = $1`,
-      [key],
-    );
-    expect(Number(rows[0]!.n)).toBe(1);
+      const { rows } = await pool.query<{ n: string }>(
+        `select count(*)::text as n from punya_transactions where idempotency_key = $1`,
+        [key],
+      );
+      expect(Number(rows[0]!.n)).toBe(1);
+    });
   });
 
   it("M15 — another actor's idempotency_key does not bypass the cap", async () => {
@@ -157,6 +183,9 @@ describe("H7 — daily award cap is race-safe", () => {
     const original = await readLimits();
 
     try {
+      // Headroom first: this test is about the per-award ceiling and cross-actor
+      // keys, not about whatever the day's budget happens to hold.
+      await writeLimits(original.perAward, (await spentToday(admin.user.id)) + 200);
       const key = `h7-cross-${randomUUID()}`;
       const seed = await request(app)
         .post("/v1/admin/punya/award")

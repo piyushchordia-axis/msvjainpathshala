@@ -28,7 +28,30 @@ import {
   type StudentAudienceCtx,
 } from "../src/lib/niyam-audience";
 
+/** Niyams planted by this file, removed in afterAll. */
+const plantedNiyamIds: string[] = [];
+
 afterAll(async () => {
+  // Without this these rows accumulate on every run. At 218 active
+  // national all-audience niyams the catalogue's 200-row cap started
+  // excluding the row this file had JUST created, so it failed asserting
+  // its own niyam was present — a failure that looks like a catalogue bug
+  // and is really the fixture competing with itself.
+  if (plantedNiyamIds.length) {
+    await pool.query(
+      `delete from niyam_submission_media where submission_id in (
+         select id from niyam_submissions where niyam_id = any($1::uuid[])
+       )`,
+      [plantedNiyamIds],
+    );
+    await pool.query(`delete from niyam_submissions where niyam_id = any($1::uuid[])`, [
+      plantedNiyamIds,
+    ]);
+    await pool.query(`delete from niyam_badges where niyam_id = any($1::uuid[])`, [
+      plantedNiyamIds,
+    ]);
+    await pool.query(`delete from niyams where id = any($1::uuid[])`, [plantedNiyamIds]);
+  }
   await pool.end();
 });
 
@@ -67,6 +90,7 @@ async function insertNiyam(
       msv_audience: (fields.msv_audience ?? "all") as "all" | "msv" | "non_msv",
     })
     .returning({ id: niyams.id });
+  plantedNiyamIds.push(row!.id);
   return row!.id;
 }
 

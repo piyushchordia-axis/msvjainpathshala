@@ -7,7 +7,42 @@ import { pool } from "@workspace/db";
 import app from "../src/app";
 import { loginAs, auth } from "./helpers";
 
+/** Courses planted by this file, removed in afterAll. */
+const plantedCourseIds: string[] = [];
+
 afterAll(async () => {
+  // Without this the catalogue grows by ~130 rows per run. At 178 active
+  // courses the public list's default limit of 100 stopped containing the
+  // course this file had JUST published, so it failed asserting its own row
+  // was listed — a failure that reads as a catalogue bug and is really the
+  // fixture competing with itself.
+  if (plantedCourseIds.length) {
+    await pool.query(
+      `delete from course_certificates where course_id = any($1::uuid[])
+          or section_id in (select id from course_sections where course_id = any($1::uuid[]))`,
+      [plantedCourseIds],
+    );
+    await pool.query(
+      `delete from student_course_progress
+        where section_id in (select id from course_sections where course_id = any($1::uuid[]))
+           or subsection_id in (
+             select ss.id from course_subsections ss
+               join course_sections s on s.id = ss.section_id
+              where s.course_id = any($1::uuid[])
+           )`,
+      [plantedCourseIds],
+    );
+    await pool.query(
+      `delete from course_subsections where section_id in (
+         select id from course_sections where course_id = any($1::uuid[])
+       )`,
+      [plantedCourseIds],
+    );
+    await pool.query(`delete from course_sections where course_id = any($1::uuid[])`, [
+      plantedCourseIds,
+    ]);
+    await pool.query(`delete from courses where id = any($1::uuid[])`, [plantedCourseIds]);
+  }
   await pool.end();
 });
 
@@ -40,6 +75,7 @@ async function cityAdminCity(superToken: string, cityAdminToken: string): Promis
       .post("/v1/admin/courses")
       .set(auth(superToken))
       .send({ name_en: `probe ${stamp()}`, kind: "standard", city_id: city.id });
+    plantedCourseIds.push(probe.body.data.id as string);
     if (probe.status !== 200) continue;
     const visible = await request(app)
       .get("/v1/admin/courses")
@@ -77,6 +113,8 @@ async function publishableCourse(
     });
   expect(create.status).toBe(200);
   const courseId = create.body.data.id as string;
+
+  plantedCourseIds.push(courseId);
   const sectionIds: string[] = [];
   const n = opts?.sections ?? 1;
   for (let i = 0; i < n; i++) {
@@ -200,6 +238,7 @@ describe("courses step 3 — authoring & visibility", () => {
       .send({ name_en: `Bare ${stamp()}`, kind: "standard", city_id: cityId });
     expect(bare.status).toBe(200);
     const courseId = bare.body.data.id as string;
+    plantedCourseIds.push(courseId);
 
     const noSections = await request(app)
       .post(`/v1/admin/courses/${courseId}/publish`)
@@ -653,6 +692,7 @@ describe("courses step 6 — admin panel exit criteria", () => {
       .send({ name_en: `Gate ${stamp()}`, kind: "standard", city_id: cityId });
     expect(bare.status).toBe(200);
     const courseId = bare.body.data.id as string;
+    plantedCourseIds.push(courseId);
 
     const r1 = await request(app)
       .post(`/v1/admin/courses/${courseId}/publish`)
@@ -730,6 +770,7 @@ describe("courses step 6 — admin panel exit criteria", () => {
       .send({ name_en: `Tpl ${stamp()}`, name_hi: "टेम्पलेट", kind: "standard" });
     expect(tpl.status).toBe(200);
     const templateId = tpl.body.data.id as string;
+    plantedCourseIds.push(templateId);
 
     const sec = await request(app)
       .post(`/v1/admin/course-templates/${templateId}/sections`)
@@ -750,6 +791,7 @@ describe("courses step 6 — admin panel exit criteria", () => {
       .send({ city_id: cityId, academic_year: "2025-26" });
     expect(derived.status).toBe(200);
     const courseId = derived.body.data.id as string;
+    plantedCourseIds.push(courseId);
 
     const before = await request(app)
       .get(`/v1/admin/courses/${courseId}/tree`)

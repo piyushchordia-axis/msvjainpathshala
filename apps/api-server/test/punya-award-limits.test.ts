@@ -228,29 +228,49 @@ describe("POST /v1/admin/punya/award — scope + limits", () => {
   });
 
   it("replaying the same idempotency_key credits once", async () => {
-    // Prefer city_admin (higher day cap) so this regression is independent of the daily test.
+    // A higher day cap is not enough on its own: the ledger is append-only
+    // (0090) so earlier runs' spend cannot be cleared, the cap is genuinely
+    // enforced (H7), and every manual category counts toward it (H6). Give
+    // this role explicit headroom above today's spend instead.
     const admin = await loginAs("city_admin");
     const studentId = await aaravId();
     const key = `idem-award-${randomUUID()}`;
-
-    const first = await request(app)
-      .post("/v1/admin/punya/award")
-      .set(auth(admin.token))
-      .send({ student_id: studentId, points: 3, note: "idempotency probe", idempotency_key: key });
-    expect(first.status).toBe(200);
-    const totalAfterFirst = first.body.data.total_points;
-
-    const second = await request(app)
-      .post("/v1/admin/punya/award")
-      .set(auth(admin.token))
-      .send({ student_id: studentId, points: 3, note: "idempotency probe", idempotency_key: key });
-    expect(second.status).toBe(200);
-    expect(second.body.data.total_points).toBe(totalAfterFirst);
-
-    const { rows } = await pool.query<{ n: string }>(
-      `select count(*)::text as n from punya_transactions where idempotency_key = $1`,
-      [key],
+    const { rows: cap } = await pool.query<{ a: number; d: number | null }>(
+      `select max_points_per_award as a, max_points_per_day as d
+         from punya_award_limits where role = 'city_admin'`,
     );
-    expect(Number(rows[0]!.n)).toBe(1);
+    const spent = await sumManualToday(admin.user.id);
+    await pool.query(
+      `update punya_award_limits set max_points_per_day = $1 where role = 'city_admin'`,
+      [spent + 100],
+    );
+    clearAwardLimitCache();
+    try {
+      const first = await request(app)
+        .post("/v1/admin/punya/award")
+        .set(auth(admin.token))
+        .send({ student_id: studentId, points: 3, note: "idempotency probe", idempotency_key: key });
+      expect(first.status).toBe(200);
+      const totalAfterFirst = first.body.data.total_points;
+
+      const second = await request(app)
+        .post("/v1/admin/punya/award")
+        .set(auth(admin.token))
+        .send({ student_id: studentId, points: 3, note: "idempotency probe", idempotency_key: key });
+      expect(second.status).toBe(200);
+      expect(second.body.data.total_points).toBe(totalAfterFirst);
+
+      const { rows } = await pool.query<{ n: string }>(
+        `select count(*)::text as n from punya_transactions where idempotency_key = $1`,
+        [key],
+      );
+      expect(Number(rows[0]!.n)).toBe(1);
+    } finally {
+      await pool.query(
+        `update punya_award_limits set max_points_per_day = $1 where role = 'city_admin'`,
+        [cap[0]!.d],
+      );
+      clearAwardLimitCache();
+    }
   });
 });

@@ -39,6 +39,8 @@ export interface PunyaDriftRow {
   ledger_total: number;
   balance_tier: string | null;
   ledger_tier: string;
+  balance_msv?: number | null;
+  ledger_msv?: number;
   /** True when a balance row exists with no ledger rows behind it at all. */
   orphan_balance: boolean;
 }
@@ -66,7 +68,13 @@ async function findDrift(): Promise<{ scanned: number; rows: PunyaDriftRow[] }> 
   const ledgerTotal = sql`coalesce(l.total, 0)`;
   const result = await dbWorker.execute(sql`
     with ledger as (
-      select student_id, coalesce(sum(points), 0)::int as total
+      select
+        student_id,
+        coalesce(sum(points), 0)::int as total,
+        -- M2: msv_points is a second running total off the same ledger, so
+        -- it needs the same safety net. Left out, it would drift silently
+        -- and only the MSV leaderboard would ever show it.
+        coalesce(sum(points) filter (where is_msv_track), 0)::int as msv_total
       from punya_transactions
       group by student_id
     ),
@@ -76,6 +84,8 @@ async function findDrift(): Promise<{ scanned: number; rows: PunyaDriftRow[] }> 
         coalesce(l.student_id, b.student_id) as student_id,
         ${ledgerTotal}::int as ledger_total,
         b.total_points as balance_total,
+        b.msv_points as balance_msv,
+        coalesce(l.msv_total, 0)::int as ledger_msv,
         b.tier::text as balance_tier,
         (l.student_id is null) as orphan_balance,
         ${tierCaseSql(ledgerTotal, thresholds)}::text as ledger_tier
@@ -85,10 +95,12 @@ async function findDrift(): Promise<{ scanned: number; rows: PunyaDriftRow[] }> 
     scanned as (select count(*)::int as n from joined)
     select
       j.student_id, j.ledger_total, j.balance_total, j.balance_tier,
-      j.ledger_tier, j.orphan_balance, s.n as scanned_total
+      j.ledger_tier, j.orphan_balance, j.balance_msv, j.ledger_msv,
+      s.n as scanned_total
     from joined j cross join scanned s
     where j.balance_total is distinct from j.ledger_total
        or j.balance_tier is distinct from j.ledger_tier
+       or j.balance_msv is distinct from j.ledger_msv
     order by abs(coalesce(j.balance_total, 0) - j.ledger_total) desc
   `);
   const rows =
@@ -113,6 +125,8 @@ async function findDrift(): Promise<{ scanned: number; rows: PunyaDriftRow[] }> 
       ledger_total: Number(r.ledger_total),
       balance_tier: r.balance_tier,
       ledger_tier: r.ledger_tier,
+      balance_msv: r.balance_msv == null ? null : Number(r.balance_msv),
+      ledger_msv: Number(r.ledger_msv ?? 0),
       orphan_balance: Boolean(r.orphan_balance),
     })),
   };
@@ -135,20 +149,29 @@ async function repairStudent(studentId: string): Promise<number> {
 
     const totalExpr = sql`coalesce(sum(t.points), 0)`;
     const fresh = await tx.execute(sql`
-      select ${totalExpr}::int as total, ${tierCaseSql(totalExpr, thresholds)}::text as tier
+      select
+        ${totalExpr}::int as total,
+        coalesce(sum(t.points) filter (where t.is_msv_track), 0)::int as msv_total,
+        ${tierCaseSql(totalExpr, thresholds)}::text as tier
       from punya_transactions t
       where t.student_id = ${studentId}::uuid
     `);
-    const row = (fresh as unknown as { rows?: Array<{ total: number; tier: string }> }).rows?.[0];
+    const row = (
+      fresh as unknown as {
+        rows?: Array<{ total: number; msv_total: number; tier: string }>;
+      }
+    ).rows?.[0];
     const ledgerTotal = Number(row?.total ?? 0);
+    const ledgerMsv = Number(row?.msv_total ?? 0);
     const ledgerTier = row?.tier ?? "jigyasu";
     const before = locked?.total_points ?? null;
 
     await tx.execute(sql`
-      insert into punya_balances (student_id, total_points, tier)
-      values (${studentId}::uuid, ${ledgerTotal}, ${ledgerTier}::tier_enum)
+      insert into punya_balances (student_id, total_points, tier, msv_points)
+      values (${studentId}::uuid, ${ledgerTotal}, ${ledgerTier}::tier_enum, ${ledgerMsv})
       on conflict (student_id) do update
         set total_points = excluded.total_points,
+            msv_points = excluded.msv_points,
             tier = excluded.tier,
             updated_at = now()
     `);
@@ -164,7 +187,13 @@ export async function reconcilePunyaBalances(): Promise<PunyaReconcileResult> {
   let netPointsMoved = 0;
   for (const row of rows) {
     const moved = await repairStudent(row.student_id);
-    if (moved !== 0 || row.balance_tier !== row.ledger_tier) repaired++;
+    if (
+      moved !== 0 ||
+      row.balance_tier !== row.ledger_tier ||
+      row.balance_msv !== row.ledger_msv
+    ) {
+      repaired++;
+    }
     netPointsMoved += moved;
   }
 

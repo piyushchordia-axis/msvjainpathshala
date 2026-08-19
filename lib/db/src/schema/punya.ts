@@ -129,6 +129,22 @@ export const punya_transactions = pgTable(
     source_entity_id: uuid("source_entity_id"),
     /** Attendance / streak ledger revision — orders reversals deterministically. */
     source_revision: integer("source_revision"),
+    /**
+     * SPEC 5.7 (M1) — geography denormalised for leaderboard reads, and a
+     * SNAPSHOT rather than a live join: a child who transfers centres keeps
+     * old rows pointing where they were when they earned them, which is what
+     * a per-centre leaderboard for a past month has to mean.
+     */
+    city_id: uuid("city_id"),
+    centre_id: uuid("centre_id"),
+    batch_id: uuid("batch_id"),
+    /** The parallel MSV leaderboard (BRD 7.6). */
+    is_msv_track: boolean("is_msv_track").notNull().default(false),
+    /**
+     * When the child EARNED it, as distinct from when the row was written.
+     * An offline sync or a catch-up job writes long after the fact.
+     */
+    awarded_at: timestamp("awarded_at", { withTimezone: true }),
     ...timestamps(),
   },
   (t) => ({
@@ -143,6 +159,10 @@ export const punya_transactions = pgTable(
       t.source_entity_id,
       t.source_revision,
     ),
+    // Leaderboard reads are "this scope, this month", so the range leads.
+    city_created_idx: index("idx_punya_tx_city_created").on(t.city_id, t.created_at),
+    centre_created_idx: index("idx_punya_tx_centre_created").on(t.centre_id, t.created_at),
+    batch_created_idx: index("idx_punya_tx_batch_created").on(t.batch_id, t.created_at),
     idempotency_uq: uniqueIndex("punya_transactions_idempotency_key_uq")
       .on(t.idempotency_key)
       .where(sql`${t.idempotency_key} is not null`),
@@ -162,6 +182,14 @@ export const punya_balances = pgTable("punya_balances", {
     .references(() => students.id, { onDelete: "cascade" }),
   total_points: integer("total_points").notNull().default(0),
   tier: tierEnum("tier").notNull().default("jigyasu"),
+  /** SPEC 5.7 (M2) — the MSV parallel track's running total. */
+  msv_points: integer("msv_points").notNull().default(0),
+  /**
+   * When the current tier was reached (M2). BRD 7.5's celebration needs to
+   * know WHEN, not just what — and without it a transition is unrecoverable
+   * after the fact.
+   */
+  tier_reached_at: timestamp("tier_reached_at", { withTimezone: true }),
   ...timestamps(),
 });
 

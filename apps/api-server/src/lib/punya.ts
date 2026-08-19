@@ -12,6 +12,7 @@ import {
 } from "./punya-tiers";
 import { and, eq, sql } from "drizzle-orm";
 import { logger } from "./logger";
+import { resolvePunyaAwardContext } from "./punya-context";
 
 export interface AwardPunyaInput {
   studentId: string;
@@ -35,6 +36,11 @@ export interface AwardPunyaInput {
   sourceEntityId?: string | null;
   /** Attendance / streak revision for deterministic reversal ordering. */
   sourceRevision?: number | null;
+  /**
+   * When the child EARNED it, if that differs from now — an offline sync or
+   * a catch-up job writes long after the fact. Defaults to now.
+   */
+  awardedAt?: Date | null;
 }
 
 export interface AwardPunyaResult {
@@ -85,6 +91,12 @@ export async function creditBalance(
   tx: Tx | Db,
   studentId: string,
   delta: number,
+  /**
+   * How much of `delta` belongs to the MSV parallel track (M2). Reversals
+   * pass a negative value, so msv_points nets off exactly like total_points
+   * — otherwise the MSV leaderboard would keep counting clawed-back points.
+   */
+  msvDelta = 0,
 ): Promise<number> {
   if (delta === 0) {
     return readBalance(tx, studentId, 0);
@@ -94,10 +106,11 @@ export async function creditBalance(
   const inserted = sql`${delta}`;
   const updated = sql`punya_balances.total_points + ${delta}`;
   const result = await tx.execute(
-    sql`insert into punya_balances (student_id, total_points, tier)
-        values (${studentId}, ${delta}, ${tierCaseSql(inserted, thresholds)})
+    sql`insert into punya_balances (student_id, total_points, tier, msv_points)
+        values (${studentId}, ${delta}, ${tierCaseSql(inserted, thresholds)}, ${msvDelta})
         on conflict (student_id) do update
           set total_points = punya_balances.total_points + ${delta},
+              msv_points = punya_balances.msv_points + ${msvDelta},
               tier = ${tierCaseSql(updated, thresholds)},
               updated_at = now()
         returning total_points`,
@@ -134,16 +147,31 @@ export async function creditBalancesFromReturned(
     sql`, `,
   )}]::int[]`;
 
+  // M2 — the MSV share of each delta, so msv_points tracks the bulk
+  // attendance path too. Contexts are cached, so a whole roster on one batch
+  // costs one lookup rather than one per child.
+  const msvDeltas: number[] = [];
+  for (const id of ids) {
+    const ctx = await resolvePunyaAwardContext(id);
+    msvDeltas.push(ctx.is_msv_track ? byStudent.get(id)! : 0);
+  }
+  const msvArray = sql`array[${sql.join(
+    msvDeltas.map((d) => sql`${d}::int`),
+    sql`, `,
+  )}]::int[]`;
+
   const thresholds = await resolveTierThresholds();
   const fresh = sql`s.delta`;
   const combined = sql`punya_balances.total_points + excluded.total_points`;
 
   await tx.execute(sql`
-    insert into punya_balances (student_id, total_points, tier)
-    select s.student_id, s.delta, ${tierCaseSql(fresh, thresholds)}
-    from unnest(${idArray}, ${deltaArray}) as s(student_id, delta)
+    insert into punya_balances (student_id, total_points, tier, msv_points)
+    select s.student_id, s.delta, ${tierCaseSql(fresh, thresholds)}, s.msv_delta
+    from unnest(${idArray}, ${deltaArray}, ${msvArray})
+      as s(student_id, delta, msv_delta)
     on conflict (student_id) do update
       set total_points = punya_balances.total_points + excluded.total_points,
+          msv_points = punya_balances.msv_points + excluded.msv_points,
           tier = ${tierCaseSql(combined, thresholds)},
           updated_at = now()
   `);
@@ -164,16 +192,25 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
 
   const sourceRevision = input.sourceRevision ?? null;
 
+  // M1 — geography and MSV membership snapshotted onto the row. Resolved
+  // once here so both insert branches agree, and cached so an attendance
+  // roster does not re-resolve the same batch for every child.
+  const ctx = await resolvePunyaAwardContext(input.studentId);
+  const awardedAt = input.awardedAt ?? new Date();
+
   if (key) {
     // Partial unique index on idempotency_key — ON CONFLICT DO NOTHING.
     const insertResult = await tx.execute(sql`
       insert into punya_transactions (
         student_id, feature_key, points, note, awarded_by,
-        idempotency_key, source_entity_kind, source_entity_id, source_revision
+        idempotency_key, source_entity_kind, source_entity_id, source_revision,
+        city_id, centre_id, batch_id, is_msv_track, awarded_at
       ) values (
         ${input.studentId}, ${input.featureKey}, ${input.points},
         ${input.note ?? null}, ${input.awardedBy ?? null},
-        ${key}, ${sourceKind}, ${sourceId}, ${sourceRevision}
+        ${key}, ${sourceKind}, ${sourceId}, ${sourceRevision},
+        ${ctx.city_id}, ${ctx.centre_id}, ${ctx.batch_id}, ${ctx.is_msv_track},
+        ${awardedAt}
       )
       on conflict (idempotency_key) where idempotency_key is not null
       do nothing
@@ -210,12 +247,22 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
         source_entity_kind: sourceKind,
         source_entity_id: sourceId,
         source_revision: sourceRevision,
+        city_id: ctx.city_id,
+        centre_id: ctx.centre_id,
+        batch_id: ctx.batch_id,
+        is_msv_track: ctx.is_msv_track,
+        awarded_at: awardedAt,
       })
       .returning({ id: punya_transactions.id });
     transactionId = row?.id ?? null;
   }
 
-  const total = await creditBalance(tx, input.studentId, input.points);
+  const total = await creditBalance(
+    tx,
+    input.studentId,
+    input.points,
+    ctx.is_msv_track ? input.points : 0,
+  );
   return {
     student_id: input.studentId,
     points_awarded: input.points,
@@ -350,14 +397,21 @@ async function runReverse(tx: Tx | Db, input: ReversePunyaInput): Promise<Revers
   const sourceId = original?.source_entity_id ?? sourceFromKey(input.featureKey, originalKey).id;
   const debit = -points;
 
+  // A reversal inherits the award's geography and MSV flag. Written without
+  // them, the debit would not net off in any scoped or MSV leaderboard and
+  // clawed-back points would go on counting forever.
+  const revCtx = await resolvePunyaAwardContext(input.studentId);
   const insertResult = await tx.execute(sql`
     insert into punya_transactions (
       student_id, feature_key, points, note, awarded_by,
-      idempotency_key, reversal_of, source_entity_kind, source_entity_id
+      idempotency_key, reversal_of, source_entity_kind, source_entity_id,
+      city_id, centre_id, batch_id, is_msv_track, awarded_at
     ) values (
       ${input.studentId}, ${input.featureKey}, ${debit},
       ${input.note ?? null}, ${input.awardedBy ?? null},
-      ${key}, ${original?.id ?? null}, ${sourceKind}, ${sourceId}
+      ${key}, ${original?.id ?? null}, ${sourceKind}, ${sourceId},
+      ${revCtx.city_id}, ${revCtx.centre_id}, ${revCtx.batch_id},
+      ${revCtx.is_msv_track}, ${new Date()}
     )
     on conflict (idempotency_key) where idempotency_key is not null
     do nothing
@@ -383,7 +437,12 @@ async function runReverse(tx: Tx | Db, input: ReversePunyaInput): Promise<Revers
     };
   }
 
-  const total = await creditBalance(tx, input.studentId, debit);
+  const total = await creditBalance(
+    tx,
+    input.studentId,
+    debit,
+    revCtx.is_msv_track ? debit : 0,
+  );
   return {
     student_id: input.studentId,
     points_reversed: points,

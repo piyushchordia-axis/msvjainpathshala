@@ -72,6 +72,7 @@ async function plantScenario(tag: string): Promise<{
     [centreId, batchId, `H9 Streak ${tag}`, `H9${tag}`.slice(0, 24)],
   );
   const studentId = stu.rows[0]!.id;
+  plantedStudentIds.push(studentId);
 
   // Eight consecutive scheduled sessions, far enough in the past that the
   // seeded calendar does not collide with them.
