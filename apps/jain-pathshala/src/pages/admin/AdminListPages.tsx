@@ -894,23 +894,93 @@ interface PunyaTxnRow {
   created_at: string;
 }
 
-function PunyaAuditTable({ title, subtitle }: { title: string; subtitle: string }) {
-  const { items, loading, loadingMore, error, hasMore, loadMore } = useAdminList<PunyaTxnRow>(
-    '/v1/admin/punya/transactions?limit=200',
+/**
+ * M18 — undo a manual award.
+ *
+ * There was no reversal route on any surface, so a mis-targeted award was
+ * permanent and the only workaround was a compensating award — which leaves
+ * the ledger claiming the first child earned points they did not. The server
+ * refuses anything that is not a manual award: attendance, niyam, homework,
+ * exam and the rest reverse through their own paths, which also fix streaks,
+ * gallery rows and badges.
+ */
+function ReversePunyaButton({ txn, onDone }: { txn: PunyaTxnRow; onDone: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function submit() {
+    setBusy(true);
+    try {
+      await apiPost(`/v1/admin/punya/transactions/${txn.id}/reverse`, {
+        reason: reason.trim(),
+      });
+      toast.success(`Reversed ${txn.points} Punya for ${txn.student_name}.`);
+      setOpen(false);
+      setReason('');
+      onDone();
+    } catch (err) {
+      toast.error('Could not reverse.', err instanceof ApiError ? err.message : undefined);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button size="sm" variant="ghost">Reverse</Button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Reverse this award</DialogTitle>
+        </DialogHeader>
+        <p className="text-sm text-muted-foreground">
+          {txn.student_name} will lose {txn.points} Punya. The award stays in the
+          ledger with a matching reversal beside it, so the history stays readable.
+        </p>
+        <Label htmlFor="reverse-reason" className="mt-4">Reason *</Label>
+        <Input
+          id="reverse-reason"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          maxLength={500}
+          placeholder="e.g. awarded to the wrong child"
+          className="mt-1"
+        />
+        <div className="mt-4 flex justify-end gap-2">
+          <DialogClose asChild>
+            <Button variant="ghost" type="button">Cancel</Button>
+          </DialogClose>
+          <Button
+            type="button"
+            disabled={busy || reason.trim().length < 3}
+            onClick={() => void submit()}
+          >
+            {busy ? 'Reversing…' : 'Reverse award'}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
+}
+
+function PunyaAuditTable({ title, subtitle }: { title: string; subtitle: string }) {
+  const { items, loading, loadingMore, error, hasMore, loadMore, reload } =
+    useAdminList<PunyaTxnRow>('/v1/admin/punya/transactions?limit=200');
   return (
     <AdminPageShell title={title} subtitle={subtitle}>
       {error ? <AdminError message={error} /> : null}
       <AdminTable
-        columns={['When', 'Student', 'Feature', 'Points', 'By', 'Note']}
+        columns={['When', 'Student', 'Feature', 'Points', 'By', 'Note', '']}
         loading={loading}
         empty=""
-        colSpan={6}
+        colSpan={7}
         footer={
           <AdminLoadMore hasMore={hasMore} loadingMore={loadingMore} onLoadMore={() => void loadMore()} />
         }
       >
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={6} message="No transactions." /> : null}
+        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={7} message="No transactions." /> : null}
         {items.map((t) => (
           <tr key={t.id} className="hover:bg-muted/30">
             <td className="px-4 py-3 text-xs whitespace-nowrap">
@@ -937,6 +1007,13 @@ function PunyaAuditTable({ title, subtitle }: { title: string; subtitle: string 
             <td className="px-4 py-3 text-xs text-muted-foreground max-w-[12rem] truncate">
               {t.note ?? '—'}
             </td>
+            <td className="px-4 py-3 text-right">
+              {/* Only credits are reversible, and the server has the final say
+                  on whether the feature is a manual one. */}
+              {t.points > 0 ? (
+                <ReversePunyaButton txn={t} onDone={() => void reload()} />
+              ) : null}
+            </td>
           </tr>
         ))}
       </AdminTable>
@@ -959,12 +1036,24 @@ interface AwardLimitInfo {
   remaining_today: number | null;
 }
 
+/** BRD 7.2 categories, resolved from the catalogue (H6). */
+interface AwardCategory {
+  key: string;
+  label: string;
+  min_points: number | null;
+  max_points: number | null;
+  default_points: number | null;
+  requires_reason: boolean;
+}
+
 export function PunyaAwardPage() {
   const [students, setStudents] = useState<AwardStudentOption[]>([]);
   const [studentQuery, setStudentQuery] = useState('');
   const [selected, setSelected] = useState<AwardStudentOption | null>(null);
   const [points, setPoints] = useState('10');
   const [note, setNote] = useState('');
+  const [categories, setCategories] = useState<AwardCategory[]>([]);
+  const [categoryKey, setCategoryKey] = useState('manual_award');
   const [busy, setBusy] = useState(false);
   // Role cap + remaining-today up front (SAN-API-08) — the server used to
   // reject over-cap awards only after the whole form was submitted.
@@ -975,15 +1064,26 @@ export function PunyaAwardPage() {
     void apiGet<AwardLimitInfo>('/v1/admin/punya/award-limit')
       .then((r) => setLimitInfo(r ?? null))
       .catch(() => setLimitInfo(null));
+    // Categories, their bounds and whether they need a reason are all data.
+    void apiGet<{ items: AwardCategory[] }>('/v1/admin/punya/award-categories')
+      .then((r) => setCategories(r?.items ?? []))
+      .catch(() => setCategories([]));
   }, []);
 
+  const category = categories.find((c) => c.key === categoryKey) ?? null;
+
+  // The tighter of the role ceiling, today's remainder and the CATEGORY's
+  // own maximum — a Seva award stops at 50 however senior the awarder is.
   const maxAllowed = (() => {
-    if (!limitInfo) return 500;
-    const caps = [limitInfo.max_points_per_award, limitInfo.remaining_today].filter(
-      (v): v is number => typeof v === 'number',
-    );
+    const caps = [
+      limitInfo?.max_points_per_award,
+      limitInfo?.remaining_today,
+      category?.max_points,
+    ].filter((v): v is number => typeof v === 'number');
     return caps.length ? Math.min(500, ...caps) : 500;
   })();
+  const minAllowed = category?.min_points ?? 0;
+  const reasonRequired = category?.requires_reason ?? true;
 
   // Server-side ?q= search — the old 500-row <Select> could not reach a
   // student beyond the first page, so they could never be awarded
@@ -1007,6 +1107,7 @@ export function PunyaAwardPage() {
       const res = await apiPost<{ total_points: number; tier: string }>('/v1/admin/punya/award', {
         student_id: selected.id,
         points: Number(points),
+        feature_key: categoryKey,
         note: note.trim() || undefined,
         // De-dupe token: a double-clicked submit or retried request must not
         // award twice (SAN-API-08).
@@ -1077,11 +1178,34 @@ export function PunyaAwardPage() {
             )}
           </div>
           <div>
+            <Label htmlFor="category">What is this for?</Label>
+            <select
+              id="category"
+              value={categoryKey}
+              onChange={(e) => {
+                const next = e.target.value;
+                setCategoryKey(next);
+                const c = categories.find((x) => x.key === next);
+                if (c?.default_points != null) setPoints(String(c.default_points));
+              }}
+              className="mt-1 w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+            >
+              {categories.map((c) => (
+                <option key={c.key} value={c.key}>
+                  {c.label}
+                  {c.min_points != null && c.max_points != null
+                    ? ` (${c.min_points}–${c.max_points})`
+                    : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
             <Label htmlFor="points">Points</Label>
             <Input
               id="points"
               type="number"
-              min={1}
+              min={Math.max(1, minAllowed)}
               max={maxAllowed}
               value={points}
               onChange={(e) => setPoints(e.target.value)}
@@ -1102,12 +1226,43 @@ export function PunyaAwardPage() {
                 Over your cap — enter {maxAllowed} or less.
               </p>
             ) : null}
+            {Number(points) < minAllowed ? (
+              <p className="mt-1 text-xs text-destructive">
+                {category?.label} awards start at {minAllowed} Punya.
+              </p>
+            ) : null}
           </div>
           <div>
-            <Label htmlFor="note">Note (optional)</Label>
-            <Input id="note" value={note} onChange={(e) => setNote(e.target.value)} className="mt-1" />
+            <Label htmlFor="note">
+              {reasonRequired ? 'Reason *' : 'Note (optional)'}
+            </Label>
+            <Input
+              id="note"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              // L1 — the server caps the note at 500; without this the form
+              // accepted more and returned a bare 422 after submit.
+              maxLength={500}
+              required={reasonRequired}
+              placeholder={reasonRequired ? 'e.g. helped set up the hall' : undefined}
+              className="mt-1"
+            />
+            {reasonRequired ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Families see this on the child’s Punya screen.
+              </p>
+            ) : null}
           </div>
-          <Button type="submit" disabled={busy || !selected || Number(points) > maxAllowed || Number(points) < 1}>
+          <Button
+            type="submit"
+            disabled={
+              busy ||
+              !selected ||
+              Number(points) > maxAllowed ||
+              Number(points) < Math.max(1, minAllowed) ||
+              (reasonRequired && note.trim().length < 3)
+            }
+          >
             {busy ? 'Awarding…' : 'Award Punya'}
           </Button>
         </form>

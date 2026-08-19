@@ -130,7 +130,12 @@ describe("H7 — daily award cap is race-safe", () => {
         request(app)
           .post("/v1/admin/punya/award")
           .set(auth(admin.token))
-          .send({ student_id: studentId, points: 4, idempotency_key: key }),
+          .send({
+            student_id: studentId,
+            points: 4,
+            note: "manual award needs a reason (H6)",
+            idempotency_key: key,
+          }),
       ),
     );
     expect(responses.every((r) => r.status === 200)).toBe(true);
@@ -156,7 +161,12 @@ describe("H7 — daily award cap is race-safe", () => {
       const seed = await request(app)
         .post("/v1/admin/punya/award")
         .set(auth(admin.token))
-        .send({ student_id: studentId, points: 5, idempotency_key: key });
+        .send({
+          student_id: studentId,
+          points: 5,
+          note: "manual award needs a reason (H6)",
+          idempotency_key: key,
+        });
       expect(seed.status).toBe(200);
 
       // Drop the city_admin per-award ceiling below what we now try to award.
@@ -165,7 +175,12 @@ describe("H7 — daily award cap is race-safe", () => {
       const abuse = await request(app)
         .post("/v1/admin/punya/award")
         .set(auth(admin.token))
-        .send({ student_id: studentId, points: 100, idempotency_key: key });
+        .send({
+          student_id: studentId,
+          points: 100,
+          note: "manual award needs a reason (H6)",
+          idempotency_key: key,
+        });
       // Same actor + same student + same key IS a legitimate replay: 200, no credit.
       expect(abuse.status).toBe(200);
 
@@ -173,7 +188,12 @@ describe("H7 — daily award cap is race-safe", () => {
       const other = await request(app)
         .post("/v1/admin/punya/award")
         .set(auth(shikshak.token))
-        .send({ student_id: studentId, points: 100, idempotency_key: key });
+        .send({
+          student_id: studentId,
+          points: 100,
+          note: "manual award needs a reason (H6)",
+          idempotency_key: key,
+        });
       expect(other.status).toBe(422);
       expect(other.body.error.code).toBe("ERR_AWARD_LIMIT_EXCEEDED");
 

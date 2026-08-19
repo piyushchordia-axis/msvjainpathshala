@@ -140,7 +140,16 @@ export async function pointsAwardedTodayBy(
     .where(
       and(
         eq(punya_transactions.awarded_by, userId),
-        eq(punya_transactions.feature_key, MANUAL_AWARD_FEATURE_KEY),
+        // EVERY manual category, not just `manual_award`.
+        //
+        // H6 split the single bucket into BRD 7.2's five categories. Left
+        // keyed on one of them, the daily ceiling would have counted only
+        // awards made under the generic key — so an admin could exhaust
+        // their 500-point budget on manual_award and then keep awarding
+        // indefinitely under Seva, with the cap reporting them at zero.
+        sql`${punya_transactions.feature_key} in (
+          select f.key from punya_features f where f.is_manual = true
+        )`,
         gt(punya_transactions.points, 0),
         sql`(${punya_transactions.created_at} AT TIME ZONE 'Asia/Kolkata')::date
             = (CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Kolkata')::date`,

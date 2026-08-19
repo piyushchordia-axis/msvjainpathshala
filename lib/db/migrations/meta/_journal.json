@@ -645,6 +645,20 @@
       "when": 1791888000018,
       "tag": "0091_punya_feature_columns_and_tiers",
       "breakpoints": true
+    },
+    {
+      "idx": 92,
+      "version": "7",
+      "when": 1791888000019,
+      "tag": "0092_punya_manual_categories",
+      "breakpoints": true
+    },
+    {
+      "idx": 93,
+      "version": "7",
+      "when": 1791888000020,
+      "tag": "0093_audit_action_reverse",
+      "breakpoints": true
     }
   ]
 }

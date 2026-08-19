@@ -51,7 +51,7 @@ import {
 } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { enqueueShivirPublishedAnnouncement } from "../../lib/shivir-notify";
-import { awardPunya } from "../../lib/punya";
+import { awardPunya, reversePunya } from "../../lib/punya";
 import {
   allocateParentCode,
   allocateStudentCode,
@@ -64,6 +64,10 @@ import {
   pointsAwardedTodayBy,
   MANUAL_AWARD_FEATURE_KEY,
 } from "../../lib/punya-award-limits";
+import {
+  listManualCategories,
+  validateManualAward,
+} from "../../lib/punya-manual-award";
 import { isClientSettingKey } from "../../lib/client-settings";
 import { isPlatformSettingKey, getEightyGConfig } from "../../lib/platform-settings";
 import { clampLimit, inScope, scopedCentreFilter } from "../../lib/route-helpers";
@@ -637,6 +641,13 @@ const punyaAwardSchema = z.object({
   student_id: z.string().uuid(),
   points: z.coerce.number().int().positive(),
   note: z.string().max(500).optional(),
+  /**
+   * H6 — BRD 7.2's category. Optional for backward compatibility: an
+   * omitted key resolves to `manual_award`, which is what every caller
+   * implicitly awarded under before. Validated against punya_features with
+   * is_manual = true, so a typo cannot invent a category.
+   */
+  feature_key: z.string().min(1).max(100).optional(),
   // Optional client-supplied de-dupe token. When the same key is replayed (a
   // double-clicked submit, a retried request), the award is NOT credited twice
   // — awardPunya returns the original result. Backward compatible: callers that
@@ -683,6 +694,24 @@ router.post("/punya/award", async (req: Request, res: Response) => {
     fail(res, 404, "ERR_NOT_FOUND", "Student not found in your scope.");
     return;
   }
+
+  // Category bounds and the reason requirement come from the catalogue.
+  const note = body.note?.trim() || null;
+  const validated = await validateManualAward({
+    featureKey: body.feature_key,
+    points: body.points,
+    note,
+  });
+  if ("error" in validated) {
+    fail(
+      res,
+      validated.error.code === "unknown" ? 422 : 422,
+      ErrorCode.VALIDATION_FAILED,
+      validated.error.message,
+    );
+    return;
+  }
+  const category = validated.category;
 
   const idemKey = body.idempotency_key?.trim() || null;
   const limit = await resolveAwardLimit(req.authUser!.role);
@@ -738,9 +767,9 @@ router.post("/punya/award", async (req: Request, res: Response) => {
     const result = await awardPunya(
       {
         studentId: student.id,
-        featureKey: MANUAL_AWARD_FEATURE_KEY,
+        featureKey: category.key,
         points: body.points,
-        note: body.note ?? null,
+        note,
         awardedBy: req.authUser!.id,
         idempotencyKey: idemKey,
       },
@@ -775,10 +804,11 @@ router.post("/punya/award", async (req: Request, res: Response) => {
       action: "award",
       entityKind: "student",
       entityId: student.id,
-      summary: `Manual punya award (+${body.points}).`,
+      summary: `${category.label} award (+${body.points}).`,
       metadata: {
+        feature_key: category.key,
         points: body.points,
-        note: body.note ?? null,
+        note,
         total_points: result.total_points,
         tier: result.tier,
         idempotency_key: idemKey,
@@ -790,10 +820,149 @@ router.post("/punya/award", async (req: Request, res: Response) => {
 
   ok(res, {
     student_id: result.student_id,
+    feature_key: category.key,
     points_awarded: result.points_awarded,
     total_points: result.total_points,
     tier: result.tier,
   });
+});
+
+const punyaReverseSchema = z.object({
+  reason: z.string().min(3).max(500),
+});
+
+/**
+ * POST /v1/admin/punya/transactions/:id/reverse — M18.
+ *
+ * A mis-targeted manual award was permanent. reversePunya lived in lib/ and
+ * was reachable from no HTTP route at all, so a Sanchalak who spotted their
+ * shikshak awarding the wrong child had nothing to do about it, on any
+ * surface. The only workaround was a compensating award, which leaves the
+ * ledger claiming the first child earned points they did not.
+ *
+ * Deliberately limited to MANUAL awards. Everything else — attendance,
+ * niyam, homework, exam, quiz, course, competition — already reverses through
+ * its own domain path, which also fixes up streaks, gallery rows, badges and
+ * certification state. Reversing one of those from here would move the
+ * points and silently desynchronise everything around them.
+ */
+router.post(
+  "/punya/transactions/:id/reverse",
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Transaction not found.");
+      return;
+    }
+    let body: z.infer<typeof punyaReverseSchema>;
+    try {
+      body = punyaReverseSchema.parse(req.body);
+    } catch {
+      fail(
+        res,
+        422,
+        ErrorCode.VALIDATION_FAILED,
+        "Say why this award is being reversed — the family sees the correction.",
+      );
+      return;
+    }
+
+    const [txn] = await db
+      .select({
+        id: punya_transactions.id,
+        student_id: punya_transactions.student_id,
+        feature_key: punya_transactions.feature_key,
+        points: punya_transactions.points,
+        idempotency_key: punya_transactions.idempotency_key,
+        is_manual: punya_features.is_manual,
+        centre_id: students.centre_id,
+        batch_id: students.batch_id,
+      })
+      .from(punya_transactions)
+      .innerJoin(students, eq(students.id, punya_transactions.student_id))
+      .leftJoin(punya_features, eq(punya_features.key, punya_transactions.feature_key))
+      .where(eq(punya_transactions.id, id))
+      .limit(1);
+
+    const scope = await resolveAdminScope(req.authUser!);
+    // 404 rather than 403 throughout, matching the rest of the module.
+    if (!txn || !inBatchWriteScope(scope, txn.batch_id, txn.centre_id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Transaction not found.");
+      return;
+    }
+    if (!txn.is_manual) {
+      fail(
+        res,
+        422,
+        ErrorCode.VALIDATION_FAILED,
+        "Only a manually awarded Punya can be reversed here — correct the attendance mark, niyam or grade it came from instead.",
+      );
+      return;
+    }
+    if (txn.points <= 0) {
+      fail(
+        res,
+        422,
+        ErrorCode.VALIDATION_FAILED,
+        "That row is already a reversal.",
+      );
+      return;
+    }
+    if (!txn.idempotency_key) {
+      // reversePunya keys the debit off the original's key; without one the
+      // reversal could not be made idempotent or linked back.
+      fail(
+        res,
+        422,
+        ErrorCode.VALIDATION_FAILED,
+        "That award predates reversible records and cannot be undone automatically.",
+      );
+      return;
+    }
+
+    const result = await reversePunya({
+      studentId: txn.student_id,
+      featureKey: txn.feature_key,
+      points: txn.points,
+      note: body.reason,
+      awardedBy: req.authUser!.id,
+      idempotencyKey: `${txn.idempotency_key}:reversal`,
+    });
+
+    if (!result.reversed) {
+      fail(res, 409, "ERR_DUPLICATE", "That award has already been reversed.");
+      return;
+    }
+
+    await auditFromReq(req, {
+      action: "reverse",
+      entityKind: "student",
+      entityId: txn.student_id,
+      summary: `Reversed a ${txn.feature_key} award (-${txn.points}).`,
+      metadata: {
+        transaction_id: txn.id,
+        feature_key: txn.feature_key,
+        points: txn.points,
+        reason: body.reason,
+        total_points: result.total_points,
+      },
+    });
+
+    ok(res, {
+      student_id: txn.student_id,
+      points_reversed: result.points_reversed,
+      total_points: result.total_points,
+      tier: result.tier,
+    });
+  },
+);
+
+/* GET /v1/admin/punya/award-categories — BRD 7.2's manual categories.
+   Clients drive their picker, per-category bounds and the reason
+   requirement from this rather than hardcoding any of them. */
+router.get("/punya/award-categories", async (_req: Request, res: Response) => {
+  const items = await listManualCategories();
+  ok(res, { items }, { count: items.length });
 });
 
 /* GET /v1/admin/shikshaks */

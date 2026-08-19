@@ -24,6 +24,12 @@ export interface PunyaFeatureSeed {
   min_points: number;
   max_points: number;
   is_active: boolean;
+  /** SPEC 5.7 (M3) — the normal value, distinct from the ceiling. */
+  default_points?: number;
+  /** Granted by a human through the manual-award surface (BRD 7.2). */
+  is_manual?: boolean;
+  /** Amount AND reason mandatory (BRD 7.2). */
+  requires_reason?: boolean;
 }
 
 export interface PunyaConfigSeed {
@@ -51,12 +57,19 @@ export const PUNYA_FEATURE_CATALOGUE: readonly PunyaFeatureSeed[] = [
   { key: "quiz_participation", label: "Quiz participation", min_points: 0, max_points: 5, is_active: true },
   { key: "quiz_win", label: "Quiz win", min_points: 0, max_points: 25, is_active: true },
   { key: "push_quiz_completion", label: "Push quiz completion", min_points: 0, max_points: 5, is_active: true },
-  { key: "manual_award", label: "Manual admin award", min_points: 0, max_points: 500, is_active: true },
+  { key: "manual_award", label: "Manual admin award", min_points: 0, max_points: 500, is_active: true, is_manual: true, requires_reason: true },
+  // BRD 7.2's five manual categories. Deliberately distinct keys from the
+  // automated ones: folding a hand-granted competition award into
+  // `competition` would make it indistinguishable from a published result.
+  { key: "manual_festival", label: "Festival participation", min_points: 0, max_points: 50, default_points: 15, is_active: true, is_manual: true, requires_reason: true },
+  { key: "manual_seva", label: "Seva", min_points: 10, max_points: 50, default_points: 10, is_active: true, is_manual: true, requires_reason: true },
+  { key: "manual_helping", label: "Helping others", min_points: 10, max_points: 30, default_points: 10, is_active: true, is_manual: true, requires_reason: true },
+  { key: "manual_competition", label: "Competition (manual)", min_points: 0, max_points: 100, default_points: 25, is_active: true, is_manual: true, requires_reason: true },
   // Amounts come from competitions.winner_points / participant_points, so
   // there is deliberately no punya_configs default for this key.
   { key: "competition", label: "Competition result", min_points: 0, max_points: 100000, is_active: true },
   // AT28 — the documented path for shivir Punya.
-  { key: "msv_shivir", label: "Shivir participation", min_points: 0, max_points: 500, is_active: true },
+  { key: "msv_shivir", label: "Shivir participation", min_points: 0, max_points: 500, is_active: true, is_manual: true, requires_reason: true },
   { key: "course_section_certified", label: "Course section certified", min_points: 0, max_points: 1000, is_active: true },
   { key: "course_completed", label: "Course completed", min_points: 0, max_points: 2000, is_active: true },
 ];

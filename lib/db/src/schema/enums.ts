@@ -205,6 +205,15 @@ export const AUDIT_ACTIONS = [
   "config_change",
   "login",
   "logout",
+  /**
+   * A previously awarded Punya clawed back (M18). Never recorded as 'award':
+   * an append-only log must not claim points were GIVEN at the moment they
+   * were taken back.
+   *
+   * Last on purpose — ALTER TYPE ... ADD VALUE appends, so this order matches
+   * the database's own (0093).
+   */
+  "reverse",
 ] as const;
 
 export const TIER_THRESHOLDS: Record<(typeof TIERS)[number], number> = {

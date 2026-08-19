@@ -28,6 +28,7 @@ import {
   useAdminStudentPunya,
   useAttendance,
   useAwardPunya,
+  usePunyaAwardCategories,
   usePunyaAwardLimit,
   useStudentHomeworkHistory,
 } from "@/lib/queries";
@@ -466,25 +467,39 @@ function AwardPunyaSheet({
   const c = useColors();
   const { hi } = useLocale();
   const limitQ = usePunyaAwardLimit(open);
+  const categoriesQ = usePunyaAwardCategories(open);
   const award = useAwardPunya();
   const [points, setPoints] = useState(0);
   const [reason, setReason] = useState("");
+  // H6 — BRD 7.2's category. `manual_award` is the generic bucket every
+  // award used to land in, and stays the default.
+  const [categoryKey, setCategoryKey] = useState("manual_award");
   const [idempotencyKey, setIdempotencyKey] = useState(() => ulid());
   const [formError, setFormError] = useState<string | null>(null);
 
   const maxPerAward = limitQ.data?.max_points_per_award ?? 0;
   const remainingToday = limitQ.data?.remaining_today ?? null;
   const maxPerDay = limitQ.data?.max_points_per_day ?? null;
+  const categories = categoriesQ.data?.items ?? [];
+  const category = categories.find((x) => x.key === categoryKey) ?? null;
+  // The tightest of the role ceiling, today's remainder and the CATEGORY's
+  // own maximum — a Seva award stops at 50 however senior the awarder is.
   const effectiveMax = Math.max(
     0,
-    Math.min(maxPerAward, remainingToday == null ? maxPerAward : remainingToday),
+    Math.min(
+      maxPerAward,
+      remainingToday == null ? maxPerAward : remainingToday,
+      category?.max_points ?? maxPerAward,
+    ),
   );
+  const categoryMin = category?.min_points ?? 0;
 
   // Mint a fresh idempotency key only when the sheet opens — retries reuse it.
   useEffect(() => {
     if (!open) return;
     setPoints(0);
     setReason("");
+    setCategoryKey("manual_award");
     setFormError(null);
     setIdempotencyKey(ulid());
   }, [open]);
@@ -505,6 +520,7 @@ function AwardPunyaSheet({
   function submit() {
     const note = reason.trim();
     if (points <= 0 || note.length < 3) return;
+    if (points < categoryMin) return;
     if (remainingToday === 0) return;
     setFormError(null);
     award.mutate(
@@ -512,6 +528,7 @@ function AwardPunyaSheet({
         student_id: studentId,
         points,
         note,
+        feature_key: categoryKey,
         idempotency_key: idempotencyKey,
       },
       {
@@ -554,6 +571,7 @@ function AwardPunyaSheet({
   const confirmDisabled =
     award.isPending ||
     points <= 0 ||
+    points < categoryMin ||
     !reasonOk ||
     remainingToday === 0 ||
     effectiveMax <= 0 ||
@@ -613,6 +631,61 @@ function AwardPunyaSheet({
                 ? "सीमा लोड नहीं हुई — पुनः खोलकर कोशिश करें।"
                 : "Could not load award limits — close and try again."}
             </Body>
+          ) : null}
+
+          {/* H6 — which of BRD 7.2's categories, so the ledger records what
+              the award was FOR instead of one bucket plus free text. */}
+          {categories.length > 0 ? (
+            <View style={{ gap: 8 }}>
+              <Body muted style={{ fontSize: 12, lineHeight: 22 }}>
+                {hi ? "किसलिए?" : "What is this for?"}
+              </Body>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {categories.map((cat) => {
+                  const active = cat.key === categoryKey;
+                  return (
+                    <Pressable
+                      key={cat.key}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={cat.label}
+                      onPress={() => {
+                        setCategoryKey(cat.key);
+                        if (cat.default_points != null) {
+                          setPoints(Math.min(cat.default_points, effectiveMax));
+                        }
+                      }}
+                      style={{
+                        borderWidth: 1,
+                        borderColor: active ? c.primary : c.border,
+                        backgroundColor: active ? c.accent : c.card,
+                        borderRadius: c.radius,
+                        paddingHorizontal: 12,
+                        paddingVertical: 8,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          fontSize: 13,
+                          lineHeight: 22,
+                          color: active ? c.primary : c.foreground,
+                          fontFamily: bodyFamily(hi, active ? "semibold" : "regular"),
+                        }}
+                      >
+                        {cat.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              {category?.min_points != null && category.min_points > 0 ? (
+                <Body muted style={{ fontSize: 12, lineHeight: 22 }}>
+                  {hi
+                    ? `${category.label}: ${category.min_points}–${category.max_points ?? ""} अंक`
+                    : `${category.label}: ${category.min_points}–${category.max_points ?? ""} Punya`}
+                </Body>
+              ) : null}
+            </View>
           ) : null}
 
           <View style={{ gap: 8 }}>

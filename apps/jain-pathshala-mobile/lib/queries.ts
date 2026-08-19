@@ -974,11 +974,33 @@ export function usePunyaAwardLimit(enabled = true) {
   });
 }
 
+/** BRD 7.2 manual categories, resolved from the catalogue (H6). */
+export interface PunyaAwardCategory {
+  key: string;
+  label: string;
+  min_points: number | null;
+  max_points: number | null;
+  default_points: number | null;
+  requires_reason: boolean;
+}
+
+export function usePunyaAwardCategories(enabled = true) {
+  return useQuery({
+    queryKey: ["punya-award-categories"],
+    queryFn: () =>
+      apiGet<{ items: PunyaAwardCategory[] }>("/v1/admin/punya/award-categories"),
+    enabled,
+    // Categories change about never; refetching them per sheet-open is waste.
+    staleTime: 10 * 60_000,
+  });
+}
+
 export type AwardPunyaResult = {
   student_id: string;
   points_awarded: number;
   total_points: number;
   tier: string;
+  feature_key?: string;
 };
 
 export function useAwardPunya() {
@@ -988,6 +1010,8 @@ export function useAwardPunya() {
       student_id: string;
       points: number;
       note?: string;
+      /** H6 — which of BRD 7.2's categories this award is for. */
+      feature_key?: string;
       idempotency_key?: string;
     }) => apiPost<AwardPunyaResult>("/v1/admin/punya/award", body),
     onSuccess: (_res, vars) => {

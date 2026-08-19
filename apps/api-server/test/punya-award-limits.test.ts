@@ -152,7 +152,7 @@ describe("POST /v1/admin/punya/award — scope + limits", () => {
     const res = await request(app)
       .post("/v1/admin/punya/award")
       .set(auth(shikshak.token))
-      .send({ student_id: outsiderId, points: 5 });
+      .send({ student_id: outsiderId, points: 5, note: "out of scope probe" });
     expect(res.status).toBe(404);
     expect(res.body.error.code).toBe("ERR_NOT_FOUND");
   });
@@ -174,7 +174,7 @@ describe("POST /v1/admin/punya/award — scope + limits", () => {
     const res = await request(app)
       .post("/v1/admin/punya/award")
       .set(auth(shikshak.token))
-      .send({ student_id: studentId, points: 11 });
+      .send({ student_id: studentId, points: 11, note: "over the per-award cap" });
     expect(res.status).toBe(422);
     expect(res.body.error.code).toBe("ERR_AWARD_LIMIT_EXCEEDED");
     expect(res.body.error.message).toMatch(/limit is 10/i);
@@ -201,6 +201,7 @@ describe("POST /v1/admin/punya/award — scope + limits", () => {
         .send({
           student_id: studentId,
           points: 10,
+          note: "draining the daily budget",
           idempotency_key: `daily-fill-${randomUUID()}`,
         });
       expect(r.status).toBe(200);
@@ -211,7 +212,12 @@ describe("POST /v1/admin/punya/award — scope + limits", () => {
     const blocked = await request(app)
       .post("/v1/admin/punya/award")
       .set(auth(shikshak.token))
-      .send({ student_id: studentId, points: 10, idempotency_key: `daily-block-${randomUUID()}` });
+      .send({
+        student_id: studentId,
+        points: 10,
+        note: "one past the cap",
+        idempotency_key: `daily-block-${randomUUID()}`,
+      });
     expect(blocked.status).toBe(429);
     expect(blocked.body.error.code).toBe("ERR_AWARD_DAILY_LIMIT_EXCEEDED");
 
@@ -230,14 +236,14 @@ describe("POST /v1/admin/punya/award — scope + limits", () => {
     const first = await request(app)
       .post("/v1/admin/punya/award")
       .set(auth(admin.token))
-      .send({ student_id: studentId, points: 3, idempotency_key: key });
+      .send({ student_id: studentId, points: 3, note: "idempotency probe", idempotency_key: key });
     expect(first.status).toBe(200);
     const totalAfterFirst = first.body.data.total_points;
 
     const second = await request(app)
       .post("/v1/admin/punya/award")
       .set(auth(admin.token))
-      .send({ student_id: studentId, points: 3, idempotency_key: key });
+      .send({ student_id: studentId, points: 3, note: "idempotency probe", idempotency_key: key });
     expect(second.status).toBe(200);
     expect(second.body.data.total_points).toBe(totalAfterFirst);
 
