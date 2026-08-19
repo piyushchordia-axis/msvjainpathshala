@@ -121,7 +121,13 @@ export function clearHomeworkPointsCache(): void {
   batchCityCache.clear();
 }
 
-function featureKeyForStatus(status: "approved" | "starred"): string {
+/**
+ * M8 — `homework_starred` was a catalogue row nothing ever wrote. This
+ * helper existed but was private and unused: both grade paths hardcoded
+ * "homework", so no ledger row was ever attributable to a starred piece of
+ * work even though the POINTS differed. Exported so the routes use it.
+ */
+export function featureKeyForStatus(status: "approved" | "starred"): string {
   return status === "starred" ? HOMEWORK_STARRED_FEATURE_KEY : HOMEWORK_FEATURE_KEY;
 }
 

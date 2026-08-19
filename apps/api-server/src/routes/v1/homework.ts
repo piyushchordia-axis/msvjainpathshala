@@ -25,7 +25,7 @@ import { resolveOwnedUpload } from "../../lib/owned-upload";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { resolveAdminScope, inBatchWriteScope } from "../../lib/scope";
 import { awardPunya, reversePunya } from "../../lib/punya";
-import { resolveHomeworkAwardPoints } from "../../lib/homework-points";
+import { resolveHomeworkAwardPoints, featureKeyForStatus } from "../../lib/homework-points";
 import {
   notifyParentsHomeworkAssigned,
   notifyParentHomeworkGraded,
@@ -99,11 +99,16 @@ async function findLatestUnreversedHomeworkAward(
   submissionId: string,
   studentId: string,
   preferredTxnId?: string | null,
-): Promise<{ id: string; points: number; idempotency_key: string } | null> {
+): Promise<{
+  id: string;
+  points: number;
+  idempotency_key: string;
+  feature_key: string;
+} | null> {
   // F3 — prefer the pointer on the submission when still unreversed.
   if (preferredTxnId) {
     const preferred = await tx.execute(sql`
-      select t.id, t.points, t.idempotency_key
+      select t.id, t.points, t.idempotency_key, t.feature_key
       from punya_transactions t
       where t.id = ${preferredTxnId}
         and t.student_id = ${studentId}
@@ -115,7 +120,12 @@ async function findLatestUnreversedHomeworkAward(
     `);
     const preferredRows =
       (preferred as unknown as {
-        rows?: Array<{ id: string; points: number; idempotency_key: string }>;
+        rows?: Array<{
+          id: string;
+          points: number;
+          idempotency_key: string;
+          feature_key: string;
+        }>;
       }).rows ?? [];
     if (preferredRows[0]) return preferredRows[0];
   }
@@ -123,7 +133,7 @@ async function findLatestUnreversedHomeworkAward(
   const legacy = `homework-grade:${submissionId}`;
   const prefix = `homework-grade:${submissionId}:`;
   const result = await tx.execute(sql`
-    select t.id, t.points, t.idempotency_key
+    select t.id, t.points, t.idempotency_key, t.feature_key
     from punya_transactions t
     where t.student_id = ${studentId}
       and t.points > 0
@@ -142,7 +152,12 @@ async function findLatestUnreversedHomeworkAward(
   `);
   const rows =
     (result as unknown as {
-      rows?: Array<{ id: string; points: number; idempotency_key: string }>;
+      rows?: Array<{
+        id: string;
+        points: number;
+        idempotency_key: string;
+        feature_key: string;
+      }>;
     }).rows ?? [];
   return rows[0] ?? null;
 }
@@ -191,7 +206,10 @@ async function claimAndAwardFirstHomeworkGrade(opts: {
   const award = await awardPunya(
     {
       studentId: opts.studentId,
-      featureKey: "homework",
+      // M8 — starred work is worth more AND is now attributable: both
+      // paths used to write "homework" regardless, so homework_starred was a
+      // catalogue row no ledger row ever pointed at.
+      featureKey: featureKeyForStatus(opts.gradeStatus),
       points: opts.points,
       note: opts.gradeStatus === "starred" ? "Homework starred" : "Homework approved",
       awardedBy: opts.actorId,
@@ -686,7 +704,7 @@ router.delete("/assignments/:id", requireAdminPanel, async (req: Request, res: R
         await reversePunya(
           {
             studentId: sub.student_id,
-            featureKey: "homework",
+            featureKey: prior.feature_key,
             points: prior.points,
             note: "Homework assignment deleted",
             awardedBy: req.authUser!.id,
@@ -1251,7 +1269,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
           const rev = await reversePunya(
             {
               studentId: sub.student_id,
-              featureKey: "homework",
+              featureKey: prior.feature_key,
               points: prior.points,
               note: "Homework returned for rework",
               awardedBy: req.authUser!.id,
@@ -1375,11 +1393,33 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       return { kind: "noop" as const, total_points: bal?.total_points ?? 0, points: 0 };
     }
 
-    const oldPoints = await resolveHomeworkAwardPoints(
-      fresh.status as "approved" | "starred",
-      sub.centre_id,
+    // M7 — compare against what was ACTUALLY awarded, not against what the
+    // current config says the old status is worth today.
+    //
+    // Re-resolving punya_configs here meant an admin changing the homework
+    // rate between the grade and the re-grade made the gate lie. Award 10,
+    // config later becomes 12, re-grade to a status also worth 12: old(12)
+    // equalled new(12), so this took the metadata-only branch and wrote no
+    // ledger movement — leaving the child permanently 2 points short with no
+    // trace. The ledger is the only honest answer to what was awarded.
+    const priorAward = await findLatestUnreversedHomeworkAward(
+      tx,
+      sub.id,
+      sub.student_id,
+      fresh.punya_transaction_id,
     );
-    if (oldPoints === points) {
+    const oldPoints =
+      priorAward?.points ??
+      (await resolveHomeworkAwardPoints(
+        fresh.status as "approved" | "starred",
+        sub.centre_id,
+      ));
+    // A starred/approved switch at an identical point value still has to move
+    // the ledger, or the row stays attributed to the wrong feature key (M8).
+    const oldKey = priorAward?.feature_key ?? featureKeyForStatus(
+      fresh.status as "approved" | "starred",
+    );
+    if (oldPoints === points && oldKey === featureKeyForStatus(gradeStatus)) {
       // Identical award value — metadata only, do NOT bump revision (AT18).
       // Preserve original marked_by/marked_at and punya_transaction_id (F3).
       await tx
@@ -1397,18 +1437,14 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
       return { kind: "metadata" as const, total_points: bal?.total_points ?? 0, points: 0 };
     }
 
-    // Different point value: reverse old, award new, bump revision.
-    const prior = await findLatestUnreversedHomeworkAward(
-      tx,
-      sub.id,
-      sub.student_id,
-      fresh.punya_transaction_id,
-    );
+    // Different point value (or a different feature key): reverse old, award
+    // new, bump revision.
+    const prior = priorAward;
     if (prior && prior.points > 0) {
       await reversePunya(
         {
           studentId: sub.student_id,
-          featureKey: "homework",
+          featureKey: prior.feature_key,
           points: prior.points,
           note: "Homework re-grade reversal",
           awardedBy: req.authUser!.id,
@@ -1433,7 +1469,7 @@ router.post("/submissions/:id/grade", requireAdminPanel, async (req: Request, re
     const award = await awardPunya(
       {
         studentId: sub.student_id,
-        featureKey: "homework",
+        featureKey: featureKeyForStatus(gradeStatus),
         points,
         note: body.status === "starred" ? "Homework starred" : "Homework approved",
         awardedBy: req.authUser!.id,
@@ -1558,7 +1594,7 @@ router.post("/submissions/:id/ungrade", requireAdminPanel, async (req: Request, 
       const rev = await reversePunya(
         {
           studentId: sub.student_id,
-          featureKey: "homework",
+          featureKey: prior.feature_key,
           points: prior.points,
           note: "Homework un-graded",
           awardedBy: req.authUser!.id,
