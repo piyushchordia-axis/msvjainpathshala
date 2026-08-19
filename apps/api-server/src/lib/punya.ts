@@ -7,6 +7,7 @@
 import { db, punya_transactions, punya_balances } from "@workspace/db";
 import { tierForPoints, TIER_THRESHOLDS } from "@workspace/db/enums";
 import { and, eq, sql } from "drizzle-orm";
+import { logger } from "./logger";
 
 export interface AwardPunyaInput {
   studentId: string;
@@ -296,13 +297,13 @@ function awardKeyFromReversal(key: string): string {
 }
 
 async function runReverse(tx: Tx | Db, input: ReversePunyaInput): Promise<ReversePunyaResult> {
-  const points = Math.abs(input.points);
   const key = input.idempotencyKey.trim();
   const originalKey = awardKeyFromReversal(key);
 
   const [original] = await tx
     .select({
       id: punya_transactions.id,
+      points: punya_transactions.points,
       source_entity_kind: punya_transactions.source_entity_kind,
       source_entity_id: punya_transactions.source_entity_id,
     })
@@ -314,6 +315,64 @@ async function runReverse(tx: Tx | Db, input: ReversePunyaInput): Promise<Revers
       ),
     )
     .limit(1);
+
+  // M6 — the ledger is authoritative for the amount, not the caller.
+  //
+  // Every caller used to supply `points` itself. Most read it from the award
+  // first, but niyam rejection passed niyam_submissions.points_awarded, a
+  // denormalised copy: if it ever disagreed with the ledger row, the debit
+  // silently moved the balance by the wrong amount and the reconcile then
+  // rebuilt the balance around it.
+  let points = Math.abs(input.points);
+  if (original) {
+    const ledgerPoints = Math.abs(Number(original.points));
+    if (ledgerPoints !== points) {
+      logger.warn(
+        {
+          student_id: input.studentId,
+          idempotency_key: originalKey,
+          caller_points: points,
+          ledger_points: ledgerPoints,
+        },
+        "reversePunya — caller amount disagreed with the ledger; using the ledger",
+      );
+      points = ledgerPoints;
+    }
+
+    // Guard a second reversal that arrives under a DIFFERENT key. The
+    // idempotency index only stops a replay of the same key, so two callers
+    // with different key conventions could each debit the same award.
+    const [already] = await tx
+      .select({ id: punya_transactions.id })
+      .from(punya_transactions)
+      .where(eq(punya_transactions.reversal_of, original.id))
+      .limit(1);
+    if (already) {
+      const total = await readBalance(tx, input.studentId, 0);
+      return {
+        student_id: input.studentId,
+        points_reversed: 0,
+        total_points: total,
+        tier: tierForPoints(total),
+        reversed: false,
+        transaction_id: already.id,
+      };
+    }
+  } else {
+    // No matching award. Debiting anyway is still the lesser evil — a niyam
+    // rejection that clawed back nothing would leave the child holding points
+    // for a submission that was refused — but it is never routine, and the
+    // resulting row has reversal_of = null, which nothing can later audit.
+    logger.error(
+      {
+        student_id: input.studentId,
+        idempotency_key: originalKey,
+        feature_key: input.featureKey,
+        points,
+      },
+      "reversePunya — no matching award found; writing an unlinked debit",
+    );
+  }
 
   const sourceKind = original?.source_entity_kind ?? sourceFromKey(input.featureKey, originalKey).kind;
   const sourceId = original?.source_entity_id ?? sourceFromKey(input.featureKey, originalKey).id;
