@@ -24,6 +24,15 @@ export const ATTENDANCE_FEATURE_KEY = "attendance";
  */
 const DEFAULT_ATTENDANCE = 10;
 
+/** AT22 — the repeating every-4-sessions bonus. */
+export const ATTENDANCE_STREAK_FEATURE_KEY = "attendance_streak";
+
+/**
+ * Matches migration 0012's punya_features/punya_configs rows (20/20).
+ * Only reached when the catalogue is cold — see DEFAULT_ATTENDANCE.
+ */
+const DEFAULT_STREAK_BONUS = 20;
+
 type CacheEntry = { points: number; expiresAt: number };
 type CityCacheEntry = { centreId: string | null; cityId: string | null; expiresAt: number };
 
@@ -151,8 +160,19 @@ export async function resolveAttendanceAwardPoints(centreId: string | null): Pro
   return resolveAttendanceAwardPointsForCity(cityId);
 }
 
-async function resolveAttendanceAwardPointsForCity(cityId: string | null): Promise<number> {
-  const cacheKey = `punya:attendance:city:${cityId ?? "global"}`;
+/**
+ * Generic AT21 resolution for one feature key: city override → global config
+ * → punya_features bounds → the caller's hardcoded floor.
+ *
+ * Extracted from the attendance-only version so the streak bonus (H8) resolves
+ * through the same precedence and the same cache instead of an inlined constant.
+ */
+async function resolveFeatureDefaultPoints(
+  featureKey: string,
+  cityId: string | null,
+  fallback: number,
+): Promise<number> {
+  const cacheKey = `punya:${featureKey}:city:${cityId ?? "global"}`;
   const cached = await cacheGet(cacheKey);
   if (cached != null && Number.isFinite(cached)) return cached;
 
@@ -162,7 +182,7 @@ async function resolveAttendanceAwardPointsForCity(cityId: string | null): Promi
       .from(punya_configs)
       .where(
         and(
-          eq(punya_configs.feature_key, ATTENDANCE_FEATURE_KEY),
+          eq(punya_configs.feature_key, featureKey),
           eq(punya_configs.city_id, cityId),
           eq(punya_configs.is_active, true),
         ),
@@ -180,7 +200,7 @@ async function resolveAttendanceAwardPointsForCity(cityId: string | null): Promi
     .from(punya_configs)
     .where(
       and(
-        eq(punya_configs.feature_key, ATTENDANCE_FEATURE_KEY),
+        eq(punya_configs.feature_key, featureKey),
         isNull(punya_configs.city_id),
         eq(punya_configs.is_active, true),
       ),
@@ -195,13 +215,62 @@ async function resolveAttendanceAwardPointsForCity(cityId: string | null): Promi
   const [feat] = await db
     .select({ max_points: punya_features.max_points, min_points: punya_features.min_points })
     .from(punya_features)
-    .where(and(eq(punya_features.key, ATTENDANCE_FEATURE_KEY), eq(punya_features.is_active, true)))
+    .where(and(eq(punya_features.key, featureKey), eq(punya_features.is_active, true)))
     .orderBy(desc(punya_features.updated_at), desc(punya_features.id))
     .limit(1);
   const fromFeature = feat?.max_points ?? feat?.min_points ?? null;
-  const points = fromFeature != null && fromFeature > 0 ? fromFeature : DEFAULT_ATTENDANCE;
+  const points = fromFeature != null && fromFeature > 0 ? fromFeature : fallback;
   await cacheSet(cacheKey, points);
   return points;
+}
+
+async function resolveAttendanceAwardPointsForCity(cityId: string | null): Promise<number> {
+  return resolveFeatureDefaultPoints(ATTENDANCE_FEATURE_KEY, cityId, DEFAULT_ATTENDANCE);
+}
+
+/**
+ * AT21 — the streak bonus, resolved from the catalogue like every other
+ * point value.
+ *
+ * H8: this was the constant STREAK_BONUS_POINTS = 20 inlined in
+ * attendance-post-process.ts, while migration 0012 seeded a
+ * punya_configs('attendance_streak', 20) row that admin-modules.ts let an
+ * admin edit. Nothing read it. Raising the bonus to 30 updated the row,
+ * returned success, and changed nothing, forever — a control that looks
+ * functional and is inert is worse than a missing one.
+ */
+export async function resolveStreakBonusPoints(cityId: string | null): Promise<number> {
+  return resolveFeatureDefaultPoints(
+    ATTENDANCE_STREAK_FEATURE_KEY,
+    cityId,
+    DEFAULT_STREAK_BONUS,
+  );
+}
+
+/** Streak bonus for a batch, resolving the batch's city through the same cache. */
+export async function resolveStreakBonusPointsForBatch(batchId: string): Promise<number> {
+  const { cityId } = await resolveBatchGeography(batchId);
+  return resolveStreakBonusPoints(cityId);
+}
+
+/** PERF #13 — batch —> (centre, city), cached ~5m. */
+export async function resolveBatchGeography(
+  batchId: string,
+): Promise<{ centreId: string | null; cityId: string | null }> {
+  const cachedCity = await cityCacheGet(batchId);
+  if (cachedCity) {
+    return { centreId: cachedCity.centreId, cityId: cachedCity.cityId };
+  }
+  const [row] = await db
+    .select({ centre_id: batches.centre_id, city_id: centres.city_id })
+    .from(batches)
+    .leftJoin(centres, eq(centres.id, batches.centre_id))
+    .where(eq(batches.id, batchId))
+    .limit(1);
+  const centreId = row?.centre_id ?? null;
+  const cityId = row?.city_id ?? null;
+  await cityCacheSet(batchId, centreId, cityId);
+  return { centreId, cityId };
 }
 
 export async function resolveAttendanceAwardPointsForBatch(batchId: string): Promise<{
@@ -211,23 +280,7 @@ export async function resolveAttendanceAwardPointsForBatch(batchId: string): Pro
   const batchPointsKey = `punya:attendance:batch:${batchId}`;
   const cachedPoints = await cacheGet(batchPointsKey);
 
-  let centreId: string | null = null;
-  let cityId: string | null = null;
-  const cachedCity = await cityCacheGet(batchId);
-  if (cachedCity) {
-    centreId = cachedCity.centreId;
-    cityId = cachedCity.cityId;
-  } else {
-    const [row] = await db
-      .select({ centre_id: batches.centre_id, city_id: centres.city_id })
-      .from(batches)
-      .leftJoin(centres, eq(centres.id, batches.centre_id))
-      .where(eq(batches.id, batchId))
-      .limit(1);
-    centreId = row?.centre_id ?? null;
-    cityId = row?.city_id ?? null;
-    await cityCacheSet(batchId, centreId, cityId);
-  }
+  const { centreId, cityId } = await resolveBatchGeography(batchId);
 
   if (cachedPoints != null && Number.isFinite(cachedPoints)) {
     return { points: cachedPoints, centreId };

@@ -17,8 +17,8 @@ import {
   centre_holidays,
 } from "@workspace/db";
 import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
-import { awardPunya } from "../lib/punya";
-import { STREAK_FEATURE_KEY } from "../lib/punya-streak";
+import { awardStreakBonus, STREAK_FEATURE_KEY } from "../lib/punya-streak";
+import { resolveStreakBonusPointsForBatch } from "../lib/attendance-points";
 import { notifyUsers } from "../lib/notify";
 import { recordAdminAttendanceMark } from "../lib/admin-dashboard-feed";
 import { enqueueDebouncedJob } from "../lib/queues";
@@ -31,8 +31,17 @@ import {
 } from "../lib/attendance-streak-math";
 
 export { STREAK_FEATURE_KEY };
-export const STREAK_BONUS_POINTS = 20;
 export { STREAK_EVERY };
+
+/**
+ * H8 / AT21 — the bonus is resolved from punya_configs at award time, not
+ * inlined here. The old `STREAK_BONUS_POINTS = 20` constant shadowed a live
+ * admin-editable config row (migration 0012) that nothing read, so raising
+ * the bonus in the admin UI reported success and changed nothing forever.
+ *
+ * Deliberately NOT re-exported as a constant: a constant is what let five
+ * call sites drift from the catalogue in the first place.
+ */
 
 /** AT31 — parent "attendance marked" settles for 5 minutes per (student, session). */
 export const PARENT_PUSH_DEBOUNCE_MS = 5 * 60 * 1000;
@@ -196,17 +205,14 @@ export async function recomputeAndAwardStreak(studentId: string): Promise<number
     })
     .where(eq(students.id, studentId));
 
-  for (const sessionId of milestoneSessionIds) {
-    const key = `attendance_streak:${studentId}:${sessionId}`;
-    await awardPunya({
-      studentId,
-      featureKey: STREAK_FEATURE_KEY,
-      points: STREAK_BONUS_POINTS,
-      note: "Attendance streak bonus (every 4 attended)",
-      idempotencyKey: key,
-      sourceEntityKind: "attendance_streak",
-      sourceEntityId: sessionId,
-    });
+  if (milestoneSessionIds.length > 0) {
+    // AT21 — resolved once per recompute, from the city's config.
+    const bonus = await resolveStreakBonusPointsForBatch(stu.batch_id);
+    for (const sessionId of milestoneSessionIds) {
+      // AT20 — guarded per milestone; awardStreakBonus skips a live award and
+      // bumps the generation when the previous one was reversed (H9).
+      await awardStreakBonus(db, { studentId, sessionId, points: bonus });
+    }
   }
 
   void sessionMeta;
@@ -347,16 +353,16 @@ export async function runAttendancePostProcess(sessionId: string): Promise<void>
   }
 
   // AT20 — one guarded award per milestone (do not batch into an unguarded write).
-  for (const a of awards) {
-    await awardPunya({
-      studentId: a.studentId,
-      featureKey: STREAK_FEATURE_KEY,
-      points: STREAK_BONUS_POINTS,
-      note: "Attendance streak bonus (every 4 attended)",
-      idempotencyKey: `attendance_streak:${a.studentId}:${a.sessionId}`,
-      sourceEntityKind: "attendance_streak",
-      sourceEntityId: a.sessionId,
-    });
+  // AT21 — one catalogue resolve for the whole batch, not one per student.
+  if (awards.length > 0) {
+    const bonus = await resolveStreakBonusPointsForBatch(batchId);
+    for (const a of awards) {
+      await awardStreakBonus(db, {
+        studentId: a.studentId,
+        sessionId: a.sessionId,
+        points: bonus,
+      });
+    }
   }
 
   // AT31 — distinct jobIds per (student, session); leave the loop (addBulk would

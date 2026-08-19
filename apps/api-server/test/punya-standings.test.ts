@@ -236,16 +236,21 @@ describe("GET /v1/admin/batches/:batchId/punya-standings", () => {
     });
 
     const awardKey = `standings-net-award-${randomUUID()}`;
+    // awarded_by stays NULL deliberately. These rows are a fixture for the
+    // net/by_source assertions below and nothing here reads the awarder — but
+    // pointsAwardedTodayBy counts every positive manual_award row an actor
+    // holds today, so attributing them to the seeded shikshak spent 20 of
+    // that shikshak's 50-point daily budget on every run and made
+    // punya-award-limits.test.ts fail depending on file order.
     await pool.query(
       `insert into punya_transactions
          (student_id, feature_key, points, note, awarded_by, idempotency_key, created_at)
        values
-         ($1, 'manual_award', 20, 'award', $2, $3, now()),
-         ($1, 'manual_award', -20, 'reverse', $2, $4, now()),
-         ($1, 'niyam', 15, 'niyam', $2, $5, now())`,
+         ($1, 'manual_award', 20, 'award', NULL, $2, now()),
+         ($1, 'manual_award', -20, 'reverse', NULL, $3, now()),
+         ($1, 'niyam', 15, 'niyam', NULL, $4, now())`,
       [
         studentId,
-        shikshak.user.id,
         awardKey,
         `${awardKey}:reversal`,
         `standings-niyam-${randomUUID()}`,
