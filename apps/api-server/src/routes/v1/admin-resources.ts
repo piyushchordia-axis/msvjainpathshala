@@ -615,7 +615,37 @@ router.get("/punya/features", async (_req: Request, res: Response) => {
 router.get("/punya/transactions", async (req: Request, res: Response) => {
   const scope = await resolveAdminScope(req.authUser!);
   const limit = clampLimit(req.query.limit, 100, 500);
+
+  // H16 — a batch-restricted role read the WHOLE centre's ledger.
+  //
+  // resolveAdminScope hands a shikshak centreIds for their entire centre, so
+  // filtering on centre alone showed them every child in it, including the
+  // batches they do not teach. Niyam solved this with inBatchWriteScope; this
+  // route never consulted batchIds at all. Q12 binds a shikshak to their own
+  // batches for niyam decisions, and the same boundary belongs here.
   const centreFilter = scopedCentreFilter(scope, students.centre_id);
+  const batchFilter =
+    scope.batchIds == null
+      ? undefined
+      : scope.batchIds.length === 0
+        ? sql`false`
+        : inArray(students.batch_id, scope.batchIds);
+
+  // Keyset cursor on (created_at, id). The route returned no next_cursor at
+  // all while the admin list derived hasMore from exactly that field, so
+  // Load More was permanently inert and the audit truncated in silence.
+  const cursorRaw = typeof req.query.cursor === "string" ? req.query.cursor : "";
+  let cursorFilter: SQL | undefined;
+  if (cursorRaw) {
+    const [ts, id] = cursorRaw.split("|");
+    const at = ts ? new Date(ts) : null;
+    if (!at || Number.isNaN(at.getTime()) || !id) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid cursor.");
+      return;
+    }
+    cursorFilter = sql`(${punya_transactions.created_at}, ${punya_transactions.id}) < (${at}, ${id}::uuid)`;
+  }
+
   const rows = await db
     .select({
       id: punya_transactions.id,
@@ -630,11 +660,25 @@ router.get("/punya/transactions", async (req: Request, res: Response) => {
     .from(punya_transactions)
     .innerJoin(students, eq(students.id, punya_transactions.student_id))
     .leftJoin(users, eq(users.id, punya_transactions.awarded_by))
-    .where(and(isNull(students.deleted_at), centreFilter))
-    .orderBy(desc(punya_transactions.created_at))
-    .limit(limit);
-  const items = rows.map((r) => ({ ...r, created_at: r.created_at.toISOString() }));
-  ok(res, { items }, { count: items.length });
+    .where(and(isNull(students.deleted_at), centreFilter, batchFilter, cursorFilter))
+    // Tie-break on id: two awards in the same millisecond would otherwise
+    // make the keyset skip or repeat a row.
+    .orderBy(desc(punya_transactions.created_at), desc(punya_transactions.id))
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const page = hasMore ? rows.slice(0, limit) : rows;
+  const last = page[page.length - 1];
+  const items = page.map((r) => ({ ...r, created_at: r.created_at.toISOString() }));
+  ok(
+    res,
+    { items },
+    {
+      count: items.length,
+      next_cursor:
+        hasMore && last ? `${last.created_at.toISOString()}|${last.id}` : null,
+    },
+  );
 });
 
 const punyaAwardSchema = z.object({
