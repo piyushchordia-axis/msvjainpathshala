@@ -4,6 +4,7 @@
  */
 import { db, punya_configs, punya_features } from "@workspace/db";
 import { and, desc, eq, isNull } from "drizzle-orm";
+import { createPointsCache } from "./punya-points-cache";
 
 export const EXAM_COMPLETION_FEATURE_KEY = "exam_completion";
 export const EXAM_TOP_SCORE_FEATURE_KEY = "exam_top_score";
@@ -12,61 +13,22 @@ export const EXAM_TOP_SCORE_FEATURE_KEY = "exam_top_score";
 const DEFAULT_COMPLETION = 20;
 const DEFAULT_TOP_SCORE = 50;
 
-type CacheEntry = { points: number; expiresAt: number };
-const memCache = new Map<string, CacheEntry>();
 const TTL_MS = 60_000;
 
-let redisGet: ((key: string) => Promise<string | null>) | null = null;
-let redisSet: ((key: string, val: string, mode: string, ttlSec: number) => Promise<unknown>) | null =
-  null;
-let redisInitTried = false;
-
-async function ensureRedis(): Promise<void> {
-  if (redisInitTried) return;
-  redisInitTried = true;
-  const url = process.env.REDIS_URL?.trim();
-  if (!url) return;
-  try {
-    const { Redis } = await import("ioredis");
-    const client = new Redis(url, { maxRetriesPerRequest: 1, enableOfflineQueue: false });
-    redisGet = (k) => client.get(k);
-    redisSet = (k, v, mode, ttl) => client.set(k, v, mode as "EX", ttl);
-  } catch {
-    redisGet = null;
-    redisSet = null;
-  }
-}
+const cache = createPointsCache<number>("exam", TTL_MS);
 
 async function cacheGet(key: string): Promise<number | null> {
-  await ensureRedis();
-  if (redisGet) {
-    try {
-      const raw = await redisGet(key);
-      if (raw != null && raw !== "") return Number(raw);
-    } catch {
-      /* fail open to DB */
-    }
-  }
-  const hit = memCache.get(key);
-  if (hit && hit.expiresAt > Date.now()) return hit.points;
-  return null;
+  const v = await cache.get(key);
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
 async function cacheSet(key: string, points: number): Promise<void> {
-  await ensureRedis();
-  memCache.set(key, { points, expiresAt: Date.now() + TTL_MS });
-  if (redisSet) {
-    try {
-      await redisSet(key, String(points), "EX", Math.ceil(TTL_MS / 1000));
-    } catch {
-      /* ignore */
-    }
-  }
+  await cache.set(key, points);
 }
 
 /** Clear caches (tests). */
 export function clearExamPointsCache(): void {
-  memCache.clear();
+  cache.clear();
 }
 
 async function resolveFeatureDefault(
@@ -115,12 +77,20 @@ async function resolveFeatureDefault(
   }
 
   const [feat] = await db
-    .select({ max_points: punya_features.max_points, min_points: punya_features.min_points })
+    .select({
+      default_points: punya_features.default_points,
+      max_points: punya_features.max_points,
+      min_points: punya_features.min_points,
+    })
     .from(punya_features)
     .where(and(eq(punya_features.key, featureKey), eq(punya_features.is_active, true)))
     .orderBy(desc(punya_features.updated_at), desc(punya_features.id))
     .limit(1);
-  const fromFeature = feat?.max_points ?? feat?.min_points ?? null;
+  // M3 — default_points first. Falling back to max_points meant a feature's
+  // CEILING was used as its normal value, so a catalogue entry could never
+  // say "normally 10, never more than 25" — the two were forced equal.
+  const fromFeature =
+    feat?.default_points ?? feat?.max_points ?? feat?.min_points ?? null;
   const points = fromFeature != null && fromFeature > 0 ? fromFeature : hardcoded;
   await cacheSet(cacheKey, points);
   return points;

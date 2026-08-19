@@ -7,6 +7,7 @@
  */
 import { db, punya_configs, punya_features, centres, batches } from "@workspace/db";
 import { and, desc, eq, isNull } from "drizzle-orm";
+import { createPointsCache } from "./punya-points-cache";
 
 export const ATTENDANCE_FEATURE_KEY = "attendance";
 
@@ -33,86 +34,29 @@ export const ATTENDANCE_STREAK_FEATURE_KEY = "attendance_streak";
  */
 const DEFAULT_STREAK_BONUS = 20;
 
-type CacheEntry = { points: number; expiresAt: number };
-type CityCacheEntry = { centreId: string | null; cityId: string | null; expiresAt: number };
 
-const memCache = new Map<string, CacheEntry>();
-const batchCityCache = new Map<string, CityCacheEntry>();
 /** ~5 minutes — points/config rarely change mid-session. */
 const TTL_MS = 5 * 60_000;
 
-let redisGet: ((key: string) => Promise<string | null>) | null = null;
-let redisSet: ((key: string, val: string, mode: string, ttlSec: number) => Promise<unknown>) | null =
-  null;
-let redisDel: ((key: string) => Promise<unknown>) | null = null;
-let redisInitTried = false;
-
-async function ensureRedis(): Promise<void> {
-  if (redisInitTried) return;
-  redisInitTried = true;
-  const url = process.env.REDIS_URL?.trim();
-  if (!url) return;
-  try {
-    const { Redis } = await import("ioredis");
-    const client = new Redis(url, { maxRetriesPerRequest: 1, enableOfflineQueue: false });
-    redisGet = (k) => client.get(k);
-    redisSet = (k, v, mode, ttl) => client.set(k, v, mode as "EX", ttl);
-    redisDel = (k) => client.del(k);
-  } catch {
-    redisGet = null;
-    redisSet = null;
-    redisDel = null;
-  }
-}
+const cache = createPointsCache<number>("attendance", TTL_MS);
+const cityCache = createPointsCache<{ centreId: string | null; cityId: string | null }>(
+  "attendance-city",
+  TTL_MS,
+);
 
 async function cacheGet(key: string): Promise<number | null> {
-  await ensureRedis();
-  if (redisGet) {
-    try {
-      const raw = await redisGet(key);
-      if (raw != null && raw !== "") return Number(raw);
-    } catch {
-      /* fail open to DB */
-    }
-  }
-  const hit = memCache.get(key);
-  if (hit && hit.expiresAt > Date.now()) return hit.points;
-  return null;
+  const v = await cache.get(key);
+  return typeof v === "number" && Number.isFinite(v) ? v : null;
 }
 
 async function cacheSet(key: string, points: number): Promise<void> {
-  await ensureRedis();
-  memCache.set(key, { points, expiresAt: Date.now() + TTL_MS });
-  if (redisSet) {
-    try {
-      await redisSet(key, String(points), "EX", Math.ceil(TTL_MS / 1000));
-    } catch {
-      /* ignore */
-    }
-  }
+  await cache.set(key, points);
 }
 
 async function cityCacheGet(
   batchId: string,
 ): Promise<{ centreId: string | null; cityId: string | null } | null> {
-  await ensureRedis();
-  const key = `punya:batch-city:${batchId}`;
-  if (redisGet) {
-    try {
-      const raw = await redisGet(key);
-      if (raw) {
-        const parsed = JSON.parse(raw) as { centreId: string | null; cityId: string | null };
-        return parsed;
-      }
-    } catch {
-      /* fail open */
-    }
-  }
-  const hit = batchCityCache.get(batchId);
-  if (hit && hit.expiresAt > Date.now()) {
-    return { centreId: hit.centreId, cityId: hit.cityId };
-  }
-  return null;
+  return cityCache.get(batchId);
 }
 
 async function cityCacheSet(
@@ -120,26 +64,13 @@ async function cityCacheSet(
   centreId: string | null,
   cityId: string | null,
 ): Promise<void> {
-  await ensureRedis();
-  batchCityCache.set(batchId, { centreId, cityId, expiresAt: Date.now() + TTL_MS });
-  if (redisSet) {
-    try {
-      await redisSet(
-        `punya:batch-city:${batchId}`,
-        JSON.stringify({ centreId, cityId }),
-        "EX",
-        Math.ceil(TTL_MS / 1000),
-      );
-    } catch {
-      /* ignore */
-    }
-  }
+  await cityCache.set(batchId, { centreId, cityId });
 }
 
 /** Clear caches (tests + punya_configs writes). */
 export function clearAttendancePointsCache(): void {
-  memCache.clear();
-  batchCityCache.clear();
+  cache.clear();
+  cityCache.clear();
 }
 
 /**
@@ -213,12 +144,20 @@ async function resolveFeatureDefaultPoints(
   }
 
   const [feat] = await db
-    .select({ max_points: punya_features.max_points, min_points: punya_features.min_points })
+    .select({
+      default_points: punya_features.default_points,
+      max_points: punya_features.max_points,
+      min_points: punya_features.min_points,
+    })
     .from(punya_features)
     .where(and(eq(punya_features.key, featureKey), eq(punya_features.is_active, true)))
     .orderBy(desc(punya_features.updated_at), desc(punya_features.id))
     .limit(1);
-  const fromFeature = feat?.max_points ?? feat?.min_points ?? null;
+  // M3 — default_points first. Falling back to max_points meant a feature's
+  // CEILING was used as its normal value, so a catalogue entry could never
+  // say "normally 10, never more than 25" — the two were forced equal.
+  const fromFeature =
+    feat?.default_points ?? feat?.max_points ?? feat?.min_points ?? null;
   const points = fromFeature != null && fromFeature > 0 ? fromFeature : fallback;
   await cacheSet(cacheKey, points);
   return points;

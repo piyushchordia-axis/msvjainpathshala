@@ -28,7 +28,7 @@
  * phase two — so the lock is held briefly and only where it matters.
  */
 import { db, dbWorker, punya_balances } from "@workspace/db";
-import { TIER_THRESHOLDS } from "@workspace/db/enums";
+import { resolveTierThresholds, tierCaseSql } from "../lib/punya-tiers";
 import { eq, sql, type SQL } from "drizzle-orm";
 import { logger } from "../lib/logger";
 import { notifyUsers } from "../lib/notify";
@@ -53,22 +53,16 @@ export interface PunyaReconcileResult {
   samples: PunyaDriftRow[];
 }
 
-/** Tier ladder as a SQL CASE over an integer expression (AT23 thresholds). */
-function tierCase(expr: SQL): SQL {
-  return sql`(case
-    when ${expr} >= ${TIER_THRESHOLDS.tirthankar} then 'tirthankar'::tier_enum
-    when ${expr} >= ${TIER_THRESHOLDS.shraman} then 'shraman'::tier_enum
-    when ${expr} >= ${TIER_THRESHOLDS.sadhak} then 'sadhak'::tier_enum
-    when ${expr} >= ${TIER_THRESHOLDS.shravak} then 'shravak'::tier_enum
-    else 'jigyasu'::tier_enum
-  end)`;
-}
+// AT23 — the ladder comes from lib/punya-tiers, the same builder
+// creditBalance uses. Three hand-rolled copies of these five numbers used to
+// exist with nothing asserting they agreed.
 
 /**
  * Phase one: every student whose stored balance or tier disagrees with the ledger.
  * Read-only, so it is safe to run on the worker pool against the full table.
  */
 async function findDrift(): Promise<{ scanned: number; rows: PunyaDriftRow[] }> {
+  const thresholds = await resolveTierThresholds();
   const ledgerTotal = sql`coalesce(l.total, 0)`;
   const result = await dbWorker.execute(sql`
     with ledger as (
@@ -84,7 +78,7 @@ async function findDrift(): Promise<{ scanned: number; rows: PunyaDriftRow[] }> 
         b.total_points as balance_total,
         b.tier::text as balance_tier,
         (l.student_id is null) as orphan_balance,
-        ${tierCase(ledgerTotal)}::text as ledger_tier
+        ${tierCaseSql(ledgerTotal, thresholds)}::text as ledger_tier
       from ledger l
       full outer join punya_balances b on b.student_id = l.student_id
     ),
@@ -130,6 +124,7 @@ async function findDrift(): Promise<{ scanned: number; rows: PunyaDriftRow[] }> 
  * Returns the points actually moved (0 when the candidate turned out to be stale).
  */
 async function repairStudent(studentId: string): Promise<number> {
+  const thresholds = await resolveTierThresholds();
   return db.transaction(async (tx) => {
     const [locked] = await tx
       .select({ total_points: punya_balances.total_points })
@@ -140,7 +135,7 @@ async function repairStudent(studentId: string): Promise<number> {
 
     const totalExpr = sql`coalesce(sum(t.points), 0)`;
     const fresh = await tx.execute(sql`
-      select ${totalExpr}::int as total, ${tierCase(totalExpr)}::text as tier
+      select ${totalExpr}::int as total, ${tierCaseSql(totalExpr, thresholds)}::text as tier
       from punya_transactions t
       where t.student_id = ${studentId}::uuid
     `);

@@ -4,22 +4,23 @@
  */
 import { db, punya_configs, punya_features } from "@workspace/db";
 import { and, desc, eq, isNull } from "drizzle-orm";
+import { createPointsCache } from "./punya-points-cache";
 
 export const COURSE_SECTION_FEATURE_KEY = "course_section_certified";
 export const COURSE_COMPLETED_FEATURE_KEY = "course_completed";
 
 type FeatureBounds = { min_points: number; max_points: number; multiplier: number };
 
-const memCache = new Map<string, { value: FeatureBounds; expiresAt: number }>();
 const TTL_MS = 60_000;
+const cache = createPointsCache<FeatureBounds>("course", TTL_MS);
 
 async function resolveFeature(
   featureKey: string,
   cityId: string | null,
 ): Promise<FeatureBounds> {
-  const cacheKey = `course-punya:${featureKey}:${cityId ?? "global"}`;
-  const hit = memCache.get(cacheKey);
-  if (hit && hit.expiresAt > Date.now()) return hit.value;
+  const cacheKey = `${featureKey}:${cityId ?? "global"}`;
+  const hit = await cache.get(cacheKey);
+  if (hit) return hit;
 
   let multiplier: number | null = null;
   if (cityId) {
@@ -69,7 +70,7 @@ async function resolveFeature(
     // Missing config → 0 multiplier → award 0 (CU22 seed landmine).
     multiplier: multiplier ?? 0,
   };
-  memCache.set(cacheKey, { value, expiresAt: Date.now() + TTL_MS });
+  await cache.set(cacheKey, value);
   return value;
 }
 
@@ -92,7 +93,7 @@ export async function resolveCourseAwardPoints(
 }
 
 export function clearCoursePointsCache(): void {
-  memCache.clear();
+  cache.clear();
 }
 
 /** CU23 idempotency keys. */

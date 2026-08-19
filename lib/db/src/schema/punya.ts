@@ -26,6 +26,19 @@ export const punya_features = pgTable(
     label: text("label").notNull(),
     min_points: integer("min_points"),
     max_points: integer("max_points"),
+    /**
+     * SPEC 5.7 (M3). Resolvers used to fall back to `max_points` — a
+     * feature's CEILING used as its normal value. Backfilled from
+     * max_points in 0091, so the numbers did not move; it merely became
+     * possible to express a default that differs from the maximum.
+     */
+    default_points: integer("default_points"),
+    /** Granted by a human through the manual-award surface, not by an event. */
+    is_manual: boolean("is_manual").notNull().default(false),
+    /** BRD 7.2 — amount AND reason mandatory for some manual categories. */
+    requires_reason: boolean("requires_reason").notNull().default(false),
+    /** Reserved for per-scope catalogues; 'global' everywhere today. */
+    scope: text("scope").notNull().default("global"),
     is_active: boolean("is_active").notNull().default(true),
     ...timestamps(),
   },
@@ -180,6 +193,20 @@ export const monthly_leaderboard_snapshots = pgTable(
     month_idx: index("idx_monthly_leaderboard_snapshots_month").on(t.month),
   }),
 );
+
+/**
+ * AT23 — the tier ladder as CONFIGURATION, adjustable without a deploy.
+ *
+ * It was TIER_THRESHOLDS in enums.ts, and the same numbers were re-inlined
+ * into three SQL CASE ladders with nothing asserting they agreed.
+ */
+export const punya_tier_thresholds = pgTable("punya_tier_thresholds", {
+  tier: tierEnum("tier").primaryKey(),
+  min_points: integer("min_points").notNull(),
+  updated_at: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type PunyaTierThreshold = typeof punya_tier_thresholds.$inferSelect;
 
 export type PunyaTransaction = typeof punya_transactions.$inferSelect;
 export type NewPunyaTransaction = typeof punya_transactions.$inferInsert;

@@ -34,6 +34,7 @@ import {
 } from "../../middlewares/auth";
 import { resolveAdminScope, cityIdsForState, cityIdsForUser } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
+import { invalidatePunyaPointCaches } from "../../lib/punya-config-invalidate";
 import { clampLimit, decodeTimeCursor, encodeTimeCursor } from "../../lib/route-helpers";
 import {
   validateNiyamPointsBounds,
@@ -1002,10 +1003,7 @@ router.post("/punya/configs", requireRole("super_admin", "state_admin", "city_ad
     throw err;
   }
 
-  const { clearAttendancePointsCache } = await import("../../lib/attendance-points");
-  const { clearHomeworkPointsCache } = await import("../../lib/homework-points");
-  clearAttendancePointsCache();
-  clearHomeworkPointsCache();
+  await invalidatePunyaPointCaches();
   await auditFromReq(req, {
     action: "create",
     entityKind: "punya_config",
@@ -1093,10 +1091,7 @@ router.patch(
     }
     // Point values are AT21-cached — a stale cache would keep awarding the
     // old value after the correction.
-    const { clearAttendancePointsCache } = await import("../../lib/attendance-points");
-    const { clearHomeworkPointsCache } = await import("../../lib/homework-points");
-    clearAttendancePointsCache();
-    clearHomeworkPointsCache();
+    await invalidatePunyaPointCaches();
     await auditFromReq(req, {
       action: "update",
       entityKind: "punya_config",

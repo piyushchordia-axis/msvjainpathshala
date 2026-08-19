@@ -31,6 +31,7 @@ import {
 } from "@workspace/db";
 import { ageGroupFromDob } from "@workspace/db";
 import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lte, lt, ne, or, sql } from "drizzle-orm";
+import type { SQL } from "drizzle-orm";
 import type { PgColumn } from "drizzle-orm/pg-core";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
@@ -545,10 +546,28 @@ router.get("/niyam-submissions", async (req: Request, res: Response) => {
 });
 
 /* GET /v1/admin/punya/configs */
-router.get("/punya/configs", async (_req: Request, res: Response) => {
+router.get("/punya/configs", async (req: Request, res: Response) => {
   // city_id was omitted entirely, so a GLOBAL row (which re-prices every city)
   // and a city override rendered identically and nobody could tell which was
   // which after the fact.
+  //
+  // M9 — and the list was unscoped, so a Mumbai city_admin read every
+  // other city's point economics. Global rows stay visible to everyone: they
+  // are the value a city override is measured against, and an admin who
+  // cannot see the default cannot reason about their own row.
+  const role = req.authUser!.role;
+  let cityFilter: SQL | undefined;
+  if (role === "city_admin") {
+    const own = req.authUser!.city_id ?? null;
+    cityFilter = own
+      ? or(isNull(punya_configs.city_id), eq(punya_configs.city_id, own))
+      : isNull(punya_configs.city_id);
+  } else if (role === "state_admin") {
+    const ids = req.authUser!.state_id ? await cityIdsForState(req.authUser!.state_id) : [];
+    cityFilter = ids.length
+      ? or(isNull(punya_configs.city_id), inArray(punya_configs.city_id, ids))
+      : isNull(punya_configs.city_id);
+  }
   const rows = await db
     .select({
       id: punya_configs.id,
@@ -560,6 +579,7 @@ router.get("/punya/configs", async (_req: Request, res: Response) => {
     })
     .from(punya_configs)
     .leftJoin(cities, eq(cities.id, punya_configs.city_id))
+    .where(cityFilter)
     .orderBy(asc(punya_configs.feature_key), asc(cities.name));
   ok(res, { items: rows }, { count: rows.length });
 });
@@ -574,6 +594,11 @@ router.get("/punya/features", async (_req: Request, res: Response) => {
       label: punya_features.label,
       min_points: punya_features.min_points,
       max_points: punya_features.max_points,
+      // M3 — the clients drive the manual-award category picker and its
+      // reason requirement from these rather than hardcoding either.
+      default_points: punya_features.default_points,
+      is_manual: punya_features.is_manual,
+      requires_reason: punya_features.requires_reason,
       is_active: punya_features.is_active,
     })
     .from(punya_features)

@@ -5,7 +5,11 @@
  * this so balances/tiers never drift.
  */
 import { db, punya_transactions, punya_balances } from "@workspace/db";
-import { tierForPoints, TIER_THRESHOLDS } from "@workspace/db/enums";
+import {
+  resolveTierThresholds,
+  tierCaseSql,
+  tierForPointsWith,
+} from "./punya-tiers";
 import { and, eq, sql } from "drizzle-orm";
 import { logger } from "./logger";
 
@@ -85,32 +89,16 @@ export async function creditBalance(
   if (delta === 0) {
     return readBalance(tx, studentId, 0);
   }
-  const tTir = TIER_THRESHOLDS.tirthankar;
-  const tShr = TIER_THRESHOLDS.shraman;
-  const tSad = TIER_THRESHOLDS.sadhak;
-  const tSra = TIER_THRESHOLDS.shravak;
+  // AT23 — one configured ladder, one builder, three call sites.
+  const thresholds = await resolveTierThresholds();
+  const inserted = sql`${delta}`;
+  const updated = sql`punya_balances.total_points + ${delta}`;
   const result = await tx.execute(
     sql`insert into punya_balances (student_id, total_points, tier)
-        values (
-          ${studentId},
-          ${delta},
-          (case
-            when ${delta} >= ${tTir} then 'tirthankar'::tier_enum
-            when ${delta} >= ${tShr} then 'shraman'::tier_enum
-            when ${delta} >= ${tSad} then 'sadhak'::tier_enum
-            when ${delta} >= ${tSra} then 'shravak'::tier_enum
-            else 'jigyasu'::tier_enum
-          end)
-        )
+        values (${studentId}, ${delta}, ${tierCaseSql(inserted, thresholds)})
         on conflict (student_id) do update
           set total_points = punya_balances.total_points + ${delta},
-              tier = (case
-                when punya_balances.total_points + ${delta} >= ${tTir} then 'tirthankar'::tier_enum
-                when punya_balances.total_points + ${delta} >= ${tShr} then 'shraman'::tier_enum
-                when punya_balances.total_points + ${delta} >= ${tSad} then 'sadhak'::tier_enum
-                when punya_balances.total_points + ${delta} >= ${tSra} then 'shravak'::tier_enum
-                else 'jigyasu'::tier_enum
-              end),
+              tier = ${tierCaseSql(updated, thresholds)},
               updated_at = now()
         returning total_points`,
   );
@@ -146,33 +134,17 @@ export async function creditBalancesFromReturned(
     sql`, `,
   )}]::int[]`;
 
-  const tTir = TIER_THRESHOLDS.tirthankar;
-  const tShr = TIER_THRESHOLDS.shraman;
-  const tSad = TIER_THRESHOLDS.sadhak;
-  const tSra = TIER_THRESHOLDS.shravak;
+  const thresholds = await resolveTierThresholds();
+  const fresh = sql`s.delta`;
+  const combined = sql`punya_balances.total_points + excluded.total_points`;
 
   await tx.execute(sql`
     insert into punya_balances (student_id, total_points, tier)
-    select
-      s.student_id,
-      s.delta,
-      (case
-        when s.delta >= ${tTir} then 'tirthankar'::tier_enum
-        when s.delta >= ${tShr} then 'shraman'::tier_enum
-        when s.delta >= ${tSad} then 'sadhak'::tier_enum
-        when s.delta >= ${tSra} then 'shravak'::tier_enum
-        else 'jigyasu'::tier_enum
-      end)
+    select s.student_id, s.delta, ${tierCaseSql(fresh, thresholds)}
     from unnest(${idArray}, ${deltaArray}) as s(student_id, delta)
     on conflict (student_id) do update
       set total_points = punya_balances.total_points + excluded.total_points,
-          tier = (case
-            when punya_balances.total_points + excluded.total_points >= ${tTir} then 'tirthankar'::tier_enum
-            when punya_balances.total_points + excluded.total_points >= ${tShr} then 'shraman'::tier_enum
-            when punya_balances.total_points + excluded.total_points >= ${tSad} then 'sadhak'::tier_enum
-            when punya_balances.total_points + excluded.total_points >= ${tSra} then 'shravak'::tier_enum
-            else 'jigyasu'::tier_enum
-          end),
+          tier = ${tierCaseSql(combined, thresholds)},
           updated_at = now()
   `);
 }
@@ -220,7 +192,7 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
         student_id: input.studentId,
         points_awarded: existing?.points ?? input.points,
         total_points: total,
-        tier: tierForPoints(total),
+        tier: tierForPointsWith(total, await resolveTierThresholds()),
         awarded: false,
         transaction_id: existing?.id ?? null,
       };
@@ -248,7 +220,7 @@ async function runAward(tx: Tx | Db, input: AwardPunyaInput): Promise<AwardPunya
     student_id: input.studentId,
     points_awarded: input.points,
     total_points: total,
-    tier: tierForPoints(total),
+    tier: tierForPointsWith(total, await resolveTierThresholds()),
     awarded: true,
     transaction_id: transactionId,
   };
@@ -353,7 +325,7 @@ async function runReverse(tx: Tx | Db, input: ReversePunyaInput): Promise<Revers
         student_id: input.studentId,
         points_reversed: 0,
         total_points: total,
-        tier: tierForPoints(total),
+        tier: tierForPointsWith(total, await resolveTierThresholds()),
         reversed: false,
         transaction_id: already.id,
       };
@@ -405,7 +377,7 @@ async function runReverse(tx: Tx | Db, input: ReversePunyaInput): Promise<Revers
       student_id: input.studentId,
       points_reversed: Math.abs(existing?.points ?? points),
       total_points: total,
-      tier: tierForPoints(total),
+      tier: tierForPointsWith(total, await resolveTierThresholds()),
       reversed: false,
       transaction_id: existing?.id ?? null,
     };
@@ -416,7 +388,7 @@ async function runReverse(tx: Tx | Db, input: ReversePunyaInput): Promise<Revers
     student_id: input.studentId,
     points_reversed: points,
     total_points: total,
-    tier: tierForPoints(total),
+    tier: tierForPointsWith(total, await resolveTierThresholds()),
     reversed: true,
     transaction_id: inserted[0]!.id,
   };
