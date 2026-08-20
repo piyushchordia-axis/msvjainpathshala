@@ -16,7 +16,7 @@
  * was earned — never the raw nullable override columns, which read as 0 and
  * labelled a paying quiz as practice (C3).
  */
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Alert, View } from "react-native";
 import { apiErrorMessage } from "@/lib/api-error-copy";
 import { Ionicons } from "@expo/vector-icons";
@@ -219,7 +219,19 @@ export default function Quizzes() {
   const [result, setResult] = useState<ResultView | null>(null);
 
   const pushQuery = useActivePushQuiz(activeStudentId ?? undefined, !active && !result);
-  const push = pushQuery.data?.active ?? null;
+  /**
+   * M4 — every live push quiz, not just the newest. Two overlapping ones (a
+   * centre-wide quiz and the Guruji's batch quiz) used to hide the older
+   * permanently. Falls back to `active` so an older API keeps working.
+   */
+  const livePushes = useMemo(() => {
+    const items = pushQuery.data?.items;
+    if (items && items.length > 0) return items;
+    const single = pushQuery.data?.active;
+    return single ? [single] : [];
+  }, [pushQuery.data]);
+  const pendingPushes = livePushes.filter((p) => !p.already_submitted);
+  const submittedPushes = livePushes.filter((p) => p.already_submitted);
 
   const startQuiz = useStartQuiz();
   const submitQuiz = useSubmitQuiz();
@@ -415,9 +427,9 @@ export default function Quizzes() {
         ) : (
           <>
             <ChildSwitcher />
-            {/* ---- Live push quiz (if one is active for the batch) ------- */}
-            {push && !push.already_submitted ? (
-              <Card style={{ borderColor: c.primary }}>
+            {/* ---- Live push quizzes (M4 — there can be more than one) --- */}
+            {pendingPushes.map((pq) => (
+              <Card key={pq.id} style={{ borderColor: c.primary }}>
                 <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
                   <View style={{ flex: 1, paddingRight: 10 }}>
                     <Pill label={hi ? "लाइव अभी" : "Live now"} tone="primary" />
@@ -425,9 +437,9 @@ export default function Quizzes() {
                       {hi ? "कक्षा प्रश्नोत्तरी" : "Class quiz"}
                     </Title>
                     <Body muted style={{ fontSize: 12, marginTop: 3 }}>
-                      {push.questions.length} {hi ? "प्रश्न" : "questions"}
-                      {push.completion_points != null && push.completion_points > 0
-                        ? ` · +${push.completion_points} ${hi ? "पुण्य" : "punya"}`
+                      {pq.questions.length} {hi ? "प्रश्न" : "questions"}
+                      {pq.completion_points != null && pq.completion_points > 0
+                        ? ` · +${pq.completion_points} ${hi ? "पुण्य" : "punya"}`
                         : ""}
                     </Body>
                   </View>
@@ -437,18 +449,19 @@ export default function Quizzes() {
                   <Button
                     label={hi ? "अभी भाग लें" : "Join now"}
                     icon="play"
-                    onPress={() => beginPush(push)}
+                    onPress={() => beginPush(pq)}
                   />
                 </View>
               </Card>
-            ) : push?.already_submitted ? (
-              <Card style={{ opacity: 0.7 }}>
+            ))}
+            {submittedPushes.map((pq) => (
+              <Card key={pq.id} style={{ opacity: 0.7 }}>
                 <Row style={{ justifyContent: "space-between", alignItems: "center" }}>
                   <Title style={{ fontSize: 16 }}>{hi ? "कक्षा प्रश्नोत्तरी" : "Class quiz"}</Title>
                   <Pill label={hi ? "पूर्ण" : "Completed"} tone="success" />
                 </Row>
               </Card>
-            ) : null}
+            ))}
 
             {/* ---- Scheduled events ------------------------------------- */}
             {quizzes.isLoading ? (
@@ -461,7 +474,7 @@ export default function Quizzes() {
                 onRetry={quizzes.refetch}
                 retryLabel={hi ? "पुनः प्रयास करें" : "Try again"}
               />
-            ) : rows.length === 0 && !push ? (
+            ) : rows.length === 0 && livePushes.length === 0 ? (
               <StateView
                 status="empty"
                 emptyText={hi ? "अभी कोई प्रश्नोत्तरी उपलब्ध नहीं है।" : "No quizzes available right now."}

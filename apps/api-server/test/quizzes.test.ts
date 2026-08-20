@@ -3117,3 +3117,390 @@ describe("quiz system — push correction path and notifications (H12, H10)", ()
       .send({ force: true });
   });
 });
+
+/**
+ * Listing scope, age targeting, and the counts a Guruji reads off a roster.
+ */
+describe("quiz system — listing scope and age targeting (H13, H15, M4, M5, M6, L7)", () => {
+  const openWindow = () => ({
+    start_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    end_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  });
+
+  it("GET /push filters in SQL, so an old quiz is not pushed past the limit (H13)", async () => {
+    const admin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-h13`;
+
+    // The shikshak's own quiz...
+    const mine = await request(app)
+      .post("/v1/quizzes/push")
+      .set(auth(shikshak.token))
+      .send({
+        batch_id: aarav.batch_id,
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        questions: [
+          {
+            question_en: `H13 mine ${tag}`,
+            options: [{ text_en: "Yes" }, { text_en: "No" }],
+            correct_indices: [0],
+          },
+        ],
+      });
+    expect(mine.status).toBe(200);
+    const mineId: string = mine.body.data.id;
+
+    // ...buried under newer national ones they cannot see. Pre-fix the route
+    // fetched `limit` rows globally then filtered in JS, so theirs fell off.
+    const created: string[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      const other = await request(app)
+        .post("/v1/quizzes/push")
+        .set(auth(admin.token))
+        .send({
+          scope: "national",
+          expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+          questions: [
+            {
+              question_en: `H13 noise ${tag}-${i}`,
+              options: [{ text_en: "Yes" }, { text_en: "No" }],
+              correct_indices: [0],
+            },
+          ],
+        });
+      created.push(other.body.data.id);
+    }
+
+    const listed = await request(app)
+      .get(`/v1/quizzes/push?limit=5`)
+      .set(auth(shikshak.token));
+    expect(listed.status).toBe(200);
+    const ids: string[] = listed.body.data.items.map((i: { id: string }) => i.id);
+    // A national quiz genuinely reaches their students, so it may appear —
+    // what must NOT happen is the page coming back empty of anything visible.
+    expect(ids.length).toBeGreaterThan(0);
+    expect(ids.length).toBeLessThanOrEqual(5);
+
+    // And with room for it, their own quiz is present.
+    const wide = await request(app)
+      .get(`/v1/quizzes/push?limit=100`)
+      .set(auth(shikshak.token));
+    expect(wide.body.data.items.map((i: { id: string }) => i.id)).toContain(mineId);
+
+    for (const id of [...created, mineId]) {
+      await request(app).delete(`/v1/quizzes/push/${id}`).set(auth(admin.token)).send({ force: true });
+    }
+  });
+
+  it("the question bank no longer leaks another centre's questions (H15)", async () => {
+    const admin = await loginAs("super_admin");
+    const sanchalak = await loginAs("sanchalak");
+    const tag = `${Date.now()}-h15`;
+
+    const held = await pool.query<{ centre_id: string; city_id: string }>(
+      `select a.centre_id, c.city_id
+         from sanchalak_centre_assignments a
+         join centres c on c.id = a.centre_id
+        where a.user_id = (select id from users where phone = '+919800000004')
+          and a.is_active = true and c.deleted_at is null
+        limit 1`,
+    );
+    const heldCentre = held.rows[0]!.centre_id;
+    const cityId = held.rows[0]!.city_id;
+
+    // Another centre in the SAME city — the exact case that leaked, because
+    // primaryCityForTargets stamps a centre-scoped question with its city.
+    const other = await pool.query<{ id: string }>(
+      `select id from centres
+        where city_id = $1 and id <> $2 and deleted_at is null limit 1`,
+      [cityId, heldCentre],
+    );
+
+    const mine = await request(app)
+      .post("/v1/quizzes/questions")
+      .set(auth(admin.token))
+      .send({
+        question_en: `H15 mine ${tag}`,
+        scope: "centre",
+        centre_ids: [heldCentre],
+        options: [{ text_en: "A" }, { text_en: "B" }],
+        correct_indices: [0],
+      });
+    expect(mine.status).toBe(200);
+
+    const listed = await request(app)
+      .get(`/v1/quizzes/questions?limit=300`)
+      .set(auth(sanchalak.token));
+    expect(listed.status).toBe(200);
+    const ids: string[] = listed.body.data.items.map((i: { id: string }) => i.id);
+    expect(ids).toContain(mine.body.data.id);
+
+    if (other.rows[0]?.id) {
+      const theirs = await request(app)
+        .post("/v1/quizzes/questions")
+        .set(auth(admin.token))
+        .send({
+          question_en: `H15 theirs ${tag}`,
+          scope: "centre",
+          centre_ids: [other.rows[0].id],
+          options: [{ text_en: "A" }, { text_en: "B" }],
+          correct_indices: [0],
+        });
+      expect(theirs.status).toBe(200);
+
+      const again = await request(app)
+        .get(`/v1/quizzes/questions?limit=300`)
+        .set(auth(sanchalak.token));
+      const ids2: string[] = again.body.data.items.map((i: { id: string }) => i.id);
+      expect(ids2).not.toContain(theirs.body.data.id);
+
+      // And it cannot be smuggled onto an event either.
+      const ev = await request(app)
+        .post("/v1/quizzes/events")
+        .set(auth(sanchalak.token))
+        .send({
+          title_en: `H15 smuggle ${tag}`,
+          scope: "centre",
+          centre_ids: [heldCentre],
+          ...openWindow(),
+          question_ids: [theirs.body.data.id],
+        });
+      expect([403]).toContain(ev.status);
+    }
+  });
+
+  it("search reaches a question past the list ceiling (M12)", async () => {
+    const admin = await loginAs("super_admin");
+    const needle = `zzsearch${Date.now()}`;
+    const q = await request(app)
+      .post("/v1/quizzes/questions")
+      .set(auth(admin.token))
+      .send({
+        question_en: `Findable ${needle} question`,
+        scope: "national",
+        topic: needle,
+        options: [{ text_en: "A" }, { text_en: "B" }],
+        correct_indices: [0],
+      });
+    expect(q.status).toBe(200);
+
+    const found = await request(app)
+      .get(`/v1/quizzes/questions?limit=300&q=${needle}`)
+      .set(auth(admin.token));
+    expect(found.status).toBe(200);
+    expect(found.body.data.items).toHaveLength(1);
+    expect(found.body.data.items[0].id).toBe(q.body.data.id);
+
+    const none = await request(app)
+      .get(`/v1/quizzes/questions?limit=300&q=${needle}-absent`)
+      .set(auth(admin.token));
+    expect(none.body.data.items).toHaveLength(0);
+  });
+
+  it("push/active returns every live quiz, not just the newest (M4)", async () => {
+    const admin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-m4`;
+
+    // Older: the Guruji's batch quiz.
+    const older = await request(app)
+      .post("/v1/quizzes/push")
+      .set(auth(shikshak.token))
+      .send({
+        batch_id: aarav.batch_id,
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        questions: [
+          {
+            question_en: `M4 batch ${tag}`,
+            options: [{ text_en: "Yes" }, { text_en: "No" }],
+            correct_indices: [0],
+          },
+        ],
+      });
+    expect(older.status).toBe(200);
+
+    // Newer: a national one that also reaches them.
+    const newer = await request(app)
+      .post("/v1/quizzes/push")
+      .set(auth(admin.token))
+      .send({
+        scope: "national",
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        questions: [
+          {
+            question_en: `M4 national ${tag}`,
+            options: [{ text_en: "Yes" }, { text_en: "No" }],
+            correct_indices: [0],
+          },
+        ],
+      });
+    expect(newer.status).toBe(200);
+
+    const active = await request(app)
+      .get(`/v1/quizzes/push/active?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    expect(active.status).toBe(200);
+    const ids: string[] = (active.body.data.items as Array<{ id: string }>).map((i) => i.id);
+    // Pre-fix only the newest came back, so the batch quiz was unreachable.
+    expect(ids).toContain(older.body.data.id);
+    expect(ids).toContain(newer.body.data.id);
+    // `active` stays the newest, for clients that only read that field.
+    expect(active.body.data.active.id).toBe(newer.body.data.id);
+
+    for (const id of [older.body.data.id, newer.body.data.id]) {
+      await request(app).delete(`/v1/quizzes/push/${id}`).set(auth(admin.token)).send({ force: true });
+    }
+  });
+
+  it("a push quiz can target one age group, and the eligible count respects it (M5, M6)", async () => {
+    const admin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    expect(aarav.age_group).toBeTruthy();
+    const tag = `${Date.now()}-m5`;
+
+    // Aim it at an age group Aarav is NOT in.
+    const otherGroup = ["bal", "kishor", "tarun", "yuva"].find((g) => g !== aarav.age_group)!;
+    const missed = await request(app)
+      .post("/v1/quizzes/push")
+      .set(auth(shikshak.token))
+      .send({
+        batch_id: aarav.batch_id,
+        age_groups: [otherGroup],
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        questions: [
+          {
+            question_en: `M5 wrong group ${tag}`,
+            options: [{ text_en: "Yes" }, { text_en: "No" }],
+            correct_indices: [0],
+          },
+        ],
+      });
+    expect(missed.status).toBe(200);
+
+    const activeMissed = await request(app)
+      .get(`/v1/quizzes/push/active?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    const missedIds: string[] = (activeMissed.body.data.items as Array<{ id: string }>).map(
+      (i) => i.id,
+    );
+    // Pre-fix push_quizzes had no age_groups column at all, so this was
+    // impossible to express and every child in the batch saw it.
+    expect(missedIds).not.toContain(missed.body.data.id);
+
+    // Aimed at Aarav's own group, it reaches him.
+    const hit = await request(app)
+      .post("/v1/quizzes/push")
+      .set(auth(shikshak.token))
+      .send({
+        batch_id: aarav.batch_id,
+        age_groups: [aarav.age_group],
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        questions: [
+          {
+            question_en: `M5 right group ${tag}`,
+            options: [{ text_en: "Yes" }, { text_en: "No" }],
+            correct_indices: [0],
+          },
+        ],
+      });
+    const activeHit = await request(app)
+      .get(`/v1/quizzes/push/active?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    expect(
+      (activeHit.body.data.items as Array<{ id: string }>).map((i) => i.id),
+    ).toContain(hit.body.data.id);
+
+    // M6 — the roster's eligible count must not include children the quiz was
+    // never offered to. An age-targeted quiz has a smaller denominator than an
+    // untargeted one on the same batch.
+    const untargeted = await request(app)
+      .post("/v1/quizzes/push")
+      .set(auth(shikshak.token))
+      .send({
+        batch_id: aarav.batch_id,
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        questions: [
+          {
+            question_en: `M6 all groups ${tag}`,
+            options: [{ text_en: "Yes" }, { text_en: "No" }],
+            correct_indices: [0],
+          },
+        ],
+      });
+
+    const targetedRoster = await request(app)
+      .get(`/v1/quizzes/push/${hit.body.data.id}/attempts`)
+      .set(auth(shikshak.token));
+    const allRoster = await request(app)
+      .get(`/v1/quizzes/push/${untargeted.body.data.id}/attempts`)
+      .set(auth(shikshak.token));
+    expect(targetedRoster.status).toBe(200);
+    expect(allRoster.status).toBe(200);
+    expect(targetedRoster.body.data.eligible_count).toBeLessThanOrEqual(
+      allRoster.body.data.eligible_count,
+    );
+    expect(targetedRoster.body.data.eligible_count).toBeGreaterThan(0);
+
+    for (const id of [missed.body.data.id, hit.body.data.id, untargeted.body.data.id]) {
+      await request(app).delete(`/v1/quizzes/push/${id}`).set(auth(admin.token)).send({ force: true });
+    }
+  });
+
+  it("a multi-city event is visible to every targeted city's admin (L7)", async () => {
+    const admin = await loginAs("super_admin");
+    const cityAdmin = await loginAs("city_admin");
+    const tag = `${Date.now()}-l7`;
+
+    const own = await pool.query<{ city_id: string }>(
+      `select city_id from users where phone = '+919800000003'`,
+    );
+    const ownCity = own.rows[0]!.city_id;
+    const other = await pool.query<{ id: string }>(
+      `select id from cities where id <> $1 limit 1`,
+      [ownCity],
+    );
+    expect(other.rows[0]?.id).toBeTruthy();
+
+    const q = await request(app)
+      .post("/v1/quizzes/questions")
+      .set(auth(admin.token))
+      .send({
+        question_en: `L7 Q ${tag}`,
+        scope: "national",
+        options: [{ text_en: "A" }, { text_en: "B" }],
+        correct_indices: [0],
+      });
+
+    // city_ids[0] is the OTHER city, so the legacy single-column filter put
+    // this event out of reach of the city_admin it also targets.
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `L7 multi-city ${tag}`,
+        scope: "city",
+        city_ids: [other.rows[0]!.id, ownCity],
+        ...openWindow(),
+        question_ids: [q.body.data.id],
+      });
+    expect(ev.status).toBe(200);
+
+    const listed = await request(app)
+      .get(`/v1/quizzes/events?limit=300`)
+      .set(auth(cityAdmin.token));
+    expect(listed.status).toBe(200);
+    expect(
+      (listed.body.data.items as Array<{ id: string }>).map((i) => i.id),
+    ).toContain(ev.body.data.id);
+
+    await request(app)
+      .delete(`/v1/quizzes/events/${ev.body.data.id}`)
+      .set(auth(admin.token))
+      .send({ force: true });
+  });
+});

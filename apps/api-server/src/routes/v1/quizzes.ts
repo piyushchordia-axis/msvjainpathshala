@@ -34,6 +34,7 @@ import {
   allowedQuizScopes,
   cityInScope,
   cityScopeForUser,
+  adminQuizVisibilitySql,
   quizVisibleToAdmin,
   quizWritableByAdmin,
   type QuizScope,
@@ -262,12 +263,20 @@ async function authorizeQuizTargets(
 }
 
 /**
- * Active students who match the quiz's geographic targets (eligible roster size).
+ * Active students who match the quiz's targets (eligible roster size).
  *
  * `extra` narrows the count to the caller's own students so the roster header
- * cannot claim more eligible children than the table below it can show.
+ * cannot claim more eligible children than the table below it can show (C1).
+ *
+ * M6 — age_groups is part of "eligible". Ignoring it counted every child in the
+ * scope against a quiz aimed at one age group, so a Bal-only quiz that every
+ * Bal child answered still read as a fraction of the batch, and the Guruji
+ * chased children who were never offered it.
  */
-async function countEligibleStudents(targets: QuizTargetRow, extra?: SQL): Promise<number> {
+async function countEligibleStudents(
+  targets: QuizTargetRow & { age_groups?: string[] | null },
+  extra?: SQL,
+): Promise<number> {
   const stateIds = targets.state_ids?.length ? targets.state_ids : [];
   const cityIds = targets.city_ids?.length ? targets.city_ids : targets.city_id ? [targets.city_id] : [];
   const centreIds = targets.centre_ids?.length
@@ -277,7 +286,21 @@ async function countEligibleStudents(targets: QuizTargetRow, extra?: SQL): Promi
       : [];
   const batchIds = targets.batch_ids?.length ? targets.batch_ids : targets.batch_id ? [targets.batch_id] : [];
 
-  const active = and(eq(students.status, "active"), isNull(students.deleted_at), extra);
+  // Empty age_groups = every age group, matching quizMatchesStudent.
+  const ageGroups = targets.age_groups?.length ? targets.age_groups : null;
+  const ageFilter = ageGroups
+    ? sql`${students.age_group} IS NOT NULL AND ${students.age_group}::text = ANY(ARRAY[${sql.join(
+        ageGroups.map((g) => sql`${g}::text`),
+        sql`, `,
+      )}])`
+    : undefined;
+
+  const active = and(
+    eq(students.status, "active"),
+    isNull(students.deleted_at),
+    ageFilter,
+    extra,
+  );
 
   if (targets.scope === "national") {
     const [row] = await db
@@ -627,23 +650,48 @@ router.get("/questions", async (req: Request, res: Response) => {
     fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
     return;
   }
-  const cityIds = await cityScopeForUser(req.authUser!);
   const limit = clampLimit(req.query.limit, 100, 300);
   const activeParam = typeof req.query.is_active === "string" ? req.query.is_active : "true";
+  const search = typeof req.query.q === "string" ? req.query.q.trim() : "";
+  const topicFilter = typeof req.query.topic === "string" ? req.query.topic.trim() : "";
+  const difficultyFilter =
+    typeof req.query.difficulty === "string" ? req.query.difficulty.trim() : "";
 
-  // super_admin (null) sees all; otherwise show national/state (city-agnostic)
-  // plus questions whose city_id is in scope. cityIds === [] => only the former.
+  /**
+   * H15 — filter on the ARRAY targets, not the legacy single city_id.
+   *
+   * The listing matched `city_id IN (my cities)`, and primaryCityForTargets
+   * stamps a CENTRE-scoped question with that centre's city — so a sanchalak
+   * saw every question in their city, including other centres'. The array
+   * columns are the real targets and carry GIN indexes (migration 0032).
+   */
   const scopeParts = [];
-  if (cityIds === null) {
-    /* no city filter */
-  } else if (cityIds.length === 0) {
-    scopeParts.push(isNull(questions.city_id));
-  } else {
-    scopeParts.push(or(isNull(questions.city_id), inArray(questions.city_id, cityIds))!);
-  }
+  const scopeSql = await adminQuizVisibilitySql(req.authUser!, {
+    scope: questions.scope,
+    state_ids: questions.state_ids,
+    city_ids: questions.city_ids,
+    centre_ids: questions.centre_ids,
+    batch_ids: questions.batch_ids,
+  });
+  if (scopeSql) scopeParts.push(scopeSql);
+
   if (activeParam === "true") scopeParts.push(eq(questions.is_active, true));
   else if (activeParam === "false") scopeParts.push(eq(questions.is_active, false));
   // "all" → no is_active filter
+
+  // M12 — search and filters, so a bank past the list cap is still reachable.
+  if (search) {
+    const like = `%${search.replace(/[%_]/g, (m) => `\\${m}`)}%`;
+    scopeParts.push(
+      or(
+        sql`${questions.question_en} ILIKE ${like}`,
+        sql`${questions.question_hi} ILIKE ${like}`,
+        sql`${questions.topic} ILIKE ${like}`,
+      )!,
+    );
+  }
+  if (topicFilter) scopeParts.push(eq(questions.topic, topicFilter));
+  if (difficultyFilter) scopeParts.push(eq(questions.difficulty, difficultyFilter));
 
   const whereClause = scopeParts.length === 0 ? undefined : and(...scopeParts);
 
@@ -844,12 +892,19 @@ router.post("/events", requireRole("super_admin", "state_admin", "city_admin"), 
     }
   }
 
-  const cityIds = await cityScopeForUser(req.authUser!);
   const primaryCity = await primaryCityForTargets(body.scope, auth.targets);
 
-  // All referenced questions must exist and be within the caller's city scope.
+  /**
+   * H15 — validate against the question's real targets.
+   *
+   * This checked only `q.city_id`, which primaryCityForTargets stamps from the
+   * centre for a CENTRE-scoped question — so a sanchalak could attach another
+   * centre's question purely because the two share a city. The read gate is the
+   * right question here ("does this question reach students I hold?"), and it
+   * is now asked of the array columns.
+   */
   const qRows = await db
-    .select({ id: questions.id, city_id: questions.city_id, is_active: questions.is_active })
+    .select()
     .from(questions)
     .where(inArray(questions.id, body.question_ids));
   if (qRows.length !== new Set(body.question_ids).size) {
@@ -857,7 +912,7 @@ router.post("/events", requireRole("super_admin", "state_admin", "city_admin"), 
     return;
   }
   for (const q of qRows) {
-    if (q.city_id && !cityInScope(cityIds, q.city_id)) {
+    if (!(await quizVisibleToAdmin(req.authUser!, q))) {
       fail(res, 403, "ERR_FORBIDDEN", "A selected question is outside your scope.");
       return;
     }
@@ -934,17 +989,36 @@ router.get("/events", async (req: Request, res: Response) => {
     fail(res, 403, "ERR_FORBIDDEN", "Admin panel access required.");
     return;
   }
-  const cityIds = await cityScopeForUser(req.authUser!);
   const limit = clampLimit(req.query.limit, 100, 300);
+  const search = typeof req.query.q === "string" ? req.query.q.trim() : "";
 
-  let whereClause;
-  if (cityIds === null) {
-    whereClause = undefined;
-  } else if (cityIds.length === 0) {
-    whereClause = isNull(quiz_events.city_id);
-  } else {
-    whereClause = or(isNull(quiz_events.city_id), inArray(quiz_events.city_id, cityIds));
+  /**
+   * L7 — a Mumbai+Pune event was invisible to the Pune admin.
+   *
+   * primaryCityForTargets stores only `city_ids[0]`, and this filtered on that
+   * single column, so every city after the first lost sight of an event aimed
+   * at them. Filtering on the array targets (GIN-indexed, migration 0032) is
+   * also the H15 fix — one predicate, both findings.
+   */
+  const parts = [];
+  const scopeSql = await adminQuizVisibilitySql(req.authUser!, {
+    scope: quiz_events.scope,
+    state_ids: quiz_events.state_ids,
+    city_ids: quiz_events.city_ids,
+    centre_ids: quiz_events.centre_ids,
+    batch_ids: quiz_events.batch_ids,
+  });
+  if (scopeSql) parts.push(scopeSql);
+
+  // M12 — search, so an event past the list cap is still reachable.
+  if (search) {
+    const like = `%${search.replace(/[%_]/g, (m) => `\\${m}`)}%`;
+    parts.push(
+      or(sql`${quiz_events.title_en} ILIKE ${like}`, sql`${quiz_events.title_hi} ILIKE ${like}`)!,
+    );
   }
+
+  const whereClause = parts.length === 0 ? undefined : and(...parts);
 
   const rows = await db
     .select({
@@ -1813,6 +1887,8 @@ const createPushSchema = z
     centre_ids: z.array(z.string().uuid()).default([]),
     batch_ids: z.array(z.string().uuid()).default([]),
     batch_id: z.string().uuid().optional(),
+    // M5 — empty = every age group, matching quiz_events.
+    age_groups: z.array(z.enum(["bal", "kishor", "tarun", "yuva"])).default([]),
     expires_at: z.string().datetime(),
     // null/omit = punya_features default; 0 disables (AT21).
     completion_points: z.number().int().min(0).max(10000).nullish(),
@@ -1848,6 +1924,23 @@ const createPushSchema = z
 /* GET /v1/quizzes/push — scoped list (live first) for admin panel */
 router.get("/push", requireAdminPanel, async (req: Request, res: Response) => {
   const limit = clampLimit(req.query.limit, 100, 300);
+
+  /**
+   * H13 — filter BEFORE the limit.
+   *
+   * This used to fetch `limit` rows globally, ordered live-first, and drop the
+   * out-of-scope ones in JS afterwards. Once 100+ newer push quizzes existed
+   * anywhere in the country, a state_admin's own stopped appearing at all —
+   * and there is no cursor to page deeper with.
+   */
+  const scopeSql = await adminQuizVisibilitySql(req.authUser!, {
+    scope: push_quizzes.scope,
+    state_ids: push_quizzes.state_ids,
+    city_ids: push_quizzes.city_ids,
+    centre_ids: push_quizzes.centre_ids,
+    batch_ids: push_quizzes.batch_ids,
+  });
+
   const rows = await db
     .select({
       id: push_quizzes.id,
@@ -1866,13 +1959,13 @@ router.get("/push", requireAdminPanel, async (req: Request, res: Response) => {
     .from(push_quizzes)
     .leftJoin(push_quiz_questions, eq(push_quiz_questions.push_quiz_id, push_quizzes.id))
     .leftJoin(push_quiz_attempts, eq(push_quiz_attempts.push_quiz_id, push_quizzes.id))
+    .where(scopeSql)
     .groupBy(push_quizzes.id)
     .orderBy(sql`(case when ${push_quizzes.expires_at} > now() then 0 else 1 end)`, desc(push_quizzes.started_at))
     .limit(limit);
 
   const items = [];
   for (const r of rows) {
-    if (!(await quizVisibleToAdmin(req.authUser!, r))) continue;
     items.push({
       id: r.id,
       scope: r.scope,
@@ -1959,6 +2052,7 @@ router.post("/push", requireAdminPanel, async (req: Request, res: Response) => {
       centre_ids: auth.targets.centre_ids,
       batch_ids: auth.targets.batch_ids,
       batch_id: primaryBatchId,
+      age_groups: body.age_groups,
       shikshak_user_id: req.authUser!.id,
       started_at: new Date(),
       expires_at: new Date(body.expires_at),
@@ -2016,7 +2110,15 @@ router.get("/push/active", async (req: Request, res: Response) => {
 
   const studentGeo = await geoForCentre(student.centre_id);
   const now = new Date();
-  const [pq] = await db
+  /**
+   * M4 — every live push quiz for this student, not just the newest.
+   *
+   * This took `.limit(1)`, so two overlapping push quizzes (a centre-wide one
+   * and the Guruji's batch one, say) left the older permanently unreachable —
+   * the student was never shown it and had no way to ask for it. `active` is
+   * kept alongside `items` so an older client keeps working.
+   */
+  const liveRows = await db
     .select({
       id: push_quizzes.id,
       started_at: push_quizzes.started_at,
@@ -2035,6 +2137,8 @@ router.get("/push/active", async (req: Request, res: Response) => {
             centre_ids: push_quizzes.centre_ids,
             batch_ids: push_quizzes.batch_ids,
             batch_id: push_quizzes.batch_id,
+            // M5 — the SQL predicate honours age targeting for push too.
+            age_groups: push_quizzes.age_groups,
           },
           student,
           studentGeo.city_id,
@@ -2043,15 +2147,17 @@ router.get("/push/active", async (req: Request, res: Response) => {
       ),
     )
     .orderBy(desc(push_quizzes.started_at))
-    .limit(1);
+    .limit(10);
 
-  if (!pq) {
-    ok(res, { active: null });
+  if (liveRows.length === 0) {
+    ok(res, { active: null, items: [] });
     return;
   }
 
+  const liveIds = liveRows.map((r) => r.id);
   const qRows = await db
     .select({
+      push_quiz_id: push_quiz_questions.push_quiz_id,
       id: push_quiz_questions.id,
       question_en: push_quiz_questions.question_en,
       question_hi: push_quiz_questions.question_hi,
@@ -2059,17 +2165,25 @@ router.get("/push/active", async (req: Request, res: Response) => {
       order_index: push_quiz_questions.order_index,
     })
     .from(push_quiz_questions)
-    .where(eq(push_quiz_questions.push_quiz_id, pq.id))
+    .where(inArray(push_quiz_questions.push_quiz_id, liveIds))
     .orderBy(asc(push_quiz_questions.order_index));
 
-  const [attempt] = await db
-    .select({ id: push_quiz_attempts.id, submitted_at: push_quiz_attempts.submitted_at })
+  const attempts = await db
+    .select({
+      push_quiz_id: push_quiz_attempts.push_quiz_id,
+      submitted_at: push_quiz_attempts.submitted_at,
+    })
     .from(push_quiz_attempts)
-    .where(and(eq(push_quiz_attempts.push_quiz_id, pq.id), eq(push_quiz_attempts.student_id, student.id)))
-    .limit(1);
+    .where(
+      and(
+        inArray(push_quiz_attempts.push_quiz_id, liveIds),
+        eq(push_quiz_attempts.student_id, student.id),
+      ),
+    );
+  const submittedByQuiz = new Map(attempts.map((a) => [a.push_quiz_id, !!a.submitted_at]));
 
-  ok(res, {
-    active: {
+  const items = await Promise.all(
+    liveRows.map(async (pq) => ({
       id: pq.id,
       started_at: pq.started_at.toISOString(),
       expires_at: pq.expires_at.toISOString(),
@@ -2079,14 +2193,22 @@ router.get("/push/active", async (req: Request, res: Response) => {
         studentGeo.city_id,
         pq.completion_points,
       ),
-      already_submitted: !!attempt?.submitted_at,
-      questions: qRows.map((q) => ({
-        id: q.id,
-        question_en: q.question_en,
-        question_hi: q.question_hi,
-        options: q.options, // {text_en, text_hi?}[] — no correct_indices
-      })),
-    },
+      already_submitted: submittedByQuiz.get(pq.id) === true,
+      questions: qRows
+        .filter((q) => q.push_quiz_id === pq.id)
+        .map((q) => ({
+          id: q.id,
+          question_en: q.question_en,
+          question_hi: q.question_hi,
+          options: q.options, // {text_en, text_hi?}[] — no correct_indices
+        })),
+    })),
+  );
+
+  ok(res, {
+    // Newest first; `active` is the one a single-quiz client would have shown.
+    items,
+    active: items[0] ?? null,
   });
 });
 
@@ -2208,6 +2330,7 @@ router.post("/push/:id/submit", async (req: Request, res: Response) => {
       centre_ids: push_quizzes.centre_ids,
       batch_ids: push_quizzes.batch_ids,
       batch_id: push_quizzes.batch_id,
+      age_groups: push_quizzes.age_groups,
       expires_at: push_quizzes.expires_at,
       completion_points: push_quizzes.completion_points,
     })

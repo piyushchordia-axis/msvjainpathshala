@@ -132,6 +132,13 @@ export const push_quizzes = pgTable(
     /** Legacy primary batch (first of batch_ids when scope=batch); null for broader scopes. */
     batch_id: uuid("batch_id").references(() => batches.id, { onDelete: "cascade" }),
     shikshak_user_id: uuid("shikshak_user_id").references(() => users.id, { onDelete: "set null" }),
+    /**
+     * M5 — empty = every age group, matching quiz_events. A Guruji running a
+     * live quiz for a mixed-age batch could not aim it at one group, and
+     * countEligibleStudents ignored age targeting entirely (M6), inflating the
+     * denominator so a fully-answered quiz read as half-attended.
+     */
+    age_groups: ageGroupEnum("age_groups").array().notNull().default([]),
     started_at: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
     expires_at: timestamp("expires_at", { withTimezone: true }).notNull(),
     // SPEC §5.14 / AT21 — null = use punya_features default; 0 disables.

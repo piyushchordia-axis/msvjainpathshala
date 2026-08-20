@@ -23,6 +23,7 @@
  */
 import { db, batches, centres, cities, students, type User } from "@workspace/db";
 import { and, eq, inArray, isNull, sql, type SQL } from "drizzle-orm";
+import type { PgColumn } from "drizzle-orm/pg-core";
 import { resolveAdminScope, type AdminScope } from "./scope";
 
 export const QUIZ_SCOPES = ["national", "state", "city", "centre", "batch"] as const;
@@ -233,6 +234,77 @@ export async function quizWritableByAdmin(user: User, targets: QuizTargetRow): P
     default:
       return false;
   }
+}
+
+/**
+ * H13 — the read gate as a SQL predicate over a quiz table's target columns.
+ *
+ * `GET /push` fetched `limit` rows ordered live-first and THEN dropped the ones
+ * out of scope in JS, so once 100+ newer push quizzes existed elsewhere a
+ * state_admin's own stopped appearing entirely — with no way to page deeper.
+ * Filtering has to happen before the LIMIT.
+ *
+ * This is the same rule as `quizVisibleToAdmin` in a second language, exactly as
+ * quiz-scope.ts holds `quizMatchesStudent` and `quizMatchesStudentSql`. **They
+ * must stay behaviourally identical.** The `&&` overlap operator uses the GIN
+ * indexes migration 0032 added.
+ *
+ * Returns `undefined` for an unrestricted caller (super_admin), so it can be
+ * dropped straight into an `and(...)`.
+ */
+export async function adminQuizVisibilitySql(
+  user: User,
+  cols: {
+    scope: PgColumn;
+    state_ids: PgColumn;
+    city_ids: PgColumn;
+    centre_ids: PgColumn;
+    batch_ids: PgColumn;
+  },
+): Promise<SQL | undefined> {
+  const scope = await resolveAdminScope(user);
+  if (scope.centreIds === null) return undefined;
+
+  const effective = await effectiveCentreIds(scope);
+  if (effective === null) return undefined;
+  if (effective.length === 0) return sql`false`;
+
+  // The geography those centres put the caller in, resolved once.
+  const geo = await db
+    .select({ id: centres.id, city_id: centres.city_id, state_id: centres.state_id })
+    .from(centres)
+    .where(and(inArray(centres.id, effective), isNull(centres.deleted_at)));
+  const stateIds = Array.from(new Set(geo.map((g) => g.state_id).filter(Boolean) as string[]));
+  const cityIds = Array.from(new Set(geo.map((g) => g.city_id).filter(Boolean) as string[]));
+
+  // Batch-restricted roles are held to their own batches; everyone else gets
+  // every batch inside their centres.
+  let batchIds: string[];
+  if (scope.batchIds !== null) {
+    batchIds = scope.batchIds;
+  } else {
+    const rows = await db
+      .select({ id: batches.id })
+      .from(batches)
+      .where(inArray(batches.centre_id, effective));
+    batchIds = rows.map((r) => r.id);
+  }
+
+  const arr = (ids: string[]) =>
+    ids.length === 0
+      ? sql`ARRAY[]::uuid[]`
+      : sql`ARRAY[${sql.join(
+          ids.map((id) => sql`${id}::uuid`),
+          sql`, `,
+        )}]::uuid[]`;
+
+  return sql`(
+    ${cols.scope} = 'national'
+    OR (${cols.scope} = 'state'  AND ${cols.state_ids}  && ${arr(stateIds)})
+    OR (${cols.scope} = 'city'   AND ${cols.city_ids}   && ${arr(cityIds)})
+    OR (${cols.scope} = 'centre' AND ${cols.centre_ids} && ${arr(effective)})
+    OR (${cols.scope} = 'batch'  AND ${cols.batch_ids}  && ${arr(batchIds)})
+  )`;
 }
 
 /**

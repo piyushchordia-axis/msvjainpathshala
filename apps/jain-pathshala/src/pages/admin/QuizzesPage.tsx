@@ -1374,25 +1374,40 @@ export default function QuizzesPage() {
     { event: EventRow; submitted: number; inProgress: number } | null
   >(null);
   const [deleting, setDeleting] = useState(false);
+  /**
+   * M12 — search, because the lists clamp at LIST_MAX with no cursor.
+   *
+   * The tab label read "Question bank (200)" as if it were a true count, and
+   * anything past row 200 was simply unreachable — no offset, no cursor, no
+   * search. Server-side filtering is the reachable half of the fix; real keyset
+   * paging still needs a cursor (see TruncationNotice).
+   */
+  const [search, setSearch] = useState('');
+  const [appliedSearch, setAppliedSearch] = useState('');
 
-  async function loadAll(filter: 'true' | 'false' | 'all' = activeFilter) {
+  async function loadAll(
+    filter: 'true' | 'false' | 'all' = activeFilter,
+    q: string = appliedSearch,
+  ) {
     setLoading(true);
     setError(null);
     try {
       // XC-WEB-02 — these three endpoints clamp at LIST_MAX and expose no
       // cursor, so anything past it is unreachable. Ask for the full clamp and
       // report the ceiling rather than showing a truncated prefix as if it were
-      // the whole list. Real paging needs server-side cursors (see the notice
-      // rendered below); push quizzes additionally order by a computed
+      // the whole list. M12 adds server-side search so rows past the clamp are
+      // at least REACHABLE; real paging still needs cursors (see the notice
+      // rendered below), and push quizzes additionally order by a computed
       // expiry-then-start expression that keyset paging cannot express as-is.
-      const [q, ev, pq] = await Promise.all([
+      const term = q.trim() ? `&q=${encodeURIComponent(q.trim())}` : '';
+      const [qs, ev, pq] = await Promise.all([
         apiGet<{ items: QuestionRow[] }>(
-          `/v1/quizzes/questions?limit=${LIST_MAX}&is_active=${filter}`,
+          `/v1/quizzes/questions?limit=${LIST_MAX}&is_active=${filter}${term}`,
         ),
-        apiGet<{ items: EventRow[] }>(`/v1/quizzes/events?limit=${LIST_MAX}`),
+        apiGet<{ items: EventRow[] }>(`/v1/quizzes/events?limit=${LIST_MAX}${term}`),
         apiGet<{ items: PushRow[] }>(`/v1/quizzes/push?limit=${LIST_MAX}`),
       ]);
-      setQuestions(q?.items ?? []);
+      setQuestions(qs?.items ?? []);
       setEvents(ev?.items ?? []);
       setPushes(pq?.items ?? []);
     } catch (err) {
@@ -1402,7 +1417,7 @@ export default function QuizzesPage() {
     }
   }
 
-  useEffect(() => { void loadAll(activeFilter); }, [activeFilter]);
+  useEffect(() => { void loadAll(activeFilter, appliedSearch); }, [activeFilter, appliedSearch]);
 
   /**
    * H3 — Delete is confirmed on BOTH paths.
@@ -1481,6 +1496,34 @@ export default function QuizzesPage() {
           Push quizzes ({pushes.length})
         </Button>
       </div>
+
+      {/* M12 — the lists clamp with no cursor, so search is how a row past the
+          ceiling is reached at all. Server-side, not a filter over the page. */}
+      {tab !== 'push' ? (
+        <form
+          className="flex flex-wrap items-center gap-2"
+          onSubmit={(e) => { e.preventDefault(); setAppliedSearch(search); }}
+        >
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={tab === 'bank' ? 'Search question or topic…' : 'Search event title…'}
+            aria-label={tab === 'bank' ? 'Search the question bank' : 'Search quiz events'}
+            className="max-w-xs"
+          />
+          <Button size="sm" type="submit" variant="outline">Search</Button>
+          {appliedSearch ? (
+            <Button
+              size="sm"
+              type="button"
+              variant="ghost"
+              onClick={() => { setSearch(''); setAppliedSearch(''); }}
+            >
+              Clear
+            </Button>
+          ) : null}
+        </form>
+      ) : null}
 
       {tab === 'bank' ? <TruncationNotice count={questions.length} noun="questions" /> : null}
       {tab === 'events' ? <TruncationNotice count={events.length} noun="quiz events" /> : null}

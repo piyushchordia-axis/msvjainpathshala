@@ -2406,17 +2406,24 @@ export interface PushQuizSubmitResponse {
   question_results?: QuizQuestionResult[];
 }
 
-/** The single active push quiz for the student's batch, or null. Polled while a
- * student sits on the quizzes screen so a live push appears without a reload. */
+/**
+ * Live push quizzes for this student. Polled while the student sits on the
+ * quizzes screen so a live push appears without a reload.
+ *
+ * M4 — `items` is the list; `active` is the newest and is kept for older
+ * clients. The endpoint used to return ONE quiz, so two overlapping pushes (a
+ * centre-wide one and the Guruji's batch one) left the older permanently
+ * unreachable — the student was never shown it and could not ask for it.
+ */
 export function useActivePushQuiz(studentId?: string, enabled = true) {
   return useQuery({
     queryKey: qk.pushQuizActive(studentId ?? ""),
     queryFn: () =>
-      apiGet<{ active: PushQuizActive | null }>(
+      apiGet<{ active: PushQuizActive | null; items?: PushQuizActive[] }>(
         `/v1/quizzes/push/active?student_id=${studentId}`,
       ),
     enabled: enabled && !!studentId,
-    // Cheap, polling-based liveness (the API is explicitly polling, no sockets).
+    // Polling remains the fallback; /push-quizzes/:id is the fast path (H10).
     refetchInterval: 20_000,
   });
 }

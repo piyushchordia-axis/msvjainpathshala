@@ -121,6 +121,105 @@ async function buildHomeworkSnapshot(
   };
 }
 
+type QuizSnapshot = {
+  attempted_count: number;
+  /** Mean of `correct / total` across submitted attempts, 0–1, or null. */
+  average_score: number | null;
+  perfect_count: number;
+  punya_earned: number;
+  label_en: string;
+  label_hi: string;
+  summary_en: string;
+  summary_hi: string;
+};
+
+/**
+ * M9 — quizzes on the progress report.
+ *
+ * progress.ts contained ZERO quiz references: a parent opening their child's
+ * monthly report saw homework and niyams and no sign that quizzes existed, even
+ * though quizzes award Punya and are one of the few things a child gets an
+ * immediate score on.
+ *
+ * Counts only SUBMITTED attempts — an abandoned one is not a result — and reads
+ * Punya from the ledger rather than the quizzes' own (nullable, override)
+ * columns, for the same reason C3 does.
+ */
+async function buildQuizSnapshot(
+  studentId: string,
+  periodLabel: string,
+): Promise<QuizSnapshot> {
+  const { from, to } = periodDateRange(periodLabel);
+
+  const rows = await db.execute(sql`
+    select
+      count(*)::int as attempted,
+      count(*) filter (
+        where a.total_count > 0 and a.correct_count = a.total_count
+      )::int as perfect,
+      avg(
+        case when a.total_count > 0
+          then a.correct_count::numeric / a.total_count::numeric
+        end
+      ) as avg_ratio,
+      coalesce((
+        select sum(t.points)::int
+        from punya_transactions t
+        where t.student_id = ${studentId}::uuid
+          and t.points > 0
+          and t.feature_key in ('quiz_participation', 'quiz_win', 'push_quiz_completion', 'quiz')
+          and (${from}::date is null or t.created_at >= ${from}::date)
+          and (${to}::date is null or t.created_at < (${to}::date + 1))
+          and not exists (
+            select 1 from punya_transactions r where r.reversal_of = t.id
+          )
+      ), 0) as punya
+    from quiz_attempts a
+    where a.student_id = ${studentId}::uuid
+      and a.submitted_at is not null
+      and (${from}::date is null or a.submitted_at >= ${from}::date)
+      and (${to}::date is null or a.submitted_at < (${to}::date + 1))
+  `);
+  const row =
+    (
+      rows as unknown as {
+        rows?: Array<{
+          attempted: number;
+          perfect: number;
+          avg_ratio: string | number | null;
+          punya: number;
+        }>;
+      }
+    ).rows?.[0] ?? null;
+
+  const attempted_count = Number(row?.attempted ?? 0);
+  const perfect_count = Number(row?.perfect ?? 0);
+  const punya_earned = Number(row?.punya ?? 0);
+  const average_score =
+    row?.avg_ratio == null || attempted_count === 0 ? null : Number(row.avg_ratio);
+  const pct = average_score == null ? null : Math.round(average_score * 1000) / 10;
+
+  const summary_en =
+    attempted_count === 0
+      ? "No quizzes taken in this period."
+      : `${attempted_count} taken — average ${pct}%, ${perfect_count} all-correct, ${punya_earned} Punya earned.`;
+  const summary_hi =
+    attempted_count === 0
+      ? "इस अवधि में कोई प्रश्नोत्तरी नहीं दी गई।"
+      : `${attempted_count} दी गईं — औसत ${pct}%, ${perfect_count} पूर्ण सही, ${punya_earned} पुण्य अर्जित।`;
+
+  return {
+    attempted_count,
+    average_score,
+    perfect_count,
+    punya_earned,
+    label_en: "Quizzes",
+    label_hi: "प्रश्नोत्तरी",
+    summary_en,
+    summary_hi,
+  };
+}
+
 /** Fetch a student row (id, name, code, centre, batch) by id, or null if missing. */
 async function fetchStudent(id: string) {
   const [row] = await db
@@ -373,11 +472,15 @@ router.post(
 
     // F5 — homework block via F4 SQL function (never recompute the rate in TS).
     // §8.14 also names attendance % and niyam streaks — those remain absent from
-    // this snapshot; this commit only adds homework.
-    const homework = await buildHomeworkSnapshot(student.id, body.period_label);
+    // this snapshot; homework and quizzes (M9) are what it carries today.
+    const [homework, quizzes] = await Promise.all([
+      buildHomeworkSnapshot(student.id, body.period_label),
+      buildQuizSnapshot(student.id, body.period_label),
+    ]);
     const snapshot = {
       items: snapshotItems,
       homework,
+      quizzes,
       generated_at: new Date().toISOString(),
     };
 
@@ -398,6 +501,8 @@ router.post(
         .join(", ");
       if (statusLine) pdf.text(statusLine);
     }
+    // M9 — quizzes were absent from the report entirely.
+    pdf.hr().heading("Quizzes").text(quizzes.summary_en);
     pdf.hr().heading("Curriculum progress");
     if (snapshotItems.length === 0) {
       pdf.text("No curriculum progress recorded yet.");
