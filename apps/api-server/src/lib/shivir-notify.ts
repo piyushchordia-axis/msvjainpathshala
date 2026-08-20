@@ -139,18 +139,34 @@ export async function enqueueShivirPublishedAnnouncement(shivirId: string): Prom
  * app.
  */
 export async function announceShivirPublished(shivirId: string): Promise<void> {
+  /**
+   * Claim the announcement before sending it.
+   *
+   * A conditional UPDATE ... RETURNING is the whole guard: only one caller can
+   * flip `announced_at` from NULL, so a republish, a double-click, or a retried
+   * BullMQ job cannot notify a city twice. Claiming first also means a crash
+   * mid-send loses the announcement rather than repeating it — the safer failure
+   * for a message that reaches thousands of families.
+   */
   const [shivir] = await db
-    .select({
+    .update(shivir_events)
+    .set({ announced_at: new Date() })
+    .where(
+      and(
+        eq(shivir_events.id, shivirId),
+        isNull(shivir_events.deleted_at),
+        eq(shivir_events.is_published, true),
+        isNull(shivir_events.announced_at),
+      ),
+    )
+    .returning({
       id: shivir_events.id,
       name_en: shivir_events.name_en,
       name_hi: shivir_events.name_hi,
       city_id: shivir_events.city_id,
       start_date: shivir_events.start_date,
       msv_only: shivir_events.msv_only,
-    })
-    .from(shivir_events)
-    .where(and(eq(shivir_events.id, shivirId), isNull(shivir_events.deleted_at)))
-    .limit(1);
+    });
   if (!shivir) return;
 
   // students.centre_id is the live posting; enrolments is the request ledger and

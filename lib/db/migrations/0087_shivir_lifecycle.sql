@@ -67,6 +67,17 @@ ALTER TABLE "shivir_events" ADD COLUMN IF NOT EXISTS "name_hi" text;--> statemen
 ALTER TABLE "shivir_events" ADD COLUMN IF NOT EXISTS "description_hi" text;--> statement-breakpoint
 ALTER TABLE "shivir_events" ADD COLUMN IF NOT EXISTS "deleted_at" timestamp with time zone;--> statement-breakpoint
 
+-- The publish announcement is an unbounded fan-out to every parent in the city,
+-- so it must fire exactly once per shivir. Claiming this column is what makes
+-- that true across a republish and across a retried queue job.
+ALTER TABLE "shivir_events" ADD COLUMN IF NOT EXISTS "announced_at" timestamp with time zone;--> statement-breakpoint
+
+-- Back-mark everything already published. These shivirs have been live for a
+-- while and their families already know; without this the first edit made to
+-- any of them after deploy would announce the whole back catalogue at once.
+UPDATE "shivir_events" SET "announced_at" = now()
+WHERE "announced_at" IS NULL AND "is_published";--> statement-breakpoint
+
 -- NOT VALID on purpose: an existing inverted range is bad data, but failing the
 -- whole migration over it would be worse. New and updated rows are checked;
 -- the API rejects inverted ranges with a 422 before they get here.

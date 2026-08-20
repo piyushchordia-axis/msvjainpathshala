@@ -50,6 +50,15 @@ export const shivir_events = pgTable(
     attendance_mode: shivirAttendanceModeEnum("attendance_mode").notNull().default("present_only"),
     msv_only: boolean("msv_only").notNull().default(false),
     is_published: boolean("is_published").notNull().default(true),
+    /**
+     * When the "new shivir" announcement went out — set once, ever.
+     *
+     * The announcement is an unbounded fan-out to every parent in the city, so
+     * it must fire exactly once per shivir. Without this an admin who publishes,
+     * spots a typo, unpublishes and republishes notifies the whole city twice —
+     * and a retried queue job does it again.
+     */
+    announced_at: timestamp("announced_at", { withTimezone: true }),
     ...softDelete(),
     ...timestamps(),
   },

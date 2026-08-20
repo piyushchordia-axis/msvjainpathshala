@@ -1,6 +1,6 @@
 # Code review — Quiz module (v2)
 
-**Date:** 2026-08-15
+**Date:** 2026-08-20
 **Supersedes:** [`QUIZ_MODULE_REVIEW.md`](./QUIZ_MODULE_REVIEW.md) (2026-08-05)
 **Structure:** persona → navigation → action → observed vs expected
 
@@ -25,7 +25,7 @@
 
 ## Summary
 
-Ten days of work closed most of the v1 list, and closed it well. The resumable start (`quizzes.ts:1328-1368`), the AT21 points indirection (`quiz-points.ts`), the SQL scope predicate (`quiz-scope.ts`), the results rosters, the reset/force-delete correction path with Punya reversal, and the mobile `?? _en` fallbacks are all genuinely done — and the test file grew from 6 cases to 23, covering resume, concurrent start, non-batch push submit, age gating, and both reversal paths.
+Fifteen days of work closed most of the v1 list, and closed it well. The resumable start (`quizzes.ts:1328-1368`), the AT21 points indirection (`quiz-points.ts`), the SQL scope predicate (`quiz-scope.ts`), the results rosters, the reset/force-delete correction path with Punya reversal, and the mobile `?? _en` fallbacks are all genuinely done — and the test file grew from 6 cases to 23, covering resume, concurrent start, non-batch push submit, age gating, and both reversal paths.
 
 Three things went wrong in the process.
 

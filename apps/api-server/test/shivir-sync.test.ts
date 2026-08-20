@@ -19,7 +19,7 @@
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import app from "../src/app";
-import { pool, db, shivir_attendance_scans, shivir_volunteers } from "@workspace/db";
+import { pool, db, cities, shivir_attendance_scans, shivir_volunteers } from "@workspace/db";
 import { and, eq, isNull } from "drizzle-orm";
 import { loginAs, auth } from "./helpers";
 import { ulid } from "../src/lib/ulid";
@@ -57,31 +57,49 @@ async function postOps(
   return res.body.data.results as SyncResultRow[];
 }
 
-/** A published, non-MSV Mumbai shivir plus a fresh session inside its window. */
-async function seedSession(adminToken: string, mode: "present_only" | "in_out") {
-  const list = await request(app).get("/v1/admin/shivirs?limit=200").set(auth(adminToken));
-  expect(list.status).toBe(200);
-  const shivir = (
-    list.body.data.items as Array<{
-      id: string;
-      city_name: string;
-      start_date: string;
-      is_published: boolean;
-      msv_only: boolean;
-    }>
-  ).find((s) => s.city_name === "Mumbai" && s.is_published && !s.msv_only);
-  expect(shivir).toBeDefined();
+function isoDate(offsetDays: number): string {
+  return new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
+}
 
-  const created = await request(app)
-    .post(`/v1/shivir-scanner/shivirs/${shivir!.id}/sessions`)
+/**
+ * A shivir owned by this test, plus one session inside its window.
+ *
+ * Deliberately NOT the seeded Mumbai shivir: the seed now assigns the seeded
+ * shikshak as a volunteer there, so a test that assigns them again would 409 on
+ * the live-assignment unique index. Owning the shivir also keeps these cases
+ * independent of the other shivir test files running in parallel.
+ */
+async function seedSession(adminToken: string, mode: "present_only" | "in_out") {
+  const [city] = await db
+    .select({ id: cities.id })
+    .from(cities)
+    .where(eq(cities.name, "Mumbai"))
+    .limit(1);
+  expect(city).toBeTruthy();
+
+  const shivir = await request(app)
+    .post("/v1/admin/shivirs")
     .set(auth(adminToken))
     .send({
-      title: `Sync test ${mode} ${Date.now()}`,
-      session_date: shivir!.start_date,
+      name_en: `Vitest sync ${Date.now()}${Math.random().toString(36).slice(2, 6)}`,
+      city_id: city!.id,
+      start_date: isoDate(1),
+      end_date: isoDate(3),
+      attendance_mode: mode,
+    });
+  expect(shivir.status).toBe(200);
+  const shivirId = shivir.body.data.id as string;
+
+  const created = await request(app)
+    .post(`/v1/shivir-scanner/shivirs/${shivirId}/sessions`)
+    .set(auth(adminToken))
+    .send({
+      title: `Sync test ${mode}`,
+      session_date: isoDate(1),
       attendance_mode: mode,
     });
   expect(created.status).toBe(200);
-  return { shivirId: shivir!.id, sessionId: created.body.data.id as string };
+  return { shivirId, sessionId: created.body.data.id as string };
 }
 
 /** The seeded parent's first child, with a freshly generated signed card. */

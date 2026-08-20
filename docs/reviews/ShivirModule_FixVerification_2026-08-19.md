@@ -79,6 +79,20 @@ admin actions the log exists to surface.
 
 ---
 
+## One announcement, ever
+
+Publishing announces to every parent in the shivir's city. Two things make that
+safe rather than reckless:
+
+- It runs on `QUEUE_NAMES.PARENT_NOTIFY`, not inside the API request. The
+  fan-out is unbounded, and a city with a few thousand families would otherwise
+  hold a request thread through thousands of inbox inserts and push calls.
+- `shivir_events.announced_at` is **claimed** by a conditional
+  `UPDATE … WHERE announced_at IS NULL … RETURNING` before anything is sent, so
+  an unpublish-then-republish, a double-click, or a retried BullMQ job cannot
+  notify a city twice. The migration back-marks every already-published shivir,
+  so deploying this does not announce the back catalogue.
+
 ## Two bugs found while writing the tests
 
 Worth recording, because both would have shipped silently.
@@ -96,6 +110,13 @@ would have been permanently false and "Load more" would never have rendered —
 exactly the failure that hook's own comment documents. The endpoint now speaks
 cursor.
 
+And one the tests caught in the tests themselves: `shivir-sync.test.ts`
+originally reused the seeded Mumbai shivir, which the seed now assigns the
+seeded shikshak to as a volunteer — so the test's own assignment 409'd on the
+live-assignment unique index. It passed in isolation only because the dev DB had
+never been re-seeded. Each shivir test file now creates the shivir it owns,
+which also decouples the files from each other when vitest runs them in parallel.
+
 ---
 
 ## Verification
@@ -109,6 +130,39 @@ pnpm --filter @workspace/api-server run test
 pnpm --filter @workspace/jain-pathshala run typecheck
 pnpm --filter @workspace/jain-pathshala-mobile run typecheck
 ```
+
+**Result on a pristine database: 97 files, 836 tests, 0 failures.**
+
+### Run the API suite against a clean database, not the dev one
+
+The local dev DB (`jainpathshala` on 5434) is push-built and **lags `schema.ts`**:
+`niyams.title_hi` is still `NOT NULL` there although `0085` and `schema.ts` both
+make it nullable. Every niyam insert that omits `title_hi` 500s, which cascades
+into **62 failures across 10 files** — niyam-catalog, niyam-submissions,
+homework, gallery, enrolments, punya-award-limits, punya-configs, niyam-sync —
+none of them shivir-related. The same DB also accumulates daily state, so
+`punya-award-limits` starts returning 429 once a day's manual-award budget is
+spent by repeated runs.
+
+Build a clean one instead, and rebuild it between full runs — a suite leaves
+rows behind that the next run trips over:
+
+```bash
+createdb jp_clean
+DATABASE_URL=…/jp_clean node lib/db/scripts/migrate.mjs
+DATABASE_URL=…/jp_clean ALLOW_SEED=1 npx tsx lib/db/src/seed.ts
+cd apps/api-server && DATABASE_URL=…/jp_clean npx vitest run
+```
+
+**The dev DB is worth repairing separately** — it is drifted independently of
+this work, and every one of those 62 failures predates it.
+
+### Note: `test/` is not typechecked
+
+`apps/api-server/tsconfig.json` includes only `src`, so a type error in a test
+file is invisible to `pnpm typecheck` and surfaces only when the test runs. A
+missing import in `shivir-sync.test.ts` passed typecheck and failed at runtime.
+Run new API tests; do not take a green typecheck as evidence.
 
 New API test files: `shivir-sync.test.ts` (the C1 regression — a parent posting
 `op_type: "shivir_scan"` with their own child's QR, asserting both the refusal
