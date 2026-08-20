@@ -7,17 +7,19 @@ import { Pressable, ScrollView, Text, View } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useColors } from "@/hooks/useColors";
+import { useColors, withAlpha } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAdminBatches, useBatchPunyaStandings } from "@/lib/queries";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
 import { Body, Card, Row, Screen, StateView, Title } from "@/components/ui";
+import { PUNYA_TIERS } from "@/lib/punya-labels";
 
 const BATCH_KEY = "jp.shikshak.selectedBatchId";
 
-const TIER_ORDER = ["jigyasu", "shravak", "sadhak", "shraman", "tirthankar"] as const;
+// L8 — one ladder, shared. This file used to keep its own copy.
+const TIER_ORDER = PUNYA_TIERS;
 
 const SOURCE_LABELS: Record<string, { en: string; hi: string }> = {
   attendance: { en: "Attendance", hi: "उपस्थिति" },
@@ -170,12 +172,17 @@ export default function ShikshakPunyaStandingsScreen() {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={{ gap: 8, paddingRight: 4 }}
             >
+              {/* L5 — the batch chips, the source toggle and the student rows
+                  were all unlabelled touchables to a screen reader. */}
               {batches.map((batch) => {
                 const active = batch.id === selectedBatchId;
                 return (
                   <Pressable
                     key={batch.id}
                     onPress={() => pickBatch(batch.id)}
+                    accessibilityRole="button"
+                    accessibilityLabel={batch.name ?? undefined}
+                    accessibilityState={{ selected: active }}
                     style={{
                       backgroundColor: active ? c.primary : c.muted,
                       borderRadius: 999,
@@ -203,6 +210,7 @@ export default function ShikshakPunyaStandingsScreen() {
           <Pressable
             onPress={() => setMonth((m) => shiftMonth(m, -1))}
             hitSlop={12}
+            accessibilityRole="button"
             accessibilityLabel={hi ? "पिछला माह" : "Previous month"}
           >
             <Ionicons name="chevron-back" size={22} color={c.foreground} />
@@ -224,7 +232,9 @@ export default function ShikshakPunyaStandingsScreen() {
             }}
             hitSlop={12}
             disabled={!canGoForward}
+            accessibilityRole="button"
             accessibilityLabel={hi ? "अगला माह" : "Next month"}
+            accessibilityState={{ disabled: !canGoForward }}
           >
             <Ionicons
               name="chevron-forward"
@@ -317,6 +327,11 @@ export default function ShikshakPunyaStandingsScreen() {
 
             <Pressable
               onPress={() => setSourcesOpen((o) => !o)}
+              accessibilityRole="button"
+              accessibilityLabel={
+                hi ? "अंकों के स्रोत दिखाएँ या छिपाएँ" : "Show or hide points by source"
+              }
+              accessibilityState={{ expanded: sourcesOpen }}
               style={{
                 backgroundColor: c.card,
                 borderRadius: c.radius,
@@ -385,6 +400,12 @@ export default function ShikshakPunyaStandingsScreen() {
                       onPress={() =>
                         router.push(`/student-detail/${row.student_id}?section=punya` as never)
                       }
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        hi
+                          ? `${row.full_name}, स्थान ${row.rank}, ${row.total_points} पुण्य, ${tierLabel(row.tier, hi)}`
+                          : `${row.full_name}, rank ${row.rank}, ${row.total_points} Punya, ${tierLabel(row.tier, hi)}`
+                      }
                       style={{
                         minHeight: 64,
                         backgroundColor: c.card,
@@ -428,12 +449,23 @@ export default function ShikshakPunyaStandingsScreen() {
                           {monthDeltaText(row.month_points, hi)}
                         </Body>
                       </View>
+                      {/* L3 — the tier colour used to be the TEXT colour, and two
+                          of the five failed WCAG AA badly: Tirthankar gold at
+                          2.25:1 and Jigyasu earth at 3.82:1, against a 4.5:1
+                          requirement for 11px text.
+
+                          The brand palette is locked (CLAUDE.md), so the fix is
+                          not to redefine the tokens: the tier colour moves to the
+                          border and a tint of it to the background, where hue
+                          carries meaning without carrying legibility, and the
+                          label takes the ink colour. The tier is still
+                          identifiable at a glance and now readable. */}
                       <View
                         style={{
                           borderRadius: 999,
                           paddingHorizontal: 10,
                           paddingVertical: 3,
-                          backgroundColor: c.muted,
+                          backgroundColor: withAlpha(color, 0.12),
                           borderWidth: 1,
                           borderColor: color,
                         }}
@@ -442,7 +474,8 @@ export default function ShikshakPunyaStandingsScreen() {
                           style={{
                             fontFamily: bodyFamily(hi, "semibold"),
                             fontSize: 11,
-                            color,
+                            lineHeight: 22,
+                            color: c.foreground,
                             letterSpacing: 0.3,
                           }}
                         >

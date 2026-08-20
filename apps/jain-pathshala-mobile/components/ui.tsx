@@ -281,7 +281,23 @@ export function Pill({
   const { hi } = useLocale();
   return (
     <View style={{ alignSelf: "flex-start", backgroundColor: t.bg, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 }}>
-      <Text style={{ fontFamily: bodyFamily(hi, "semibold"), fontSize: 11, color: t.fg, letterSpacing: 0.3 }}>{label}</Text>
+      {/* L4 — CLAUDE.md sets a 22px floor for any Devanagari text, because
+          its ascenders and matras are taller than Latin. This was 11px with no
+          lineHeight at all, so a tier badge reading जिज्ञासु had its matras
+          clipped. Unconditional rather than keyed on `hi`: Jain terms stay in
+          Devanagari even in the English locale, so the pill cannot know from
+          the locale alone whether its label needs the taller line. */}
+      <Text
+        style={{
+          fontFamily: bodyFamily(hi, "semibold"),
+          fontSize: 11,
+          lineHeight: 22,
+          color: t.fg,
+          letterSpacing: 0.3,
+        }}
+      >
+        {label}
+      </Text>
     </View>
   );
 }

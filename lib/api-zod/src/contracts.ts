@@ -360,7 +360,13 @@ export const overviewSchema = z.object({
   open_service_requests: z.number(),
   pending_enrolments: z.number(),
   attendance_rate_30d: z.number(),
-  punya_awarded_30d: z.number(),
+  /**
+   * M14 — calendar month (Asia/Kolkata), not a rolling 30 days.
+   *
+   * Renamed from punya_awarded_30d on purpose: the old name said one thing,
+   * the Dashboard label said another, and Analytics said a third.
+   */
+  punya_awarded_month: z.number(),
   msv_active: z.number(),
   /** Omitted entirely for roles outside DONATION_VIEW_ROLES — never a national figure on a scoped endpoint. */
   donations_total_paise_ytd: z.number().optional(),

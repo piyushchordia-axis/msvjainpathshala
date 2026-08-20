@@ -31,6 +31,8 @@ export type QuickAction = {
 const PARENT_ACTIONS: QuickAction[] = [
   { href: "/my-attendance", icon: "checkmark-done-outline", en: "Attendance", hi: "उपस्थिति", accent: "attendance" },
   { href: "/niyam-submit", icon: "sparkles-outline", en: "Submit Niyam", hi: "नियम भेजें", accent: "niyam" },
+  // L11 — a parent had no route to the Punya ledger from anywhere in the app.
+  { href: "/punya", icon: "ribbon-outline", en: "Punya", hi: "पुण्य", accent: "punya" },
   { href: "/courses", icon: "library-outline", en: "Courses", hi: "पाठ्यक्रम", accent: "courses" },
   { href: "/certificates", icon: "ribbon-outline", en: "Certificates", hi: "प्रमाणपत्र", accent: "certificates" },
   { href: "/homework", icon: "book-outline", en: "Homework", hi: "गृहकार्य", accent: "homework" },

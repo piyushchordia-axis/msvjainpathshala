@@ -56,6 +56,9 @@ export default function ParentHome() {
       : 0);
 
   const openAttendance = () => router.push("/my-attendance");
+  // L11 — the Punya card showed a total and a tier with no way through to
+  // the ledger behind them, including when points were reversed.
+  const openPunya = () => router.push("/punya");
 
   return (
     <View style={{ flex: 1, backgroundColor: c.background }}>
@@ -225,7 +228,13 @@ export default function ParentHome() {
 
             <AnimatedMount delay={240}>
               <Card>
-                <Title style={{ fontSize: 17 }}>{hi ? "पुण्य अंक" : "Punya points"}</Title>
+                <Pressable
+                  onPress={openPunya}
+                  accessibilityRole="button"
+                  accessibilityLabel={hi ? "पुण्य विवरण देखें" : "View Punya ledger"}
+                >
+                  <Title style={{ fontSize: 17 }}>{hi ? "पुण्य अंक" : "Punya points"}</Title>
+                </Pressable>
                 {punya.isLoading ? (
                   <StateView status="loading" emptyText="" />
                 ) : punya.isError ? (

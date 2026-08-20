@@ -22,7 +22,7 @@ export default function DashboardScreen() {
     { label: hi ? "सक्रिय विद्यार्थी" : "Active students", value: data?.active_students ?? 0, icon: "people-outline" as const },
     { label: hi ? "केंद्र" : "Centres", value: data?.centres ?? 0, icon: "business-outline" as const },
     { label: hi ? "30-दिन उपस्थिति" : "30-day attendance", value: data ? `${data.attendance_rate_30d}%` : "—", icon: "checkmark-done-outline" as const },
-    { label: hi ? "पुण्य (30 दिन)" : "Punya awarded", value: data?.punya_awarded_30d ?? 0, icon: "ribbon-outline" as const },
+    { label: hi ? "पुण्य (इस महीने)" : "Punya (this month)", value: data?.punya_awarded_month ?? 0, icon: "ribbon-outline" as const },
     { label: hi ? "एमएसवी सक्रिय" : "MSV active", value: data?.msv_active ?? 0, icon: "leaf-outline" as const },
   ];
 

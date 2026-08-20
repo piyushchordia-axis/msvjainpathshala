@@ -231,6 +231,25 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
   const centreFilter = scopedCentreFilter(scope, students.centre_id);
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
+  // M14 — Punya is reported for the CALENDAR MONTH, not a rolling window.
+  //
+  // The server computed a rolling 30 days while the Dashboard called it
+  // "this month" and Analytics called the same field "(30d)" — two pages
+  // contradicting each other about one number. A calendar month also lines
+  // it up with the monthly leaderboard and the monthly centre reports, so
+  // an admin comparing the three is comparing like with like.
+  //
+  // `since` deliberately stays a rolling 30 days: it drives
+  // attendance_rate_30d, which is a different measure and is labelled
+  // honestly already.
+  const monthStart = new Date(
+    `${new Date().toLocaleDateString("en-CA", {
+      timeZone: "Asia/Kolkata",
+      year: "numeric",
+      month: "2-digit",
+    }).slice(0, 7)}-01T00:00:00+05:30`,
+  );
+
   const centreScope = scopedCentreFilter(scope, centres.id);
   const srCentreFilter = scopedCentreFilter(scope, service_requests.centre_id);
   const enrolmentCentreFilter = scopedCentreFilter(scope, enrolments.requested_centre_id);
@@ -296,7 +315,11 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
       .from(punya_transactions)
       .innerJoin(students, eq(students.id, punya_transactions.student_id))
       .where(
-        and(gte(punya_transactions.created_at, since), isNull(students.deleted_at), punyaCentreFilter),
+        and(
+          gte(punya_transactions.created_at, monthStart),
+          isNull(students.deleted_at),
+          punyaCentreFilter,
+        ),
       ),
     showDonations
       ? db
@@ -322,7 +345,7 @@ router.get("/analytics/overview", async (req: Request, res: Response) => {
     open_service_requests: openReq?.n ?? 0,
     pending_enrolments: pendingEnrol?.n ?? 0,
     attendance_rate_30d: attendanceRate,
-    punya_awarded_30d: Number(punyaRow?.sum ?? 0),
+    punya_awarded_month: Number(punyaRow?.sum ?? 0),
     msv_active: msvActive?.n ?? 0,
     ...(showDonations
       ? { donations_total_paise_ytd: Number(donationRow?.sum ?? 0) }

@@ -57,6 +57,21 @@ export function punyaFeatureLabel(featureKey: string, hi: boolean): string {
  * Jain terms stay untransliterated in both languages (CLAUDE.md): a tier is a
  * spiritual rank, not a label to translate.
  */
+/**
+ * L8 — the tier ladder, in ONE place on the client.
+ *
+ * shikshak/punya.tsx kept its own `TIER_ORDER` copy of the server enum, so
+ * adding or reordering a tier meant remembering a file nobody would think to
+ * look in. Ordered lowest to highest, matching TIERS in the schema.
+ */
+export const PUNYA_TIERS = [
+  "jigyasu",
+  "shravak",
+  "sadhak",
+  "shraman",
+  "tirthankar",
+] as const;
+
 const TIER_LABELS: Record<string, { en: string; hi: string }> = {
   jigyasu: { en: "Jigyasu", hi: "जिज्ञासु" },
   shravak: { en: "Shravak", hi: "श्रावक" },

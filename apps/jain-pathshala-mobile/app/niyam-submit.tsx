@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Alert, Pressable, TextInput, View } from "react-native";
 import { useRouter, useLocalSearchParams } from "expo-router";
-import { useColors } from "@/hooks/useColors";
+import { useColors, withAlpha } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -380,7 +380,7 @@ export default function NiyamSubmit() {
                       paddingHorizontal: 12,
                       borderWidth: 1,
                       borderColor: forYesterday ? c.primary : c.border,
-                      backgroundColor: forYesterday ? c.primary + "12" : c.background,
+                      backgroundColor: forYesterday ? withAlpha(c.primary, 0.07) : c.background,
                       borderRadius: c.radius,
                     }}
                   >

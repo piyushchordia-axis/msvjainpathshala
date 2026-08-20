@@ -12,6 +12,7 @@ import { useAdminList } from '@/hooks/useAdminList';
 import { useAuth } from '@/lib/auth-context';
 import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
+import { useLocale } from '@/lib/locale-context';
 import { roleSatisfies } from '@/components/admin/sidebar-nav';
 import type { Role } from '@/lib/auth';
 import { Card } from '@/components/ui/card';
@@ -64,9 +65,11 @@ function AddCentreDialog({ onAdded }: { onAdded: () => void }) {
 
   useEffect(() => {
     if (!open) return;
-    void apiGet<{ cities: GeoOption[] }>('/v1/admin/geography').then((r) => {
-      setCities(r?.cities ?? []);
-    });
+    // L6 — a rejected fetch here used to be an unhandled rejection AND a
+    // permanently empty picker with nothing on screen to say why.
+    void apiGet<{ cities: GeoOption[] }>('/v1/admin/geography')
+      .then((r) => setCities(r?.cities ?? []))
+      .catch(() => setCities([]));
   }, [open]);
 
   async function submit(e: React.FormEvent) {
@@ -275,19 +278,26 @@ function NiyamDialog({ niyam, onSaved }: { niyam?: NiyamRow; onSaved: () => void
 
   useEffect(() => {
     if (!open) return;
-    void apiGet<{ states: GeoStateOpt[]; cities: GeoCityOpt[] }>('/v1/admin/geography').then((r) => {
-      setStates(r?.states ?? []);
-      let cityList = r?.cities ?? [];
-      if (role === 'state_admin' && user?.state_id) {
-        cityList = cityList.filter((c) => c.state_id === user.state_id);
-      }
-      if (role === 'city_admin' && user?.city_id) {
-        cityList = cityList.filter((c) => c.id === user.city_id);
-      }
-      setCities(cityList);
-      if (user?.state_id) setStateId(user.state_id);
-      if (user?.city_id) setCityId(user.city_id);
-    });
+    void apiGet<{ states: GeoStateOpt[]; cities: GeoCityOpt[] }>('/v1/admin/geography')
+      .then((r) => {
+        setStates(r?.states ?? []);
+        let cityList = r?.cities ?? [];
+        if (role === 'state_admin' && user?.state_id) {
+          cityList = cityList.filter((c) => c.state_id === user.state_id);
+        }
+        if (role === 'city_admin' && user?.city_id) {
+          cityList = cityList.filter((c) => c.id === user.city_id);
+        }
+        setCities(cityList);
+        if (user?.state_id) setStateId(user.state_id);
+        if (user?.city_id) setCityId(user.city_id);
+      })
+      // L6 — otherwise this is an unhandled rejection and the geography
+      // pickers stay empty forever with no explanation.
+      .catch(() => {
+        setStates([]);
+        setCities([]);
+      });
   }, [open, role, user?.state_id, user?.city_id]);
 
   async function submit(e: React.FormEvent) {
@@ -679,13 +689,16 @@ function AddPunyaConfigDialog({ onAdded }: { onAdded: () => void }) {
 
   useEffect(() => {
     if (!open) return;
-    void apiGet<{ items: PunyaFeatureOpt[] }>('/v1/admin/punya/features').then((r) =>
-      setFeatures(r?.items ?? []),
-    );
+    // L6 — without a .catch these are unhandled rejections, and the config
+    // form silently offers an empty feature list rather than saying it could
+    // not load one.
+    void apiGet<{ items: PunyaFeatureOpt[] }>('/v1/admin/punya/features')
+      .then((r) => setFeatures(r?.items ?? []))
+      .catch(() => setFeatures([]));
     if (isSuper) {
-      void apiGet<{ states: GeoStateOpt[]; cities: GeoCityOpt[] }>('/v1/admin/geography').then((r) =>
-        setCityOpts(r?.cities ?? []),
-      );
+      void apiGet<{ states: GeoStateOpt[]; cities: GeoCityOpt[] }>('/v1/admin/geography')
+        .then((r) => setCityOpts(r?.cities ?? []))
+        .catch(() => setCityOpts([]));
     }
   }, [open, isSuper]);
 
@@ -870,11 +883,30 @@ function PunyaConfigRowView({ c, onSaved }: { c: PunyaConfigRow; onSaved: () => 
 
 export function PunyaConfigsPage() {
   const { items, loading, error, reload } = useAdminList<PunyaConfigRow>('/v1/admin/punya/configs');
+  // L2 — the three Punya pages were the only admin surfaces with no
+  // localisation at all, while their siblings (niyam review, analytics) are
+  // bilingual. Jain terms stay untranslated in both languages per CLAUDE.md.
+  const hi = useLocale() === 'hi';
   return (
-    <AdminPageShell title="Punya configs" subtitle="Point values per feature key." actions={<AddPunyaConfigDialog onAdded={reload} />}>
+    <AdminPageShell
+      title={hi ? 'पुण्य कॉन्फ़िग' : 'Punya configs'}
+      subtitle={hi ? 'प्रति फ़ीचर अंक मान।' : 'Point values per feature key.'}
+      actions={<AddPunyaConfigDialog onAdded={reload} />}
+    >
       {error ? <AdminError message={error} /> : null}
-      <AdminTable columns={['Feature', 'Scope', 'Points', 'Active', 'Actions']} loading={loading} empty="" colSpan={5}>
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={5} message="No configs." /> : null}
+      <AdminTable
+        columns={
+          hi
+            ? ['फ़ीचर', 'क्षेत्र', 'अंक', 'सक्रिय', 'कार्रवाई']
+            : ['Feature', 'Scope', 'Points', 'Active', 'Actions']
+        }
+        loading={loading}
+        empty=""
+        colSpan={5}
+      >
+        {items.length === 0 && !loading ? (
+          <AdminEmptyRow colSpan={5} message={hi ? 'कोई कॉन्फ़िग नहीं।' : 'No configs.'} />
+        ) : null}
         {items.map((c) => (
           <PunyaConfigRowView key={c.id} c={c} onSaved={reload} />
         ))}
@@ -905,6 +937,7 @@ interface PunyaTxnRow {
  * gallery rows and badges.
  */
 function ReversePunyaButton({ txn, onDone }: { txn: PunyaTxnRow; onDone: () => void }) {
+  const hi = useLocale() === 'hi';
   const [open, setOpen] = useState(false);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
@@ -929,35 +962,50 @@ function ReversePunyaButton({ txn, onDone }: { txn: PunyaTxnRow; onDone: () => v
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <Button size="sm" variant="ghost">Reverse</Button>
+        <Button size="sm" variant="ghost">{hi ? 'वापस लें' : 'Reverse'}</Button>
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Reverse this award</DialogTitle>
+          <DialogTitle>
+            {hi ? 'यह पुण्य वापस लें' : 'Reverse this award'}
+          </DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          {txn.student_name} will lose {txn.points} Punya. The award stays in the
-          ledger with a matching reversal beside it, so the history stays readable.
+          {hi
+            ? `${txn.student_name} के ${txn.points} पुण्य वापस लिए जाएँगे। मूल प्रविष्टि बहीखाते में रहेगी और उसके साथ वापसी दर्ज होगी, ताकि इतिहास पढ़ा जा सके।`
+            : `${txn.student_name} will lose ${txn.points} Punya. The award stays in the ledger with a matching reversal beside it, so the history stays readable.`}
         </p>
-        <Label htmlFor="reverse-reason" className="mt-4">Reason *</Label>
+        <Label htmlFor="reverse-reason" className="mt-4">
+          {hi ? 'कारण *' : 'Reason *'}
+        </Label>
         <Input
           id="reverse-reason"
           value={reason}
           onChange={(e) => setReason(e.target.value)}
           maxLength={500}
-          placeholder="e.g. awarded to the wrong child"
+          placeholder={
+            hi ? 'जैसे: ग़लत बच्चे को दिया गया' : 'e.g. awarded to the wrong child'
+          }
           className="mt-1"
         />
         <div className="mt-4 flex justify-end gap-2">
           <DialogClose asChild>
-            <Button variant="ghost" type="button">Cancel</Button>
+            <Button variant="ghost" type="button">
+              {hi ? 'रद्द करें' : 'Cancel'}
+            </Button>
           </DialogClose>
           <Button
             type="button"
             disabled={busy || reason.trim().length < 3}
             onClick={() => void submit()}
           >
-            {busy ? 'Reversing…' : 'Reverse award'}
+            {busy
+              ? hi
+                ? 'वापस लिया जा रहा है…'
+                : 'Reversing…'
+              : hi
+                ? 'पुण्य वापस लें'
+                : 'Reverse award'}
           </Button>
         </div>
       </DialogContent>
@@ -968,11 +1016,16 @@ function ReversePunyaButton({ txn, onDone }: { txn: PunyaTxnRow; onDone: () => v
 function PunyaAuditTable({ title, subtitle }: { title: string; subtitle: string }) {
   const { items, loading, loadingMore, error, hasMore, loadMore, reload } =
     useAdminList<PunyaTxnRow>('/v1/admin/punya/transactions?limit=200');
+  const hi = useLocale() === 'hi';
   return (
     <AdminPageShell title={title} subtitle={subtitle}>
       {error ? <AdminError message={error} /> : null}
       <AdminTable
-        columns={['When', 'Student', 'Feature', 'Points', 'By', 'Note', '']}
+        columns={
+          hi
+            ? ['कब', 'विद्यार्थी', 'फ़ीचर', 'अंक', 'किसने', 'टिप्पणी', '']
+            : ['When', 'Student', 'Feature', 'Points', 'By', 'Note', '']
+        }
         loading={loading}
         empty=""
         colSpan={7}
@@ -980,7 +1033,9 @@ function PunyaAuditTable({ title, subtitle }: { title: string; subtitle: string 
           <AdminLoadMore hasMore={hasMore} loadingMore={loadingMore} onLoadMore={() => void loadMore()} />
         }
       >
-        {items.length === 0 && !loading ? <AdminEmptyRow colSpan={7} message="No transactions." /> : null}
+        {items.length === 0 && !loading ? (
+          <AdminEmptyRow colSpan={7} message={hi ? 'कोई लेन-देन नहीं।' : 'No transactions.'} />
+        ) : null}
         {items.map((t) => (
           <tr key={t.id} className="hover:bg-muted/30">
             <td className="px-4 py-3 text-xs whitespace-nowrap">
@@ -1022,8 +1077,16 @@ function PunyaAuditTable({ title, subtitle }: { title: string; subtitle: string 
 }
 
 export function PunyaAuditPage() {
+  const hi = useLocale() === 'hi';
   return (
-    <PunyaAuditTable title="Punya audit" subtitle="Recent Punya awards in your scope." />
+    <PunyaAuditTable
+      title={hi ? 'पुण्य लेखा' : 'Punya audit'}
+      subtitle={
+        hi
+          ? 'आपके क्षेत्र में हाल के पुण्य अंक।'
+          : 'Recent Punya awards in your scope.'
+      }
+    />
   );
 }
 
@@ -1083,6 +1146,7 @@ export function PunyaAwardPage() {
     return caps.length ? Math.min(500, ...caps) : 500;
   })();
   const minAllowed = category?.min_points ?? 0;
+  const hi = useLocale() === 'hi';
   const reasonRequired = category?.requires_reason ?? true;
 
   // Server-side ?q= search — the old 500-row <Select> could not reach a
@@ -1094,7 +1158,11 @@ export function PunyaAwardPage() {
       const url = q
         ? `/v1/admin/students?limit=20&q=${encodeURIComponent(q)}`
         : '/v1/admin/students?limit=20';
-      void apiGet<{ items: AwardStudentOption[] }>(url).then((r) => setStudents(r?.items ?? []));
+      // L6 — a failed search threw into the void and left the previous
+      // results on screen as if they still matched the query.
+      void apiGet<{ items: AwardStudentOption[] }>(url)
+        .then((r) => setStudents(r?.items ?? []))
+        .catch(() => setStudents([]));
     }, 300);
     return () => window.clearTimeout(t);
   }, [studentQuery]);
@@ -1113,7 +1181,11 @@ export function PunyaAwardPage() {
         // award twice (SAN-API-08).
         idempotency_key: `manual:${awardKey}`,
       });
-      toast.success(`Awarded ${points} Punya. New total: ${res.total_points} (${res.tier}).`);
+      toast.success(
+        hi
+          ? `${points} पुण्य दिए गए। नया कुल: ${res.total_points} (${res.tier})।`
+          : `Awarded ${points} Punya. New total: ${res.total_points} (${res.tier}).`,
+      );
       setNote('');
       setAwardKey(crypto.randomUUID());
       // Refresh remaining-today after a successful award.
@@ -1121,18 +1193,30 @@ export function PunyaAwardPage() {
         .then((r) => setLimitInfo(r ?? null))
         .catch(() => {});
     } catch (err) {
-      toast.error('Award failed.', err instanceof ApiError ? err.message : undefined);
+      toast.error(
+        hi ? 'पुण्य नहीं दिए जा सके।' : 'Award failed.',
+        err instanceof ApiError ? err.message : undefined,
+      );
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <AdminPageShell title="Award Punya" subtitle="Manually award points to a student in your scope.">
+    <AdminPageShell
+      title={hi ? 'पुण्य दें' : 'Award Punya'}
+      subtitle={
+        hi
+          ? 'अपने क्षेत्र के किसी विद्यार्थी को स्वयं अंक दें।'
+          : 'Manually award points to a student in your scope.'
+      }
+    >
       <Card className="max-w-md p-6">
         <form className="space-y-4" onSubmit={submit}>
           <div>
-            <Label htmlFor="student_search">Student</Label>
+            <Label htmlFor="student_search">
+              {hi ? 'विद्यार्थी' : 'Student'}
+            </Label>
             {selected ? (
               <div className="mt-1 flex items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-sm">
                 <span>
@@ -1144,7 +1228,7 @@ export function PunyaAwardPage() {
                   variant="ghost"
                   onClick={() => setSelected(null)}
                 >
-                  Change
+                  {hi ? 'बदलें' : 'Change'}
                 </Button>
               </div>
             ) : (
@@ -1153,7 +1237,9 @@ export function PunyaAwardPage() {
                   id="student_search"
                   value={studentQuery}
                   onChange={(e) => setStudentQuery(e.target.value)}
-                  placeholder="Search by name or student code"
+                  placeholder={
+                    hi ? 'नाम या विद्यार्थी कोड से खोजें' : 'Search by name or student code'
+                  }
                   className="mt-1"
                 />
                 <div className="mt-2 max-h-56 space-y-1 overflow-y-auto">
@@ -1170,7 +1256,9 @@ export function PunyaAwardPage() {
                   ))}
                   {students.length === 0 ? (
                     <p className="px-1 py-2 text-xs text-muted-foreground">
-                      No students match — try a name or code.
+                      {hi
+                        ? 'कोई विद्यार्थी नहीं मिला — नाम या कोड आज़माएँ।'
+                        : 'No students match — try a name or code.'}
                     </p>
                   ) : null}
                 </div>
@@ -1178,7 +1266,9 @@ export function PunyaAwardPage() {
             )}
           </div>
           <div>
-            <Label htmlFor="category">What is this for?</Label>
+            <Label htmlFor="category">
+              {hi ? 'किसलिए?' : 'What is this for?'}
+            </Label>
             <select
               id="category"
               value={categoryKey}
@@ -1201,7 +1291,7 @@ export function PunyaAwardPage() {
             </select>
           </div>
           <div>
-            <Label htmlFor="points">Points</Label>
+            <Label htmlFor="points">{hi ? 'अंक' : 'Points'}</Label>
             <Input
               id="points"
               type="number"
@@ -1214,27 +1304,43 @@ export function PunyaAwardPage() {
             {limitInfo ? (
               <p className="mt-1 text-xs text-muted-foreground">
                 {limitInfo.max_points_per_award != null
-                  ? `Up to ${limitInfo.max_points_per_award} per award. `
+                  ? hi
+                    ? `एक बार में अधिकतम ${limitInfo.max_points_per_award}। `
+                    : `Up to ${limitInfo.max_points_per_award} per award. `
                   : ''}
                 {limitInfo.remaining_today != null
-                  ? `${limitInfo.remaining_today} of ${limitInfo.max_points_per_day} left today.`
-                  : 'No daily cap for your role.'}
+                  ? hi
+                    ? `आज ${limitInfo.max_points_per_day} में से ${limitInfo.remaining_today} शेष।`
+                    : `${limitInfo.remaining_today} of ${limitInfo.max_points_per_day} left today.`
+                  : hi
+                    ? 'आपकी भूमिका पर दैनिक सीमा नहीं है।'
+                    : 'No daily cap for your role.'}
               </p>
             ) : null}
             {Number(points) > maxAllowed ? (
               <p className="mt-1 text-xs text-destructive">
-                Over your cap — enter {maxAllowed} or less.
+                {hi
+                  ? `आपकी सीमा से अधिक — ${maxAllowed} या कम भरें।`
+                  : `Over your cap — enter ${maxAllowed} or less.`}
               </p>
             ) : null}
             {Number(points) < minAllowed ? (
               <p className="mt-1 text-xs text-destructive">
-                {category?.label} awards start at {minAllowed} Punya.
+                {hi
+                  ? `${category?.label} के लिए न्यूनतम ${minAllowed} पुण्य।`
+                  : `${category?.label} awards start at ${minAllowed} Punya.`}
               </p>
             ) : null}
           </div>
           <div>
             <Label htmlFor="note">
-              {reasonRequired ? 'Reason *' : 'Note (optional)'}
+              {reasonRequired
+                ? hi
+                  ? 'कारण *'
+                  : 'Reason *'
+                : hi
+                  ? 'टिप्पणी (वैकल्पिक)'
+                  : 'Note (optional)'}
             </Label>
             <Input
               id="note"
@@ -1244,12 +1350,20 @@ export function PunyaAwardPage() {
               // accepted more and returned a bare 422 after submit.
               maxLength={500}
               required={reasonRequired}
-              placeholder={reasonRequired ? 'e.g. helped set up the hall' : undefined}
+              placeholder={
+                reasonRequired
+                  ? hi
+                    ? 'जैसे: सभा कक्ष तैयार करने में मदद की'
+                    : 'e.g. helped set up the hall'
+                  : undefined
+              }
               className="mt-1"
             />
             {reasonRequired ? (
               <p className="mt-1 text-xs text-muted-foreground">
-                Families see this on the child’s Punya screen.
+                {hi
+                  ? 'परिवार यह बच्चे की पुण्य स्क्रीन पर देखते हैं।'
+                  : 'Families see this on the child’s Punya screen.'}
               </p>
             ) : null}
           </div>
@@ -1263,7 +1377,13 @@ export function PunyaAwardPage() {
               (reasonRequired && note.trim().length < 3)
             }
           >
-            {busy ? 'Awarding…' : 'Award Punya'}
+            {busy
+              ? hi
+                ? 'दिया जा रहा है…'
+                : 'Awarding…'
+              : hi
+                ? 'पुण्य दें'
+                : 'Award Punya'}
           </Button>
         </form>
       </Card>

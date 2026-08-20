@@ -14,7 +14,7 @@ interface OverviewPayload {
   open_service_requests: number;
   pending_enrolments: number;
   attendance_rate_30d: number;
-  punya_awarded_30d: number;
+  punya_awarded_month: number;
   msv_active: number;
   /** Absent for roles outside DONATION_VIEW_ROLES (sanchalak, shikshak). */
   donations_total_paise_ytd?: number;
@@ -48,7 +48,7 @@ const EMPTY: OverviewPayload = {
   open_service_requests: 0,
   pending_enrolments: 0,
   attendance_rate_30d: 0,
-  punya_awarded_30d: 0,
+  punya_awarded_month: 0,
   msv_active: 0,
 };
 
@@ -90,7 +90,7 @@ export default function DashboardPage() {
   const stats = [
     { label: 'Active students', value: data.active_students.toLocaleString('en-IN'), delta: `${data.centres} centres in scope`, icon: GraduationCap },
     { label: '30-day attendance', value: `${data.attendance_rate_30d.toFixed(1)}%`, delta: 'rolling window', icon: CheckCircle2 },
-    { label: 'Punya awarded', value: data.punya_awarded_30d.toLocaleString('en-IN'), delta: 'this month', icon: Sparkles },
+    { label: 'Punya awarded', value: data.punya_awarded_month.toLocaleString('en-IN'), delta: 'this month', icon: Sparkles },
     { label: 'Pending enrolments', value: data.pending_enrolments.toLocaleString('en-IN'), delta: 'awaiting your approval', icon: Flame },
   ];
 

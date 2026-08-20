@@ -10,14 +10,14 @@ import {
 } from "react-native";
 import { router, useLocalSearchParams } from "expo-router";
 import { Image as ExpoImage } from "expo-image";
-import { useColors } from "@/hooks/useColors";
+import { useColors, withAlpha } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { canAccessAdminPanel } from "@/lib/auth";
 import { resolveUploadUrl, ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/format";
-import { formatAgeGroup } from "@workspace/api-zod";
+import { ErrorCode, formatAgeGroup } from "@workspace/api-zod";
 import { bodyFamily } from "@/constants/typography";
 import { AppHeader } from "@/components/AppHeader";
 import { ulid } from "@/lib/offline/ulid";
@@ -551,10 +551,15 @@ function AwardPunyaSheet({
                   ? "पुरस्कार नहीं दिया जा सका।"
                   : "Could not award Punya.";
           // Limit errors: surface the server message verbatim (states the fix).
+          //
+          // L12 — compared against the shared catalogue rather than string
+          // literals. A typo in a literal is invisible: the branch simply never
+          // matches, and the specific, actionable limit message silently
+          // degrades to the generic "Could not award" alert.
           if (
             err instanceof ApiError &&
-            (err.code === "ERR_AWARD_LIMIT_EXCEEDED" ||
-              err.code === "ERR_AWARD_DAILY_LIMIT_EXCEEDED")
+            (err.code === ErrorCode.AWARD_LIMIT_EXCEEDED ||
+              err.code === ErrorCode.AWARD_DAILY_LIMIT_EXCEEDED)
           ) {
             setFormError(msg);
             Alert.alert(hi ? "सीमा" : "Limit reached", msg);
@@ -698,9 +703,15 @@ function AwardPunyaSheet({
                 : ""}
             </Body>
             <Row style={{ alignItems: "center", gap: 12 }}>
+              {/* L5 — these controls had no role and no label, so a screen
+                  reader announced them as unlabelled touchables: an award
+                  screen that reads as four anonymous buttons. */}
               <Pressable
                 onPress={() => addPoints(-1)}
                 disabled={points <= 0 || award.isPending}
+                accessibilityRole="button"
+                accessibilityLabel={hi ? "एक अंक घटाएँ" : "Decrease by one point"}
+                accessibilityState={{ disabled: points <= 0 || award.isPending }}
                 style={{
                   width: 44,
                   height: 44,
@@ -715,10 +726,25 @@ function AwardPunyaSheet({
               >
                 <Text style={{ fontSize: 22, color: c.foreground }}>−</Text>
               </Pressable>
-              <Numeric style={{ fontSize: 36, minWidth: 48, textAlign: "center" }}>{points}</Numeric>
+              {/* Numeric does not forward accessibility props, so the live
+                  region sits on a wrapper. Without it a screen-reader user
+                  taps + and hears nothing change. */}
+              <View
+                accessibilityLiveRegion="polite"
+                accessibilityLabel={
+                  hi ? `${points} पुण्य अंक` : `${points} Punya points`
+                }
+              >
+                <Numeric style={{ fontSize: 36, minWidth: 48, textAlign: "center" }}>
+                  {points}
+                </Numeric>
+              </View>
               <Pressable
                 onPress={() => addPoints(1)}
                 disabled={points >= effectiveMax || award.isPending}
+                accessibilityRole="button"
+                accessibilityLabel={hi ? "एक अंक बढ़ाएँ" : "Increase by one point"}
+                accessibilityState={{ disabled: points >= effectiveMax || award.isPending }}
                 style={{
                   width: 44,
                   height: 44,
@@ -742,6 +768,9 @@ function AwardPunyaSheet({
                     key={n}
                     onPress={() => addPoints(n)}
                     disabled={disabled}
+                    accessibilityRole="button"
+                    accessibilityLabel={hi ? `${n} अंक जोड़ें` : `Add ${n} points`}
+                    accessibilityState={{ disabled }}
                     style={{
                       paddingHorizontal: 14,
                       paddingVertical: 10,
@@ -774,13 +803,16 @@ function AwardPunyaSheet({
                     key={p.en}
                     onPress={() => setReason(label)}
                     disabled={award.isPending}
+                    accessibilityRole="button"
+                    accessibilityLabel={label}
+                    accessibilityState={{ selected: active, disabled: award.isPending }}
                     style={{
                       paddingHorizontal: 12,
                       paddingVertical: 8,
                       borderRadius: c.radius,
                       borderWidth: 1,
                       borderColor: active ? c.primary : c.border,
-                      backgroundColor: active ? c.primary + "14" : c.card,
+                      backgroundColor: active ? withAlpha(c.primary, 0.08) : c.card,
                     }}
                   >
                     <Body

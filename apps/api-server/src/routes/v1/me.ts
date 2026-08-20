@@ -319,7 +319,19 @@ router.put("/students/:id/photo", async (req: Request, res: Response) => {
 
 /* Attendance history: use frozen GET /v1/students/:id/attendance (no /me alias). */
 
-/* GET /v1/me/students/:id/punya — balance + recent transactions */
+/**
+ * GET /v1/me/students/:id/punya — balance + recent transactions.
+ *
+ * M19 — a DELIBERATE deviation from SPEC 6.9, which specifies separate
+ * /punya/balance and /punya/transactions endpoints.
+ *
+ * Every caller of one wants the other: the screen renders a total, a tier and
+ * the ledger behind them together, so splitting this would mean two requests
+ * on a connection that is frequently poor, and a window in which the headline
+ * total and the visible rows come from different moments and disagree. The
+ * merged shape is the one the product actually needs; it is recorded here
+ * rather than silently diverging.
+ */
 router.get("/students/:id/punya", async (req: Request, res: Response) => {
   const id = String(req.params.id);
   if (!UUID_RE.test(id) || !(await ownedStudentId(req, id))) {

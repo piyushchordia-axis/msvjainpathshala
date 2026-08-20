@@ -66,15 +66,32 @@ type Db = typeof db;
 const SUBMISSION_ID_RE =
   /^submission:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?::|$)/i;
 
-/** Best-effort parse of source entity fields from feature + idempotency key. */
+/**
+ * Best-effort parse of source entity fields from feature + idempotency key.
+ *
+ * L10 — when nothing identifies a source ENTITY, both fields stay null.
+ *
+ * This used to fall back to writing the feature key into source_entity_kind,
+ * which conflates two different vocabularies: source_entity_kind names the
+ * row a Punya award came FROM ('attendance', 'quiz_attempt', 'course_section'),
+ * while feature_key names what was awarded. They coincided by luck for a few
+ * keys and stopped coinciding entirely with H6 — a manual Seva award was
+ * writing source_entity_kind='manual_seva' with source_entity_id=null, a kind
+ * that points at no table and no row.
+ *
+ * Every consumer filters on a kind its own producer writes EXPLICITLY (see
+ * exam-punya, punya-streak, attendance-mark, course-certify), so nothing reads
+ * the derived value; it was noise that looked like provenance.
+ */
 function sourceFromKey(
   featureKey: string,
   idempotencyKey: string | null,
 ): { kind: string | null; id: string | null } {
-  if (!idempotencyKey) return { kind: featureKey || null, id: null };
+  if (!idempotencyKey) return { kind: null, id: null };
   const m = SUBMISSION_ID_RE.exec(idempotencyKey);
+  // A niyam submission key carries a real entity id, so the kind means something.
   if (m) return { kind: featureKey || "niyam_submission", id: m[1]! };
-  return { kind: featureKey || null, id: null };
+  return { kind: null, id: null };
 }
 
 async function readBalance(tx: Tx | Db, studentId: string, fallbackPoints: number) {

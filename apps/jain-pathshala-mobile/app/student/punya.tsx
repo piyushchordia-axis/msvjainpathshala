@@ -8,6 +8,7 @@ import type { PunyaTransaction } from "@/lib/types";
 import { formatDate } from "@/lib/format";
 import { punyaFeatureLabel, punyaTierLabel } from "@/lib/punya-labels";
 import { AppHeader, ProfileAvatarButton } from "@/components/AppHeader";
+import { useAuth } from "@/contexts/AuthContext";
 import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { Body, Card, Numeric, Pill, Row, Screen, StateView, Title } from "@/components/ui";
 
@@ -32,6 +33,11 @@ export default function StudentPunya() {
   const c = useColors();
   const { hi } = useLocale();
   const { activeStudentId, activeChild, loading, isError, refetch } = useSessionView();
+  // L11 — this screen is mounted twice: as the student's Punya tab and as
+  // the root /punya route a parent reaches. The avatar must lead to the
+  // caller's OWN profile, not into the student tab tree a parent cannot enter.
+  const { user } = useAuth();
+  const profileHref = user?.role === "parent" ? "/parent/profile" : "/student/profile";
   // Grows on "show older", so the whole ledger is reachable.
   const [limit, setLimit] = useState(PUNYA_LEDGER_PAGE);
   const punya = usePunya(activeStudentId ?? undefined, { limit });
@@ -60,6 +66,12 @@ export default function StudentPunya() {
             alignItems: "flex-start",
             paddingHorizontal: 14,
             paddingVertical: 12,
+            // M11 — these rows used to sit inside a <Card>; as top-level list
+            // items they carry its frame themselves, so the ledger looks
+            // unchanged while actually virtualizing.
+            backgroundColor: c.card,
+            borderTopLeftRadius: index === 0 ? c.radius : 0,
+            borderTopRightRadius: index === 0 ? c.radius : 0,
             borderBottomWidth: index < transactions.length - 1 ? 1 : 0,
             borderBottomColor: c.border,
           }}
@@ -89,8 +101,64 @@ export default function StudentPunya() {
 
   const keyExtractor = useCallback((item: PunyaTransaction) => item.id, []);
 
+  /**
+   * M11 — the ledger is the OUTER list's data.
+   *
+   * It used to be a FlatList with scrollEnabled={false} nested inside the
+   * ListHeaderComponent of an outer FlatList with data={[]}, which mounts
+   * every row eagerly and defeats virtualization entirely — on the one
+   * screen whose whole point is a long, growing list. The Card's rounded
+   * frame is reproduced on the rows themselves so the appearance is
+   * unchanged.
+   */
+  const showOlder = summary?.has_more ? (
+    <View
+      style={{
+        backgroundColor: c.card,
+        borderBottomLeftRadius: c.radius,
+        borderBottomRightRadius: c.radius,
+        borderTopWidth: 1,
+        borderTopColor: c.border,
+      }}
+    >
+      {/* Never present a truncated ledger as complete — the rows above will
+          not add up to the headline total — and give the student a way to
+          actually reach the rest. */}
+      <Pressable
+        onPress={() => setLimit((n) => n + PUNYA_LEDGER_PAGE)}
+        disabled={punya.isFetching}
+        accessibilityRole="button"
+        accessibilityLabel={
+          hi ? "पुराने लेन-देन देखें" : "Show older entries"
+        }
+        style={{ paddingVertical: 12, alignItems: "center" }}
+      >
+        <Body style={{ fontSize: 13, color: c.primary }}>
+          {punya.isFetching
+            ? hi
+              ? "लोड हो रहा है…"
+              : "Loading…"
+            : hi
+              ? `पुराने लेन-देन देखें (${transactions.length} दिख रहे हैं)`
+              : `Show older entries (${transactions.length} shown)`}
+        </Body>
+      </Pressable>
+    </View>
+  ) : (
+    <View
+      style={{
+        height: 12,
+        backgroundColor: c.card,
+        borderBottomLeftRadius: c.radius,
+        borderBottomRightRadius: c.radius,
+      }}
+    />
+  );
+
+  // The list container no longer sets a gap (it would separate every ledger
+  // row), so the header spaces its own sections.
   const listHeader = (
-    <>
+    <View style={{ gap: 14, paddingBottom: 14 }}>
       {loading ? (
         <StateView status="loading" emptyText="" />
       ) : !activeStudentId || !activeChild ? (
@@ -239,41 +307,12 @@ export default function StudentPunya() {
                   status="empty"
                   emptyText={hi ? "अभी कोई लेन-देन नहीं है।" : "No transactions yet."}
                 />
-              ) : (
-                <Card style={{ padding: 0, overflow: "hidden" }}>
-                  <FlatList
-                    data={transactions}
-                    keyExtractor={keyExtractor}
-                    renderItem={renderTransaction}
-                    scrollEnabled={false}
-                  />
-                  {/* Never present a truncated ledger as complete — the rows
-                      above will not add up to the headline total — and give the
-                      student a way to actually reach the rest. */}
-                  {summary?.has_more ? (
-                    <Pressable
-                      onPress={() => setLimit((n) => n + PUNYA_LEDGER_PAGE)}
-                      disabled={punya.isFetching}
-                      style={{ paddingVertical: 12, alignItems: "center" }}
-                    >
-                      <Body style={{ fontSize: 13, color: c.primary }}>
-                        {punya.isFetching
-                          ? hi
-                            ? "लोड हो रहा है…"
-                            : "Loading…"
-                          : hi
-                            ? `पुराने लेन-देन देखें (${transactions.length} दिख रहे हैं)`
-                            : `Show older entries (${transactions.length} shown)`}
-                      </Body>
-                    </Pressable>
-                  ) : null}
-                </Card>
-              )}
+              ) : null}
             </>
           )}
         </>
       )}
-    </>
+    </View>
   );
 
   return (
@@ -285,16 +324,18 @@ export default function StudentPunya() {
           <ProfileAvatarButton
             name={activeChild?.full_name}
             photoUrl={activeChild?.photo_url}
-            href="/student/profile"
+            href={profileHref}
           />
         }
       />
       <Screen scroll={false} contentStyle={{ flex: 1, paddingHorizontal: 0, paddingBottom: 110 }}>
         <FlatList
-          data={[]}
-          renderItem={() => null}
+          data={transactions}
+          keyExtractor={keyExtractor}
+          renderItem={renderTransaction}
           ListHeaderComponent={listHeader}
-          contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 8, paddingBottom: 40, gap: 14 }}
+          ListFooterComponent={transactions.length > 0 ? showOlder : null}
+          contentContainerStyle={{ paddingHorizontal: 18, paddingTop: 8, paddingBottom: 40 }}
           refreshControl={
             <RefreshControl
               refreshing={!!punya.isRefetching}
