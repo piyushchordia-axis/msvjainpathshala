@@ -2277,3 +2277,511 @@ describe("quiz system — resolved points and catalogue bounds (C3, H1)", () => 
     ]);
   });
 });
+
+/**
+ * The take-flow integrity set: answer review, history, empty answer keys,
+ * bilingual fallbacks and the window boundaries the suite never touched.
+ */
+describe("quiz system — take flow (M7, M8, M18, L9, L12) and windows", () => {
+  const openWindow = () => ({
+    start_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    end_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  });
+
+  async function makeQuestion(
+    token: string,
+    tag: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<string> {
+    const q = await request(app)
+      .post("/v1/quizzes/questions")
+      .set(auth(token))
+      .send({
+        question_en: `TF Q ${tag}`,
+        scope: "national",
+        options: [{ text_en: "Yes" }, { text_en: "No" }],
+        correct_indices: [0],
+        ...extra,
+      });
+    expect(q.status).toBe(200);
+    return q.body.data.id as string;
+  }
+
+  it("submit returns question_results so the student can review (M7)", async () => {
+    await expireOpenQuizEvents();
+    const admin = await loginAs("super_admin");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-m7`;
+
+    const right = await makeQuestion(admin.token, `${tag}-a`);
+    const wrong = await makeQuestion(admin.token, `${tag}-b`);
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `M7 review ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [right, wrong],
+        participation_points: 0,
+        win_points: 0,
+      });
+    expect(ev.status).toBe(200);
+    const eventId: string = ev.body.data.id;
+
+    await request(app)
+      .post(`/v1/quizzes/events/${eventId}/start`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id });
+
+    // One right, one deliberately wrong.
+    const submit = await request(app)
+      .post(`/v1/quizzes/events/${eventId}/submit`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id, answers: { [right]: [0], [wrong]: [1] } });
+    expect(submit.status).toBe(200);
+    expect(submit.body.data.correct_count).toBe(1);
+    expect(submit.body.data.total_count).toBe(2);
+
+    const results: Array<{ question_id: string; correct: boolean }> =
+      submit.body.data.question_results;
+    expect(results).toHaveLength(2);
+    expect(results.find((r) => r.question_id === right)?.correct).toBe(true);
+    expect(results.find((r) => r.question_id === wrong)?.correct).toBe(false);
+
+    // The answer key itself still never reaches the student.
+    expect(JSON.stringify(submit.body.data)).not.toContain("correct_indices");
+
+    await request(app)
+      .delete(`/v1/quizzes/events/${eventId}`)
+      .set(auth(admin.token))
+      .send({ force: true });
+  });
+
+  it("history returns a closed quiz with the full review (M8)", async () => {
+    await expireOpenQuizEvents();
+    const admin = await loginAs("super_admin");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-m8`;
+    const qId = await makeQuestion(admin.token, tag);
+
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `M8 history ${tag}`,
+        title_hi: `M8 इतिहास ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [qId],
+        participation_points: 0,
+        win_points: 0,
+      });
+    const eventId: string = ev.body.data.id;
+
+    await request(app)
+      .post(`/v1/quizzes/events/${eventId}/start`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id });
+    await request(app)
+      .post(`/v1/quizzes/events/${eventId}/submit`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id, answers: { [qId]: [0] } });
+
+    // Close the window — this is the state that used to make it disappear.
+    await pool.query(`update quiz_events set end_at = now() - interval '1 minute' where id = $1`, [
+      eventId,
+    ]);
+
+    const available = await request(app)
+      .get(`/v1/quizzes/events/available?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    expect(
+      (available.body.data.items as Array<{ id: string }>).some((e) => e.id === eventId),
+    ).toBe(false);
+
+    const history = await request(app)
+      .get(`/v1/quizzes/events/history?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    expect(history.status).toBe(200);
+    const mine = (history.body.data.items as Array<{ event_id: string; title_hi: string | null; questions: unknown[] }>)
+      .find((r) => r.event_id === eventId);
+    expect(mine).toBeDefined();
+    expect(mine!.title_hi).toBe(`M8 इतिहास ${tag}`);
+    expect(mine!.questions).toHaveLength(1);
+
+    await request(app)
+      .delete(`/v1/quizzes/events/${eventId}`)
+      .set(auth(admin.token))
+      .send({ force: true });
+  });
+
+  it("history refuses a student the caller does not own", async () => {
+    const student = await loginAs("student");
+    const other = await pool.query<{ id: string }>(
+      `select s.id from students s
+        where s.status = 'active' and s.deleted_at is null
+          and s.user_id is distinct from (select id from users where phone = '+919800000007')
+          and s.parent_id is distinct from (select id from users where phone = '+919800000007')
+        limit 1`,
+    );
+    expect(other.rows[0]?.id).toBeTruthy();
+    const res = await request(app)
+      .get(`/v1/quizzes/events/history?student_id=${other.rows[0]!.id}`)
+      .set(auth(student.token));
+    expect(res.status).toBe(404);
+  });
+
+  it("a question with an empty answer key is not graded at all (M18)", async () => {
+    await expireOpenQuizEvents();
+    const admin = await loginAs("super_admin");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-m18`;
+
+    const good = await makeQuestion(admin.token, `${tag}-good`);
+    const broken = await makeQuestion(admin.token, `${tag}-broken`);
+    // Zod requires min(1) on create, so this state only reaches legacy/seeded
+    // rows — which is exactly why nobody was looking at it.
+    await pool.query(`update questions set correct_indices = '{}' where id = $1`, [broken]);
+
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `M18 empty key ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [good, broken],
+        participation_points: 0,
+        win_points: 0,
+      });
+    const eventId: string = ev.body.data.id;
+
+    await request(app)
+      .post(`/v1/quizzes/events/${eventId}/start`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id });
+
+    // Answer the good one, leave the broken one blank. Pre-fix the blank
+    // counted as CORRECT (sameIndexSet([], []) is true) and the child scored 2/2.
+    const submit = await request(app)
+      .post(`/v1/quizzes/events/${eventId}/submit`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id, answers: { [good]: [0] } });
+    expect(submit.status).toBe(200);
+    expect(submit.body.data.total_count).toBe(1);
+    expect(submit.body.data.correct_count).toBe(1);
+    expect(submit.body.data.all_correct).toBe(true);
+    const ids = (submit.body.data.question_results as Array<{ question_id: string }>).map(
+      (r) => r.question_id,
+    );
+    expect(ids).toEqual([good]);
+
+    await request(app)
+      .delete(`/v1/quizzes/events/${eventId}`)
+      .set(auth(admin.token))
+      .send({ force: true });
+  });
+
+  it("start and submit are refused outside the window (ERR_WINDOW_CLOSED)", async () => {
+    const admin = await loginAs("super_admin");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-window`;
+    const qId = await makeQuestion(admin.token, tag);
+
+    // Not open yet.
+    const future = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `Window future ${tag}`,
+        scope: "national",
+        start_at: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        end_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString(),
+        question_ids: [qId],
+        participation_points: 0,
+        win_points: 0,
+      });
+    const futureId: string = future.body.data.id;
+    const early = await request(app)
+      .post(`/v1/quizzes/events/${futureId}/start`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id });
+    expect(early.status).toBe(422);
+    expect(early.body.error.code).toBe("ERR_WINDOW_CLOSED");
+
+    // Open, started, then closed underneath the student — the exact race the
+    // paused push polling made invisible on mobile.
+    const open = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `Window closing ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [qId],
+        participation_points: 0,
+        win_points: 0,
+      });
+    const openId: string = open.body.data.id;
+    const started = await request(app)
+      .post(`/v1/quizzes/events/${openId}/start`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id });
+    expect(started.status).toBe(200);
+
+    await pool.query(`update quiz_events set end_at = now() - interval '1 second' where id = $1`, [
+      openId,
+    ]);
+    const late = await request(app)
+      .post(`/v1/quizzes/events/${openId}/submit`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id, answers: { [qId]: [0] } });
+    expect(late.status).toBe(422);
+    expect(late.body.error.code).toBe("ERR_WINDOW_CLOSED");
+
+    for (const id of [futureId, openId]) {
+      await request(app).delete(`/v1/quizzes/events/${id}`).set(auth(admin.token)).send({ force: true });
+    }
+  });
+
+  it("an expired push quiz refuses a submit", async () => {
+    const shikshak = await loginAs("shikshak");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-pushwindow`;
+
+    const create = await request(app)
+      .post("/v1/quizzes/push")
+      .set(auth(shikshak.token))
+      .send({
+        batch_id: aarav.batch_id,
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        completion_points: 0,
+        questions: [
+          {
+            question_en: `Push window ${tag}`,
+            options: [{ text_en: "Yes" }, { text_en: "No" }],
+            correct_indices: [0],
+          },
+        ],
+      });
+    expect(create.status).toBe(200);
+    const pushId: string = create.body.data.id;
+
+    await pool.query(`update push_quizzes set expires_at = now() - interval '1 second' where id = $1`, [
+      pushId,
+    ]);
+    const late = await request(app)
+      .post(`/v1/quizzes/push/${pushId}/submit`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id, answers: {} });
+    expect(late.status).toBe(422);
+    expect(late.body.error.code).toBe("ERR_WINDOW_CLOSED");
+  });
+
+  it("blank Hindi is stored as NULL so the ?? fallback still fires (L9)", async () => {
+    const admin = await loginAs("super_admin");
+    const tag = `${Date.now()}-l9`;
+
+    const q = await request(app)
+      .post("/v1/quizzes/questions")
+      .set(auth(admin.token))
+      .send({
+        question_en: `L9 Q ${tag}`,
+        question_hi: "   ",
+        scope: "national",
+        options: [
+          { text_en: "Yes", text_hi: "" },
+          { text_en: "No", text_hi: "नहीं" },
+        ],
+        correct_indices: [0],
+      });
+    expect(q.status).toBe(200);
+
+    const row = await pool.query<{ question_hi: string | null; options: Array<{ text_hi?: string | null }> }>(
+      `select question_hi, options from questions where id = $1`,
+      [q.body.data.id],
+    );
+    // "" used to be stored verbatim, and `title_hi ?? title_en` only fires on
+    // null/undefined — so a Hindi reader got a blank line, not the English.
+    expect(row.rows[0]?.question_hi).toBeNull();
+    expect(row.rows[0]?.options[0]?.text_hi ?? null).toBeNull();
+    expect(row.rows[0]?.options[1]?.text_hi).toBe("नहीं");
+  });
+
+  it("bilingual content round-trips to the student list and back", async () => {
+    await expireOpenQuizEvents();
+    const admin = await loginAs("super_admin");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-bilingual`;
+
+    const q = await request(app)
+      .post("/v1/quizzes/questions")
+      .set(auth(admin.token))
+      .send({
+        question_en: `Which vow is non-violence? ${tag}`,
+        question_hi: `कौन सा व्रत अहिंसा है? ${tag}`,
+        scope: "national",
+        options: [
+          { text_en: "Ahimsa", text_hi: "अहिंसा" },
+          { text_en: "Satya", text_hi: "सत्य" },
+        ],
+        correct_indices: [0],
+      });
+    expect(q.status).toBe(200);
+
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `Bilingual quiz ${tag}`,
+        title_hi: `द्विभाषी प्रश्नोत्तरी ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [q.body.data.id],
+        participation_points: 0,
+        win_points: 0,
+      });
+    const eventId: string = ev.body.data.id;
+
+    const available = await request(app)
+      .get(`/v1/quizzes/events/available?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    const listed = (available.body.data.items as Array<{ id: string; title_hi: string | null }>)
+      .find((e) => e.id === eventId);
+    expect(listed?.title_hi).toBe(`द्विभाषी प्रश्नोत्तरी ${tag}`);
+
+    const start = await request(app)
+      .post(`/v1/quizzes/events/${eventId}/start`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id });
+    expect(start.status).toBe(200);
+    const first = start.body.data.questions[0];
+    expect(first.question_hi).toBe(`कौन सा व्रत अहिंसा है? ${tag}`);
+    expect(first.options[0].text_hi).toBe("अहिंसा");
+
+    await request(app)
+      .delete(`/v1/quizzes/events/${eventId}`)
+      .set(auth(admin.token))
+      .send({ force: true });
+  });
+
+  it("a push quiz cannot be set to run for a month (L12)", async () => {
+    const shikshak = await loginAs("shikshak");
+    const aarav = await aaravStudent();
+
+    const res = await request(app)
+      .post("/v1/quizzes/push")
+      .set(auth(shikshak.token))
+      .send({
+        batch_id: aarav.batch_id,
+        expires_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        questions: [
+          {
+            question_en: `L12 ${Date.now()}`,
+            options: [{ text_en: "Yes" }, { text_en: "No" }],
+            correct_indices: [0],
+          },
+        ],
+      });
+    expect(res.status).toBe(422);
+    // L8 — the envelope carries the reason instead of an empty details[].
+    expect(Array.isArray(res.body.error.details)).toBe(true);
+    expect(res.body.error.details.length).toBeGreaterThan(0);
+  });
+
+  it("a deactivated question cannot be attached to a new event (M3)", async () => {
+    const admin = await loginAs("super_admin");
+    const tag = `${Date.now()}-m3`;
+    const qId = await makeQuestion(admin.token, tag);
+
+    const off = await request(app)
+      .delete(`/v1/quizzes/questions/${qId}`)
+      .set(auth(admin.token));
+    expect(off.status).toBe(200);
+
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `M3 inactive ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [qId],
+      });
+    expect(ev.status).toBe(422);
+    expect(ev.body.error.message).toContain("deactivated");
+
+    // Reactivating makes it usable again — deactivation is not a one-way door.
+    const on = await request(app)
+      .patch(`/v1/quizzes/questions/${qId}`)
+      .set(auth(admin.token))
+      .send({ is_active: true });
+    expect(on.status).toBe(200);
+    const ok2 = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `M3 reactivated ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [qId],
+      });
+    expect(ok2.status).toBe(200);
+    await request(app)
+      .delete(`/v1/quizzes/events/${ok2.body.data.id}`)
+      .set(auth(admin.token))
+      .send({ force: true });
+  });
+
+  it("deleting an event with an IN-PROGRESS attempt needs force too (H3)", async () => {
+    await expireOpenQuizEvents();
+    const admin = await loginAs("super_admin");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-h3`;
+    const qId = await makeQuestion(admin.token, tag);
+
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `H3 in-progress ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [qId],
+        participation_points: 0,
+        win_points: 0,
+      });
+    const eventId: string = ev.body.data.id;
+
+    // Started but NOT submitted — a child part-way through.
+    await request(app)
+      .post(`/v1/quizzes/events/${eventId}/start`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id });
+
+    // The guard used to filter on submitted_at IS NOT NULL, so this deleted
+    // silently and destroyed their work.
+    const blocked = await request(app)
+      .delete(`/v1/quizzes/events/${eventId}`)
+      .set(auth(admin.token))
+      .send({});
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error.code).toBe("ERR_EVENT_HAS_ATTEMPTS");
+    expect(blocked.body.error.details[0].in_progress_attempts).toBe(1);
+    expect(blocked.body.error.details[0].submitted_attempts).toBe(0);
+
+    const forced = await request(app)
+      .delete(`/v1/quizzes/events/${eventId}`)
+      .set(auth(admin.token))
+      .send({ force: true });
+    expect(forced.status).toBe(200);
+  });
+});

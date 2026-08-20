@@ -117,6 +117,40 @@ function sameIndexSet(a: number[], b: number[]): boolean {
   return true;
 }
 
+/**
+ * M18 — a question with an EMPTY answer key cannot be graded.
+ *
+ * `sameIndexSet([], [])` is true, so a legacy or seeded row whose
+ * correct_indices is `[]` marked every student who answered nothing as CORRECT,
+ * and every student who actually answered as wrong. Zod requires min(1) on new
+ * rows, so this only reaches rows that predate that — but those are exactly the
+ * rows nobody is looking at.
+ *
+ * Such questions are dropped from BOTH sides: they do not count towards
+ * correct_count and they do not count towards total_count. Scoring a child
+ * against a question that has no right answer is worse than not scoring it.
+ */
+function isGradable(q: { correct_indices: number[] }): boolean {
+  return Array.isArray(q.correct_indices) && q.correct_indices.length > 0;
+}
+
+/** Per-question outcome for a set of answers. Ungradable questions are omitted. */
+function gradeAnswers(
+  qRows: Array<{ id: string; correct_indices: number[] }>,
+  answers: Record<string, number[]>,
+): { results: Array<{ question_id: string; correct: boolean }>; correct: number; total: number } {
+  const gradable = qRows.filter(isGradable);
+  const results = gradable.map((q) => ({
+    question_id: q.id,
+    correct: sameIndexSet(answers[q.id] ?? [], q.correct_indices),
+  }));
+  return {
+    results,
+    correct: results.filter((r) => r.correct).length,
+    total: gradable.length,
+  };
+}
+
 function targetsForScope(
   scope: QuizScope,
   input: {
@@ -459,6 +493,24 @@ async function primaryCityForTargets(
 /* ═══════════════════════════ ADMIN — question bank ═══════════════════════════ */
 
 /**
+ * L9 — an optional Hindi field that cannot be an empty string.
+ *
+ * `""` passed `z.string().max(n).optional()` and was stored as-is, which then
+ * DEFEATS every client's `title_hi ?? title_en` fallback: `??` only fires on
+ * null/undefined, so a Hindi-speaking child got a blank line rather than the
+ * English text. Whitespace-only input collapses to undefined here, so the
+ * column stays NULL and the fallback works.
+ */
+function optionalHindi(max: number) {
+  return z
+    .string()
+    .trim()
+    .max(max)
+    .optional()
+    .transform((v) => (v ? v : undefined));
+}
+
+/**
  * One option. Text is TRIMMED before the length check, so "   " cannot satisfy
  * min(1) and land as a blank option — the admin panel used to drop blanks
  * client-side while indexing correct_indices around them, which silently
@@ -467,17 +519,12 @@ async function primaryCityForTargets(
  */
 const quizOptionSchema = z.object({
   text_en: z.string().trim().min(1).max(1000),
-  text_hi: z
-    .string()
-    .trim()
-    .max(1000)
-    .optional()
-    .transform((v) => (v ? v : undefined)),
+  text_hi: optionalHindi(1000),
 });
 
 const createQuestionSchema = z.object({
-  question_en: z.string().min(1).max(2000),
-  question_hi: z.string().max(2000).optional(),
+  question_en: z.string().trim().min(1).max(2000),
+  question_hi: optionalHindi(2000),
   scope: z.enum(QUIZ_SCOPES).default("national"),
   state_ids: z.array(z.string().uuid()).default([]),
   city_ids: z.array(z.string().uuid()).default([]),
@@ -617,8 +664,8 @@ router.get("/questions", async (req: Request, res: Response) => {
 });
 
 const patchQuestionSchema = z.object({
-  question_en: z.string().min(1).max(2000).optional(),
-  question_hi: z.string().max(2000).nullable().optional(),
+  question_en: z.string().trim().min(1).max(2000).optional(),
+  question_hi: optionalHindi(2000).nullable(),
   options: z
     .array(quizOptionSchema)
     .min(2)
@@ -734,8 +781,8 @@ router.delete("/questions/:id", requireAdminPanel, requireRole("super_admin", "s
 
 const createEventSchema = z
   .object({
-    title_en: z.string().min(1).max(300),
-    title_hi: z.string().max(300).optional(),
+    title_en: z.string().trim().min(1).max(300),
+    title_hi: optionalHindi(300),
     scope: z.enum(QUIZ_SCOPES),
     state_ids: z.array(z.string().uuid()).default([]),
     city_ids: z.array(z.string().uuid()).default([]),
@@ -972,10 +1019,8 @@ router.get("/events/:id/attempts", requireAdminPanel, async (req: Request, res: 
 
   const items = attemptRows.map((row) => {
     const answers = (row.answers ?? {}) as Record<string, number[]>;
-    const question_results = qRows.map((q) => ({
-      question_id: q.id,
-      correct: sameIndexSet(answers[q.id] ?? [], q.correct_indices),
-    }));
+    // M18 — questions with an empty answer key are not gradable at all.
+    const question_results = gradeAnswers(qRows, answers).results;
     return {
       attempt_id: row.id,
       student_id: row.student_id,
@@ -1288,6 +1333,120 @@ router.get("/events/available", async (req: Request, res: Response) => {
   ok(res, { items }, { count: items.length });
 });
 
+/**
+ * GET /v1/quizzes/events/history?student_id=&limit= — past attempts (M8).
+ *
+ * Quizzes vanished at end_at: /events/available filters `end_at >= now`, and
+ * the result view lived in component state only, so once a window closed there
+ * was no way for a child or parent to see what they had scored, or to revisit
+ * a question they got wrong. Everything needed was already stored.
+ *
+ * Ownership is the same ownedStudent check as the take flow, and the answer key
+ * still never crosses the wire — only per-question correct/incorrect, and only
+ * for an attempt that is already submitted and immutable.
+ */
+router.get("/events/history", async (req: Request, res: Response) => {
+  const parsed = z
+    .object({ student_id: z.string().uuid(), limit: z.unknown().optional() })
+    .safeParse(req.query);
+  if (!parsed.success) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "A valid student_id is required.");
+    return;
+  }
+  const student = await ownedStudent(req, parsed.data.student_id);
+  if (!student) {
+    fail(res, 404, "ERR_NOT_FOUND", "Student not found.");
+    return;
+  }
+  const limit = clampLimit(req.query.limit, 25, 100);
+
+  const rows = await db
+    .select({
+      attempt_id: quiz_attempts.id,
+      event_id: quiz_events.id,
+      title_en: quiz_events.title_en,
+      title_hi: quiz_events.title_hi,
+      start_at: quiz_events.start_at,
+      end_at: quiz_events.end_at,
+      submitted_at: quiz_attempts.submitted_at,
+      correct_count: quiz_attempts.correct_count,
+      total_count: quiz_attempts.total_count,
+      score: quiz_attempts.score,
+      answers: quiz_attempts.answers,
+    })
+    .from(quiz_attempts)
+    .innerJoin(quiz_events, eq(quiz_events.id, quiz_attempts.quiz_event_id))
+    .where(and(eq(quiz_attempts.student_id, student.id), isNotNull(quiz_attempts.submitted_at)))
+    .orderBy(desc(quiz_attempts.submitted_at))
+    .limit(limit);
+
+  if (rows.length === 0) {
+    ok(res, { items: [] }, { count: 0 });
+    return;
+  }
+
+  // One query for the whole page's questions, and one for the whole page's
+  // ledger — a per-row lookup here would be the same N+1 H14 just removed.
+  const eventIds = Array.from(new Set(rows.map((r) => r.event_id)));
+  const qRows = await db
+    .select({
+      quiz_event_id: quiz_event_questions.quiz_event_id,
+      id: questions.id,
+      question_en: questions.question_en,
+      question_hi: questions.question_hi,
+      options: questions.options,
+      correct_indices: questions.correct_indices,
+      order_index: quiz_event_questions.order_index,
+    })
+    .from(quiz_event_questions)
+    .innerJoin(questions, eq(questions.id, quiz_event_questions.question_id))
+    .where(inArray(quiz_event_questions.quiz_event_id, eventIds))
+    .orderBy(asc(quiz_event_questions.order_index));
+
+  const byEvent = new Map<string, typeof qRows>();
+  for (const q of qRows) {
+    const list = byEvent.get(q.quiz_event_id) ?? [];
+    list.push(q);
+    byEvent.set(q.quiz_event_id, list);
+  }
+
+  const awardedByAttempt = await pointsAwardedForAttempts(rows.map((r) => r.attempt_id));
+
+  const items = rows.map((r) => {
+    const eventQuestions = byEvent.get(r.event_id) ?? [];
+    const answers = (r.answers ?? {}) as Record<string, number[]>;
+    const graded = gradeAnswers(eventQuestions, answers);
+    return {
+      attempt_id: r.attempt_id,
+      event_id: r.event_id,
+      title_en: r.title_en,
+      title_hi: r.title_hi,
+      start_at: r.start_at.toISOString(),
+      end_at: r.end_at.toISOString(),
+      submitted_at: r.submitted_at!.toISOString(),
+      // Stored counts are the record of what was scored at the time; fall back
+      // to a recount for rows written before total_count was populated.
+      correct_count: r.correct_count ?? graded.correct,
+      total_count: r.total_count ?? graded.total,
+      score: r.score,
+      is_winner: (r.total_count ?? graded.total) > 0 && r.correct_count === r.total_count,
+      points_earned: awardedByAttempt.get(r.attempt_id) ?? 0,
+      // The review screen: what was asked, what they picked, what was right.
+      questions: eventQuestions.map((q) => ({
+        id: q.id,
+        question_en: q.question_en,
+        question_hi: q.question_hi,
+        options: q.options,
+        selected_indices: answers[q.id] ?? [],
+        correct_indices: q.correct_indices,
+        correct: graded.results.find((g) => g.question_id === q.id)?.correct ?? false,
+      })),
+    };
+  });
+
+  ok(res, { items }, { count: items.length });
+});
+
 /** Load an event's ordered questions WITHOUT correct_indices (student-safe). */
 async function loadEventQuestionsForStudent(eventId: string) {
   const rows = await db
@@ -1517,12 +1676,9 @@ router.post("/events/:id/submit", async (req: Request, res: Response) => {
     .innerJoin(questions, eq(questions.id, quiz_event_questions.question_id))
     .where(eq(quiz_event_questions.quiz_event_id, eventId));
 
-  const totalCount = qRows.length;
-  let correctCount = 0;
-  for (const q of qRows) {
-    const selected = body.answers[q.id] ?? [];
-    if (sameIndexSet(selected, q.correct_indices)) correctCount += 1;
-  }
+  const graded = gradeAnswers(qRows, body.answers);
+  const totalCount = graded.total;
+  const correctCount = graded.correct;
   const allCorrect = totalCount > 0 && correctCount === totalCount;
   const score = correctCount;
 
@@ -1610,10 +1766,26 @@ router.post("/events/:id/submit", async (req: Request, res: Response) => {
     total_count: totalCount,
     all_correct: allCorrect,
     points_awarded: pointsAwarded,
+    /**
+     * M7 — the child sees which answers were wrong.
+     *
+     * This was computed already, but only for the two requireAdminPanel
+     * rosters: the student got counts and nothing else. On a religious-
+     * education platform the review screen IS the teaching moment, and a score
+     * with no explanation teaches nothing.
+     *
+     * Safe to return here because the attempt is now submitted and immutable —
+     * the answer key still never crosses the wire before or during an attempt
+     * (loadEventQuestionsForStudent does not select correct_indices).
+     */
+    question_results: graded.results,
   });
 });
 
 /* ═══════════════════════════ PUSH QUIZZES — live, batch-scoped ═══════════════════════════ */
+
+/** L12 — the longest a live push quiz may run. */
+const MAX_PUSH_QUIZ_DURATION_MS = 24 * 60 * 60 * 1000;
 
 const createPushSchema = z
   .object({
@@ -1629,8 +1801,8 @@ const createPushSchema = z
     questions: z
       .array(
         z.object({
-          question_en: z.string().min(1).max(2000),
-          question_hi: z.string().max(2000).optional(),
+          question_en: z.string().trim().min(1).max(2000),
+          question_hi: optionalHindi(2000),
           options: z
             .array(quizOptionSchema)
             .min(2)
@@ -1641,7 +1813,19 @@ const createPushSchema = z
       .min(1)
       .max(50),
   })
-  .refine((b) => new Date(b.expires_at) > new Date(), { message: "expires_at must be in the future" });
+  .refine((b) => new Date(b.expires_at) > new Date(), { message: "expires_at must be in the future" })
+  /**
+   * L12 — a push quiz is an in-class moment, not a standing event.
+   *
+   * There was no upper bound, so one could be set to expire in 2050 and would
+   * sit at the top of every student's screen — ordered live-first — forever.
+   * A day is generous for "mid-session"; anything longer wants a scheduled
+   * event, which has a real window and a correction path.
+   */
+  .refine(
+    (b) => new Date(b.expires_at).getTime() - Date.now() <= MAX_PUSH_QUIZ_DURATION_MS,
+    { message: "A push quiz can run for at most 24 hours — use a scheduled quiz event instead." },
+  );
 
 /* GET /v1/quizzes/push — scoped list (live first) for admin panel */
 router.get("/push", requireAdminPanel, async (req: Request, res: Response) => {
@@ -1930,10 +2114,8 @@ router.get("/push/:id/attempts", requireAdminPanel, async (req: Request, res: Re
 
   const items = attemptRows.map((row) => {
     const answers = (row.answers ?? {}) as Record<string, number[]>;
-    const question_results = qRows.map((q) => ({
-      question_id: q.id,
-      correct: sameIndexSet(answers[q.id] ?? [], q.correct_indices),
-    }));
+    // M18 — questions with an empty answer key are not gradable at all.
+    const question_results = gradeAnswers(qRows, answers).results;
     const correct_count = question_results.filter((q) => q.correct).length;
     return {
       attempt_id: row.id,
@@ -1944,7 +2126,8 @@ router.get("/push/:id/attempts", requireAdminPanel, async (req: Request, res: Re
       started_at: null as string | null,
       submitted_at: row.submitted_at ? row.submitted_at.toISOString() : null,
       correct_count,
-      total_count: qRows.length,
+      // M18 — the gradable count, matching what submit scored against.
+      total_count: question_results.length,
       score: row.score,
       points_awarded: awardedByAttempt.get(row.id) ?? 0,
       question_results,
@@ -2040,11 +2223,8 @@ router.post("/push/:id/submit", async (req: Request, res: Response) => {
     .from(push_quiz_questions)
     .where(eq(push_quiz_questions.push_quiz_id, pushId));
 
-  let correctCount = 0;
-  for (const q of qRows) {
-    const selected = body.answers[q.id] ?? [];
-    if (sameIndexSet(selected, q.correct_indices)) correctCount += 1;
-  }
+  const graded = gradeAnswers(qRows, body.answers);
+  const correctCount = graded.correct;
   const score = correctCount;
 
   // Resolve AT21 points outside the award transaction.
@@ -2109,8 +2289,11 @@ router.post("/push/:id/submit", async (req: Request, res: Response) => {
     push_quiz_id: pushId,
     score,
     correct_count: correctCount,
-    total_count: qRows.length,
+    // M18 — ungradable questions are excluded from the denominator too.
+    total_count: graded.total,
     points_awarded: pointsAwarded,
+    // M7 — same review data as the scheduled-event flow.
+    question_results: graded.results,
   });
 });
 

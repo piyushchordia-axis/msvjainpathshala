@@ -117,6 +117,7 @@ export const qk = {
   homeworkCurriculumTopics: (batchId: string) =>
     ["shikshak", "homework-curriculum-topics", batchId] as const,
   quizzesAvailable: (id: string) => ["me", "quizzes", "available", id] as const,
+  quizHistory: (id: string) => ["me", "quizzes", "history", id] as const,
   pushQuizActive: (id: string) => ["me", "quizzes", "push-active", id] as const,
   openCompetitions: ["me", "competitions", "open"] as const,
   idCard: (id: string) => ["me", "id-card", id] as const,
@@ -2272,6 +2273,11 @@ export interface QuizStartResponse {
   /** Prior answers when resumed — keyed by question id. */
   answers?: Record<string, number[]>;
 }
+/** M7 — per-question outcome, returned on submit and in history. */
+export interface QuizQuestionResult {
+  question_id: string;
+  correct: boolean;
+}
 export interface QuizSubmitResponse {
   attempt_id: string;
   score: number;
@@ -2279,6 +2285,29 @@ export interface QuizSubmitResponse {
   total_count: number;
   all_correct: boolean;
   points_awarded: number;
+  question_results?: QuizQuestionResult[];
+}
+
+/** M8 — a past attempt with everything the review screen needs. */
+export interface QuizHistoryQuestion extends QuizQuestion {
+  selected_indices: number[];
+  correct_indices: number[];
+  correct: boolean;
+}
+export interface QuizHistoryRow {
+  attempt_id: string;
+  event_id: string;
+  title_en: string;
+  title_hi: string | null;
+  start_at: string;
+  end_at: string;
+  submitted_at: string;
+  correct_count: number;
+  total_count: number;
+  score: number | null;
+  is_winner: boolean;
+  points_earned: number;
+  questions: QuizHistoryQuestion[];
 }
 
 /** Open scheduled quiz events for the active student. student_id is required by
@@ -2332,7 +2361,27 @@ export function useSubmitQuiz() {
   return useMutation({
     mutationFn: ({ id, student_id, answers }: { id: string; student_id: string; answers: Record<string, number[]> }) =>
       apiPost<QuizSubmitResponse>(`/v1/quizzes/events/${id}/submit`, { student_id, answers }),
-    onSuccess: (_res, vars) => qc.invalidateQueries({ queryKey: qk.quizzesAvailable(vars.student_id) }),
+    onSuccess: (_res, vars) => {
+      qc.invalidateQueries({ queryKey: qk.quizzesAvailable(vars.student_id) });
+      qc.invalidateQueries({ queryKey: qk.quizHistory(vars.student_id) });
+    },
+  });
+}
+
+/**
+ * M8 — past quizzes, which used to vanish at end_at.
+ *
+ * /events/available filters `end_at >= now` and the result view lived in
+ * component state, so once a window closed a child could not see what they had
+ * scored or revisit a question they got wrong. Fetched lazily: only the History
+ * section mounts it.
+ */
+export function useQuizHistory(studentId?: string, enabled = true) {
+  return useQuery({
+    queryKey: qk.quizHistory(studentId ?? ""),
+    queryFn: () =>
+      apiGet<List<QuizHistoryRow>>(`/v1/quizzes/events/history?student_id=${studentId}`),
+    enabled: enabled && !!studentId,
   });
 }
 
@@ -2352,6 +2401,7 @@ export interface PushQuizSubmitResponse {
   correct_count: number;
   total_count: number;
   points_awarded: number;
+  question_results?: QuizQuestionResult[];
 }
 
 /** The single active push quiz for the student's batch, or null. Polled while a

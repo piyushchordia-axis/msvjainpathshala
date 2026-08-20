@@ -26,7 +26,16 @@ const SOURCE_LABELS: Record<string, { en: string; hi: string }> = {
   attendance_streak: { en: "Attendance streak", hi: "उपस्थिति श्रृंखला" },
   niyam: { en: "Niyam", hi: "नियम" },
   homework: { en: "Homework", hi: "गृहकार्य" },
+  /**
+   * M14 — `quiz` is the LEGACY key. Migration 0031 split quiz awards into
+   * quiz_participation / quiz_win / push_quiz_completion, so every award made
+   * since then rendered as a raw feature key on this screen. The old key stays
+   * for historical rows.
+   */
   quiz: { en: "Quiz", hi: "प्रश्नोत्तरी" },
+  quiz_participation: { en: "Quiz participation", hi: "प्रश्नोत्तरी भागीदारी" },
+  quiz_win: { en: "Quiz win", hi: "प्रश्नोत्तरी जीत" },
+  push_quiz_completion: { en: "Class quiz", hi: "कक्षा प्रश्नोत्तरी" },
   manual_award: { en: "Manual", hi: "हाथ से" },
 };
 
