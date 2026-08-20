@@ -115,7 +115,7 @@ describe("quiz system — scheduled events", () => {
         scope: "national",
         start_at: start,
         end_at: end,
-        participation_points: 7,
+        participation_points: 5,
         win_points: 13,
         question_ids: [q1Id, q2Id],
       });
@@ -161,10 +161,10 @@ describe("quiz system — scheduled events", () => {
     expect(submit.body.data.correct_count).toBe(2);
     expect(submit.body.data.total_count).toBe(2);
     expect(submit.body.data.all_correct).toBe(true);
-    expect(submit.body.data.points_awarded).toBe(20); // 7 + 13
+    expect(submit.body.data.points_awarded).toBe(18); // 5 + 13 — participation is capped at 5 by punya_features (H1)
 
     const after = await punyaTotal(parent.token, aarav.id);
-    expect(after - before).toBe(20);
+    expect(after - before).toBe(18);
 
     // 6) Re-submit is blocked (idempotent: no double award).
     const resubmit = await request(app)
@@ -295,7 +295,7 @@ describe("quiz system — scheduled events", () => {
         scope: "national",
         start_at: start,
         end_at: end,
-        participation_points: 7,
+        participation_points: 5,
         win_points: 13,
         age_groups: ["kishor"],
         question_ids: [qId],
@@ -704,7 +704,7 @@ describe("quiz system — push quizzes", () => {
       .send({
         batch_id: aarav.batch_id,
         expires_at: expires,
-        completion_points: 9,
+        completion_points: 5,
         questions: [
           {
             question_en: `Push Q1 ${tag}`,
@@ -749,10 +749,10 @@ describe("quiz system — push quizzes", () => {
       });
     expect(submit.status).toBe(200);
     expect(submit.body.data.score).toBe(2);
-    expect(submit.body.data.points_awarded).toBe(9);
+    expect(submit.body.data.points_awarded).toBe(5);
 
     const after = await punyaTotal(parent.token, aarav.id);
-    expect(after - before).toBe(9);
+    expect(after - before).toBe(5);
 
     // Re-submit blocked; no double award.
     const resubmit = await request(app)
@@ -1422,7 +1422,7 @@ describe("quiz system — correction path", () => {
         start_at: start,
         end_at: end,
         question_ids: [qId],
-        participation_points: 11,
+        participation_points: 5,
         win_points: 0,
       });
     const eventId: string = ev.body.data.id;
@@ -1438,16 +1438,16 @@ describe("quiz system — correction path", () => {
       .set(auth(student.token))
       .send({ student_id: aarav.id, answers: { [qId]: [0] } });
     expect(submit.status).toBe(200);
-    expect(submit.body.data.points_awarded).toBe(11);
+    expect(submit.body.data.points_awarded).toBe(5);
     const afterSubmit = await punyaTotal(parent.token, aarav.id);
-    expect(afterSubmit - before).toBe(11);
+    expect(afterSubmit - before).toBe(5);
 
     const attemptId: string = submit.body.data.attempt_id;
     const reset1 = await request(app)
       .post(`/v1/quizzes/events/${eventId}/attempts/${attemptId}/reset`)
       .set(auth(admin.token));
     expect(reset1.status).toBe(200);
-    expect(reset1.body.data.points_reversed).toBe(11);
+    expect(reset1.body.data.points_reversed).toBe(5);
     const afterReset = await punyaTotal(parent.token, aarav.id);
     expect(afterReset).toBe(before);
 
@@ -1469,8 +1469,8 @@ describe("quiz system — correction path", () => {
       .set(auth(student.token))
       .send({ student_id: aarav.id, answers: { [qId]: [0] } });
     expect(resubmit.status).toBe(200);
-    expect(resubmit.body.data.points_awarded).toBe(11);
-    expect(await punyaTotal(parent.token, aarav.id)).toBe(before + 11);
+    expect(resubmit.body.data.points_awarded).toBe(5);
+    expect(await punyaTotal(parent.token, aarav.id)).toBe(before + 5);
   });
 
   it("deleting an event with attempts requires force and leaves the ledger balanced", async () => {
@@ -1502,7 +1502,7 @@ describe("quiz system — correction path", () => {
         start_at: start,
         end_at: end,
         question_ids: [qId],
-        participation_points: 8,
+        participation_points: 5,
         win_points: 0,
       });
     const eventId: string = ev.body.data.id;
@@ -1517,7 +1517,7 @@ describe("quiz system — correction path", () => {
       .post(`/v1/quizzes/events/${eventId}/submit`)
       .set(auth(student.token))
       .send({ student_id: aarav.id, answers: { [qId]: [0] } });
-    expect(await punyaTotal(parent.token, aarav.id)).toBe(before + 8);
+    expect(await punyaTotal(parent.token, aarav.id)).toBe(before + 5);
 
     const blocked = await request(app)
       .delete(`/v1/quizzes/events/${eventId}`)
@@ -1525,14 +1525,14 @@ describe("quiz system — correction path", () => {
       .send({});
     expect(blocked.status).toBe(409);
     expect(blocked.body.error.code).toBe("ERR_EVENT_HAS_ATTEMPTS");
-    expect(await punyaTotal(parent.token, aarav.id)).toBe(before + 8);
+    expect(await punyaTotal(parent.token, aarav.id)).toBe(before + 5);
 
     const forced = await request(app)
       .delete(`/v1/quizzes/events/${eventId}`)
       .set(auth(admin.token))
       .send({ force: true });
     expect(forced.status).toBe(200);
-    expect(forced.body.data.points_reversed).toBe(8);
+    expect(forced.body.data.points_reversed).toBe(5);
     expect(await punyaTotal(parent.token, aarav.id)).toBe(before);
 
     const gone = await request(app)
@@ -1967,5 +1967,313 @@ describe("quiz system — admin read/write scope (C1)", () => {
       expect(mixedDel.status).toBe(403);
       await forceDelete(admin.token, mixed.body.data.id);
     }
+  });
+});
+
+/**
+ * C3 + H1 — the points a student is shown, and the ceiling an admin cannot pass.
+ *
+ * Migration 0031 made participation/win/completion nullable OVERRIDES (null =
+ * the punya_features default, 0 = disabled) but nothing was carried through:
+ * /events/available kept reading the raw columns, so a quiz paying 30 Punya
+ * rendered no points pills and an explicit "Practice" badge, and points_earned
+ * dropped to 0 seconds after the result screen had shown +30. Separately, the
+ * override path was `Math.max(0, override)` with Zod allowing 0..10000, so the
+ * seeded max_points was decorative.
+ */
+describe("quiz system — resolved points and catalogue bounds (C3, H1)", () => {
+  const openWindow = () => ({
+    start_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    end_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  });
+
+  /** punya_features bounds for a quiz feature, as seeded by migration 0031. */
+  async function bounds(featureKey: string): Promise<{ min: number; max: number }> {
+    const r = await pool.query<{ min_points: number; max_points: number }>(
+      `select min_points, max_points from punya_features where key = $1 and is_active = true limit 1`,
+      [featureKey],
+    );
+    expect(r.rows[0]).toBeDefined();
+    return { min: r.rows[0]!.min_points, max: r.rows[0]!.max_points };
+  }
+
+  async function makeQuestion(token: string, tag: string): Promise<string> {
+    const q = await request(app)
+      .post("/v1/quizzes/questions")
+      .set(auth(token))
+      .send({
+        question_en: `Points Q ${tag}`,
+        scope: "national",
+        options: [{ text_en: "Yes" }, { text_en: "No" }],
+        correct_indices: [0],
+      });
+    expect(q.status).toBe(200);
+    return q.body.data.id as string;
+  }
+
+  it("rejects a participation override above the punya_features ceiling", async () => {
+    const admin = await loginAs("super_admin");
+    const tag = `${Date.now()}-h1-cap`;
+    const qId = await makeQuestion(admin.token, tag);
+    const { max } = await bounds("quiz_participation");
+
+    const tooHigh = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `H1 over cap ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [qId],
+        participation_points: max + 1,
+      });
+    expect(tooHigh.status).toBe(422);
+    expect(tooHigh.body.error.code).toBe("ERR_VALIDATION_FAILED");
+    // The admin is told the range, not silently given a different number.
+    expect(tooHigh.body.error.message).toContain(String(max));
+
+    // 10,000 Punya per win — the value the review called out — is refused too.
+    const absurd = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `H1 absurd ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [qId],
+        win_points: 10000,
+      });
+    expect(absurd.status).toBe(422);
+
+    // Exactly at the ceiling is fine, and so is 0 (deliberately disabled).
+    const atCap = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `H1 at cap ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [qId],
+        participation_points: max,
+        win_points: 0,
+      });
+    expect(atCap.status).toBe(200);
+    await request(app)
+      .delete(`/v1/quizzes/events/${atCap.body.data.id}`)
+      .set(auth(admin.token))
+      .send({ force: true });
+  });
+
+  it("rejects a push completion override above the ceiling", async () => {
+    const shikshak = await loginAs("shikshak");
+    const aarav = await aaravStudent();
+    const { max } = await bounds("push_quiz_completion");
+
+    const res = await request(app)
+      .post("/v1/quizzes/push")
+      .set(auth(shikshak.token))
+      .send({
+        batch_id: aarav.batch_id,
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        completion_points: max + 100,
+        questions: [
+          {
+            question_en: `H1 push ${Date.now()}`,
+            options: [{ text_en: "Yes" }, { text_en: "No" }],
+            correct_indices: [0],
+          },
+        ],
+      });
+    expect(res.status).toBe(422);
+    expect(res.body.error.message).toContain(String(max));
+  });
+
+  it("clamps a legacy out-of-bounds override at award time", async () => {
+    const admin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-h1-legacy`;
+    const qId = await makeQuestion(admin.token, tag);
+    const { max } = await bounds("quiz_participation");
+
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `H1 legacy ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [qId],
+        participation_points: max,
+        win_points: 0,
+      });
+    expect(ev.status).toBe(200);
+    const eventId: string = ev.body.data.id;
+
+    // Rows authored before the guard — or edited straight in the DB — must not
+    // out-pay the catalogue either. Belt and braces: this is the clamp, not the
+    // authoring check, so it is written past the API on purpose.
+    await pool.query(`update quiz_events set participation_points = 9999 where id = $1`, [eventId]);
+
+    await request(app)
+      .post(`/v1/quizzes/events/${eventId}/start`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id });
+
+    const before = await punyaTotal(parent.token, aarav.id);
+    const submit = await request(app)
+      .post(`/v1/quizzes/events/${eventId}/submit`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id, answers: { [qId]: [0] } });
+    expect(submit.status).toBe(200);
+    expect(submit.body.data.points_awarded).toBe(max);
+    expect(await punyaTotal(parent.token, aarav.id)).toBe(before + max);
+
+    await request(app)
+      .delete(`/v1/quizzes/events/${eventId}`)
+      .set(auth(admin.token))
+      .send({ force: true });
+  });
+
+  it("available reports the RESOLVED default for a null override, never 0", async () => {
+    await expireOpenQuizEvents();
+    const admin = await loginAs("super_admin");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-c3-null`;
+    const qId = await makeQuestion(admin.token, tag);
+
+    // Omit both point fields entirely — the "use the standard" case.
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `C3 default points ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [qId],
+      });
+    expect(ev.status).toBe(200);
+    const eventId: string = ev.body.data.id;
+
+    // Stored as NULL — the override really is absent, not defaulted on write.
+    const stored = await pool.query<{ participation_points: number | null; win_points: number | null }>(
+      `select participation_points, win_points from quiz_events where id = $1`,
+      [eventId],
+    );
+    expect(stored.rows[0]?.participation_points).toBeNull();
+    expect(stored.rows[0]?.win_points).toBeNull();
+
+    const available = await request(app)
+      .get(`/v1/quizzes/events/available?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    expect(available.status).toBe(200);
+    const mine = (
+      available.body.data.items as Array<{
+        id: string;
+        participation_points: number;
+        win_points: number;
+      }>
+    ).find((e) => e.id === eventId);
+    expect(mine).toBeDefined();
+
+    // Pre-fix these were null, so the mobile card summed them to 0 and rendered
+    // an explicit "Practice / अभ्यास" badge on a quiz that pays.
+    expect(mine!.participation_points).toBeGreaterThan(0);
+    expect(mine!.win_points).toBeGreaterThan(0);
+
+    await request(app)
+      .delete(`/v1/quizzes/events/${eventId}`)
+      .set(auth(admin.token))
+      .send({ force: true });
+  });
+
+  it("points_earned comes from the ledger and survives a refetch", async () => {
+    await expireOpenQuizEvents();
+    const admin = await loginAs("super_admin");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-c3-earned`;
+    const qId = await makeQuestion(admin.token, tag);
+
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `C3 earned ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [qId],
+      });
+    expect(ev.status).toBe(200);
+    const eventId: string = ev.body.data.id;
+
+    await request(app)
+      .post(`/v1/quizzes/events/${eventId}/start`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id });
+    const submit = await request(app)
+      .post(`/v1/quizzes/events/${eventId}/submit`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id, answers: { [qId]: [0] } });
+    expect(submit.status).toBe(200);
+    const awarded: number = submit.body.data.points_awarded;
+    expect(awarded).toBeGreaterThan(0);
+
+    // The refetch the result screen triggers. This is where the pill vanished:
+    // points_earned was recomputed from the NULL override columns and came back 0.
+    const available = await request(app)
+      .get(`/v1/quizzes/events/available?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    const mine = (
+      available.body.data.items as Array<{ id: string; points_earned: number; already_attempted: boolean }>
+    ).find((e) => e.id === eventId);
+    expect(mine?.already_attempted).toBe(true);
+    expect(mine?.points_earned).toBe(awarded);
+
+    await request(app)
+      .delete(`/v1/quizzes/events/${eventId}`)
+      .set(auth(admin.token))
+      .send({ force: true });
+  });
+
+  it("push/active reports resolved completion points for a null override", async () => {
+    const shikshak = await loginAs("shikshak");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-c3-push`;
+
+    const create = await request(app)
+      .post("/v1/quizzes/push")
+      .set(auth(shikshak.token))
+      .send({
+        batch_id: aarav.batch_id,
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        questions: [
+          {
+            question_en: `C3 push Q ${tag}`,
+            options: [{ text_en: "Yes" }, { text_en: "No" }],
+            correct_indices: [0],
+          },
+        ],
+      });
+    expect(create.status).toBe(200);
+
+    const stored = await pool.query<{ completion_points: number | null }>(
+      `select completion_points from push_quizzes where id = $1`,
+      [create.body.data.id],
+    );
+    expect(stored.rows[0]?.completion_points).toBeNull();
+
+    const active = await request(app)
+      .get(`/v1/quizzes/push/active?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    expect(active.status).toBe(200);
+    expect(active.body.data.active?.completion_points).toBeGreaterThan(0);
+
+    await pool.query(`update push_quizzes set expires_at = now() - interval '1 minute' where id = $1`, [
+      create.body.data.id,
+    ]);
   });
 });

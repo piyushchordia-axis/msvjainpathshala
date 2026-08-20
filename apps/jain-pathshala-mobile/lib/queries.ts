@@ -2236,9 +2236,22 @@ export interface QuizEventRow {
   id: string;
   scope: string;
   title_en: string;
-  title_hi: string;
+  /**
+   * M10 — nullable. Typed as `string` before, so the compiler could not catch a
+   * render site that dropped its `?? title_en` and went blank in Hindi.
+   */
+  title_hi: string | null;
   start_at: string;
   end_at: string;
+  /**
+   * C3 — RESOLVED values (AT21), not the raw nullable overrides.
+   *
+   * The stored columns mean "override the catalogue"; null means "pay the
+   * punya_features default". The API used to hand those straight over, so a
+   * quiz paying 30 Punya arrived as null/null, summed to 0, and rendered an
+   * explicit "Practice / अभ्यास" badge. The server resolves them now, so 0 here
+   * genuinely means disabled.
+   */
   participation_points: number;
   win_points: number;
   already_attempted: boolean;
@@ -2246,7 +2259,7 @@ export interface QuizEventRow {
   in_progress: boolean;
   /** True when the student submitted with every answer correct. */
   is_winner?: boolean;
-  /** Punya awarded for this attempt (participation + win if applicable). */
+  /** Punya actually awarded for this attempt, read off the ledger (C3). */
   points_earned?: number;
 }
 export interface QuizOption { text_en: string; text_hi: string | null }
@@ -2328,6 +2341,7 @@ export interface PushQuizActive {
   id: string;
   started_at: string;
   expires_at: string;
+  /** RESOLVED completion points (AT21) — 0 means disabled, never "unset" (C3). */
   completion_points: number;
   already_submitted: boolean;
   questions: QuizQuestion[];

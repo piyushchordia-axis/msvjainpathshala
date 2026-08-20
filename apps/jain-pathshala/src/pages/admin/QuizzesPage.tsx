@@ -19,6 +19,16 @@ import {
 import {
   draftToPayload, emptyDraftQ, validateDraft, type DraftQ,
 } from '@/pages/admin/quiz-draft';
+import {
+  PUSH_QUIZ_COMPLETION_FEATURE_KEY,
+  QUIZ_PARTICIPATION_FEATURE_KEY,
+  QUIZ_WIN_FEATURE_KEY,
+  formatPointsOverride,
+  pointsPayloadValue,
+  pointsPlaceholder,
+  useQuizPointFeatures,
+  validatePointsField,
+} from '@/pages/admin/quiz-points';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 interface QuizOption { text_en: string; text_hi?: string; }
@@ -499,10 +509,13 @@ function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; o
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [startAt, setStartAt] = useState('');
   const [endAt, setEndAt] = useState('');
-  const [participation, setParticipation] = useState('5');
-  const [win, setWin] = useState('10');
+  // H2 — empty means "use the punya_features default", NOT zero. These used to
+  // be seeded with inlined '5'/'10' that had no relationship to the catalogue.
+  const [participation, setParticipation] = useState('');
+  const [win, setWin] = useState('');
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const opts = useQuizTargetOptions(open);
+  const pointFeatures = useQuizPointFeatures(open);
 
   function reset() {
     setTitle('');
@@ -510,8 +523,8 @@ function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; o
     setSelectedIds(new Set());
     setStartAt('');
     setEndAt('');
-    setParticipation('5');
-    setWin('10');
+    setParticipation('');
+    setWin('');
     setPicked(new Set());
   }
 
@@ -526,14 +539,22 @@ function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; o
     if (picked.size === 0) { toast.error('Select at least one question.'); return; }
     const targetErr = validateTargets(scope, selectedIds);
     if (targetErr) { toast.error(targetErr); return; }
+    const pointsErr =
+      validatePointsField(participation, 'Participation points', pointFeatures?.[QUIZ_PARTICIPATION_FEATURE_KEY]) ??
+      validatePointsField(win, 'Win points', pointFeatures?.[QUIZ_WIN_FEATURE_KEY]);
+    if (pointsErr) { toast.error(pointsErr); return; }
     setBusy(true);
     try {
+      // An omitted key stores NULL = "use the catalogue default" (H2). Sending
+      // 0 here would DISABLE the award, which is not what a blank field means.
+      const participationPoints = pointsPayloadValue(participation);
+      const winPoints = pointsPayloadValue(win);
       await apiPost('/v1/quizzes/events', {
         title_en: title.trim(),
         start_at: new Date(startAt).toISOString(),
         end_at: new Date(endAt).toISOString(),
-        participation_points: Number(participation) || 0,
-        win_points: Number(win) || 0,
+        ...(participationPoints !== undefined ? { participation_points: participationPoints } : {}),
+        ...(winPoints !== undefined ? { win_points: winPoints } : {}),
         question_ids: Array.from(picked),
         ...targetsPayload(scope, selectedIds),
       });
@@ -573,12 +594,30 @@ function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; o
           />
           <div className="grid grid-cols-2 gap-3">
             <FormRow label="Participation pts">
-              <Input type="number" min={0} value={participation} onChange={(e) => setParticipation(e.target.value)} />
+              <Input
+                type="number"
+                min={0}
+                max={pointFeatures?.[QUIZ_PARTICIPATION_FEATURE_KEY]?.maxPoints || undefined}
+                value={participation}
+                placeholder={pointsPlaceholder(pointFeatures?.[QUIZ_PARTICIPATION_FEATURE_KEY])}
+                onChange={(e) => setParticipation(e.target.value)}
+              />
             </FormRow>
             <FormRow label="Win pts">
-              <Input type="number" min={0} value={win} onChange={(e) => setWin(e.target.value)} />
+              <Input
+                type="number"
+                min={0}
+                max={pointFeatures?.[QUIZ_WIN_FEATURE_KEY]?.maxPoints || undefined}
+                value={win}
+                placeholder={pointsPlaceholder(pointFeatures?.[QUIZ_WIN_FEATURE_KEY])}
+                onChange={(e) => setWin(e.target.value)}
+              />
             </FormRow>
           </div>
+          <p className="text-xs text-muted-foreground">
+            Leave a points field blank to use the standard award. Enter 0 to turn that
+            award off for this quiz.
+          </p>
           <div className="grid grid-cols-2 gap-3">
             <FormRow label="Start *">
               <Input type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
@@ -627,15 +666,17 @@ function CreatePushDialog({ onAdded }: { onAdded: () => void }) {
   const [scope, setScope] = useState<QuizScope>('batch');
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [minutes, setMinutes] = useState('15');
-  const [points, setPoints] = useState('5');
+  // H2 — blank = the catalogue default, not 0.
+  const [points, setPoints] = useState('');
   const [drafts, setDrafts] = useState<DraftQ[]>([emptyDraftQ()]);
   const opts = useQuizTargetOptions(open);
+  const pointFeatures = useQuizPointFeatures(open);
 
   function reset() {
     setScope('batch');
     setSelectedIds(new Set());
     setMinutes('15');
-    setPoints('5');
+    setPoints('');
     setDrafts([emptyDraftQ()]);
   }
 
@@ -655,12 +696,19 @@ function CreatePushDialog({ onAdded }: { onAdded: () => void }) {
       const err = validateDraft(d);
       if (err) { toast.error(err); return; }
     }
+    const pointsErr = validatePointsField(
+      points,
+      'Completion points',
+      pointFeatures?.[PUSH_QUIZ_COMPLETION_FEATURE_KEY],
+    );
+    if (pointsErr) { toast.error(pointsErr); return; }
     setBusy(true);
     try {
       const expires_at = new Date(Date.now() + (Number(minutes) || 15) * 60 * 1000).toISOString();
+      const completionPoints = pointsPayloadValue(points);
       await apiPost('/v1/quizzes/push', {
         expires_at,
-        completion_points: Number(points) || 0,
+        ...(completionPoints !== undefined ? { completion_points: completionPoints } : {}),
         questions: drafts.map((d) => draftToPayload(d)),
         ...targetsPayload(scope, selectedIds),
       });
@@ -700,9 +748,19 @@ function CreatePushDialog({ onAdded }: { onAdded: () => void }) {
               <Input type="number" min={1} value={minutes} onChange={(e) => setMinutes(e.target.value)} />
             </FormRow>
             <FormRow label="Completion pts">
-              <Input type="number" min={0} value={points} onChange={(e) => setPoints(e.target.value)} />
+              <Input
+                type="number"
+                min={0}
+                max={pointFeatures?.[PUSH_QUIZ_COMPLETION_FEATURE_KEY]?.maxPoints || undefined}
+                value={points}
+                placeholder={pointsPlaceholder(pointFeatures?.[PUSH_QUIZ_COMPLETION_FEATURE_KEY])}
+                onChange={(e) => setPoints(e.target.value)}
+              />
             </FormRow>
           </div>
+          <p className="text-xs text-muted-foreground">
+            Leave completion points blank to use the standard award. Enter 0 to turn it off.
+          </p>
           <div className="space-y-3">
             {drafts.map((d, i) => (
               <div key={i} className="space-y-2">
@@ -1093,7 +1151,7 @@ export default function QuizzesPage() {
                     <p className="text-sm font-medium">{ev.title_en}</p>
                     <p className="mt-1 text-xs text-muted-foreground">
                       <span className="capitalize">{ev.scope}</span> · {ev.question_count} questions ·{' '}
-                      {ev.participation_points ?? '—'} participation / {ev.win_points ?? '—'} win pts
+                      {formatPointsOverride(ev.participation_points)} participation / {formatPointsOverride(ev.win_points)} win pts
                     </p>
                     <p className="mt-1 text-xs text-primary">View results</p>
                   </button>
@@ -1143,7 +1201,7 @@ export default function QuizzesPage() {
                   </div>
                   <p className="mt-2 text-xs text-muted-foreground">
                     {pq.question_count} questions · {pq.submitted_count} submitted
-                    {pq.completion_points != null ? ` · ${pq.completion_points} pts` : ''}
+                     · {formatPointsOverride(pq.completion_points)} pts
                   </p>
                   <p className="mt-1 text-xs text-primary">View results</p>
                 </div>

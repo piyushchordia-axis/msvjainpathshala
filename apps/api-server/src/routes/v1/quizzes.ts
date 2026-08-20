@@ -25,6 +25,7 @@ import {
   resolveQuizParticipationPoints,
   resolveQuizWinPoints,
   resolvePushQuizCompletionPoints,
+  validateQuizPointsOverride,
 } from "../../lib/quiz-points";
 import { quizMatchesStudent, quizMatchesStudentSql } from "../../lib/quiz-scope";
 import {
@@ -282,27 +283,54 @@ async function countEligibleStudents(targets: QuizTargetRow, extra?: SQL): Promi
   return 0;
 }
 
-/** Sum unreversed punya for a quiz/push attempt (source_entity_id + legacy idempotency keys). */
-async function pointsAwardedForAttempt(attemptId: string): Promise<number> {
-  const prefix = `quiz-award:${attemptId}`;
+/**
+ * Sum unreversed punya per attempt — ONE grouped query for the whole set.
+ *
+ * H14 — the per-attempt version was called inside the roster loops, so a
+ * 200-row event cost ~201 queries, and the admin panel re-ran the push roster
+ * every 5 seconds per open tab. C3 needed the same number on the student list
+ * across up to 100 events, which would have been a second N+1.
+ *
+ * The ledger is the authority here, not the quiz's own point columns: those are
+ * nullable OVERRIDES now (null = the punya_features default), so reading them
+ * back reports 0 for a quiz that actually paid 30.
+ *
+ * Attempts with no award are simply absent from the map; callers default to 0.
+ */
+async function pointsAwardedForAttempts(attemptIds: string[]): Promise<Map<string, number>> {
+  const ids = Array.from(new Set(attemptIds.filter(Boolean)));
+  if (ids.length === 0) return new Map();
+
+  // Same array-param idiom as session-page.ts / punya.ts: a bare JS array does
+  // not survive `${ids}::uuid[]`.
+  const idArray = sql`array[${sql.join(
+    ids.map((id) => sql`${id}::uuid`),
+    sql`, `,
+  )}]::uuid[]`;
+
+  // Match on source_entity_id, on the legacy flat key, and on the revisioned
+  // keys a retake mints (quiz-award:{id}:{kind}:{n}) — never on a reversal row.
   const result = await db.execute(sql`
-    select coalesce(sum(t.points), 0)::int as points
-    from punya_transactions t
-    where t.points > 0
-      and (
-        t.source_entity_id = ${attemptId}::uuid
-        or t.idempotency_key = ${prefix}
+    select a.attempt_id, coalesce(sum(t.points), 0)::int as points
+    from unnest(${idArray}) as a(attempt_id)
+    left join punya_transactions t
+      on t.points > 0
+     and (
+           t.source_entity_id = a.attempt_id
+        or t.idempotency_key = 'quiz-award:' || a.attempt_id::text
         or (
-          t.idempotency_key like ${prefix + ":%"}
-          and t.idempotency_key not like ${"%:reversal"}
-        )
-      )
-      and not exists (
-        select 1 from punya_transactions r where r.reversal_of = t.id
-      )
+             t.idempotency_key like 'quiz-award:' || a.attempt_id::text || ':%'
+             and t.idempotency_key not like '%:reversal'
+           )
+         )
+     and not exists (
+       select 1 from punya_transactions r where r.reversal_of = t.id
+     )
+    group by a.attempt_id
   `);
-  const rows = (result as unknown as { rows?: Array<{ points: number }> }).rows ?? [];
-  return rows[0]?.points ?? 0;
+  const rows =
+    (result as unknown as { rows?: Array<{ attempt_id: string; points: number }> }).rows ?? [];
+  return new Map(rows.map((r) => [r.attempt_id, Number(r.points) || 0]));
 }
 
 type QuizAwardRow = {
@@ -730,6 +758,20 @@ router.post("/events", requireRole("super_admin", "state_admin", "city_admin"), 
     return;
   }
 
+  // H1 — an override outside the punya_features bounds is refused here, so the
+  // admin is told the allowed range rather than silently getting a clamped
+  // number at award time. Zod's 0..10000 is a sanity cap, not the policy.
+  for (const [featureKey, label, value] of [
+    [QUIZ_PARTICIPATION_FEATURE_KEY, "Participation points", body.participation_points],
+    [QUIZ_WIN_FEATURE_KEY, "Win points", body.win_points],
+  ] as const) {
+    const bad = await validateQuizPointsOverride(featureKey, label, value);
+    if (bad) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", bad.message);
+      return;
+    }
+  }
+
   const cityIds = await cityScopeForUser(req.authUser!);
   const primaryCity = await primaryCityForTargets(body.scope, auth.targets);
 
@@ -895,14 +937,16 @@ router.get("/events/:id/attempts", requireAdminPanel, async (req: Request, res: 
     .where(and(eq(quiz_attempts.quiz_event_id, eventId), studentScope))
     .orderBy(asc(students.full_name));
 
-  const items = [];
-  for (const row of attemptRows) {
+  // H14 — one grouped ledger query for the whole roster, not one per attempt.
+  const awardedByAttempt = await pointsAwardedForAttempts(attemptRows.map((r) => r.id));
+
+  const items = attemptRows.map((row) => {
     const answers = (row.answers ?? {}) as Record<string, number[]>;
     const question_results = qRows.map((q) => ({
       question_id: q.id,
       correct: sameIndexSet(answers[q.id] ?? [], q.correct_indices),
     }));
-    items.push({
+    return {
       attempt_id: row.id,
       student_id: row.student_id,
       full_name: row.full_name,
@@ -913,10 +957,10 @@ router.get("/events/:id/attempts", requireAdminPanel, async (req: Request, res: 
       correct_count: row.correct_count,
       total_count: row.total_count,
       score: row.score,
-      points_awarded: await pointsAwardedForAttempt(row.id),
+      points_awarded: awardedByAttempt.get(row.id) ?? 0,
       question_results,
-    });
-  }
+    };
+  });
 
   const submitted = items.filter((i) => i.submitted_at);
   const scoreSum = submitted.reduce((acc, i) => acc + (i.score ?? 0), 0);
@@ -1137,6 +1181,7 @@ router.get("/events/available", async (req: Request, res: Response) => {
   const attempted = ids.length
     ? await db
         .select({
+          id: quiz_attempts.id,
           quiz_event_id: quiz_attempts.quiz_event_id,
           correct_count: quiz_attempts.correct_count,
           total_count: quiz_attempts.total_count,
@@ -1147,6 +1192,28 @@ router.get("/events/available", async (req: Request, res: Response) => {
     : [];
   const attemptByEvent = new Map(attempted.map((a) => [a.quiz_event_id, a]));
 
+  /**
+   * C3 — resolve points through the AT21 helpers, and read what was EARNED off
+   * the ledger.
+   *
+   * Migration 0031 made these columns nullable overrides (null = the
+   * punya_features default, 0 = disabled), but this route kept reading the raw
+   * columns. A quiz paying 30 Punya therefore rendered no points pills and an
+   * explicit "Practice" badge, and `points_earned` fell to 0 seconds after the
+   * result screen had shown +30.
+   *
+   * The student payload is display-only, so it carries the RESOLVED value; the
+   * raw override has no business crossing the wire.
+   */
+  const awardedByAttempt = await pointsAwardedForAttempts(attempted.map((a) => a.id));
+  const resolvedPoints = new Map<string, { participation: number; win: number }>();
+  for (const m of matching) {
+    resolvedPoints.set(m.id, {
+      participation: await resolveQuizParticipationPoints(studentGeo.city_id, m.participation_points),
+      win: await resolveQuizWinPoints(studentGeo.city_id, m.win_points),
+    });
+  }
+
   const items = matching.map((m) => {
     const att = attemptByEvent.get(m.id);
     const already_attempted = !!att?.submitted_at;
@@ -1155,11 +1222,9 @@ router.get("/events/available", async (req: Request, res: Response) => {
       !!att?.submitted_at &&
       (att.total_count ?? 0) > 0 &&
       att.correct_count === att.total_count;
-    let points_earned = 0;
-    if (att?.submitted_at) {
-      if ((m.participation_points ?? 0) > 0) points_earned += m.participation_points ?? 0;
-      if (is_winner && (m.win_points ?? 0) > 0) points_earned += m.win_points ?? 0;
-    }
+    const resolved = resolvedPoints.get(m.id) ?? { participation: 0, win: 0 };
+    // Ledger truth, not a recomputation from the (nullable) override columns.
+    const points_earned = att?.submitted_at ? (awardedByAttempt.get(att.id) ?? 0) : 0;
     return {
       id: m.id,
       scope: m.scope,
@@ -1167,8 +1232,8 @@ router.get("/events/available", async (req: Request, res: Response) => {
       title_hi: m.title_hi,
       start_at: m.start_at.toISOString(),
       end_at: m.end_at.toISOString(),
-      participation_points: m.participation_points,
-      win_points: m.win_points,
+      participation_points: resolved.participation,
+      win_points: resolved.win,
       already_attempted,
       in_progress,
       is_winner,
@@ -1622,6 +1687,17 @@ router.post("/push", requireAdminPanel, async (req: Request, res: Response) => {
     return;
   }
 
+  // H1 — same catalogue bounds as scheduled events.
+  const badPoints = await validateQuizPointsOverride(
+    PUSH_QUIZ_COMPLETION_FEATURE_KEY,
+    "Completion points",
+    body.completion_points,
+  );
+  if (badPoints) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", badPoints.message);
+    return;
+  }
+
   // batch_id column is optional; keep first batch for legacy readers when present.
   const primaryBatchId = auth.targets.batch_ids[0] ?? null;
   // For non-batch scopes, pick any in-scope batch as a placeholder FK if needed —
@@ -1744,7 +1820,12 @@ router.get("/push/active", async (req: Request, res: Response) => {
       id: pq.id,
       started_at: pq.started_at.toISOString(),
       expires_at: pq.expires_at.toISOString(),
-      completion_points: pq.completion_points,
+      // C3 — resolved, not the raw override: null means "the punya_features
+      // default", and rendering it as 0 labelled a paying quiz as practice.
+      completion_points: await resolvePushQuizCompletionPoints(
+        studentGeo.city_id,
+        pq.completion_points,
+      ),
       already_submitted: !!attempt?.submitted_at,
       questions: qRows.map((q) => ({
         id: q.id,
@@ -1799,15 +1880,17 @@ router.get("/push/:id/attempts", requireAdminPanel, async (req: Request, res: Re
     .where(and(eq(push_quiz_attempts.push_quiz_id, pushId), studentScope))
     .orderBy(asc(students.full_name));
 
-  const items = [];
-  for (const row of attemptRows) {
+  // H14 — one grouped ledger query. This roster is polled every 5s while live.
+  const awardedByAttempt = await pointsAwardedForAttempts(attemptRows.map((r) => r.id));
+
+  const items = attemptRows.map((row) => {
     const answers = (row.answers ?? {}) as Record<string, number[]>;
     const question_results = qRows.map((q) => ({
       question_id: q.id,
       correct: sameIndexSet(answers[q.id] ?? [], q.correct_indices),
     }));
     const correct_count = question_results.filter((q) => q.correct).length;
-    items.push({
+    return {
       attempt_id: row.id,
       student_id: row.student_id,
       full_name: row.full_name,
@@ -1818,10 +1901,10 @@ router.get("/push/:id/attempts", requireAdminPanel, async (req: Request, res: Re
       correct_count,
       total_count: qRows.length,
       score: row.score,
-      points_awarded: await pointsAwardedForAttempt(row.id),
+      points_awarded: awardedByAttempt.get(row.id) ?? 0,
       question_results,
-    });
-  }
+    };
+  });
 
   const submitted = items.filter((i) => i.submitted_at);
   const scoreSum = submitted.reduce((acc, i) => acc + (i.score ?? 0), 0);
