@@ -1541,3 +1541,431 @@ describe("quiz system — correction path", () => {
     expect(gone.status).toBe(404);
   });
 });
+
+/**
+ * C1 — the read gate and the write gate are different questions.
+ *
+ * `quizTargetsInAdminScope` answered "may this admin view results" and was then
+ * reused as the only authorization on PATCH/DELETE/reset/force-delete. It
+ * returned true unconditionally for national scope and existentially for
+ * state/city, so holding ONE centre inside a targeted city was enough to
+ * mutate a quiz aimed at the whole city — and to read every attempting child's
+ * name, centre, batch, score and per-question answers across all of it.
+ *
+ * None of these branches had a single assertion in either direction, which is
+ * why it shipped. Every object below is created inside the test, so nothing
+ * here depends on seed ordering.
+ */
+describe("quiz system — admin read/write scope (C1)", () => {
+  const openWindow = () => ({
+    start_at: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    end_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+  });
+
+  async function nationalQuestion(token: string, tag: string): Promise<string> {
+    const q = await request(app)
+      .post("/v1/quizzes/questions")
+      .set(auth(token))
+      .send({
+        question_en: `C1 Q ${tag}`,
+        scope: "national",
+        options: [{ text_en: "A" }, { text_en: "B" }],
+        correct_indices: [0],
+      });
+    expect(q.status).toBe(200);
+    return q.body.data.id as string;
+  }
+
+  /** Plant graded attempts without driving the take-flow — the row filter is the point. */
+  async function plantAttempts(eventId: string, questionId: string, studentIds: string[]) {
+    for (const sid of studentIds) {
+      await pool.query(
+        `insert into quiz_attempts (quiz_event_id, student_id, started_at, submitted_at,
+                                    score, correct_count, total_count, answers)
+         values ($1, $2, now(), now(), 1, 1, 1, $3::jsonb)
+         on conflict do nothing`,
+        [eventId, sid, JSON.stringify({ [questionId]: [0] })],
+      );
+    }
+  }
+
+  async function forceDelete(token: string, eventId: string) {
+    await request(app)
+      .delete(`/v1/quizzes/events/${eventId}`)
+      .set(auth(token))
+      .send({ force: true });
+  }
+
+  it("city_admin cannot rewrite the answer key of a national question", async () => {
+    const admin = await loginAs("super_admin");
+    const cityAdmin = await loginAs("city_admin");
+    const qId = await nationalQuestion(admin.token, `${Date.now()}-c1-natq`);
+
+    const patched = await request(app)
+      .patch(`/v1/quizzes/questions/${qId}`)
+      .set(auth(cityAdmin.token))
+      .send({ correct_indices: [1] });
+    expect(patched.status).toBe(403);
+    expect(patched.body.error.code).toBe("ERR_FORBIDDEN");
+
+    const deleted = await request(app)
+      .delete(`/v1/quizzes/questions/${qId}`)
+      .set(auth(cityAdmin.token));
+    expect(deleted.status).toBe(403);
+
+    const stillCorrect = await pool.query<{ correct_indices: number[] }>(
+      `select correct_indices from questions where id = $1`,
+      [qId],
+    );
+    expect(stillCorrect.rows[0]?.correct_indices).toEqual([0]);
+
+    // super_admin is unaffected by the new gate.
+    const asSuper = await request(app)
+      .patch(`/v1/quizzes/questions/${qId}`)
+      .set(auth(admin.token))
+      .send({ topic: "c1-regression" });
+    expect(asSuper.status).toBe(200);
+  });
+
+  it("city_admin cannot delete a state-scoped event covering their own state", async () => {
+    const admin = await loginAs("super_admin");
+    const cityAdmin = await loginAs("city_admin");
+
+    // The state containing the city_admin's own city: the OLD existential check
+    // passed here (they hold centres in it), which is exactly the hole.
+    const own = await pool.query<{ state_id: string }>(
+      `select c.state_id from users u join cities c on c.id = u.city_id
+        where u.phone = '+919800000003'`,
+    );
+    const stateId = own.rows[0]?.state_id;
+    expect(stateId).toBeTruthy();
+
+    const tag = `${Date.now()}-c1-state`;
+    const qId = await nationalQuestion(admin.token, tag);
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `C1 state event ${tag}`,
+        scope: "state",
+        state_ids: [stateId],
+        ...openWindow(),
+        question_ids: [qId],
+        participation_points: 0,
+        win_points: 0,
+      });
+    expect(ev.status).toBe(200);
+    const eventId: string = ev.body.data.id;
+
+    const del = await request(app)
+      .delete(`/v1/quizzes/events/${eventId}`)
+      .set(auth(cityAdmin.token))
+      .send({ force: true });
+    expect(del.status).toBe(403);
+    expect(del.body.error.code).toBe("ERR_FORBIDDEN");
+
+    // Reading it is still allowed — the read gate is deliberately existential.
+    const read = await request(app)
+      .get(`/v1/quizzes/events/${eventId}/attempts`)
+      .set(auth(cityAdmin.token));
+    expect(read.status).toBe(200);
+
+    await forceDelete(admin.token, eventId);
+  });
+
+  it("city_admin cannot mutate a multi-city event that also targets a city outside their scope", async () => {
+    const admin = await loginAs("super_admin");
+    const cityAdmin = await loginAs("city_admin");
+
+    const own = await pool.query<{ city_id: string }>(
+      `select city_id from users where phone = '+919800000003'`,
+    );
+    const ownCity = own.rows[0]?.city_id;
+    expect(ownCity).toBeTruthy();
+
+    const other = await pool.query<{ id: string }>(
+      `select id from cities where id <> $1 limit 1`,
+      [ownCity],
+    );
+    const otherCity = other.rows[0]?.id;
+    expect(otherCity).toBeTruthy();
+
+    const tag = `${Date.now()}-c1-multicity`;
+    const qId = await nationalQuestion(admin.token, tag);
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `C1 multi-city event ${tag}`,
+        scope: "city",
+        city_ids: [ownCity, otherCity],
+        ...openWindow(),
+        question_ids: [qId],
+        participation_points: 0,
+        win_points: 0,
+      });
+    expect(ev.status).toBe(200);
+    const eventId: string = ev.body.data.id;
+
+    // Containment, not existence: holding one of the two cities is not enough.
+    const del = await request(app)
+      .delete(`/v1/quizzes/events/${eventId}`)
+      .set(auth(cityAdmin.token))
+      .send({ force: true });
+    expect(del.status).toBe(403);
+
+    // A single-city event in their OWN city stays writable — the gate narrows,
+    // it does not lock a city_admin out of their own work.
+    const mine = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `C1 own-city event ${tag}`,
+        scope: "city",
+        city_ids: [ownCity],
+        ...openWindow(),
+        question_ids: [qId],
+        participation_points: 0,
+        win_points: 0,
+      });
+    expect(mine.status).toBe(200);
+    const mineDel = await request(app)
+      .delete(`/v1/quizzes/events/${mine.body.data.id}`)
+      .set(auth(cityAdmin.token))
+      .send({ force: true });
+    expect(mineDel.status).toBe(200);
+
+    await forceDelete(admin.token, eventId);
+  });
+
+  it("sanchalak reads a city-wide roster but only their own centre's rows", async () => {
+    const admin = await loginAs("super_admin");
+    const sanchalak = await loginAs("sanchalak");
+
+    const held = await pool.query<{ centre_id: string; city_id: string }>(
+      `select a.centre_id, c.city_id
+         from sanchalak_centre_assignments a
+         join centres c on c.id = a.centre_id
+        where a.user_id = (select id from users where phone = '+919800000004')
+          and a.is_active = true
+          and c.deleted_at is null
+        limit 1`,
+    );
+    const heldCentre = held.rows[0]?.centre_id;
+    const cityId = held.rows[0]?.city_id;
+    expect(heldCentre).toBeTruthy();
+
+    const inScope = await pool.query<{ id: string }>(
+      `select id from students
+        where centre_id = $1 and status = 'active' and deleted_at is null limit 1`,
+      [heldCentre],
+    );
+    // A student at a centre the sanchalak does NOT hold. Deliberately not
+    // restricted to the same city: the seed has only one centre with students
+    // per city, so a same-city filter made this assertion vacuous — and the
+    // roster query lists attempts, it does not re-check eligibility, so any
+    // out-of-scope student proves whether the row filter is doing its job.
+    const outScope = await pool.query<{ id: string }>(
+      `select s.id from students s
+        where s.status = 'active' and s.deleted_at is null
+          and s.centre_id is not null
+          and s.centre_id not in (
+            select centre_id from sanchalak_centre_assignments
+             where user_id = (select id from users where phone = '+919800000004')
+               and is_active = true
+          )
+        limit 1`,
+    );
+    expect(inScope.rows[0]?.id).toBeTruthy();
+    expect(outScope.rows[0]?.id).toBeTruthy();
+
+    const tag = `${Date.now()}-c1-roster`;
+    const qId = await nationalQuestion(admin.token, tag);
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `C1 city roster ${tag}`,
+        scope: "city",
+        city_ids: [cityId],
+        ...openWindow(),
+        question_ids: [qId],
+        participation_points: 0,
+        win_points: 0,
+      });
+    expect(ev.status).toBe(200);
+    const eventId: string = ev.body.data.id;
+
+    const planted = [inScope.rows[0]!.id, outScope.rows[0]!.id];
+    await plantAttempts(eventId, qId, planted);
+
+    const roster = await request(app)
+      .get(`/v1/quizzes/events/${eventId}/attempts`)
+      .set(auth(sanchalak.token));
+    expect(roster.status).toBe(200);
+
+    const returnedIds: string[] = roster.body.data.items.map(
+      (i: { student_id: string }) => i.student_id,
+    );
+    expect(returnedIds).toContain(inScope.rows[0]!.id);
+    if (outScope.rows[0]?.id) {
+      expect(returnedIds).not.toContain(outScope.rows[0].id);
+    }
+
+    // Every returned row must belong to a centre the sanchalak actually holds.
+    const leaked = await pool.query<{ n: string }>(
+      `select count(*)::text as n from students
+        where id = any($1::uuid[])
+          and centre_id not in (
+            select centre_id from sanchalak_centre_assignments
+             where user_id = (select id from users where phone = '+919800000004')
+               and is_active = true
+          )`,
+      [returnedIds],
+    );
+    expect(Number(leaked.rows[0]?.n ?? 0)).toBe(0);
+    expect(roster.body.data.attempted_count).toBe(returnedIds.length);
+
+    // super_admin still sees every planted row on the same event.
+    const asSuper = await request(app)
+      .get(`/v1/quizzes/events/${eventId}/attempts`)
+      .set(auth(admin.token));
+    expect(asSuper.status).toBe(200);
+    expect(asSuper.body.data.items.length).toBe(planted.length);
+
+    await forceDelete(admin.token, eventId);
+  });
+
+  it("shikshak reads a national roster narrowed to their own batches", async () => {
+    const admin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+
+    const batchRows = await pool.query<{ batch_id: string }>(
+      `select batch_id from shikshak_batch_assignments
+        where user_id = (select id from users where phone = '+919800000005')
+          and is_active = true`,
+    );
+    const batchIds = batchRows.rows.map((r) => r.batch_id);
+    expect(batchIds.length).toBeGreaterThan(0);
+
+    const mine = await pool.query<{ id: string }>(
+      `select id from students
+        where batch_id = any($1::uuid[]) and status = 'active' and deleted_at is null limit 1`,
+      [batchIds],
+    );
+    const theirs = await pool.query<{ id: string }>(
+      `select id from students
+        where (batch_id is null or batch_id <> all($1::uuid[]))
+          and status = 'active' and deleted_at is null limit 1`,
+      [batchIds],
+    );
+    expect(mine.rows[0]?.id).toBeTruthy();
+
+    const tag = `${Date.now()}-c1-shikshak`;
+    const qId = await nationalQuestion(admin.token, tag);
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `C1 national roster ${tag}`,
+        scope: "national",
+        ...openWindow(),
+        question_ids: [qId],
+        participation_points: 0,
+        win_points: 0,
+      });
+    expect(ev.status).toBe(200);
+    const eventId: string = ev.body.data.id;
+
+    const planted = [mine.rows[0]!.id, theirs.rows[0]?.id].filter(Boolean) as string[];
+    await plantAttempts(eventId, qId, planted);
+
+    const roster = await request(app)
+      .get(`/v1/quizzes/events/${eventId}/attempts`)
+      .set(auth(shikshak.token));
+    expect(roster.status).toBe(200);
+    const returnedIds: string[] = roster.body.data.items.map(
+      (i: { student_id: string }) => i.student_id,
+    );
+    expect(returnedIds).toContain(mine.rows[0]!.id);
+    if (theirs.rows[0]?.id) {
+      expect(returnedIds).not.toContain(theirs.rows[0].id);
+    }
+
+    // Whatever the roster shows, a shikshak may not destroy a national event.
+    const del = await request(app)
+      .delete(`/v1/quizzes/events/${eventId}`)
+      .set(auth(shikshak.token))
+      .send({ force: true });
+    expect(del.status).toBe(403);
+
+    await forceDelete(admin.token, eventId);
+  });
+
+  it("state_admin cannot mutate an event targeting a city outside their state", async () => {
+    const admin = await loginAs("super_admin");
+    const stateAdmin = await loginAs("state_admin");
+
+    const own = await pool.query<{ state_id: string }>(
+      `select state_id from users where phone = '+919800000002'`,
+    );
+    const stateId = own.rows[0]?.state_id;
+    expect(stateId).toBeTruthy();
+
+    const insideCity = await pool.query<{ id: string }>(
+      `select id from cities where state_id = $1 limit 1`,
+      [stateId],
+    );
+    const outsideCity = await pool.query<{ id: string }>(
+      `select id from cities where state_id <> $1 limit 1`,
+      [stateId],
+    );
+    expect(insideCity.rows[0]?.id).toBeTruthy();
+
+    const tag = `${Date.now()}-c1-stateadmin`;
+    const qId = await nationalQuestion(admin.token, tag);
+
+    // Their own state's city is writable...
+    const inEv = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `C1 in-state ${tag}`,
+        scope: "city",
+        city_ids: [insideCity.rows[0]!.id],
+        ...openWindow(),
+        question_ids: [qId],
+        participation_points: 0,
+        win_points: 0,
+      });
+    expect(inEv.status).toBe(200);
+    const inDel = await request(app)
+      .delete(`/v1/quizzes/events/${inEv.body.data.id}`)
+      .set(auth(stateAdmin.token))
+      .send({ force: true });
+    expect(inDel.status).toBe(200);
+
+    // ...a city in another state is not, even bundled with one of their own.
+    if (outsideCity.rows[0]?.id) {
+      const mixed = await request(app)
+        .post("/v1/quizzes/events")
+        .set(auth(admin.token))
+        .send({
+          title_en: `C1 mixed-state ${tag}`,
+          scope: "city",
+          city_ids: [insideCity.rows[0]!.id, outsideCity.rows[0].id],
+          ...openWindow(),
+          question_ids: [qId],
+          participation_points: 0,
+          win_points: 0,
+        });
+      expect(mixed.status).toBe(200);
+      const mixedDel = await request(app)
+        .delete(`/v1/quizzes/events/${mixed.body.data.id}`)
+        .set(auth(stateAdmin.token))
+        .send({ force: true });
+      expect(mixedDel.status).toBe(403);
+      await forceDelete(admin.token, mixed.body.data.id);
+    }
+  });
+});

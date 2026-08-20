@@ -27,6 +27,17 @@ import {
   resolvePushQuizCompletionPoints,
 } from "../../lib/quiz-points";
 import { quizMatchesStudent, quizMatchesStudentSql } from "../../lib/quiz-scope";
+import {
+  QUIZ_SCOPES,
+  adminStudentScopeCondition,
+  allowedQuizScopes,
+  cityInScope,
+  cityScopeForUser,
+  quizVisibleToAdmin,
+  quizWritableByAdmin,
+  type QuizScope,
+  type QuizTargetRow,
+} from "../../lib/quiz-admin-scope";
 import { auditFromReq } from "../../lib/audit";
 import { clampLimit, ownedStudentsCondition } from "../../lib/route-helpers";
 import {
@@ -41,44 +52,16 @@ import {
   students,
   centres,
   batches,
-  cities,
   states,
   type User,
 } from "@workspace/db";
-import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, isNull, lte, or, sql, type SQL } from "drizzle-orm";
 import { z } from "zod";
 import { canAccessAdminPanel } from "@workspace/api-zod";
 import { Router, type IRouter, type Request, type Response } from "express";
 
 const router: IRouter = Router();
 router.use(requireAuth);
-
-const QUIZ_SCOPES = ["national", "state", "city", "centre", "batch"] as const;
-
-/* ---- city scope: null = all (super_admin); [] = nothing; else city ids ---- */
-async function cityScopeForUser(user: User): Promise<string[] | null> {
-  if (user.role === "super_admin") return null;
-  if (user.role === "city_admin") return user.city_id ? [user.city_id] : [];
-  if (user.role === "state_admin") {
-    if (!user.state_id) return [];
-    const rows = await db.select({ id: cities.id }).from(cities).where(eq(cities.state_id, user.state_id));
-    return rows.map((r) => r.id);
-  }
-  const scope = await resolveAdminScope(user);
-  if (scope.centreIds === null) return null;
-  if (scope.centreIds.length === 0) return [];
-  const rows = await db
-    .select({ city_id: centres.city_id })
-    .from(centres)
-    .where(inArray(centres.id, scope.centreIds));
-  return Array.from(new Set(rows.map((r) => r.city_id)));
-}
-
-function cityInScope(cityIds: string[] | null, cityId: string | null): boolean {
-  if (cityIds === null) return true;
-  if (!cityId) return false;
-  return cityIds.includes(cityId);
-}
 
 /** The single student row owned by this user (parent of, or is), or null. */
 async function ownedStudent(req: Request, studentId: string) {
@@ -119,8 +102,6 @@ async function geoForCentre(centreId: string | null): Promise<{ city_id: string 
   return { city_id: row?.city_id ?? null, state_id: row?.state_id ?? null };
 }
 
-type QuizScope = (typeof QUIZ_SCOPES)[number];
-
 function uniqIds(ids: string[]): string[] {
   return Array.from(new Set(ids.filter(Boolean)));
 }
@@ -156,13 +137,6 @@ function targetsForScope(
   if (scope === "city") return { state_ids: [], city_ids, centre_ids: [], batch_ids: [] };
   if (scope === "centre") return { state_ids: [], city_ids: [], centre_ids, batch_ids: [] };
   return { state_ids: [], city_ids: [], centre_ids: [], batch_ids };
-}
-
-function allowedQuizScopes(role: string): QuizScope[] {
-  if (role === "super_admin") return [...QUIZ_SCOPES];
-  if (role === "state_admin") return ["state", "city", "centre", "batch"];
-  if (role === "city_admin") return ["city", "centre", "batch"];
-  return ["centre", "batch"];
 }
 
 /**
@@ -250,22 +224,13 @@ async function authorizeQuizTargets(
   return { error: null, targets };
 }
 
-type QuizTargetRow = {
-  scope: string;
-  state_ids?: string[] | null;
-  city_ids?: string[] | null;
-  centre_ids?: string[] | null;
-  batch_ids?: string[] | null;
-  city_id?: string | null;
-  centre_id?: string | null;
-  batch_id?: string | null;
-};
-
-/** True when the admin may view results for this quiz (centre/batch write scope). */
-async function quizTargetsInAdminScope(user: User, targets: QuizTargetRow): Promise<boolean> {
-  const scope = await resolveAdminScope(user);
-  if (scope.centreIds === null) return true;
-
+/**
+ * Active students who match the quiz's geographic targets (eligible roster size).
+ *
+ * `extra` narrows the count to the caller's own students so the roster header
+ * cannot claim more eligible children than the table below it can show.
+ */
+async function countEligibleStudents(targets: QuizTargetRow, extra?: SQL): Promise<number> {
   const stateIds = targets.state_ids?.length ? targets.state_ids : [];
   const cityIds = targets.city_ids?.length ? targets.city_ids : targets.city_id ? [targets.city_id] : [];
   const centreIds = targets.centre_ids?.length
@@ -275,69 +240,7 @@ async function quizTargetsInAdminScope(user: User, targets: QuizTargetRow): Prom
       : [];
   const batchIds = targets.batch_ids?.length ? targets.batch_ids : targets.batch_id ? [targets.batch_id] : [];
 
-  switch (targets.scope) {
-    case "national":
-      return true;
-    case "state": {
-      if (stateIds.length === 0 || scope.centreIds.length === 0) return false;
-      const rows = await db
-        .select({ id: centres.id })
-        .from(centres)
-        .where(
-          and(
-            inArray(centres.state_id, stateIds),
-            inArray(centres.id, scope.centreIds),
-            isNull(centres.deleted_at),
-          ),
-        )
-        .limit(1);
-      return rows.length > 0;
-    }
-    case "city": {
-      if (cityIds.length === 0 || scope.centreIds.length === 0) return false;
-      const rows = await db
-        .select({ id: centres.id })
-        .from(centres)
-        .where(
-          and(
-            inArray(centres.city_id, cityIds),
-            inArray(centres.id, scope.centreIds),
-            isNull(centres.deleted_at),
-          ),
-        )
-        .limit(1);
-      return rows.length > 0;
-    }
-    case "centre":
-      return centreIds.some((id) => scope.centreIds!.includes(id));
-    case "batch": {
-      if (batchIds.length === 0) return false;
-      if (scope.batchIds !== null) {
-        return batchIds.some((id) => scope.batchIds!.includes(id));
-      }
-      const rows = await db
-        .select({ centre_id: batches.centre_id })
-        .from(batches)
-        .where(inArray(batches.id, batchIds));
-      return rows.some((b) => scope.centreIds!.includes(b.centre_id));
-    }
-    default:
-      return false;
-  }
-}
-
-/** Active students who match the quiz's geographic targets (eligible roster size). */
-async function countEligibleStudents(targets: QuizTargetRow): Promise<number> {
-  const stateIds = targets.state_ids?.length ? targets.state_ids : [];
-  const cityIds = targets.city_ids?.length ? targets.city_ids : targets.city_id ? [targets.city_id] : [];
-  const centreIds = targets.centre_ids?.length
-    ? targets.centre_ids
-    : targets.centre_id
-      ? [targets.centre_id]
-      : [];
-  const batchIds = targets.batch_ids?.length ? targets.batch_ids : targets.batch_id ? [targets.batch_id] : [];
-
-  const active = and(eq(students.status, "active"), isNull(students.deleted_at));
+  const active = and(eq(students.status, "active"), isNull(students.deleted_at), extra);
 
   if (targets.scope === "national") {
     const [row] = await db
@@ -687,7 +590,7 @@ router.patch("/questions/:id", requireAdminPanel, requireRole("super_admin", "st
     fail(res, 404, "ERR_NOT_FOUND", "Question not found.");
     return;
   }
-  if (!(await quizTargetsInAdminScope(req.authUser!, existing))) {
+  if (!(await quizWritableByAdmin(req.authUser!, existing))) {
     fail(res, 403, "ERR_FORBIDDEN", "This question is outside your scope.");
     return;
   }
@@ -746,7 +649,7 @@ router.delete("/questions/:id", requireAdminPanel, requireRole("super_admin", "s
     fail(res, 404, "ERR_NOT_FOUND", "Question not found.");
     return;
   }
-  if (!(await quizTargetsInAdminScope(req.authUser!, existing))) {
+  if (!(await quizWritableByAdmin(req.authUser!, existing))) {
     fail(res, 403, "ERR_FORBIDDEN", "This question is outside your scope.");
     return;
   }
@@ -933,10 +836,15 @@ router.get("/events/:id/attempts", requireAdminPanel, async (req: Request, res: 
     fail(res, 404, "ERR_NOT_FOUND", "Quiz event not found.");
     return;
   }
-  if (!(await quizTargetsInAdminScope(req.authUser!, event))) {
+  if (!(await quizVisibleToAdmin(req.authUser!, event))) {
     fail(res, 403, "ERR_FORBIDDEN", "This quiz event is outside your scope.");
     return;
   }
+  // The gate above is existential — one centre inside a targeted city admits
+  // the request. THIS is what keeps the rows honest: without it a sanchalak
+  // opening a city-wide event read every attempting child's name, centre,
+  // batch, score and per-question answers across every centre in that city.
+  const studentScope = await adminStudentScopeCondition(req.authUser!);
 
   const qRows = await db
     .select({
@@ -967,7 +875,7 @@ router.get("/events/:id/attempts", requireAdminPanel, async (req: Request, res: 
     .innerJoin(students, eq(students.id, quiz_attempts.student_id))
     .leftJoin(centres, eq(centres.id, students.centre_id))
     .leftJoin(batches, eq(batches.id, students.batch_id))
-    .where(eq(quiz_attempts.quiz_event_id, eventId))
+    .where(and(eq(quiz_attempts.quiz_event_id, eventId), studentScope))
     .orderBy(asc(students.full_name));
 
   const items = [];
@@ -996,7 +904,7 @@ router.get("/events/:id/attempts", requireAdminPanel, async (req: Request, res: 
   const submitted = items.filter((i) => i.submitted_at);
   const scoreSum = submitted.reduce((acc, i) => acc + (i.score ?? 0), 0);
   const average_score = submitted.length ? scoreSum / submitted.length : 0;
-  const eligible_count = await countEligibleStudents(event);
+  const eligible_count = await countEligibleStudents(event, studentScope);
 
   ok(
     res,
@@ -1025,7 +933,7 @@ router.post(
       fail(res, 404, "ERR_NOT_FOUND", "Quiz event not found.");
       return;
     }
-    if (!(await quizTargetsInAdminScope(req.authUser!, event))) {
+    if (!(await quizWritableByAdmin(req.authUser!, event))) {
       fail(res, 403, "ERR_FORBIDDEN", "This quiz event is outside your scope.");
       return;
     }
@@ -1093,7 +1001,7 @@ router.delete("/events/:id", requireAdminPanel, requireRole("super_admin", "stat
     fail(res, 404, "ERR_NOT_FOUND", "Quiz event not found.");
     return;
   }
-  if (!(await quizTargetsInAdminScope(req.authUser!, event))) {
+  if (!(await quizWritableByAdmin(req.authUser!, event))) {
     fail(res, 403, "ERR_FORBIDDEN", "This quiz event is outside your scope.");
     return;
   }
@@ -1635,7 +1543,7 @@ router.get("/push", requireAdminPanel, async (req: Request, res: Response) => {
 
   const items = [];
   for (const r of rows) {
-    if (!(await quizTargetsInAdminScope(req.authUser!, r))) continue;
+    if (!(await quizVisibleToAdmin(req.authUser!, r))) continue;
     items.push({
       id: r.id,
       scope: r.scope,
@@ -1839,10 +1747,12 @@ router.get("/push/:id/attempts", requireAdminPanel, async (req: Request, res: Re
     fail(res, 404, "ERR_NOT_FOUND", "Push quiz not found.");
     return;
   }
-  if (!(await quizTargetsInAdminScope(req.authUser!, pq))) {
+  if (!(await quizVisibleToAdmin(req.authUser!, pq))) {
     fail(res, 403, "ERR_FORBIDDEN", "This push quiz is outside your scope.");
     return;
   }
+  // Existential gate, contained rows — see GET /events/:id/attempts.
+  const studentScope = await adminStudentScopeCondition(req.authUser!);
 
   const qRows = await db
     .select({
@@ -1869,7 +1779,7 @@ router.get("/push/:id/attempts", requireAdminPanel, async (req: Request, res: Re
     .innerJoin(students, eq(students.id, push_quiz_attempts.student_id))
     .leftJoin(centres, eq(centres.id, students.centre_id))
     .leftJoin(batches, eq(batches.id, students.batch_id))
-    .where(eq(push_quiz_attempts.push_quiz_id, pushId))
+    .where(and(eq(push_quiz_attempts.push_quiz_id, pushId), studentScope))
     .orderBy(asc(students.full_name));
 
   const items = [];
@@ -1899,7 +1809,7 @@ router.get("/push/:id/attempts", requireAdminPanel, async (req: Request, res: Re
   const submitted = items.filter((i) => i.submitted_at);
   const scoreSum = submitted.reduce((acc, i) => acc + (i.score ?? 0), 0);
   const average_score = submitted.length ? scoreSum / submitted.length : 0;
-  const eligible_count = await countEligibleStudents(pq);
+  const eligible_count = await countEligibleStudents(pq, studentScope);
   const is_live = pq.expires_at.getTime() > Date.now();
 
   ok(
