@@ -15,6 +15,7 @@ import { userCanAccessCity } from "./scope";
 import { logger } from "./logger";
 import { attachSocketServer, onSocketServer } from "./socket-server";
 import { attachShivirFeed } from "./shivir-feed";
+import { attachPushQuizFeed } from "./push-quiz-feed";
 
 export const WINDOW_MS = 10_000;
 
@@ -149,6 +150,8 @@ export function attachAdminDashboardFeed(httpServer: HttpServer): void {
     logger.info("Socket.IO admin-dashboard namespace ready");
   });
   attachShivirFeed();
+  // H10 — the third namespace CLAUDE.md mandates, which had never been built.
+  attachPushQuizFeed();
 }
 
 /**

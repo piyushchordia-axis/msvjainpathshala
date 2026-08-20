@@ -39,6 +39,8 @@ import {
   type QuizScope,
   type QuizTargetRow,
 } from "../../lib/quiz-admin-scope";
+import { notifyPushQuizStarted, notifyQuizEventOpen } from "../../lib/quiz-notify";
+import { emitPushQuizEvent, emitPushQuizRosterEvent } from "../../lib/push-quiz-feed";
 import { auditFromReq } from "../../lib/audit";
 import { clampLimit, ownedStudentsCondition } from "../../lib/route-helpers";
 import {
@@ -404,6 +406,13 @@ async function findUnreversedQuizAwards(
 }
 
 /**
+ * Which award an idempotency key names. `completion` is the push-quiz one; it
+ * used to have no kind segment at all (a flat `quiz-award:{attemptId}`), which
+ * is why the push retake path silently awarded nothing once reset existed.
+ */
+type QuizAwardKind = "participation" | "win" | "completion";
+
+/**
  * Next award revision for an attempt. Reset reverses ledger rows but keeps the
  * original idempotency keys, so a retake must mint a new key or ON CONFLICT
  * silently skips the credit.
@@ -411,7 +420,7 @@ async function findUnreversedQuizAwards(
 async function nextQuizAwardRevision(
   tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
   attemptId: string,
-  kind: "participation" | "win",
+  kind: QuizAwardKind,
 ): Promise<number> {
   const legacy = `quiz-award:${attemptId}:${kind}`;
   const prefix = `quiz-award:${attemptId}:${kind}:`;
@@ -431,7 +440,7 @@ async function nextQuizAwardRevision(
 
 function quizAwardIdempotencyKey(
   attemptId: string,
-  kind: "participation" | "win",
+  kind: QuizAwardKind,
   revision: number,
 ): string {
   // rev 1 keeps the historical key shape used before correction-path retakes.
@@ -906,6 +915,15 @@ router.post("/events", requireRole("super_admin", "state_admin", "city_admin"), 
     entityId: event.id,
     summary: `Created quiz event "${body.title_en}"`,
   });
+
+  // H10 — announce it, but only if it is takeable NOW. A quiz that opens next
+  // week should not push today; the daily surfaces will carry it when it opens.
+  const startsAt = new Date(body.start_at);
+  const endsAt = new Date(body.end_at);
+  const nowTs = new Date();
+  if (startsAt <= nowTs && endsAt > nowTs) {
+    await notifyQuizEventOpen(event.id);
+  }
 
   ok(res, { id: event.id });
 });
@@ -1966,6 +1984,12 @@ router.post("/push", requireAdminPanel, async (req: Request, res: Response) => {
     summary: `Started push quiz (${body.scope})`,
   });
 
+  // H10 — a live in-class quiz on a 20s poll (that only runs while the student
+  // is already looking at the quizzes screen) is not discoverable. Tell them.
+  await notifyPushQuizStarted(pq.id);
+  // Anyone watching the live roster sees it appear without waiting for a poll.
+  emitPushQuizEvent(pq.id, { type: "started", question_count: body.questions.length });
+
   ok(res, { id: pq.id });
 });
 
@@ -2260,13 +2284,25 @@ router.post("/push/:id/submit", async (req: Request, res: Response) => {
     // Reached only on the winning claim above, so completion points award once.
     let pointsAwarded = 0;
     if (completionPoints > 0) {
+      /**
+       * H12 — the revisioned key, matching the event path.
+       *
+       * This used to hardcode `quiz-award:{attemptId}`. Reset reverses the
+       * ledger rows but deliberately KEEPS their idempotency keys (see
+       * nextQuizAwardRevision), so a retake against a flat key was silently
+       * swallowed by ON CONFLICT and awarded nothing — the student was told
+       * "submitted", the roster showed 0 Punya, and no error was raised
+       * anywhere. Harmless while push quizzes had no reset route; a live bug
+       * the moment one exists.
+       */
+      const rev = await nextQuizAwardRevision(tx, rows[0]!.id, "completion");
       await awardPunya(
         {
           studentId: student.id,
           featureKey: PUSH_QUIZ_COMPLETION_FEATURE_KEY,
           points: completionPoints,
           note: "Push quiz completion",
-          idempotencyKey: `quiz-award:${rows[0]!.id}`,
+          idempotencyKey: quizAwardIdempotencyKey(rows[0]!.id, "completion", rev),
           sourceEntityKind: "push_quiz_attempt",
           sourceEntityId: rows[0]!.id,
         },
@@ -2285,6 +2321,21 @@ router.post("/push/:id/submit", async (req: Request, res: Response) => {
 
   const pointsAwarded = result.pointsAwarded;
 
+  // H10 — the Guruji's roster updates as the class answers, instead of on a 5s
+  // poll. After the claim, so a losing concurrent submit cannot emit twice.
+  const submittedNow = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(push_quiz_attempts)
+    .where(
+      and(eq(push_quiz_attempts.push_quiz_id, pushId), isNotNull(push_quiz_attempts.submitted_at)),
+    );
+  emitPushQuizRosterEvent(pushId, {
+    type: "submitted",
+    student_id: student.id,
+    score,
+    submitted_count: submittedNow[0]?.n ?? 0,
+  });
+
   ok(res, {
     push_quiz_id: pushId,
     score,
@@ -2294,6 +2345,322 @@ router.post("/push/:id/submit", async (req: Request, res: Response) => {
     points_awarded: pointsAwarded,
     // M7 — same review data as the scheduled-event flow.
     question_results: graded.results,
+  });
+});
+
+
+/* ── H12 — the push-quiz correction path ─────────────────────────────────────
+ *
+ * Scheduled events got PATCH/DELETE/reset with Punya reversal; push quizzes got
+ * none of it. A Guruji who started a live quiz with a wrong answer key, or who
+ * needed to stop it early, had no route at all — and the roster kept awarding
+ * against that key until it expired on its own.
+ *
+ * These mirror the event routes exactly, including the write gate (C1) and the
+ * reverse-then-award discipline, so there is one shape to remember.
+ */
+
+const patchPushSchema = z.object({
+  questions: z
+    .array(
+      z.object({
+        question_en: z.string().trim().min(1).max(2000),
+        question_hi: optionalHindi(2000),
+        options: z.array(quizOptionSchema).min(2).max(10),
+        correct_indices: z.array(z.coerce.number().int().min(0)).min(1),
+      }),
+    )
+    .min(1)
+    .max(50)
+    .optional(),
+  completion_points: z.number().int().min(0).max(10000).nullish(),
+  expires_at: z.string().datetime().optional(),
+});
+
+/* PATCH /v1/quizzes/push/:id — fix a live push quiz before anyone submits */
+router.patch("/push/:id", requireAdminPanel, async (req: Request, res: Response) => {
+  const pushId = String(req.params.id);
+  let body: z.infer<typeof patchPushSchema>;
+  try {
+    body = patchPushSchema.parse(req.body ?? {});
+  } catch (err) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid push quiz data.", zodDetails(err));
+    return;
+  }
+  if (Object.keys(body).length === 0) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "No fields to update.");
+    return;
+  }
+
+  const [pq] = await db.select().from(push_quizzes).where(eq(push_quizzes.id, pushId)).limit(1);
+  if (!pq) {
+    fail(res, 404, "ERR_NOT_FOUND", "Push quiz not found.");
+    return;
+  }
+  if (!(await quizWritableByAdmin(req.authUser!, pq))) {
+    fail(res, 403, "ERR_FORBIDDEN", "This push quiz is outside your scope.");
+    return;
+  }
+
+  // Same rule as PATCH /questions/:id: once a child has been graded against an
+  // answer key, that key is history. Correct it by resetting the attempt.
+  const [attempted] = await db
+    .select({ id: push_quiz_attempts.id })
+    .from(push_quiz_attempts)
+    .where(and(eq(push_quiz_attempts.push_quiz_id, pushId), isNotNull(push_quiz_attempts.submitted_at)))
+    .limit(1);
+  if (attempted && body.questions) {
+    fail(
+      res,
+      409,
+      "ERR_QUESTION_IN_USE",
+      "Students have already submitted this quiz — reset their attempts before changing the questions.",
+    );
+    return;
+  }
+
+  if (body.questions) {
+    for (const q of body.questions) {
+      for (const idx of q.correct_indices) {
+        if (idx >= q.options.length) {
+          fail(res, 422, "ERR_VALIDATION_FAILED", "A correct index is out of range.");
+          return;
+        }
+      }
+    }
+  }
+  if (body.completion_points !== undefined) {
+    const bad = await validateQuizPointsOverride(
+      PUSH_QUIZ_COMPLETION_FEATURE_KEY,
+      "Completion points",
+      body.completion_points,
+    );
+    if (bad) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", bad.message);
+      return;
+    }
+  }
+  if (body.expires_at) {
+    const next = new Date(body.expires_at);
+    if (next.getTime() - Date.now() > MAX_PUSH_QUIZ_DURATION_MS) {
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        "A push quiz can run for at most 24 hours — use a scheduled quiz event instead.",
+      );
+      return;
+    }
+  }
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(push_quizzes)
+      .set({
+        ...(body.completion_points !== undefined
+          ? { completion_points: body.completion_points ?? null }
+          : {}),
+        ...(body.expires_at ? { expires_at: new Date(body.expires_at) } : {}),
+        updated_at: new Date(),
+      })
+      .where(eq(push_quizzes.id, pushId));
+
+    if (body.questions) {
+      // Replace wholesale: order_index is positional, so a partial update would
+      // leave the old ordering behind.
+      await tx.delete(push_quiz_questions).where(eq(push_quiz_questions.push_quiz_id, pushId));
+      await tx.insert(push_quiz_questions).values(
+        body.questions.map((q, i) => ({
+          push_quiz_id: pushId,
+          question_en: q.question_en,
+          question_hi: q.question_hi ?? null,
+          options: q.options.map((o) => ({ text_en: o.text_en, text_hi: o.text_hi })),
+          correct_indices: q.correct_indices,
+          order_index: i,
+        })),
+      );
+    }
+  });
+
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "push_quiz",
+    entityId: pushId,
+    summary: "Updated push quiz",
+    metadata: {
+      questions_replaced: !!body.questions,
+      expires_at_changed: !!body.expires_at,
+    },
+  });
+
+  ok(res, { id: pushId, updated: true });
+});
+
+/* POST /v1/quizzes/push/:id/end — stop a live push quiz now */
+router.post("/push/:id/end", requireAdminPanel, async (req: Request, res: Response) => {
+  const pushId = String(req.params.id);
+  const [pq] = await db.select().from(push_quizzes).where(eq(push_quizzes.id, pushId)).limit(1);
+  if (!pq) {
+    fail(res, 404, "ERR_NOT_FOUND", "Push quiz not found.");
+    return;
+  }
+  if (!(await quizWritableByAdmin(req.authUser!, pq))) {
+    fail(res, 403, "ERR_FORBIDDEN", "This push quiz is outside your scope.");
+    return;
+  }
+
+  const now = new Date();
+  if (pq.expires_at <= now) {
+    // Already over. Idempotent rather than an error: "end now" twice is a
+    // double-tap on a phone mid-class, not a mistake worth a red banner.
+    ok(res, { id: pushId, ended: true, already_ended: true });
+    return;
+  }
+
+  await db
+    .update(push_quizzes)
+    .set({ expires_at: now, updated_at: now })
+    .where(eq(push_quizzes.id, pushId));
+
+  await auditFromReq(req, {
+    action: "update",
+    entityKind: "push_quiz",
+    entityId: pushId,
+    summary: "Ended push quiz early",
+  });
+
+  emitPushQuizEvent(pushId, { type: "ended" });
+
+  ok(res, { id: pushId, ended: true, already_ended: false });
+});
+
+/* POST /v1/quizzes/push/:id/attempts/:attemptId/reset — reverse Punya + clear */
+router.post(
+  "/push/:id/attempts/:attemptId/reset",
+  requireAdminPanel,
+  async (req: Request, res: Response) => {
+    const pushId = String(req.params.id);
+    const attemptId = String(req.params.attemptId);
+
+    const [pq] = await db.select().from(push_quizzes).where(eq(push_quizzes.id, pushId)).limit(1);
+    if (!pq) {
+      fail(res, 404, "ERR_NOT_FOUND", "Push quiz not found.");
+      return;
+    }
+    if (!(await quizWritableByAdmin(req.authUser!, pq))) {
+      fail(res, 403, "ERR_FORBIDDEN", "This push quiz is outside your scope.");
+      return;
+    }
+
+    const [attempt] = await db
+      .select({
+        id: push_quiz_attempts.id,
+        student_id: push_quiz_attempts.student_id,
+        submitted_at: push_quiz_attempts.submitted_at,
+      })
+      .from(push_quiz_attempts)
+      .where(and(eq(push_quiz_attempts.id, attemptId), eq(push_quiz_attempts.push_quiz_id, pushId)))
+      .limit(1);
+    if (!attempt) {
+      fail(res, 404, "ERR_NOT_FOUND", "Attempt not found.");
+      return;
+    }
+
+    const outcome = await db.transaction(async (tx) => {
+      // Same helper as the event path: reverses the ledger rows but KEEPS their
+      // idempotency keys, so a retake mints a new revision rather than being
+      // swallowed by ON CONFLICT.
+      const points_reversed = await reverseQuizAttemptAwards(
+        tx,
+        attempt.id,
+        attempt.student_id,
+        req.authUser!.id,
+      );
+      await tx
+        .update(push_quiz_attempts)
+        .set({ submitted_at: null, score: null, answers: {}, updated_at: new Date() })
+        .where(eq(push_quiz_attempts.id, attempt.id));
+      return { points_reversed };
+    });
+
+    await auditFromReq(req, {
+      action: "update",
+      entityKind: "push_quiz_attempt",
+      entityId: attemptId,
+      summary: `Reset push quiz attempt (reversed ${outcome.points_reversed} Punya)`,
+      metadata: { push_quiz_id: pushId, points_reversed: outcome.points_reversed },
+    });
+
+    ok(res, { attempt_id: attemptId, points_reversed: outcome.points_reversed, reset: true });
+  },
+);
+
+/* DELETE /v1/quizzes/push/:id — delete; force reverses awards when attempts exist */
+router.delete("/push/:id", requireAdminPanel, async (req: Request, res: Response) => {
+  const pushId = String(req.params.id);
+  const force =
+    (req.body && typeof req.body === "object" && (req.body as { force?: unknown }).force === true) ||
+    req.query.force === "true";
+
+  const [pq] = await db.select().from(push_quizzes).where(eq(push_quizzes.id, pushId)).limit(1);
+  if (!pq) {
+    fail(res, 404, "ERR_NOT_FOUND", "Push quiz not found.");
+    return;
+  }
+  if (!(await quizWritableByAdmin(req.authUser!, pq))) {
+    fail(res, 403, "ERR_FORBIDDEN", "This push quiz is outside your scope.");
+    return;
+  }
+
+  const existing = await db
+    .select({ id: push_quiz_attempts.id, submitted_at: push_quiz_attempts.submitted_at })
+    .from(push_quiz_attempts)
+    .where(eq(push_quiz_attempts.push_quiz_id, pushId));
+  const submittedCount = existing.filter((a) => a.submitted_at).length;
+
+  if (existing.length > 0 && !force) {
+    fail(
+      res,
+      409,
+      "ERR_EVENT_HAS_ATTEMPTS",
+      `This push quiz has ${existing.length} attempt(s) (${submittedCount} submitted) — pass force: true to reverse awards and delete.`,
+      [{ submitted_attempts: submittedCount, in_progress_attempts: existing.length - submittedCount }],
+    );
+    return;
+  }
+
+  const outcome = await db.transaction(async (tx) => {
+    let points_reversed = 0;
+    const allAttempts = await tx
+      .select({ id: push_quiz_attempts.id, student_id: push_quiz_attempts.student_id })
+      .from(push_quiz_attempts)
+      .where(eq(push_quiz_attempts.push_quiz_id, pushId));
+    for (const att of allAttempts) {
+      points_reversed += await reverseQuizAttemptAwards(tx, att.id, att.student_id, req.authUser!.id);
+    }
+    await tx.delete(push_quiz_attempts).where(eq(push_quiz_attempts.push_quiz_id, pushId));
+    await tx.delete(push_quiz_questions).where(eq(push_quiz_questions.push_quiz_id, pushId));
+    await tx.delete(push_quizzes).where(eq(push_quizzes.id, pushId));
+    return { attemptCount: allAttempts.length, points_reversed };
+  });
+
+  await auditFromReq(req, {
+    action: "delete",
+    entityKind: "push_quiz",
+    entityId: pushId,
+    summary: `Deleted push quiz (attempts=${outcome.attemptCount}, reversed=${outcome.points_reversed}, force=${!!force})`,
+    metadata: {
+      force: !!force,
+      attempts_removed: outcome.attemptCount,
+      points_reversed: outcome.points_reversed,
+    },
+  });
+
+  ok(res, {
+    id: pushId,
+    deleted: true,
+    attempts_removed: outcome.attemptCount,
+    points_reversed: outcome.points_reversed,
   });
 });
 

@@ -2785,3 +2785,335 @@ describe("quiz system — take flow (M7, M8, M18, L9, L12) and windows", () => {
     expect(forced.status).toBe(200);
   });
 });
+
+/**
+ * H12/H10 — push quizzes get the correction path events already had, and the
+ * module finally tells anyone that a quiz exists.
+ *
+ * Scheduled events got PATCH/DELETE/reset with Punya reversal; push quizzes got
+ * none of it, so a Guruji who started a live quiz with a wrong answer key had no
+ * route at all and it kept awarding until it expired on its own.
+ */
+describe("quiz system — push correction path and notifications (H12, H10)", () => {
+  async function startPush(
+    token: string,
+    batchId: string | null,
+    tag: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<string> {
+    const res = await request(app)
+      .post("/v1/quizzes/push")
+      .set(auth(token))
+      .send({
+        batch_id: batchId,
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        completion_points: 0,
+        questions: [
+          {
+            question_en: `Push corr ${tag}`,
+            options: [{ text_en: "Yes" }, { text_en: "No" }],
+            correct_indices: [0],
+          },
+        ],
+        ...extra,
+      });
+    expect(res.status).toBe(200);
+    return res.body.data.id as string;
+  }
+
+  it("a shikshak can end their own live push quiz early", async () => {
+    const shikshak = await loginAs("shikshak");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-end`;
+    const pushId = await startPush(shikshak.token, aarav.batch_id, tag);
+
+    // Live before.
+    const before = await request(app)
+      .get(`/v1/quizzes/push/active?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    expect(before.body.data.active?.id).toBe(pushId);
+
+    const ended = await request(app)
+      .post(`/v1/quizzes/push/${pushId}/end`)
+      .set(auth(shikshak.token))
+      .send({});
+    expect(ended.status).toBe(200);
+    expect(ended.body.data.already_ended).toBe(false);
+
+    // Gone from the student's live surface immediately. Asserted by id, not
+    // null: other suites leave live push quizzes behind in a shared database.
+    const after = await request(app)
+      .get(`/v1/quizzes/push/active?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    expect(after.body.data.active?.id).not.toBe(pushId);
+
+    // Idempotent — a double-tap mid-class is not an error.
+    const again = await request(app)
+      .post(`/v1/quizzes/push/${pushId}/end`)
+      .set(auth(shikshak.token))
+      .send({});
+    expect(again.status).toBe(200);
+    expect(again.body.data.already_ended).toBe(true);
+
+    await request(app)
+      .delete(`/v1/quizzes/push/${pushId}`)
+      .set(auth(shikshak.token))
+      .send({ force: true });
+  });
+
+  it("the answer key can be fixed before anyone submits, and is locked after", async () => {
+    const shikshak = await loginAs("shikshak");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-patch`;
+    const pushId = await startPush(shikshak.token, aarav.batch_id, tag);
+
+    const fixed = await request(app)
+      .patch(`/v1/quizzes/push/${pushId}`)
+      .set(auth(shikshak.token))
+      .send({
+        questions: [
+          {
+            question_en: `Push corrected ${tag}`,
+            options: [{ text_en: "Yes" }, { text_en: "No" }],
+            correct_indices: [1],
+          },
+        ],
+      });
+    expect(fixed.status).toBe(200);
+
+    const active = await request(app)
+      .get(`/v1/quizzes/push/active?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    const qId: string = active.body.data.active.questions[0].id;
+    expect(active.body.data.active.questions[0].question_en).toBe(`Push corrected ${tag}`);
+
+    // Answering the CORRECTED key scores.
+    const submit = await request(app)
+      .post(`/v1/quizzes/push/${pushId}/submit`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id, answers: { [qId]: [1] } });
+    expect(submit.status).toBe(200);
+    expect(submit.body.data.correct_count).toBe(1);
+
+    // Now that a child has been graded against it, the key is history.
+    const locked = await request(app)
+      .patch(`/v1/quizzes/push/${pushId}`)
+      .set(auth(shikshak.token))
+      .send({
+        questions: [
+          {
+            question_en: `Push relocked ${tag}`,
+            options: [{ text_en: "Yes" }, { text_en: "No" }],
+            correct_indices: [0],
+          },
+        ],
+      });
+    expect(locked.status).toBe(409);
+    expect(locked.body.error.code).toBe("ERR_QUESTION_IN_USE");
+
+    await request(app)
+      .delete(`/v1/quizzes/push/${pushId}`)
+      .set(auth(shikshak.token))
+      .send({ force: true });
+  });
+
+  it("resetting a push attempt reverses Punya and lets the student retake", async () => {
+    const shikshak = await loginAs("shikshak");
+    const parent = await loginAs("parent");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-pushreset`;
+
+    const pushId = await startPush(shikshak.token, aarav.batch_id, tag, {
+      completion_points: 5,
+    });
+    const active = await request(app)
+      .get(`/v1/quizzes/push/active?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    const qId: string = active.body.data.active.questions[0].id;
+
+    const before = await punyaTotal(parent.token, aarav.id);
+    const submit = await request(app)
+      .post(`/v1/quizzes/push/${pushId}/submit`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id, answers: { [qId]: [0] } });
+    expect(submit.status).toBe(200);
+    expect(submit.body.data.points_awarded).toBe(5);
+    expect(await punyaTotal(parent.token, aarav.id)).toBe(before + 5);
+
+    const roster = await request(app)
+      .get(`/v1/quizzes/push/${pushId}/attempts`)
+      .set(auth(shikshak.token));
+    const attemptId: string = roster.body.data.items[0].attempt_id;
+
+    const reset = await request(app)
+      .post(`/v1/quizzes/push/${pushId}/attempts/${attemptId}/reset`)
+      .set(auth(shikshak.token))
+      .send({});
+    expect(reset.status).toBe(200);
+    expect(reset.body.data.points_reversed).toBe(5);
+    expect(await punyaTotal(parent.token, aarav.id)).toBe(before);
+
+    // A retake mints a NEW award revision rather than being swallowed by
+    // ON CONFLICT on the original idempotency key.
+    const retake = await request(app)
+      .post(`/v1/quizzes/push/${pushId}/submit`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id, answers: { [qId]: [0] } });
+    expect(retake.status).toBe(200);
+    expect(retake.body.data.points_awarded).toBe(5);
+    expect(await punyaTotal(parent.token, aarav.id)).toBe(before + 5);
+
+    const del = await request(app)
+      .delete(`/v1/quizzes/push/${pushId}`)
+      .set(auth(shikshak.token))
+      .send({ force: true });
+    expect(del.status).toBe(200);
+    expect(del.body.data.points_reversed).toBe(5);
+    expect(await punyaTotal(parent.token, aarav.id)).toBe(before);
+  });
+
+  it("deleting a push quiz with attempts requires force", async () => {
+    const shikshak = await loginAs("shikshak");
+    const student = await loginAs("student");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-pushdel`;
+    const pushId = await startPush(shikshak.token, aarav.batch_id, tag);
+
+    const active = await request(app)
+      .get(`/v1/quizzes/push/active?student_id=${aarav.id}`)
+      .set(auth(student.token));
+    const qId: string = active.body.data.active.questions[0].id;
+    await request(app)
+      .post(`/v1/quizzes/push/${pushId}/submit`)
+      .set(auth(student.token))
+      .send({ student_id: aarav.id, answers: { [qId]: [0] } });
+
+    const blocked = await request(app)
+      .delete(`/v1/quizzes/push/${pushId}`)
+      .set(auth(shikshak.token))
+      .send({});
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error.details[0].submitted_attempts).toBe(1);
+
+    const forced = await request(app)
+      .delete(`/v1/quizzes/push/${pushId}`)
+      .set(auth(shikshak.token))
+      .send({ force: true });
+    expect(forced.status).toBe(200);
+  });
+
+  it("the C1 write gate covers the new push routes too", async () => {
+    const admin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const tag = `${Date.now()}-pushgate`;
+
+    // A national push quiz — outside a shikshak's authoring cap entirely.
+    const national = await request(app)
+      .post("/v1/quizzes/push")
+      .set(auth(admin.token))
+      .send({
+        scope: "national",
+        expires_at: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+        questions: [
+          {
+            question_en: `Push gate ${tag}`,
+            options: [{ text_en: "Yes" }, { text_en: "No" }],
+            correct_indices: [0],
+          },
+        ],
+      });
+    expect(national.status).toBe(200);
+    const pushId: string = national.body.data.id;
+
+    for (const call of [
+      request(app).patch(`/v1/quizzes/push/${pushId}`).set(auth(shikshak.token)).send({ completion_points: 0 }),
+      request(app).post(`/v1/quizzes/push/${pushId}/end`).set(auth(shikshak.token)).send({}),
+      request(app).delete(`/v1/quizzes/push/${pushId}`).set(auth(shikshak.token)).send({ force: true }),
+    ]) {
+      const res = await call;
+      expect(res.status).toBe(403);
+    }
+
+    await request(app)
+      .delete(`/v1/quizzes/push/${pushId}`)
+      .set(auth(admin.token))
+      .send({ force: true });
+  });
+
+  it("starting a push quiz notifies the targeted batch's families (H10)", async () => {
+    const shikshak = await loginAs("shikshak");
+    const aarav = await aaravStudent();
+    const tag = `${Date.now()}-notify`;
+
+    const before = await pool.query<{ n: string }>(
+      `select count(*)::text as n from notifications where kind = 'quiz'`,
+    );
+
+    const pushId = await startPush(shikshak.token, aarav.batch_id, tag);
+
+    const after = await pool.query<{ n: string }>(
+      `select count(*)::text as n from notifications where kind = 'quiz'`,
+    );
+    // Zero before this change: quizzes.ts never imported notify at all.
+    expect(Number(after.rows[0]!.n)).toBeGreaterThan(Number(before.rows[0]!.n));
+
+    // Aarav's own parent is among the recipients. The inbox table carries no
+    // JSON payload column — `data` is the PUSH payload only — so assert on the
+    // row that actually reaches the family, which is what H10 was about.
+    const parentRow = await pool.query<{ n: string }>(
+      `select count(*)::text as n from notifications
+        where kind = 'quiz'
+          and user_id = (select parent_id from students where id = $1)
+          and created_at > now() - interval '2 minutes'`,
+      [aarav.id],
+    );
+    expect(Number(parentRow.rows[0]!.n)).toBeGreaterThan(0);
+
+    await request(app)
+      .delete(`/v1/quizzes/push/${pushId}`)
+      .set(auth(shikshak.token))
+      .send({ force: true });
+  });
+
+  it("an event that is not open yet notifies nobody", async () => {
+    const admin = await loginAs("super_admin");
+    const tag = `${Date.now()}-notifyfuture`;
+    const q = await request(app)
+      .post("/v1/quizzes/questions")
+      .set(auth(admin.token))
+      .send({
+        question_en: `Notify Q ${tag}`,
+        scope: "national",
+        options: [{ text_en: "Yes" }, { text_en: "No" }],
+        correct_indices: [0],
+      });
+
+    const before = await pool.query<{ n: string }>(
+      `select count(*)::text as n from notifications where kind = 'quiz'`,
+    );
+    const ev = await request(app)
+      .post("/v1/quizzes/events")
+      .set(auth(admin.token))
+      .send({
+        title_en: `Future quiz ${tag}`,
+        scope: "national",
+        start_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+        end_at: new Date(Date.now() + 8 * 24 * 60 * 60 * 1000).toISOString(),
+        question_ids: [q.body.data.id],
+      });
+    expect(ev.status).toBe(200);
+    const after = await pool.query<{ n: string }>(
+      `select count(*)::text as n from notifications where kind = 'quiz'`,
+    );
+    // A quiz opening next week must not push today.
+    expect(after.rows[0]!.n).toBe(before.rows[0]!.n);
+
+    await request(app)
+      .delete(`/v1/quizzes/events/${ev.body.data.id}`)
+      .set(auth(admin.token))
+      .send({ force: true });
+  });
+});

@@ -59,6 +59,11 @@ export const SHIKSHAK_ACTIONS: QuickAction[] = [
     accent: "punya",
   },
   { href: "/shikshak/niyam-review", icon: "clipboard-outline", en: "Niyam review", hi: "नियम समीक्षा", accent: "niyam" },
+  // H17 — SPEC §15.2's "instant quiz created on-the-fly by Guruji/Didi during a
+  // session". The API always admitted a shikshak to POST /push; there was no UI
+  // on any surface, so the persona the feature was designed for could not reach
+  // it. Mobile, because a Guruji mid-class is holding a phone.
+  { href: "/shikshak/quizzes", icon: "flash-outline", en: "Class quiz", hi: "कक्षा प्रश्नोत्तरी", accent: "quizzes" },
   { href: "/shikshak/join-approvals", icon: "person-add-outline", en: "Join approvals", hi: "Join स्वीकृति", accent: "join" },
   { href: "/shikshak/niyams", icon: "sparkles-outline", en: "Niyam catalog", hi: "नियम सूची", accent: "niyam" },
   { href: "/gallery", icon: "images-outline", en: "Punya Wall", hi: "पुण्य दीवार", accent: "punya" },

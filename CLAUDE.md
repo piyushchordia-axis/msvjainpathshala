@@ -517,12 +517,27 @@ Notes:
 
 ```
 /shivirs/:shivirId       → volunteers + admins of that shivir
-/push-quizzes/:quizId    → participants of that push quiz
+/push-quizzes/:quizId    → participants of that push quiz, + a `staff` room
 /admin-dashboard/:cityId → city_admin+ of that city (live activity feed)
 ```
 
 Authentication: clients connect with `auth: { token }` — JWT verified before namespace join.
 Redis adapter (`@socket.io/redis-adapter`) required for multi-instance deployments.
+
+**`/push-quizzes/:quizId` carries two audiences and they must not share a payload.**
+Joining requires either an admin-panel role that passes the quiz read gate
+(`quizVisibleToAdmin`), or ownership of a student the quiz actually targets
+(`quizMatchesStudent` — the same rule as the take flow). Staff additionally join
+a `staff` room.
+
+- `push_quiz.update` — lifecycle (`started`, `ended`), emitted to the whole
+  namespace. This is how a student sitting in the runner learns the quiz closed;
+  push polling is deliberately paused during an attempt, so nothing else tells them.
+- `push_quiz.roster` — `submitted`, emitted to the **`staff` room only**. It
+  carries a student id and score, so sending it namespace-wide would leak one
+  child's result to every other child in the class.
+
+The 5s roster poll stays as the fallback for clients that cannot open a socket.
 
 ---
 

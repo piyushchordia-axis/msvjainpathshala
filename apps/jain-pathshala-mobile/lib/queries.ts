@@ -119,6 +119,8 @@ export const qk = {
   quizzesAvailable: (id: string) => ["me", "quizzes", "available", id] as const,
   quizHistory: (id: string) => ["me", "quizzes", "history", id] as const,
   pushQuizActive: (id: string) => ["me", "quizzes", "push-active", id] as const,
+  shikshakPushQuizzes: ["shikshak", "push-quizzes"] as const,
+  pushQuizRoster: (id: string) => ["shikshak", "push-quiz-roster", id] as const,
   openCompetitions: ["me", "competitions", "open"] as const,
   idCard: (id: string) => ["me", "id-card", id] as const,
 };
@@ -2418,6 +2420,128 @@ export function useActivePushQuiz(studentId?: string, enabled = true) {
     refetchInterval: 20_000,
   });
 }
+/* ── H17 — the Guruji's own push-quiz surface ───────────────────────────────
+ *
+ * SPEC §15.2 calls a push quiz an "instant quiz created on-the-fly by
+ * Guruji/Didi during a session", and the API has always admitted a shikshak to
+ * POST /push. There was no UI on ANY surface: the web nav gates /admin/quizzes
+ * at city_admin, and mobile had /quizzes only in PARENT_ACTIONS. The persona the
+ * feature was designed for could not reach it — while the same persona WAS
+ * admitted by the API to routes they should not have touched (C1).
+ *
+ * Mobile, not web: a Guruji mid-class is holding a phone.
+ */
+export interface ShikshakPushQuizRow {
+  id: string;
+  scope: string;
+  started_at: string;
+  expires_at: string;
+  completion_points: number | null;
+  question_count: number;
+  submitted_count: number;
+  is_live: boolean;
+  batch_ids?: string[];
+  batch_id?: string | null;
+}
+
+export interface PushQuizAttemptRow {
+  attempt_id: string;
+  student_id: string;
+  full_name: string;
+  centre_name: string | null;
+  batch_name: string | null;
+  submitted_at: string | null;
+  correct_count: number;
+  total_count: number;
+  score: number | null;
+  points_awarded: number;
+}
+
+export interface PushQuizRosterPayload {
+  items: PushQuizAttemptRow[];
+  is_live: boolean;
+  attempted_count: number;
+  submitted_count: number;
+  eligible_count: number;
+  average_score: number;
+}
+
+/** Push quizzes visible to this staff member, live first. */
+export function useMyPushQuizzes(enabled = true) {
+  return useQuery({
+    queryKey: qk.shikshakPushQuizzes,
+    queryFn: () => apiGet<List<ShikshakPushQuizRow>>(`/v1/quizzes/push?limit=50`),
+    enabled,
+  });
+}
+
+/**
+ * The live roster. Polled at 5s while the quiz is live — the Socket.IO
+ * `/push-quizzes/:id` namespace is the fast path; this is the fallback that
+ * works when the socket cannot connect.
+ */
+export function usePushQuizRoster(pushQuizId: string | null, isLive: boolean) {
+  return useQuery({
+    queryKey: qk.pushQuizRoster(pushQuizId ?? ""),
+    queryFn: () => apiGet<PushQuizRosterPayload>(`/v1/quizzes/push/${pushQuizId}/attempts`),
+    enabled: !!pushQuizId,
+    refetchInterval: isLive ? 5_000 : false,
+  });
+}
+
+export interface StartPushQuizInput {
+  batch_id: string;
+  minutes: number;
+  completion_points?: number;
+  questions: Array<{
+    question_en: string;
+    question_hi?: string;
+    options: Array<{ text_en: string; text_hi?: string }>;
+    correct_indices: number[];
+  }>;
+}
+
+export function useStartPushQuiz() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ batch_id, minutes, completion_points, questions }: StartPushQuizInput) =>
+      apiPost<{ id: string }>(`/v1/quizzes/push`, {
+        scope: "batch",
+        batch_ids: [batch_id],
+        expires_at: new Date(Date.now() + minutes * 60 * 1000).toISOString(),
+        ...(completion_points !== undefined ? { completion_points } : {}),
+        questions,
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.shikshakPushQuizzes }),
+  });
+}
+
+/** H12 — stop a live quiz now (sets expires_at = now()). */
+export function useEndPushQuiz() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => apiPost<{ ended: boolean }>(`/v1/quizzes/push/${id}/end`, {}),
+    onSuccess: (_r, id) => {
+      qc.invalidateQueries({ queryKey: qk.shikshakPushQuizzes });
+      qc.invalidateQueries({ queryKey: qk.pushQuizRoster(id) });
+    },
+  });
+}
+
+/** H12 — reverse a student's Punya and let them retake. */
+export function useResetPushQuizAttempt() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ pushQuizId, attemptId }: { pushQuizId: string; attemptId: string }) =>
+      apiPost<{ points_reversed: number }>(
+        `/v1/quizzes/push/${pushQuizId}/attempts/${attemptId}/reset`,
+        {},
+      ),
+    onSuccess: (_r, vars) =>
+      qc.invalidateQueries({ queryKey: qk.pushQuizRoster(vars.pushQuizId) }),
+  });
+}
+
 export function useSubmitPushQuiz() {
   const qc = useQueryClient();
   return useMutation({
