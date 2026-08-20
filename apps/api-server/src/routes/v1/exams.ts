@@ -500,8 +500,30 @@ router.post("/:id/attempts/:attemptId/grade", async (req: Request, res: Response
     fail(res, 404, "ERR_NOT_FOUND", "Attempt not found.");
     return;
   }
+  // Only a submitted attempt can be graded, and a graded one re-graded.
+  //
+  // 'abandoned' used to fall straight through to the finalize path, which set
+  // status='graded' and awarded completion Punya on a dead attempt. Because
+  // both attempt-cap queries exclude 'abandoned', grading one also RE-CONSUMED
+  // the retry the abandon had freed — irreversibly, since reset only accepts
+  // 'in_progress'. An abandoned attempt with no exam_answers rows has an
+  // ungraded count of 0, so the very first call finalised it at score 0.
   if (attempt.status === "in_progress") {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Attempt not submitted.");
+    fail(
+      res,
+      422,
+      "ERR_VALIDATION_FAILED",
+      "This attempt is still in progress — it can be graded once the student submits it.",
+    );
+    return;
+  }
+  if (attempt.status === "abandoned") {
+    fail(
+      res,
+      422,
+      "ERR_VALIDATION_FAILED",
+      "This attempt was abandoned and cannot be graded — the student needs to sit the exam again.",
+    );
     return;
   }
 
@@ -1576,14 +1598,22 @@ router.get("/attempts/:attemptId/result", async (req: Request, res: Response) =>
     .where(eq(exam_answers.attempt_id, attemptId))
     .orderBy(asc(exam_questions.order_index), asc(exam_questions.id));
 
-  const score = attempt.score ?? 0;
+  // An attempt whose text answers are still unmarked has score = NULL. Coercing
+  // that to 0 published a hard zero under a red "Not passed" badge to a child
+  // who may have written a good paper. Release is now blocked while anything
+  // needs grading, but exams released BEFORE that guard existed still land here,
+  // so report the truth: no score yet. Both clients gate on
+  // `typeof score === 'number'`, so null degrades to "not released yet".
+  const pending = attempt.needs_grading || attempt.score === null;
   const passMark = exam?.pass_mark ?? 0;
+  const score = pending ? null : attempt.score;
   ok(res, {
     status: attempt.status,
     score,
+    needs_grading: attempt.needs_grading,
     total_marks: exam?.total_marks ?? 0,
     pass_mark: passMark,
-    passed: score >= passMark,
+    passed: score === null ? null : score >= passMark,
     per_question: perQuestion.map((p) => ({
       question_id: p.question_id,
       question_en: p.question_en,

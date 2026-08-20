@@ -35,13 +35,22 @@ import {
 import { resolveAdminScope, cityIdsForState, cityIdsForUser } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { invalidatePunyaPointCaches } from "../../lib/punya-config-invalidate";
-import { clampLimit, decodeTimeCursor, encodeTimeCursor } from "../../lib/route-helpers";
+import {
+  clampLimit,
+  decodeTimeCursor,
+  encodeTimeCursor,
+  scopedBatchFilter,
+  scopedCentreFilter,
+} from "../../lib/route-helpers";
 import {
   validateNiyamPointsBounds,
   validatePunyaConfigPointsBounds,
 } from "../../lib/niyam-points";
 import { isUniqueViolation } from "../../lib/pg-errors";
 import { generateExamAccessCode, hashOtpCode } from "../../lib/tokens";
+import { QUEUE_NAMES } from "@jp/shared/constants";
+import { enqueueJob } from "../../lib/queues";
+import { logger } from "../../lib/logger";
 
 const router: IRouter = Router();
 router.use(requireAuth, requireAdminPanel);
@@ -254,7 +263,58 @@ router.post(
       return;
     }
 
-    await db.update(online_exams).set({ results_released: true }).where(eq(online_exams.id, id));
+    // Releasing while text answers are unmarked publishes a NULL score, which
+    // the result route renders as a failing zero — a child who wrote a good
+    // paper is told they failed. Release is one-way, so this has to block.
+    const [ungraded] = await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(exam_attempts)
+      .where(
+        and(
+          eq(exam_attempts.exam_id, id),
+          eq(exam_attempts.status, "submitted"),
+          eq(exam_attempts.needs_grading, true),
+        ),
+      );
+    const pending = ungraded?.n ?? 0;
+    if (pending > 0) {
+      fail(
+        res,
+        409,
+        "ERR_CONFLICT",
+        `${pending} attempt${pending === 1 ? " still needs" : "s still need"} grading — finish grading on the Exam grading page, then release.`,
+      );
+      return;
+    }
+
+    // updated_at matters beyond bookkeeping: the top-score catch-up cron filters
+    // on (window_end >= since OR updated_at >= since) over 30 days, so an exam
+    // released well after its window closed matched neither disjunct and its
+    // toppers were silently skipped.
+    await db
+      .update(online_exams)
+      .set({ results_released: true, updated_at: new Date() })
+      .where(eq(online_exams.id, id));
+
+    await auditFromReq(req, {
+      action: "update",
+      entityKind: "online_exam",
+      entityId: id,
+      summary: `Released results for exam "${exam.title_en}".`,
+      metadata: { results_released: true },
+    });
+
+    // The primary trigger for top-score Punya (exam-punya.ts documents this
+    // route as such); the daily cron is only the catch-up. Non-fatal: the
+    // release is already committed, so a queue hiccup must not 500 the admin
+    // into retrying an irreversible action. The cron picks it up either way,
+    // which is exactly what updated_at above keeps in range.
+    try {
+      await enqueueJob(QUEUE_NAMES.EXAM_TOP_SCORE, { exam_id: id });
+    } catch (err) {
+      logger.warn({ err, examId: id }, "exam.top_score enqueue failed after release");
+    }
+
     ok(res, { id, results_released: true });
   },
 );
@@ -418,6 +478,11 @@ router.get("/exams/:id/attempts", async (req: Request, res: Response) => {
     fail(res, 404, "ERR_NOT_FOUND", "Exam not found.");
     return;
   }
+  // Reads are open to the admin panel, but the ROWS are scoped (Q12): a
+  // shikshak sees only their assigned batches, a sanchalak only their assigned
+  // centres. Without this the list handed every admin-panel role every
+  // attempting child's name and score city-wide. Writes stay canAdministerExams.
+  const scope = await resolveAdminScope(req.authUser!);
   const rows = await db
     .select({
       id: exam_attempts.id,
@@ -425,12 +490,25 @@ router.get("/exams/:id/attempts", async (req: Request, res: Response) => {
       student_code: students.student_code,
       status: exam_attempts.status,
       score: exam_attempts.score,
+      // The grading page filters on needs_grading and renders the auto/manual
+      // split; omitting these three made every exam report "no attempts need
+      // grading", so a text exam could never be found to grade.
+      needs_grading: exam_attempts.needs_grading,
+      auto_score: exam_attempts.auto_score,
+      manual_score: exam_attempts.manual_score,
       started_at: exam_attempts.started_at,
       submitted_at: exam_attempts.submitted_at,
     })
     .from(exam_attempts)
     .innerJoin(students, eq(students.id, exam_attempts.student_id))
-    .where(and(eq(exam_attempts.exam_id, id), isNull(students.deleted_at)))
+    .where(
+      and(
+        eq(exam_attempts.exam_id, id),
+        isNull(students.deleted_at),
+        scopedCentreFilter(scope, students.centre_id),
+        scopedBatchFilter(scope, students.batch_id),
+      ),
+    )
     .orderBy(desc(exam_attempts.started_at));
 
   const items = rows.map((r) => ({
@@ -593,7 +671,14 @@ router.post("/curricula", requireRole("super_admin", "state_admin", "city_admin"
 const createExamSchema = z
   .object({
     title_en: z.string().min(1).max(500),
-    title_hi: z.string().max(500).optional(),
+    // Required: the old `title_hi ?? title_en` fallback wrote Latin text into a
+    // Devanagari column, which CLAUDE.md forbids. The create dialog already
+    // blocks submit on an empty Hindi title, so nothing client-side changes.
+    title_hi: z.string().min(1).max(500),
+    // Accepted, not stripped — the schema is not .strict(), so Zod silently
+    // dropped the descriptions the dialog has been sending all along.
+    description_en: z.string().max(2000).nullable().optional(),
+    description_hi: z.string().max(2000).nullable().optional(),
     city_id: z.string().uuid(),
     window_start: z.string().datetime(),
     window_end: z.string().datetime(),
@@ -648,7 +733,9 @@ router.post("/exams", requireRole("super_admin", "state_admin", "city_admin"), a
 
   const [row] = await db.insert(online_exams).values({
     title_en: body.title_en,
-    title_hi: body.title_hi ?? body.title_en,
+    title_hi: body.title_hi,
+    description_en: body.description_en ?? null,
+    description_hi: body.description_hi ?? null,
     city_id: body.city_id,
     window_start: new Date(body.window_start),
     window_end: new Date(body.window_end),

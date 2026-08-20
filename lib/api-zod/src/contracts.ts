@@ -226,10 +226,19 @@ export function canFeatureMedia(role: Role | null | undefined): boolean {
 }
 
 /**
- * Who may author exam questions, grade attempts, and release results.
- * Deliberately NARROWER than canAccessAdminPanel — sanchalak and shikshak can
- * open the admin panel but must NOT touch exam content or results (SPEC 6.17).
- * Do not "fix" this by reusing ADMIN_PANEL_ROLES.
+ * Who may author exam questions, grade attempts, and release results — i.e.
+ * every exam WRITE. Deliberately NARROWER than canAccessAdminPanel: sanchalak
+ * and shikshak can open the admin panel but must NOT author, grade or release
+ * (SPEC 6.17). Do not "fix" this by reusing ADMIN_PANEL_ROLES.
+ *
+ * READS are a separate question, resolved 2026-08-21. The exam list and the
+ * attempts list stay open to the admin panel, but their ROWS are scoped the
+ * same way Q12 scopes niyam review: a shikshak sees only students in their
+ * assigned batches, a sanchalak only their assigned centres. Previously they
+ * were not scoped at all, so either role read every attempting child's name and
+ * score across the whole city. The scoping is applied in the query itself
+ * (scopedCentreFilter + scopedBatchFilter in admin-modules.ts), NOT by widening
+ * this constant — a Guruji may see their own students' marks, and nothing more.
  */
 export const EXAM_ADMIN_ROLES: Role[] = ["super_admin", "state_admin", "city_admin"];
 

@@ -5,9 +5,18 @@
  */
 import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
-import { eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import app from "../src/app";
-import { pool, db, students, users } from "@workspace/db";
+import {
+  pool,
+  db,
+  audit_logs,
+  centres,
+  exam_attempts,
+  online_exams,
+  students,
+  users,
+} from "@workspace/db";
 import { loginAs, auth } from "./helpers";
 import {
   clearMemoryRateLimitKeyForTests,
@@ -1774,5 +1783,322 @@ describe("online exams", () => {
     expect(reversals[0]!.points).toBe(-18);
     expect(reversals[0]!.reversal_of).toBeTruthy();
     expect(reversals[0]!.idempotency_key).toBe(`${awards[0]!.idempotency_key}:reversal`);
+  });
+
+  /* ------------------------------------------------------------------ */
+  /* Grading, release and scope                                          */
+  /* ------------------------------------------------------------------ */
+
+  it("attempts list is row-scoped: shikshak by batch, sanchalak by centre", async () => {
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+    const examId = await createMumbaiExam(admin.token, cityId);
+
+    const aarav = await aaravStudent();
+    const [aaravRow] = await db
+      .select({ centre_id: students.centre_id })
+      .from(students)
+      .where(eq(students.id, aarav.id))
+      .limit(1);
+    const centreId = aaravRow!.centre_id!;
+    const [centreRow] = await db
+      .select({ state_id: centres.state_id, city_id: centres.city_id })
+      .from(centres)
+      .where(eq(centres.id, centreId))
+      .limit(1);
+
+    const tag = Math.random().toString(36).slice(2, 8);
+
+    // A centre-mate with no batch yet — inside the sanchalak's centre but
+    // outside every shikshak batch assignment. This row is what separates
+    // "batch-bound" from "centre-wide"; without it both roles look identical.
+    const [noBatch] = await db
+      .insert(students)
+      .values({
+        full_name: `Vitest NoBatch ${tag}`,
+        student_code: `VIT-NB-${tag}`,
+        age_group: "bal",
+        centre_id: centreId,
+        batch_id: null,
+        status: "active",
+      })
+      .returning({ id: students.id });
+
+    // A second centre in the same city that the sanchalak does not run (SN-1).
+    const [otherCentre] = await db
+      .insert(centres)
+      .values({
+        state_id: centreRow!.state_id,
+        city_id: centreRow!.city_id,
+        code: `VIT-${tag.slice(0, 3).toUpperCase()}`,
+        name: `Vitest Other Centre ${tag}`,
+        status: "active",
+      })
+      .returning({ id: centres.id });
+    const [otherStudent] = await db
+      .insert(students)
+      .values({
+        full_name: `Vitest OtherCentre ${tag}`,
+        student_code: `VIT-OC-${tag}`,
+        age_group: "bal",
+        centre_id: otherCentre!.id,
+        status: "active",
+      })
+      .returning({ id: students.id });
+
+    try {
+      const now = new Date();
+      await db.insert(exam_attempts).values([
+        { exam_id: examId, student_id: aarav.id, started_at: now, status: "submitted", score: 10 },
+        { exam_id: examId, student_id: noBatch!.id, started_at: now, status: "submitted", score: 11 },
+        { exam_id: examId, student_id: otherStudent!.id, started_at: now, status: "submitted", score: 12 },
+      ]);
+
+      async function codesFor(token: string): Promise<string[]> {
+        const res = await request(app)
+          .get(`/v1/admin/exams/${examId}/attempts`)
+          .set(auth(token));
+        expect(res.status).toBe(200);
+        return (res.body.data.items as Array<{ student_code: string }>).map((i) => i.student_code);
+      }
+
+      const cityAdmin = await loginAs("city_admin");
+      const sanchalak = await loginAs("sanchalak");
+      const shikshak = await loginAs("shikshak");
+
+      const cityCodes = await codesFor(cityAdmin.token);
+      expect(cityCodes).toContain("MUM-STU-00001");
+      expect(cityCodes).toContain(`VIT-NB-${tag}`);
+      expect(cityCodes).toContain(`VIT-OC-${tag}`);
+
+      // Sanchalak keeps whole-centre reach, but stops at their own centres.
+      const sanchalakCodes = await codesFor(sanchalak.token);
+      expect(sanchalakCodes).toContain("MUM-STU-00001");
+      expect(sanchalakCodes).toContain(`VIT-NB-${tag}`);
+      expect(sanchalakCodes).not.toContain(`VIT-OC-${tag}`);
+
+      // Shikshak is bound to the batches they actually teach.
+      const shikshakCodes = await codesFor(shikshak.token);
+      expect(shikshakCodes).toContain("MUM-STU-00001");
+      expect(shikshakCodes).not.toContain(`VIT-NB-${tag}`);
+      expect(shikshakCodes).not.toContain(`VIT-OC-${tag}`);
+    } finally {
+      // exam_attempts cascade from students; the centre must go after them.
+      await db.delete(students).where(inArray(students.id, [noBatch!.id, otherStudent!.id]));
+      await db.delete(centres).where(eq(centres.id, otherCentre!.id));
+    }
+  });
+
+  it("grading an abandoned attempt is refused, awards nothing, and leaves the retry free", async () => {
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+    // max_attempts 1 so the freed slot is observable.
+    const examId = await createMumbaiExam(admin.token, cityId, { max_attempts: 1 });
+
+    const q = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({ question_en: "What is Ahimsa?", question_type: "text", marks: 20 });
+    expect(q.status).toBe(200);
+    const qId: string = q.body.data.id;
+
+    const student = await loginAs("student");
+    const start = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({});
+    expect(start.status).toBe(200);
+    const attemptId: string = start.body.data.attempt_id;
+
+    const reset = await request(app)
+      .post(`/v1/exams/${examId}/attempts/${attemptId}/reset`)
+      .set(auth(admin.token))
+      .send({});
+    expect(reset.status).toBe(200);
+    expect(reset.body.data.status).toBe("abandoned");
+
+    const grade = await request(app)
+      .post(`/v1/exams/${examId}/attempts/${attemptId}/grade`)
+      .set(auth(admin.token))
+      .send({ grades: [{ question_id: qId, marks_awarded: 20 }] });
+    expect(grade.status).toBe(422);
+    expect(grade.body.error.code).toBe("ERR_VALIDATION_FAILED");
+
+    const [row] = await db
+      .select({ status: exam_attempts.status })
+      .from(exam_attempts)
+      .where(eq(exam_attempts.id, attemptId))
+      .limit(1);
+    expect(row!.status).toBe("abandoned");
+
+    // No completion Punya may be minted on a dead attempt.
+    const aarav = await aaravStudent();
+    const txns = await examCompletionTxns(aarav.id, attemptId);
+    expect(txns.rows).toHaveLength(0);
+
+    // The retry the abandon freed is still free.
+    const restart = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({});
+    expect(restart.status).toBe(200);
+  });
+
+  it("release is refused while attempts need grading, then audits and stamps updated_at", async () => {
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+    const examId = await createMumbaiExam(admin.token, cityId);
+
+    const q = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({ question_en: "What is Ahimsa?", question_type: "text", marks: 20 });
+    expect(q.status).toBe(200);
+    const qId: string = q.body.data.id;
+
+    const student = await loginAs("student");
+    const start = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({});
+    expect(start.status).toBe(200);
+    const attemptId: string = start.body.data.attempt_id;
+    const submit = await request(app)
+      .post(`/v1/exams/attempts/${attemptId}/submit`)
+      .set(auth(student.token))
+      .send({ answers: [{ question_id: qId, text_answer: "Non-violence." }] });
+    expect(submit.status).toBe(200);
+
+    // The grading page filters on these three; omitting them made every exam
+    // report "no attempts need grading".
+    const list = await request(app)
+      .get(`/v1/admin/exams/${examId}/attempts`)
+      .set(auth(admin.token));
+    expect(list.status).toBe(200);
+    const mine = (list.body.data.items as Array<Record<string, unknown>>).find(
+      (i) => i.id === attemptId,
+    );
+    expect(mine).toBeDefined();
+    expect(mine!.needs_grading).toBe(true);
+    expect(mine).toHaveProperty("auto_score");
+    expect(mine).toHaveProperty("manual_score");
+
+    const blocked = await request(app)
+      .post(`/v1/admin/exams/${examId}/release-results`)
+      .set(auth(admin.token))
+      .send({});
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error.code).toBe("ERR_CONFLICT");
+    expect(String(blocked.body.error.message)).toContain("grading");
+
+    const [beforeRow] = await db
+      .select({ updated_at: online_exams.updated_at })
+      .from(online_exams)
+      .where(eq(online_exams.id, examId))
+      .limit(1);
+
+    const grade = await request(app)
+      .post(`/v1/exams/${examId}/attempts/${attemptId}/grade`)
+      .set(auth(admin.token))
+      .send({ grades: [{ question_id: qId, marks_awarded: 16 }] });
+    expect(grade.status).toBe(200);
+
+    const release = await request(app)
+      .post(`/v1/admin/exams/${examId}/release-results`)
+      .set(auth(admin.token))
+      .send({});
+    expect(release.status).toBe(200);
+
+    // updated_at keeps the exam inside the top-score cron's 30-day lookback.
+    const [afterRow] = await db
+      .select({ updated_at: online_exams.updated_at })
+      .from(online_exams)
+      .where(eq(online_exams.id, examId))
+      .limit(1);
+    expect(afterRow!.updated_at.getTime()).toBeGreaterThan(beforeRow!.updated_at.getTime());
+
+    const auditRows = await db
+      .select({ summary: audit_logs.summary })
+      .from(audit_logs)
+      .where(and(eq(audit_logs.entity_kind, "online_exam"), eq(audit_logs.entity_id, examId)));
+    expect(auditRows.some((r) => String(r.summary).includes("Released results"))).toBe(true);
+  });
+
+  it("an exam released before the ungraded guard existed reports no score, not a failing zero", async () => {
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+    const examId = await createMumbaiExam(admin.token, cityId);
+
+    const q = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({ question_en: "What is Ahimsa?", question_type: "text", marks: 20 });
+    expect(q.status).toBe(200);
+    const qId: string = q.body.data.id;
+
+    const student = await loginAs("student");
+    const start = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({});
+    expect(start.status).toBe(200);
+    const attemptId: string = start.body.data.attempt_id;
+    const submit = await request(app)
+      .post(`/v1/exams/attempts/${attemptId}/submit`)
+      .set(auth(student.token))
+      .send({ answers: [{ question_id: qId, text_answer: "Non-violence." }] });
+    expect(submit.status).toBe(200);
+
+    // Bypass the guard deliberately: this is the state exams released before it
+    // existed are already in, and the result route still has to be honest.
+    await db
+      .update(online_exams)
+      .set({ results_released: true })
+      .where(eq(online_exams.id, examId));
+
+    const result = await request(app)
+      .get(`/v1/exams/attempts/${attemptId}/result`)
+      .set(auth(student.token));
+    expect(result.status).toBe(200);
+    expect(result.body.data.status).toBe("submitted");
+    expect(result.body.data.needs_grading).toBe(true);
+    expect(result.body.data.score).toBeNull();
+    expect(result.body.data.passed).toBeNull();
+  });
+
+  it("exam create round-trips both descriptions and requires a Hindi title", async () => {
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+    const examId = await createMumbaiExam(admin.token, cityId, {
+      description_en: "Annual assessment.",
+      description_hi: "वार्षिक मूल्यांकन।",
+    });
+
+    const list = await request(app)
+      .get("/v1/admin/exams?limit=200")
+      .set(auth(admin.token));
+    expect(list.status).toBe(200);
+    const row = (list.body.data.items as Array<Record<string, unknown>>).find(
+      (e) => e.id === examId,
+    );
+    expect(row).toBeDefined();
+    expect(row!.description_en).toBe("Annual assessment.");
+    expect(row!.description_hi).toBe("वार्षिक मूल्यांकन।");
+
+    // title_hi is required — the old fallback wrote Latin into a Devanagari column.
+    const noHindi = await request(app)
+      .post("/v1/admin/exams")
+      .set(auth(admin.token))
+      .send({
+        title_en: "No Hindi title",
+        city_id: cityId,
+        window_start: new Date(Date.now() - 3_600_000).toISOString(),
+        window_end: new Date(Date.now() + 3_600_000).toISOString(),
+        total_marks: 20,
+        pass_mark: 5,
+        max_attempts: 1,
+        exam_otp: "",
+      });
+    expect(noHindi.status).toBe(422);
   });
 });
