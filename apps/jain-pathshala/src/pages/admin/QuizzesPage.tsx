@@ -29,6 +29,7 @@ import {
   useQuizPointFeatures,
   validatePointsField,
 } from '@/pages/admin/quiz-points';
+import { formatIst, istLocalInputToIso } from '@/pages/admin/quiz-time';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 interface QuizOption { text_en: string; text_hi?: string; }
@@ -127,6 +128,146 @@ function defaultScopeForRole(role: string | undefined): QuizScope {
 
 function FormRow({ label, children }: { label: string; children: React.ReactNode }) {
   return <div className="space-y-1"><Label className="text-xs font-medium">{label}</Label>{children}</div>;
+}
+
+/**
+ * M16 — API caps mirrored client-side so they surface as field errors instead
+ * of "Failed to create event." with an empty details[] and a payload that will
+ * fail identically forever.
+ */
+const MAX_EVENT_QUESTIONS = 100;
+const MAX_PUSH_QUESTIONS = 50;
+
+/**
+ * M11 — age groups and difficulty are authorable.
+ *
+ * Both are fully implemented server-side (age_groups drives who a quiz is even
+ * offered to), but neither was in any payload, so every web-authored row was
+ * difficulty "medium" with no age targeting — and the card rendered that inert
+ * default as though it meant something.
+ */
+const AGE_GROUPS = ['bal', 'kishor', 'tarun', 'yuva'] as const;
+type AgeGroup = (typeof AGE_GROUPS)[number];
+const AGE_GROUP_LABELS: Record<AgeGroup, string> = {
+  bal: 'Bal',
+  kishor: 'Kishor',
+  tarun: 'Tarun',
+  yuva: 'Yuva',
+};
+
+const DIFFICULTIES = ['easy', 'medium', 'hard'] as const;
+
+/**
+ * H5 — the gap has to be findable.
+ *
+ * Degrading to English is the right runtime behaviour, but it also makes a
+ * missing translation invisible to the person who could fix it. CLAUDE.md
+ * requires `_en` and `_hi` for all user-facing content; this is how an admin
+ * sees which rows still owe one.
+ */
+function MissingHindiBadge() {
+  return (
+    <span className="ml-2 rounded bg-status-warning-soft px-2 py-0.5 text-xs text-status-warning">
+      Hindi missing
+    </span>
+  );
+}
+
+/**
+ * H3/L5 — destructive quiz actions ask first, in the product's own voice.
+ *
+ * Delete and Reset both fired on a single click. Reset was rendered on every
+ * row regardless of state: resetting an unsubmitted attempt blanks a child's
+ * answers mid-quiz, and resetting a submitted one reverses their Punya. One
+ * misclick in a 200-row roster is unrecoverable. The force-delete path did
+ * confirm — via `window.confirm`, which is unstyled and untranslatable — but
+ * the ordinary path did not.
+ */
+function ConfirmDialog({
+  open,
+  title,
+  body,
+  confirmLabel,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean;
+  title: string;
+  body: React.ReactNode;
+  confirmLabel: string;
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onCancel(); }}>
+      <DialogContent className="max-w-md">
+        <DialogHeader><DialogTitle>{title}</DialogTitle></DialogHeader>
+        <div className="space-y-2 pt-1 text-sm text-muted-foreground">{body}</div>
+        <div className="flex justify-end gap-2 pt-3">
+          <Button type="button" variant="outline" onClick={onCancel} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="button" variant="destructive" onClick={onConfirm} disabled={busy}>
+            {busy ? 'Working…' : confirmLabel}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AgeGroupPicker({
+  selected,
+  onChange,
+  hint,
+}: {
+  selected: Set<AgeGroup>;
+  onChange: (next: Set<AgeGroup>) => void;
+  hint: string;
+}) {
+  function toggle(g: AgeGroup) {
+    const next = new Set(selected);
+    if (next.has(g)) next.delete(g);
+    else next.add(g);
+    onChange(next);
+  }
+  return (
+    <div className="space-y-1">
+      <Label className="text-xs font-medium">Age groups</Label>
+      <div className="flex flex-wrap gap-2">
+        {AGE_GROUPS.map((g) => (
+          <Button
+            key={g}
+            type="button"
+            size="sm"
+            variant={selected.has(g) ? 'default' : 'outline'}
+            aria-pressed={selected.has(g)}
+            onClick={() => toggle(g)}
+          >
+            {AGE_GROUP_LABELS[g]}
+          </Button>
+        ))}
+      </div>
+      <p className="text-xs text-muted-foreground">{hint}</p>
+    </div>
+  );
+}
+
+function DifficultyPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <FormRow label="Difficulty">
+      <Select value={value} onValueChange={onChange}>
+        <SelectTrigger><SelectValue /></SelectTrigger>
+        <SelectContent>
+          {DIFFICULTIES.map((d) => (
+            <SelectItem key={d} value={d} className="capitalize">{d}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </FormRow>
+  );
 }
 
 /** Scope dropdown + multi-select of matching geo/entities (filtered by access). */
@@ -285,12 +426,30 @@ function validateTargets(scope: QuizScope, selected: Set<string>): string | null
 }
 
 // ─── Reusable option editor (text_en + correct toggle) ──────────────────────
+/**
+ * H5 — Hindi is authored here, not just rendered.
+ *
+ * `_hi` appeared three times in the whole page, all type declarations: there
+ * was no field for question_hi or per-option text_hi anywhere, so no
+ * web-authored quiz could ever have Hindi, and the mobile `?? _en` fallback was
+ * carrying every single string. CLAUDE.md requires `_en` and `_hi` variants for
+ * all user-facing content.
+ *
+ * H4 — text_hi is also round-tripped through the draft. The edit dialog built
+ * options from text_en only and the API overwrites the whole options array
+ * whenever `options` is present, so changing a topic destroyed every Hindi
+ * option on the question.
+ */
 function QuestionEditor({
   draft, onChange,
 }: { draft: DraftQ; onChange: (d: DraftQ) => void }) {
   function setText(v: string) { onChange({ ...draft, question_en: v }); }
-  function setOpt(i: number, v: string) {
-    onChange({ ...draft, options: draft.options.map((o, idx) => (idx === i ? { text_en: v } : o)) });
+  function setTextHi(v: string) { onChange({ ...draft, question_hi: v }); }
+  function setOpt(i: number, patch: { text_en?: string; text_hi?: string }) {
+    onChange({
+      ...draft,
+      options: draft.options.map((o, idx) => (idx === i ? { ...o, ...patch } : o)),
+    });
   }
   function toggle(i: number) {
     onChange({ ...draft, correct: draft.correct.map((c, idx) => (idx === i ? !c : c)) });
@@ -311,24 +470,68 @@ function QuestionEditor({
       <FormRow label="Question (English) *">
         <Textarea value={draft.question_en} onChange={(e) => setText(e.target.value)} rows={2} />
       </FormRow>
+      <FormRow label="Question (Hindi)">
+        <Textarea
+          value={draft.question_hi ?? ''}
+          onChange={(e) => setTextHi(e.target.value)}
+          rows={2}
+          lang="hi"
+          placeholder="देवनागरी में लिखें"
+        />
+      </FormRow>
       <div className="space-y-2">
         <Label className="text-xs font-medium">Options (tick all correct)</Label>
-        {draft.options.map((o, i) => (
-          <div key={i} className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => toggle(i)}
-              className={`flex h-8 w-8 shrink-0 items-center justify-center rounded border transition-colors ${draft.correct[i] ? 'bg-status-success-soft border-[hsl(var(--status-success))] text-status-success' : 'border-input bg-background text-muted-foreground hover:bg-muted'}`}
-              aria-label="Mark correct"
-            >
-              <Check className="h-4 w-4" />
-            </button>
-            <Input value={o.text_en} onChange={(e) => setOpt(i, e.target.value)} placeholder={`Option ${i + 1}`} />
-            <Button type="button" size="sm" variant="ghost" disabled={draft.options.length <= 2} onClick={() => removeOpt(i)}>
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          </div>
-        ))}
+        {draft.options.map((o, i) => {
+          const isCorrect = !!draft.correct[i];
+          const optionName = o.text_en.trim() || `option ${i + 1}`;
+          return (
+            <div key={i} className="flex items-start gap-2">
+              <button
+                type="button"
+                onClick={() => toggle(i)}
+                aria-pressed={isCorrect}
+                // L2 — the label was a static "Mark correct" on every row and
+                // never announced state, so a screen reader could not tell
+                // which option was the answer, or that anything had changed.
+                aria-label={
+                  isCorrect
+                    ? `${optionName} is marked correct — tap to unmark`
+                    : `Mark ${optionName} correct`
+                }
+                className={`mt-1 flex h-8 w-8 shrink-0 items-center justify-center rounded border transition-colors ${isCorrect ? 'bg-status-success-soft border-[hsl(var(--status-success))] text-status-success' : 'border-input bg-background text-muted-foreground hover:bg-muted'}`}
+              >
+                <Check className="h-4 w-4" />
+              </button>
+              <div className="flex-1 space-y-1">
+                <Input
+                  value={o.text_en}
+                  onChange={(e) => setOpt(i, { text_en: e.target.value })}
+                  placeholder={`Option ${i + 1} (English)`}
+                  aria-label={`Option ${i + 1}, English`}
+                />
+                <Input
+                  value={o.text_hi ?? ''}
+                  onChange={(e) => setOpt(i, { text_hi: e.target.value })}
+                  placeholder={`विकल्प ${i + 1} (Hindi)`}
+                  aria-label={`Option ${i + 1}, Hindi`}
+                  lang="hi"
+                />
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="mt-1"
+                disabled={draft.options.length <= 2}
+                onClick={() => removeOpt(i)}
+                // L4 — icon-only, so it announced as an unnamed button.
+                aria-label={`Remove ${optionName}`}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
+          );
+        })}
         <Button type="button" size="sm" variant="outline" onClick={addOpt}>
           <Plus className="mr-1 h-4 w-4" />Add option
         </Button>
@@ -347,6 +550,8 @@ function AddQuestionDialog({ onAdded }: { onAdded: () => void }) {
   const [scope, setScope] = useState<QuizScope>(defaultScopeForRole(user?.role));
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [topic, setTopic] = useState('');
+  const [difficulty, setDifficulty] = useState('medium');
+  const [ageGroups, setAgeGroups] = useState<Set<AgeGroup>>(new Set());
   const [draft, setDraft] = useState<DraftQ>(emptyDraftQ());
   const opts = useQuizTargetOptions(open);
 
@@ -354,6 +559,8 @@ function AddQuestionDialog({ onAdded }: { onAdded: () => void }) {
     setScope(defaultScopeForRole(user?.role));
     setSelectedIds(new Set());
     setTopic('');
+    setDifficulty('medium');
+    setAgeGroups(new Set());
     setDraft(emptyDraftQ());
   }
 
@@ -366,9 +573,12 @@ function AddQuestionDialog({ onAdded }: { onAdded: () => void }) {
       const p = draftToPayload(draft);
       await apiPost('/v1/quizzes/questions', {
         question_en: p.question_en,
+        ...(p.question_hi ? { question_hi: p.question_hi } : {}),
         options: p.options,
         correct_indices: p.correct_indices,
         topic: topic.trim() || undefined,
+        difficulty,
+        age_groups: Array.from(ageGroups),
         ...targetsPayload(scope, selectedIds),
       });
       toast.success('Question added to bank.');
@@ -402,9 +612,17 @@ function AddQuestionDialog({ onAdded }: { onAdded: () => void }) {
             centres={opts.centres}
             batches={opts.batches}
           />
-          <FormRow label="Topic">
-            <Input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="e.g. Ahimsa" />
-          </FormRow>
+          <div className="grid grid-cols-2 gap-3">
+            <FormRow label="Topic">
+              <Input value={topic} onChange={(e) => setTopic(e.target.value)} placeholder="e.g. Ahimsa" />
+            </FormRow>
+            <DifficultyPicker value={difficulty} onChange={setDifficulty} />
+          </div>
+          <AgeGroupPicker
+            selected={ageGroups}
+            onChange={setAgeGroups}
+            hint="Leave all unselected to make this question available to every age group."
+          />
           <QuestionEditor draft={draft} onChange={setDraft} />
           <div className="flex justify-end gap-2 pt-2">
             <DialogClose asChild><Button type="button" variant="outline">Cancel</Button></DialogClose>
@@ -427,20 +645,27 @@ function EditQuestionDialog({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [topic, setTopic] = useState(question.topic ?? '');
-  const [draft, setDraft] = useState<DraftQ>(() => ({
+  /**
+   * H4 — the draft carries text_hi both ways.
+   *
+   * It used to be built from text_en only, and the API replaces the WHOLE
+   * options array whenever `options` is present — so an admin who opened this
+   * dialog to fix a typo in the topic silently destroyed every Hindi option on
+   * the question. (question_hi survived only because the key was omitted.)
+   */
+  const draftFromQuestion = (): DraftQ => ({
     question_en: question.question_en,
-    options: question.options.map((o) => ({ text_en: o.text_en })),
+    question_hi: question.question_hi ?? '',
+    options: question.options.map((o) => ({ text_en: o.text_en, text_hi: o.text_hi ?? '' })),
     correct: question.options.map((_, i) => question.correct_indices.includes(i)),
-  }));
+  });
+  const [draft, setDraft] = useState<DraftQ>(draftFromQuestion);
 
   useEffect(() => {
     if (!open) return;
     setTopic(question.topic ?? '');
-    setDraft({
-      question_en: question.question_en,
-      options: question.options.map((o) => ({ text_en: o.text_en })),
-      correct: question.options.map((_, i) => question.correct_indices.includes(i)),
-    });
+    setDraft(draftFromQuestion());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, question]);
 
   async function submit(e: React.FormEvent) {
@@ -452,6 +677,9 @@ function EditQuestionDialog({
       const p = draftToPayload(draft);
       await apiPatch(`/v1/quizzes/questions/${question.id}`, {
         question_en: p.question_en,
+        // Explicit null clears it; draftToPayload omits the key when blank, and
+        // an omitted key on PATCH means "leave unchanged".
+        question_hi: p.question_hi ?? null,
         options: p.options,
         correct_indices: p.correct_indices,
         topic: topic.trim() || null,
@@ -498,31 +726,84 @@ async function deactivateQuestion(id: string, onDone: () => void) {
   }
 }
 
+/** M2 — the way back. PATCH has always accepted is_active: true. */
+async function reactivateQuestion(id: string, onDone: () => void) {
+  try {
+    await apiPatch(`/v1/quizzes/questions/${id}`, { is_active: true });
+    toast.success('Question reactivated.');
+    onDone();
+  } catch (er) {
+    toast.error('Could not reactivate question.', er instanceof ApiError ? er.message : undefined);
+  }
+}
+
 // ─── Create event (pick questions from the bank) ────────────────────────────
-function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; onAdded: () => void }) {
+/**
+ * M1 — the picker fetches its OWN bank.
+ *
+ * One `questions` state served both the bank tab and this dialog, so switching
+ * the bank filter to "Inactive" emptied the picker and it said "No questions in
+ * the bank yet" over a bank of 200 active questions. The causing filter is
+ * rendered on the bank tab only, so it was off-screen and unfindable.
+ */
+function useActiveQuestionBank(open: boolean) {
+  const [items, setItems] = useState<QuestionRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    setFailed(false);
+    void apiGet<{ items: QuestionRow[] }>(`/v1/quizzes/questions?limit=${LIST_MAX}&is_active=true`)
+      .then((r) => {
+        if (!cancelled) setItems(r?.items ?? []);
+      })
+      .catch(() => {
+        // An empty picker must not read as "the bank is empty" (CTY-ERR-03).
+        if (!cancelled) setFailed(true);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  return { items, loading, failed };
+}
+
+function CreateEventDialog({ onAdded }: { onAdded: () => void }) {
   const { user } = useAuth();
   const allowedScopes = allowedScopesForRole(user?.role);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [title, setTitle] = useState('');
+  const [titleHi, setTitleHi] = useState('');
   const [scope, setScope] = useState<QuizScope>(defaultScopeForRole(user?.role));
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [startAt, setStartAt] = useState('');
   const [endAt, setEndAt] = useState('');
+  const [ageGroups, setAgeGroups] = useState<Set<AgeGroup>>(new Set());
   // H2 — empty means "use the punya_features default", NOT zero. These used to
   // be seeded with inlined '5'/'10' that had no relationship to the catalogue.
   const [participation, setParticipation] = useState('');
   const [win, setWin] = useState('');
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const opts = useQuizTargetOptions(open);
+  const bank = useActiveQuestionBank(open);
   const pointFeatures = useQuizPointFeatures(open);
 
   function reset() {
     setTitle('');
+    setTitleHi('');
     setScope(defaultScopeForRole(user?.role));
     setSelectedIds(new Set());
     setStartAt('');
     setEndAt('');
+    setAgeGroups(new Set());
     setParticipation('');
     setWin('');
     setPicked(new Set());
@@ -537,12 +818,25 @@ function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; o
     if (!title.trim()) { toast.error('Title is required.'); return; }
     if (!startAt || !endAt) { toast.error('Start and end times are required.'); return; }
     if (picked.size === 0) { toast.error('Select at least one question.'); return; }
+    // M16 — mirror the API cap so 101 questions is a field error, not a 422.
+    if (picked.size > MAX_EVENT_QUESTIONS) {
+      toast.error(`Select at most ${MAX_EVENT_QUESTIONS} questions.`);
+      return;
+    }
     const targetErr = validateTargets(scope, selectedIds);
     if (targetErr) { toast.error(targetErr); return; }
     const pointsErr =
       validatePointsField(participation, 'Participation points', pointFeatures?.[QUIZ_PARTICIPATION_FEATURE_KEY]) ??
       validatePointsField(win, 'Win points', pointFeatures?.[QUIZ_WIN_FEATURE_KEY]);
     if (pointsErr) { toast.error(pointsErr); return; }
+    // M13 — the field is a bare wall-clock; read it as IST, not browser-local.
+    const startIso = istLocalInputToIso(startAt);
+    const endIso = istLocalInputToIso(endAt);
+    if (!startIso || !endIso) { toast.error('Start and end times are not valid.'); return; }
+    if (new Date(endIso) <= new Date(startIso)) {
+      toast.error('The end time must be after the start time.');
+      return;
+    }
     setBusy(true);
     try {
       // An omitted key stores NULL = "use the catalogue default" (H2). Sending
@@ -551,8 +845,10 @@ function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; o
       const winPoints = pointsPayloadValue(win);
       await apiPost('/v1/quizzes/events', {
         title_en: title.trim(),
-        start_at: new Date(startAt).toISOString(),
-        end_at: new Date(endAt).toISOString(),
+        ...(titleHi.trim() ? { title_hi: titleHi.trim() } : {}),
+        start_at: startIso,
+        end_at: endIso,
+        age_groups: Array.from(ageGroups),
         ...(participationPoints !== undefined ? { participation_points: participationPoints } : {}),
         ...(winPoints !== undefined ? { win_points: winPoints } : {}),
         question_ids: Array.from(picked),
@@ -579,6 +875,14 @@ function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; o
         <form className="space-y-4 pt-2" onSubmit={submit}>
           <FormRow label="Title (English) *">
             <Input value={title} onChange={(e) => setTitle(e.target.value)} />
+          </FormRow>
+          <FormRow label="Title (Hindi)">
+            <Input
+              value={titleHi}
+              onChange={(e) => setTitleHi(e.target.value)}
+              lang="hi"
+              placeholder="देवनागरी में लिखें"
+            />
           </FormRow>
           {opts.error ? <TargetLoadError onRetry={opts.retry} /> : null}
           <QuizScopeTargets
@@ -619,19 +923,37 @@ function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; o
             award off for this quiz.
           </p>
           <div className="grid grid-cols-2 gap-3">
-            <FormRow label="Start *">
+            {/* M13 — labelled IST and converted as IST, so the window an admin
+                types is the window students get, wherever the browser is. */}
+            <FormRow label="Start (IST) *">
               <Input type="datetime-local" value={startAt} onChange={(e) => setStartAt(e.target.value)} />
             </FormRow>
-            <FormRow label="End *">
+            <FormRow label="End (IST) *">
               <Input type="datetime-local" value={endAt} onChange={(e) => setEndAt(e.target.value)} />
             </FormRow>
           </div>
+          <p className="text-xs text-muted-foreground">
+            Times are India Standard Time, whatever your device is set to.
+          </p>
+          <AgeGroupPicker
+            selected={ageGroups}
+            onChange={setAgeGroups}
+            hint="Leave all unselected to open this quiz to every age group."
+          />
           <div className="space-y-2">
-            <Label className="text-xs font-medium">Questions ({picked.size} selected) *</Label>
+            <Label className="text-xs font-medium">
+              Questions ({picked.size} of {MAX_EVENT_QUESTIONS} selected) *
+            </Label>
             <div className="max-h-52 space-y-1 overflow-y-auto rounded-md border border-border p-2">
-              {questions.length === 0 ? (
+              {bank.loading ? (
+                <p className="p-2 text-xs text-muted-foreground">Loading the question bank…</p>
+              ) : bank.failed ? (
+                <p className="p-2 text-xs text-destructive">
+                  Couldn&apos;t load the question bank — close and reopen this dialog to retry.
+                </p>
+              ) : bank.items.length === 0 ? (
                 <p className="p-2 text-xs text-muted-foreground">No questions in the bank yet. Add some first.</p>
-              ) : questions.map((q) => (
+              ) : bank.items.map((q) => (
                 <label key={q.id} className="flex cursor-pointer items-start gap-2 rounded p-2 text-sm hover:bg-muted/40">
                   <input
                     type="checkbox"
@@ -642,6 +964,7 @@ function CreateEventDialog({ questions, onAdded }: { questions: QuestionRow[]; o
                   <span className="flex-1">
                     <span className="font-medium">{q.question_en}</span>
                     <span className="ml-2 text-xs capitalize text-muted-foreground">{q.scope}</span>
+                    {q.question_hi ? null : <MissingHindiBadge />}
                   </span>
                 </label>
               ))}
@@ -766,14 +1089,28 @@ function CreatePushDialog({ onAdded }: { onAdded: () => void }) {
               <div key={i} className="space-y-2">
                 <div className="flex items-center justify-between">
                   <Label className="text-xs font-semibold">Question {i + 1}</Label>
-                  <Button type="button" size="sm" variant="ghost" disabled={drafts.length <= 1} onClick={() => removeDraft(i)}>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    disabled={drafts.length <= 1}
+                    onClick={() => removeDraft(i)}
+                    aria-label={`Remove question ${i + 1}`}
+                  >
                     <Trash2 className="h-4 w-4" />
                   </Button>
                 </div>
                 <QuestionEditor draft={d} onChange={(nd) => setDraft(i, nd)} />
               </div>
             ))}
-            <Button type="button" size="sm" variant="outline" onClick={addDraft}>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              // M16 — the API caps push quizzes at 50 questions.
+              disabled={drafts.length >= MAX_PUSH_QUESTIONS}
+              onClick={addDraft}
+            >
               <Plus className="mr-1 h-4 w-4" />Add another question
             </Button>
           </div>
@@ -803,6 +1140,18 @@ function AttemptsResultsPanel({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [resetting, setResetting] = useState<string | null>(null);
+  const [confirmReset, setConfirmReset] = useState<AttemptRow | null>(null);
+  /**
+   * L6 — the 5s poll used to run forever, error or not.
+   *
+   * A dropped connection or an expired session meant a request every 5 seconds
+   * for as long as the tab stayed open, each one failing, with the stale roster
+   * still on screen looking live. Stop after a few consecutive failures and say
+   * so, rather than hammering the API in the background.
+   */
+  const [pollFailures, setPollFailures] = useState(0);
+  const POLL_FAILURE_LIMIT = 3;
+  const pollStopped = pollFailures >= POLL_FAILURE_LIMIT;
 
   async function load() {
     try {
@@ -813,37 +1162,46 @@ function AttemptsResultsPanel({
       const res = await apiGet<AttemptsPayload>(path);
       setData(res);
       setError(null);
+      setPollFailures(0);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Could not load attempts.');
+      setPollFailures((n) => n + 1);
     } finally {
       setLoading(false);
     }
+  }
+
+  function retry() {
+    setPollFailures(0);
+    setLoading(true);
+    void load();
   }
 
   useEffect(() => {
     void load();
   }, [kind, id]);
 
-  // Live push quizzes: refresh the roster every 5s.
+  // Live push quizzes: refresh the roster every 5s, until it stops working.
   useEffect(() => {
-    if (kind !== 'push' || !data?.is_live) return;
+    if (kind !== 'push' || !data?.is_live || pollStopped) return;
     const t = window.setInterval(() => {
       void load();
     }, 5000);
     return () => window.clearInterval(t);
-  }, [kind, id, data?.is_live]);
+  }, [kind, id, data?.is_live, pollStopped]);
 
-  async function resetAttempt(attemptId: string) {
+  async function resetAttempt(row: AttemptRow) {
     if (kind !== 'event') return;
-    setResetting(attemptId);
+    setResetting(row.attempt_id);
     try {
-      await apiPost(`/v1/quizzes/events/${id}/attempts/${attemptId}/reset`, {});
+      await apiPost(`/v1/quizzes/events/${id}/attempts/${row.attempt_id}/reset`, {});
       toast.success('Attempt reset — Punya reversed where awarded.');
       await load();
     } catch (er) {
       toast.error('Could not reset attempt.', er instanceof ApiError ? er.message : undefined);
     } finally {
       setResetting(null);
+      setConfirmReset(null);
     }
   }
 
@@ -868,6 +1226,12 @@ function AttemptsResultsPanel({
       </div>
 
       {error ? <AdminError message={error} /> : null}
+      {pollStopped ? (
+        <div className="flex items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          <span>Live updates stopped after repeated failures — the figures below may be out of date.</span>
+          <Button type="button" size="sm" variant="outline" onClick={retry}>Resume</Button>
+        </div>
+      ) : null}
       {loading && !data ? (
         <Card className="p-6 text-sm text-muted-foreground">Loading results…</Card>
       ) : !data || data.items.length === 0 ? (
@@ -910,21 +1274,29 @@ function AttemptsResultsPanel({
                           }`}
                         >
                           {q.correct ? <Check className="h-3 w-3" /> : <X className="h-3 w-3" />}
-                          <span className="sr-only">Q{i + 1}</span>
+                          {/* L3 — these announced "Q1 Q2 Q3" with no outcome,
+                              so the whole column was silent to a screen reader. */}
+                          <span className="sr-only">
+                            Q{i + 1} {q.correct ? 'correct' : 'incorrect'}
+                          </span>
                         </span>
                       ))}
                     </div>
                   </td>
                   <td className="px-3 py-2 text-xs text-muted-foreground">
-                    {row.submitted_at ? new Date(row.submitted_at).toLocaleString('en-GB') : '—'}
+                    {/* M13 — IST, matching the window the admin authored. */}
+                    {formatIst(row.submitted_at)}
                   </td>
                   {kind === 'event' ? (
                     <td className="px-3 py-2">
                       <Button
                         size="sm"
                         variant="outline"
-                        disabled={resetting === row.attempt_id}
-                        onClick={() => void resetAttempt(row.attempt_id)}
+                        // H3 — an unsubmitted attempt has no award to reverse;
+                        // resetting one just blanks a child's answers mid-quiz.
+                        disabled={resetting === row.attempt_id || !row.submitted_at}
+                        title={row.submitted_at ? undefined : 'Nothing to reset — this attempt is still in progress.'}
+                        onClick={() => setConfirmReset(row)}
                       >
                         {resetting === row.attempt_id ? 'Resetting…' : 'Reset'}
                       </Button>
@@ -936,6 +1308,33 @@ function AttemptsResultsPanel({
           </table>
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!confirmReset}
+        title="Reset this attempt?"
+        confirmLabel="Reset attempt"
+        busy={!!resetting}
+        onCancel={() => setConfirmReset(null)}
+        onConfirm={() => { if (confirmReset) void resetAttempt(confirmReset); }}
+        body={
+          confirmReset ? (
+            <>
+              <p>
+                <span className="font-medium text-foreground">{confirmReset.full_name}</span>
+                {confirmReset.centre_name ? ` · ${confirmReset.centre_name}` : ''}
+              </p>
+              <p>
+                Their answers and score will be cleared, and the{' '}
+                <span className="font-medium text-foreground">
+                  {confirmReset.points_awarded} Punya
+                </span>{' '}
+                awarded for this quiz will be reversed. They can then take it again.
+              </p>
+              <p>This cannot be undone.</p>
+            </>
+          ) : null
+        }
+      />
     </div>
   );
 }
@@ -971,6 +1370,10 @@ export default function QuizzesPage() {
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<ResultsView>(null);
   const [activeFilter, setActiveFilter] = useState<'true' | 'false' | 'all'>('true');
+  const [confirmDelete, setConfirmDelete] = useState<
+    { event: EventRow; submitted: number; inProgress: number } | null
+  >(null);
+  const [deleting, setDeleting] = useState(false);
 
   async function loadAll(filter: 'true' | 'false' | 'all' = activeFilter) {
     setLoading(true);
@@ -1001,28 +1404,43 @@ export default function QuizzesPage() {
 
   useEffect(() => { void loadAll(activeFilter); }, [activeFilter]);
 
+  /**
+   * H3 — Delete is confirmed on BOTH paths.
+   *
+   * A single click hard-deleted the event. The API's 409 only fired for
+   * SUBMITTED attempts, so an event with 30 students mid-quiz deleted silently
+   * and destroyed their in-progress work; the server now counts every attempt
+   * and reports both numbers in `details`, which this dialog reads back.
+   */
   async function deleteEvent(ev: EventRow, force: boolean) {
+    setDeleting(true);
     try {
       await apiDelete(`/v1/quizzes/events/${ev.id}`, force ? { force: true } : {});
       toast.success(force ? 'Event deleted (awards reversed).' : 'Event deleted.');
       if (results?.kind === 'event' && results.id === ev.id) setResults(null);
+      setConfirmDelete(null);
       await loadAll();
     } catch (er) {
       if (er instanceof ApiError && er.code === 'ERR_EVENT_HAS_ATTEMPTS') {
-        const okForce = window.confirm(
-          'This event has submitted attempts. Delete anyway and reverse awarded Punya?',
-        );
-        if (okForce) await deleteEvent(ev, true);
+        const detail = Array.isArray(er.details) ? er.details[0] : undefined;
+        const counts = (detail ?? {}) as { submitted_attempts?: number; in_progress_attempts?: number };
+        setConfirmDelete({
+          event: ev,
+          submitted: counts.submitted_attempts ?? 0,
+          inProgress: counts.in_progress_attempts ?? 0,
+        });
         return;
       }
       toast.error('Could not delete event.', er instanceof ApiError ? er.message : undefined);
+    } finally {
+      setDeleting(false);
     }
   }
 
   const actions = (
     <div className="flex items-center gap-2">
       <AddQuestionDialog onAdded={() => void loadAll()} />
-      <CreateEventDialog questions={questions.filter((q) => q.is_active)} onAdded={() => void loadAll()} />
+      <CreateEventDialog onAdded={() => void loadAll()} />
       <CreatePushDialog onAdded={() => void loadAll()} />
     </div>
   );
@@ -1105,15 +1523,25 @@ export default function QuizzesPage() {
                       {!q.is_active ? (
                         <span className="rounded bg-muted px-2 py-0.5 text-xs text-muted-foreground">Inactive</span>
                       ) : null}
+                      {/* H5 — surface the gap where someone can act on it. */}
+                      {!q.question_hi || q.options.some((o) => !o.text_hi) ? <MissingHindiBadge /> : null}
                     </div>
                     <p className="mt-2 text-sm font-medium">{q.question_en}</p>
+                    {q.question_hi ? (
+                      <p className="mt-1 text-sm text-muted-foreground" lang="hi">{q.question_hi}</p>
+                    ) : null}
                     <ul className="mt-2 space-y-1">
                       {q.options.map((o, i) => (
                         <li key={i} className="flex items-center gap-2 text-sm">
                           <span className={`inline-flex h-4 w-4 items-center justify-center rounded-full border text-[10px] ${q.correct_indices.includes(i) ? 'border-[hsl(var(--status-success))] bg-status-success-soft text-status-success' : 'border-input text-transparent'}`}>
                             <Check className="h-3 w-3" />
                           </span>
-                          <span className={q.correct_indices.includes(i) ? 'font-medium' : ''}>{o.text_en}</span>
+                          <span className={q.correct_indices.includes(i) ? 'font-medium' : ''}>
+                            {o.text_en}
+                            {o.text_hi ? (
+                              <span className="ml-2 text-muted-foreground" lang="hi">· {o.text_hi}</span>
+                            ) : null}
+                          </span>
                         </li>
                       ))}
                     </ul>
@@ -1128,7 +1556,20 @@ export default function QuizzesPage() {
                       >
                         Deactivate
                       </Button>
-                    ) : null}
+                    ) : (
+                      /* M2 — deactivation was a one-way door: Edit is disabled
+                         and nothing else rendered, though PATCH has always
+                         accepted is_active: true. The 409 copy tells admins to
+                         "deactivate it and author a new question", which made
+                         that door permanent. */
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void reactivateQuestion(q.id, () => void loadAll())}
+                      >
+                        Reactivate
+                      </Button>
+                    )}
                   </div>
                 </div>
               </Card>
@@ -1148,7 +1589,13 @@ export default function QuizzesPage() {
                     className="min-w-0 flex-1 text-left"
                     onClick={() => setResults({ kind: 'event', id: ev.id, title: ev.title_en })}
                   >
-                    <p className="text-sm font-medium">{ev.title_en}</p>
+                    <p className="text-sm font-medium">
+                      {ev.title_en}
+                      {ev.title_hi ? null : <MissingHindiBadge />}
+                    </p>
+                    {ev.title_hi ? (
+                      <p className="text-xs text-muted-foreground" lang="hi">{ev.title_hi}</p>
+                    ) : null}
                     <p className="mt-1 text-xs text-muted-foreground">
                       <span className="capitalize">{ev.scope}</span> · {ev.question_count} questions ·{' '}
                       {formatPointsOverride(ev.participation_points)} participation / {formatPointsOverride(ev.win_points)} win pts
@@ -1157,10 +1604,18 @@ export default function QuizzesPage() {
                   </button>
                   <div className="flex shrink-0 flex-col items-end gap-2">
                     <div className="text-right text-xs text-muted-foreground">
-                      <div>{new Date(ev.start_at).toLocaleString('en-GB')}</div>
-                      <div>→ {new Date(ev.end_at).toLocaleString('en-GB')}</div>
+                      {/* M13 — IST, matching the labelled inputs. */}
+                      <div>{formatIst(ev.start_at)}</div>
+                      <div>→ {formatIst(ev.end_at)}</div>
+                      <div className="text-[10px] uppercase tracking-wide">IST</div>
                     </div>
-                    <Button size="sm" variant="outline" onClick={() => void deleteEvent(ev, false)}>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() =>
+                        setConfirmDelete({ event: ev, submitted: 0, inProgress: 0 })
+                      }
+                    >
                       Delete
                     </Button>
                   </div>
@@ -1173,17 +1628,30 @@ export default function QuizzesPage() {
         <Card className="p-6 text-sm text-muted-foreground">No push quizzes yet. Start one.</Card>
       ) : (
         <div className="space-y-3">
-          {pushes.map((pq) => (
+          {pushes.map((pq) => {
+            const openResults = () =>
+              setResults({
+                kind: 'push',
+                id: pq.id,
+                title: `Push quiz · ${formatIst(pq.started_at)} IST`,
+              });
+            return (
             <Card
               key={pq.id}
-              className="cursor-pointer p-4 transition-colors hover:bg-muted/30"
-              onClick={() =>
-                setResults({
-                  kind: 'push',
-                  id: pq.id,
-                  title: `Push quiz · ${new Date(pq.started_at).toLocaleString('en-GB')}`,
-                })
-              }
+              // L1 — the card was mouse-only: no role, no tabIndex, no key
+              // handler, so keyboard and screen-reader users had no way into
+              // the push results at all.
+              role="button"
+              tabIndex={0}
+              aria-label={`Push quiz started ${formatIst(pq.started_at)} IST — view results`}
+              className="cursor-pointer p-4 transition-colors hover:bg-muted/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              onClick={openResults}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  openResults();
+                }
+              }}
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -1206,14 +1674,56 @@ export default function QuizzesPage() {
                   <p className="mt-1 text-xs text-primary">View results</p>
                 </div>
                 <div className="text-right text-xs text-muted-foreground">
-                  <div>{new Date(pq.started_at).toLocaleString('en-GB')}</div>
-                  <div>expires {new Date(pq.expires_at).toLocaleString('en-GB')}</div>
+                  <div>{formatIst(pq.started_at)}</div>
+                  <div>expires {formatIst(pq.expires_at)}</div>
+                  <div className="text-[10px] uppercase tracking-wide">IST</div>
                 </div>
               </div>
             </Card>
-          ))}
+            );
+          })}
         </div>
       )}
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Delete this quiz event?"
+        confirmLabel={
+          confirmDelete && (confirmDelete.submitted > 0 || confirmDelete.inProgress > 0)
+            ? 'Delete and reverse Punya'
+            : 'Delete event'
+        }
+        busy={deleting}
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={() => {
+          if (!confirmDelete) return;
+          const needsForce = confirmDelete.submitted > 0 || confirmDelete.inProgress > 0;
+          void deleteEvent(confirmDelete.event, needsForce);
+        }}
+        body={
+          confirmDelete ? (
+            <>
+              <p className="font-medium text-foreground">{confirmDelete.event.title_en}</p>
+              {confirmDelete.submitted > 0 ? (
+                <p>
+                  {confirmDelete.submitted} student(s) have already submitted. Their answers
+                  will be deleted and the Punya they earned reversed.
+                </p>
+              ) : null}
+              {confirmDelete.inProgress > 0 ? (
+                <p>
+                  {confirmDelete.inProgress} student(s) are still taking it right now. Their
+                  answers so far will be lost.
+                </p>
+              ) : null}
+              {confirmDelete.submitted === 0 && confirmDelete.inProgress === 0 ? (
+                <p>The event and its question links will be removed.</p>
+              ) : null}
+              <p>This cannot be undone.</p>
+            </>
+          ) : null
+        }
+      />
     </AdminPageShell>
   );
 }

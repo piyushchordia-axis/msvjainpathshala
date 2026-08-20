@@ -14,7 +14,7 @@
  * score = correct_count. Point awards are idempotent — guarded on submitted_at so
  * re-calling submit never double-awards.
  */
-import { ok, fail } from "../../lib/envelope";
+import { ok, fail, zodDetails } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { resolveAdminScope } from "../../lib/scope";
 import { awardPunya, reversePunya } from "../../lib/punya";
@@ -504,8 +504,8 @@ router.post("/questions", requireRole("super_admin", "state_admin", "city_admin"
   let body: z.infer<typeof createQuestionSchema>;
   try {
     body = createQuestionSchema.parse(req.body);
-  } catch {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid question data.");
+  } catch (err) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid question data.", zodDetails(err));
     return;
   }
 
@@ -544,6 +544,22 @@ router.post("/questions", requireRole("super_admin", "state_admin", "city_admin"
       created_by: req.authUser!.id,
     })
     .returning({ id: questions.id });
+
+  // H11 — PATCH and DELETE audited but POST did not, so the one action that
+  // CREATES a scored, Punya-bearing answer key left no trace in the
+  // append-only log. Authoring is exactly what belongs there.
+  await auditFromReq(req, {
+    action: "create",
+    entityKind: "question",
+    entityId: row.id,
+    summary: `Authored quiz question (${body.scope})`,
+    metadata: {
+      scope: body.scope,
+      option_count: body.options.length,
+      correct_count: body.correct_indices.length,
+      topic: body.topic ?? null,
+    },
+  });
 
   ok(res, { id: row.id });
 });
@@ -621,8 +637,8 @@ router.patch("/questions/:id", requireAdminPanel, requireRole("super_admin", "st
   let body: z.infer<typeof patchQuestionSchema>;
   try {
     body = patchQuestionSchema.parse(req.body ?? {});
-  } catch {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid question data.");
+  } catch (err) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid question data.", zodDetails(err));
     return;
   }
   if (Object.keys(body).length === 0) {
@@ -747,8 +763,8 @@ router.post("/events", requireRole("super_admin", "state_admin", "city_admin"), 
   let body: z.infer<typeof createEventSchema>;
   try {
     body = createEventSchema.parse(req.body);
-  } catch {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid event data.");
+  } catch (err) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid event data.", zodDetails(err));
     return;
   }
 
@@ -777,7 +793,7 @@ router.post("/events", requireRole("super_admin", "state_admin", "city_admin"), 
 
   // All referenced questions must exist and be within the caller's city scope.
   const qRows = await db
-    .select({ id: questions.id, city_id: questions.city_id })
+    .select({ id: questions.id, city_id: questions.city_id, is_active: questions.is_active })
     .from(questions)
     .where(inArray(questions.id, body.question_ids));
   if (qRows.length !== new Set(body.question_ids).size) {
@@ -789,6 +805,20 @@ router.post("/events", requireRole("super_admin", "state_admin", "city_admin"), 
       fail(res, 403, "ERR_FORBIDDEN", "A selected question is outside your scope.");
       return;
     }
+  }
+  // M3 — a deactivated question could still be attached to a new event, so
+  // retiring one did not stop it reaching students. Deactivation has to mean
+  // "no longer usable", or the is_active flag is decorative.
+  const inactive = qRows.filter((q) => !q.is_active);
+  if (inactive.length > 0) {
+    fail(
+      res,
+      422,
+      "ERR_VALIDATION_FAILED",
+      `${inactive.length} selected question(s) are deactivated — reactivate them or choose others.`,
+      inactive.map((q) => ({ question_id: q.id, reason: "inactive" })),
+    );
+    return;
   }
 
   const [event] = await db
@@ -1067,17 +1097,32 @@ router.delete("/events/:id", requireAdminPanel, requireRole("super_admin", "stat
     return;
   }
 
-  const submitted = await db
-    .select({ id: quiz_attempts.id, student_id: quiz_attempts.student_id })
+  /**
+   * H3 — count EVERY attempt, not just submitted ones.
+   *
+   * The guard used to filter on `submitted_at IS NOT NULL`, so an event with 30
+   * students mid-quiz deleted silently and destroyed their in-progress work.
+   * An unsubmitted attempt has nothing to reverse, but it is a child part-way
+   * through a quiz — losing it without a word is the more serious of the two.
+   */
+  const existing = await db
+    .select({ id: quiz_attempts.id, submitted_at: quiz_attempts.submitted_at })
     .from(quiz_attempts)
-    .where(and(eq(quiz_attempts.quiz_event_id, eventId), isNotNull(quiz_attempts.submitted_at)));
+    .where(eq(quiz_attempts.quiz_event_id, eventId));
+  const submittedCount = existing.filter((a) => a.submitted_at).length;
+  const inProgressCount = existing.length - submittedCount;
 
-  if (submitted.length > 0 && !force) {
+  if (existing.length > 0 && !force) {
+    // Name both numbers so the admin knows which harm they are confirming.
+    const parts: string[] = [];
+    if (submittedCount > 0) parts.push(`${submittedCount} submitted`);
+    if (inProgressCount > 0) parts.push(`${inProgressCount} still in progress`);
     fail(
       res,
       409,
       "ERR_EVENT_HAS_ATTEMPTS",
-      "This quiz event has submitted attempts — pass force: true to reverse awards and delete.",
+      `This quiz event has attempts (${parts.join(", ")}) — pass force: true to reverse awards, discard in-progress work and delete.`,
+      [{ submitted_attempts: submittedCount, in_progress_attempts: inProgressCount }],
     );
     return;
   }
@@ -1270,8 +1315,8 @@ router.post("/events/:id/start", async (req: Request, res: Response) => {
   let body: z.infer<typeof startEventSchema>;
   try {
     body = startEventSchema.parse(req.body ?? {});
-  } catch {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid start payload.");
+  } catch (err) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid start payload.", zodDetails(err));
     return;
   }
   const student = await ownedStudent(req, body.student_id);
@@ -1373,8 +1418,8 @@ router.put("/events/attempts/:attemptId/answers", async (req: Request, res: Resp
   let body: z.infer<typeof autosaveAnswersSchema>;
   try {
     body = autosaveAnswersSchema.parse(req.body ?? {});
-  } catch {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid answers payload.");
+  } catch (err) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid answers payload.", zodDetails(err));
     return;
   }
 
@@ -1423,8 +1468,8 @@ router.post("/events/:id/submit", async (req: Request, res: Response) => {
   let body: z.infer<typeof submitEventSchema>;
   try {
     body = submitEventSchema.parse(req.body ?? {});
-  } catch {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid submit payload.");
+  } catch (err) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid submit payload.", zodDetails(err));
     return;
   }
   const student = await ownedStudent(req, body.student_id);
@@ -1666,8 +1711,8 @@ router.post("/push", requireAdminPanel, async (req: Request, res: Response) => {
   let body: z.infer<typeof createPushSchema>;
   try {
     body = createPushSchema.parse(req.body);
-  } catch {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid push quiz data.");
+  } catch (err) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid push quiz data.", zodDetails(err));
     return;
   }
 
@@ -1936,8 +1981,8 @@ router.post("/push/:id/submit", async (req: Request, res: Response) => {
   let body: z.infer<typeof submitPushSchema>;
   try {
     body = submitPushSchema.parse(req.body ?? {});
-  } catch {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid submit payload.");
+  } catch (err) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid submit payload.", zodDetails(err));
     return;
   }
   const student = await ownedStudent(req, body.student_id);
