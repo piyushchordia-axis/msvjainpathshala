@@ -57,6 +57,8 @@ interface ActiveAttempt {
   initialAnswers?: Record<string, number[]>;
   /** H9 — when this quiz stops accepting answers (end_at / expires_at). */
   expiresAt?: string | null;
+  /** L10 — how many answers were restored, so the runner can say so. */
+  resumedAnswerCount?: number;
 }
 
 /** Normalised result for the shared result card. */
@@ -255,6 +257,15 @@ export default function Quizzes() {
             initialAnswers: data.answers ?? {},
             // H9 — the runner needs the deadline to count down to.
             expiresAt: quiz.end_at,
+            /**
+             * L10 — the API has always returned `resumed` and nothing read it,
+             * so a child who came back to a half-finished quiz got no
+             * acknowledgement that their answers had survived. Only say so when
+             * there is actually something restored.
+             */
+            resumedAnswerCount: data.resumed
+              ? Object.values(data.answers ?? {}).filter((a) => a.length > 0).length
+              : 0,
           });
         },
         onError: (err) =>
@@ -401,6 +412,7 @@ export default function Quizzes() {
             questions={active.questions}
             initialAnswers={active.initialAnswers}
             expiresAt={active.expiresAt}
+            resumedAnswerCount={active.resumedAnswerCount}
             submitting={submitQuiz.isPending || submitPush.isPending}
             onSubmit={submitAnswers}
             // Only scheduled events have a server-side attempt to save against;

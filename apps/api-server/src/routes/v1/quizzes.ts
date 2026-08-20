@@ -1561,6 +1561,30 @@ async function loadEventQuestionsForStudent(eventId: string) {
   }));
 }
 
+/**
+ * M17 — the total the attempt is snapshotted with must be the total it will be
+ * SCORED against.
+ *
+ * Start wrote `eventQuestions.length` while submit counts gradable questions
+ * only (M18), so an event carrying a legacy question with an empty answer key
+ * snapshotted 10 and scored out of 9. Counted here rather than derived from
+ * loadEventQuestionsForStudent because that function deliberately never selects
+ * correct_indices — no answer key reaches a student, on any path.
+ */
+async function countGradableEventQuestions(eventId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(quiz_event_questions)
+    .innerJoin(questions, eq(questions.id, quiz_event_questions.question_id))
+    .where(
+      and(
+        eq(quiz_event_questions.quiz_event_id, eventId),
+        sql`cardinality(${questions.correct_indices}) > 0`,
+      ),
+    );
+  return row?.n ?? 0;
+}
+
 /* POST /v1/quizzes/events/:id/start — open an attempt, return safe questions */
 router.post("/events/:id/start", async (req: Request, res: Response) => {
   let body: z.infer<typeof startEventSchema>;
@@ -1606,6 +1630,8 @@ router.post("/events/:id/start", async (req: Request, res: Response) => {
   }
 
   const eventQuestions = await loadEventQuestionsForStudent(eventId);
+  // M17 — snapshot the total this attempt will actually be scored against.
+  const gradableCount = await countGradableEventQuestions(eventId);
 
   // Guarded insert — concurrent starts share one attempt row (no 23505 → 500).
   const inserted = await db
@@ -1614,7 +1640,7 @@ router.post("/events/:id/start", async (req: Request, res: Response) => {
       quiz_event_id: eventId,
       student_id: student.id,
       started_at: now,
-      total_count: eventQuestions.length,
+      total_count: gradableCount,
     })
     .onConflictDoNothing({
       target: [quiz_attempts.quiz_event_id, quiz_attempts.student_id],

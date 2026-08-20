@@ -33,6 +33,7 @@ export function QuizRunner({
   submitting,
   initialAnswers,
   expiresAt,
+  resumedAnswerCount,
   onSubmit,
   onAutosave,
   onCancel,
@@ -51,6 +52,12 @@ export function QuizRunner({
    * on screen ever said the quiz had closed.
    */
   expiresAt?: string | null;
+  /**
+   * L10 — how many answers were restored on resume. The API has always returned
+   * a `resumed` flag and nothing read it, so a child coming back to a
+   * half-finished quiz got no sign their work had survived.
+   */
+  resumedAnswerCount?: number;
   /** Called with questionId -> selected option indices. */
   onSubmit: (answers: Record<string, number[]>) => void;
   /**
@@ -215,6 +222,12 @@ export function QuizRunner({
             {hi
               ? "एक मिनट से भी कम बचा है — जो उत्तर दिए हैं वे अपने आप जमा हो जाएँगे।"
               : "Less than a minute left — whatever you have answered will be sent automatically."}
+          </Body>
+        ) : (resumedAnswerCount ?? 0) > 0 ? (
+          <Body style={{ fontSize: 13, marginTop: 10, color: c.successText }}>
+            {hi
+              ? `आपके ${resumedAnswerCount} उत्तर सहेजे हुए मिले — वहीं से जारी रखें।`
+              : `We kept your ${resumedAnswerCount} saved answer(s) — carry on where you left off.`}
           </Body>
         ) : null}
       </Card>
