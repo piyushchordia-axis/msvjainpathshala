@@ -430,6 +430,23 @@ async function primaryCityForTargets(
 
 /* ═══════════════════════════ ADMIN — question bank ═══════════════════════════ */
 
+/**
+ * One option. Text is TRIMMED before the length check, so "   " cannot satisfy
+ * min(1) and land as a blank option — the admin panel used to drop blanks
+ * client-side while indexing correct_indices around them, which silently
+ * shifted the answer key (C2). Blank Hindi collapses to undefined so the
+ * clients' `text_hi ?? text_en` fallback still fires (L9).
+ */
+const quizOptionSchema = z.object({
+  text_en: z.string().trim().min(1).max(1000),
+  text_hi: z
+    .string()
+    .trim()
+    .max(1000)
+    .optional()
+    .transform((v) => (v ? v : undefined)),
+});
+
 const createQuestionSchema = z.object({
   question_en: z.string().min(1).max(2000),
   question_hi: z.string().max(2000).optional(),
@@ -440,7 +457,7 @@ const createQuestionSchema = z.object({
   batch_ids: z.array(z.string().uuid()).default([]),
   city_id: z.string().uuid().optional(),
   options: z
-    .array(z.object({ text_en: z.string().min(1).max(1000), text_hi: z.string().max(1000).optional() }))
+    .array(quizOptionSchema)
     .min(2)
     .max(10),
   correct_indices: z.array(z.coerce.number().int().min(0)).min(1),
@@ -559,7 +576,7 @@ const patchQuestionSchema = z.object({
   question_en: z.string().min(1).max(2000).optional(),
   question_hi: z.string().max(2000).nullable().optional(),
   options: z
-    .array(z.object({ text_en: z.string().min(1).max(1000), text_hi: z.string().max(1000).optional() }))
+    .array(quizOptionSchema)
     .min(2)
     .max(10)
     .optional(),
@@ -1505,7 +1522,7 @@ const createPushSchema = z
           question_en: z.string().min(1).max(2000),
           question_hi: z.string().max(2000).optional(),
           options: z
-            .array(z.object({ text_en: z.string().min(1).max(1000), text_hi: z.string().max(1000).optional() }))
+            .array(quizOptionSchema)
             .min(2)
             .max(10),
           correct_indices: z.array(z.coerce.number().int().min(0)).min(1),

@@ -16,6 +16,9 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import {
+  draftToPayload, emptyDraftQ, validateDraft, type DraftQ,
+} from '@/pages/admin/quiz-draft';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 interface QuizOption { text_en: string; text_hi?: string; }
@@ -272,16 +275,6 @@ function validateTargets(scope: QuizScope, selected: Set<string>): string | null
 }
 
 // ─── Reusable option editor (text_en + correct toggle) ──────────────────────
-interface DraftQ {
-  question_en: string;
-  options: { text_en: string }[];
-  correct: boolean[];
-}
-
-function emptyDraftQ(): DraftQ {
-  return { question_en: '', options: [{ text_en: '' }, { text_en: '' }], correct: [false, false] };
-}
-
 function QuestionEditor({
   draft, onChange,
 }: { draft: DraftQ; onChange: (d: DraftQ) => void }) {
@@ -334,22 +327,6 @@ function QuestionEditor({
   );
 }
 
-function draftToPayload(d: DraftQ) {
-  const options = d.options.filter((o) => o.text_en.trim()).map((o) => ({ text_en: o.text_en.trim() }));
-  const correct_indices = d.correct
-    .map((c, i) => (c && d.options[i]?.text_en.trim() ? i : -1))
-    .filter((i) => i >= 0);
-  return { question_en: d.question_en.trim(), options, correct_indices };
-}
-
-function validateDraft(d: DraftQ): string | null {
-  if (!d.question_en.trim()) return 'Question text is required.';
-  const filled = d.options.filter((o) => o.text_en.trim());
-  if (filled.length < 2) return 'At least two options are required.';
-  const p = draftToPayload(d);
-  if (p.correct_indices.length < 1) return 'Mark at least one correct option.';
-  return null;
-}
 
 // ─── Add question to bank ───────────────────────────────────────────────────
 function AddQuestionDialog({ onAdded }: { onAdded: () => void }) {
