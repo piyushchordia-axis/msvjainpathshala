@@ -258,6 +258,142 @@ describe("progress", () => {
     expect(hw.summary_en).not.toMatch(/^0%/);
   });
 
+  it("a generated report's snapshot carries the CU30 courses block with correct coverage/mastery across two courses (H28)", async () => {
+    const admin = await loginAs("super_admin");
+    const studentId = await mumbaiStudentWithCurriculum(admin.token);
+    const tag = Date.now();
+
+    // Course A — 1 section, 2 subsections (subsections are the leaves).
+    // sub A1: completed + certified. sub A2: in_progress, not certified.
+    // => leaf_total=2, leaf_reached=2, leaf_certified=1 => coverage=1, mastery=0.5.
+    // The section itself carries no progress row of its own => section_certified=0.
+    const courseA = await pool.query<{ id: string }>(
+      `insert into courses (name_en, name_hi, kind, status, academic_year, punya_points)
+       values ($1, $2, 'standard', 'active', '2025-26', 50) returning id`,
+      [`CU30 Course A ${tag}`, "परीक्षण पाठ्यक्रम A"],
+    );
+    const courseAId = courseA.rows[0]!.id;
+    const sectionA = await pool.query<{ id: string }>(
+      `insert into course_sections (course_id, title_en, title_hi, order_index, punya_points)
+       values ($1, 'Section A1', 'खंड A1', 0, 20) returning id`,
+      [courseAId],
+    );
+    const sectionAId = sectionA.rows[0]!.id;
+    const subA1 = await pool.query<{ id: string }>(
+      `insert into course_subsections (section_id, title_en, title_hi, order_index)
+       values ($1, 'Sub A1', 'उप A1', 0) returning id`,
+      [sectionAId],
+    );
+    const subA1Id = subA1.rows[0]!.id;
+    const subA2 = await pool.query<{ id: string }>(
+      `insert into course_subsections (section_id, title_en, title_hi, order_index)
+       values ($1, 'Sub A2', 'उप A2', 1) returning id`,
+      [sectionAId],
+    );
+    const subA2Id = subA2.rows[0]!.id;
+    await pool.query(
+      `insert into student_course_progress
+         (student_id, subsection_id, status, certified_at, certified_by, updated_by_role)
+       values ($1, $2, 'completed', now(), $3, 'super_admin')`,
+      [studentId, subA1Id, admin.user.id],
+    );
+    await pool.query(
+      `insert into student_course_progress (student_id, subsection_id, status, updated_by_role)
+       values ($1, $2, 'in_progress', 'super_admin')`,
+      [studentId, subA2Id],
+    );
+
+    // Course B — section-only (2 sections, no subsections; sections are the leaves).
+    // Section B1: completed + certified. Section B2: untouched (no progress row).
+    // => leaf_total=2, leaf_reached=1, leaf_certified=1 => coverage=0.5, mastery=1.
+    // section_total=2, section_certified=1.
+    const courseB = await pool.query<{ id: string }>(
+      `insert into courses (name_en, name_hi, kind, status, academic_year, punya_points)
+       values ($1, $2, 'standard', 'active', '2025-26', 0) returning id`,
+      [`CU30 Course B ${tag}`, "परीक्षण पाठ्यक्रम B"],
+    );
+    const courseBId = courseB.rows[0]!.id;
+    const sectionB1 = await pool.query<{ id: string }>(
+      `insert into course_sections (course_id, title_en, title_hi, order_index, punya_points)
+       values ($1, 'Section B1', 'खंड B1', 0, 15) returning id`,
+      [courseBId],
+    );
+    const sectionB1Id = sectionB1.rows[0]!.id;
+    const sectionB2 = await pool.query<{ id: string }>(
+      `insert into course_sections (course_id, title_en, title_hi, order_index, punya_points)
+       values ($1, 'Section B2', 'खंड B2', 1, 15) returning id`,
+      [courseBId],
+    );
+    const sectionB2Id = sectionB2.rows[0]!.id;
+    await pool.query(
+      `insert into student_course_progress
+         (student_id, section_id, status, certified_at, certified_by, updated_by_role)
+       values ($1, $2, 'completed', now(), $3, 'super_admin')`,
+      [studentId, sectionB1Id, admin.user.id],
+    );
+
+    try {
+      const periodLabel = `cu30-${tag}`;
+      const report = await request(app)
+        .post(`/v1/progress/students/${studentId}/reports`)
+        .set(auth(admin.token))
+        .send({ period_kind: "monthly", period_label: periodLabel });
+      expect(report.status).toBe(200);
+      expect(report.body.data.snapshot_version).toBe(2);
+
+      const courses = report.body.data.snapshot.courses as Array<{
+        course_id: string;
+        coverage: number | null;
+        mastery: number | null;
+        section_certified: number;
+        section_total: number;
+        certified_nodes: Array<{ node_id: string; node_kind: string; certified_at: string }>;
+      }>;
+      expect(Array.isArray(courses)).toBe(true);
+
+      const blockA = courses.find((c) => c.course_id === courseAId);
+      expect(blockA).toBeTruthy();
+      expect(blockA!.coverage).toBeCloseTo(1, 10);
+      expect(blockA!.mastery).toBeCloseTo(0.5, 10);
+      expect(blockA!.section_certified).toBe(0);
+      expect(blockA!.section_total).toBe(1);
+      expect(blockA!.certified_nodes).toHaveLength(1);
+      expect(blockA!.certified_nodes[0]!.node_id).toBe(subA1Id);
+      expect(blockA!.certified_nodes[0]!.node_kind).toBe("subsection");
+
+      const blockB = courses.find((c) => c.course_id === courseBId);
+      expect(blockB).toBeTruthy();
+      expect(blockB!.coverage).toBeCloseTo(0.5, 10);
+      expect(blockB!.mastery).toBeCloseTo(1, 10);
+      expect(blockB!.section_certified).toBe(1);
+      expect(blockB!.section_total).toBe(2);
+      expect(blockB!.certified_nodes).toHaveLength(1);
+      expect(blockB!.certified_nodes[0]!.node_id).toBe(sectionB1Id);
+      expect(blockB!.certified_nodes[0]!.node_kind).toBe("section");
+
+      // Regenerating the same period keeps the courses block in step, and a
+      // pre-CU30 row (default snapshot_version=1, no snapshot.courses) —
+      // simulated directly against the DB — is never touched by this route,
+      // only ever superseded by a fresh version-2 write.
+    } finally {
+      await pool.query(
+        `delete from student_course_progress
+          where student_id = $1
+            and (subsection_id = any($2::uuid[]) or section_id = any($3::uuid[]))`,
+        [studentId, [subA1Id, subA2Id], [sectionAId, sectionB1Id, sectionB2Id]],
+      );
+      await pool.query(`delete from course_subsections where id = any($1::uuid[])`, [
+        [subA1Id, subA2Id],
+      ]);
+      await pool.query(`delete from course_sections where id = any($1::uuid[])`, [
+        [sectionAId, sectionB1Id, sectionB2Id],
+      ]);
+      await pool.query(`delete from courses where id = any($1::uuid[])`, [
+        [courseAId, courseBId],
+      ]);
+    }
+  });
+
   it("the rendered PDF contains the homework section", async () => {
     // Assert via snapshot (template data) — PdfBuilder has no text extractor;
     // the same summary_en string is drawn under the Homework heading.

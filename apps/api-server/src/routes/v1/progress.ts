@@ -35,6 +35,11 @@ import {
   COURSE_PROGRESS_STATUSES,
   upsertCourseProgress,
 } from "../../services/course-progress";
+import { buildCourseProgressReportBlocks } from "../../lib/course-progress";
+import {
+  PROGRESS_REPORT_SNAPSHOT_VERSION_CURRENT,
+  progressReportSnapshotV2Schema,
+} from "@workspace/api-zod";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -475,15 +480,20 @@ router.post(
 
     // F5 — homework block via F4 SQL function (never recompute the rate in TS).
     // §8.14 also names attendance % and niyam streaks — those remain absent from
-    // this snapshot; homework and quizzes (M9) are what it carries today.
-    const [homework, quizzes] = await Promise.all([
+    // this snapshot; homework, quizzes (M9) and courses (CU30/H28) are what it
+    // carries today.
+    const [homework, quizzes, courseBlocks] = await Promise.all([
       buildHomeworkSnapshot(student.id, body.period_label),
       buildQuizSnapshot(student.id, body.period_label),
+      // CU30/H28 — one block per course the student has ANY progress on,
+      // read from fn_course_progress (CU28) — never recomputed here.
+      buildCourseProgressReportBlocks(student.id),
     ]);
     const snapshot = {
       items: snapshotItems,
       homework,
       quizzes,
+      courses: courseBlocks,
       generated_at: new Date().toISOString(),
     };
 
@@ -524,6 +534,10 @@ router.post(
 
     const now = new Date();
     snapshot.generated_at = now.toISOString();
+    // CU30 — validate the versioned shape before it ever reaches the JSONB
+    // column (CLAUDE.md's JSONB rule). The parsed value is discarded; a
+    // throw here means our own construction above is wrong, not the data.
+    progressReportSnapshotV2Schema.parse(snapshot);
     const [row] = await db
       .insert(progress_reports)
       .values({
@@ -534,6 +548,9 @@ router.post(
         pdf_url: stored.url,
         shikshak_comment: body.shikshak_comment ?? null,
         snapshot,
+        // CU30 — every new write is the versioned shape; the column DEFAULT
+        // (1) only backfills rows written before this change.
+        snapshot_version: PROGRESS_REPORT_SNAPSHOT_VERSION_CURRENT,
       })
       .onConflictDoUpdate({
         target: [
@@ -546,10 +563,16 @@ router.post(
           pdf_url: stored.url,
           shikshak_comment: body.shikshak_comment ?? null,
           snapshot,
+          snapshot_version: PROGRESS_REPORT_SNAPSHOT_VERSION_CURRENT,
           updated_at: now,
         },
       })
-      .returning({ id: progress_reports.id, pdf_url: progress_reports.pdf_url, snapshot: progress_reports.snapshot });
+      .returning({
+        id: progress_reports.id,
+        pdf_url: progress_reports.pdf_url,
+        snapshot: progress_reports.snapshot,
+        snapshot_version: progress_reports.snapshot_version,
+      });
 
     await auditFromReq(req, {
       action: "create",
@@ -563,6 +586,7 @@ router.post(
       id: row.id,
       pdf_url: signUploadUrl(row.pdf_url, 7 * 24 * 3600),
       snapshot: row.snapshot,
+      snapshot_version: row.snapshot_version,
     });
   },
 );

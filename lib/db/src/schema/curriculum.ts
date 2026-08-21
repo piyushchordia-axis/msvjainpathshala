@@ -285,6 +285,14 @@ export const progress_reports = pgTable(
     released_to_parent: boolean("released_to_parent").notNull().default(false),
     released_at: timestamp("released_at", { withTimezone: true }),
     snapshot: jsonb("snapshot").$type<Record<string, unknown>>(),
+    /**
+     * CU30 — version marker for `snapshot`'s shape. 1 = pre-CU30 (`{ items,
+     * homework, quizzes, generated_at }`, no `courses` key). 2 = adds the
+     * `courses` curriculum block read from `fn_course_progress` (CU28).
+     * Default only backfills existing rows; every new write sets it
+     * explicitly (0103_progress_report_snapshot_version.sql).
+     */
+    snapshot_version: integer("snapshot_version").notNull().default(1),
     ...timestamps(),
   },
   (t) => ({

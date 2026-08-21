@@ -722,6 +722,13 @@
       "when": 1792060800004,
       "tag": "0102_course_progress_misc_hardening",
       "breakpoints": true
+    },
+    {
+      "idx": 103,
+      "version": "7",
+      "when": 1792060800005,
+      "tag": "0103_progress_report_snapshot_version",
+      "breakpoints": true
     }
   ]
 }

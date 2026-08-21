@@ -1,7 +1,8 @@
 /**
  * Thin wrappers around fn_course_progress (CU28 / AT5 pattern).
  * Never re-implement coverage or mastery arithmetic in TypeScript — PDF worker,
- * mobile, admin, and CU16 section roll-up all call this SQL function.
+ * mobile, admin, CU16 section roll-up, and CU30's report `courses` block all
+ * call this SQL function.
  */
 import { db } from "@workspace/db";
 import { sql } from "drizzle-orm";
@@ -140,4 +141,98 @@ export async function getCourseSectionRollups(
     coverage: asRatio(row.coverage),
     mastery: asRatio(row.mastery),
   }));
+}
+
+export type CourseProgressCertifiedNode = {
+  node_id: string;
+  node_kind: "section" | "subsection";
+  title_en: string;
+  title_hi: string;
+  certified_at: string;
+};
+
+export type CourseProgressReportBlock = {
+  course_id: string;
+  coverage: number | null;
+  mastery: number | null;
+  section_certified: number;
+  section_total: number;
+  certified_nodes: CourseProgressCertifiedNode[];
+};
+
+/**
+ * CU30 (H28) — the progress-report `courses` block, one entry per course the
+ * student has ANY progress row on (CU4: this includes archived courses — an
+ * archived course must still appear in the student's own history/reports).
+ * `coverage`/`mastery`/`section_certified`/`section_total` are read from
+ * `fn_course_progress` (CU28) via `getCourseProgress` — never recomputed
+ * here. `certified_nodes` is a factual listing (not an aggregate), safe to
+ * build alongside it.
+ */
+export async function buildCourseProgressReportBlocks(
+  studentId: string,
+): Promise<CourseProgressReportBlock[]> {
+  const touched = await db.execute(sql`
+    select distinct co.id as course_id
+    from student_course_progress p
+    left join course_sections sec on sec.id = p.section_id
+    left join course_subsections sub on sub.id = p.subsection_id
+    left join course_sections sec_via_sub on sec_via_sub.id = sub.section_id
+    inner join courses co on co.id = coalesce(sec.course_id, sec_via_sub.course_id)
+    where p.student_id = ${studentId}::uuid
+  `);
+  const courseIds = (
+    (touched as unknown as { rows?: Array<{ course_id: string }> }).rows ?? []
+  ).map((r) => r.course_id);
+
+  const blocks: CourseProgressReportBlock[] = [];
+  for (const courseId of courseIds) {
+    const stats = await getCourseProgress(studentId, courseId);
+    const nodesResult = await db.execute(sql`
+      select
+        coalesce(p.section_id, p.subsection_id) as node_id,
+        case when p.section_id is not null then 'section' else 'subsection' end as node_kind,
+        coalesce(sec.title_en, sub.title_en) as title_en,
+        coalesce(sec.title_hi, sub.title_hi) as title_hi,
+        p.certified_at
+      from student_course_progress p
+      left join course_sections sec on sec.id = p.section_id
+      left join course_subsections sub on sub.id = p.subsection_id
+      left join course_sections sec_via_sub on sec_via_sub.id = sub.section_id
+      where p.student_id = ${studentId}::uuid
+        and p.certified_at is not null
+        and coalesce(sec.course_id, sec_via_sub.course_id) = ${courseId}::uuid
+      order by p.certified_at asc
+    `);
+    const certified_nodes: CourseProgressCertifiedNode[] = (
+      (
+        nodesResult as unknown as {
+          rows?: Array<{
+            node_id: string;
+            node_kind: "section" | "subsection";
+            title_en: string;
+            title_hi: string;
+            certified_at: string | Date;
+          }>;
+        }
+      ).rows ?? []
+    ).map((r) => ({
+      node_id: r.node_id,
+      node_kind: r.node_kind,
+      title_en: r.title_en,
+      title_hi: r.title_hi,
+      certified_at:
+        r.certified_at instanceof Date ? r.certified_at.toISOString() : String(r.certified_at),
+    }));
+
+    blocks.push({
+      course_id: courseId,
+      coverage: stats.coverage,
+      mastery: stats.mastery,
+      section_certified: stats.section_certified,
+      section_total: stats.section_total,
+      certified_nodes,
+    });
+  }
+  return blocks;
 }
