@@ -457,6 +457,15 @@ router.get("/:id/attempts/:attemptId", async (req: Request, res: Response) => {
       is_correct: a.is_correct,
       marks_awarded: a.marks_awarded,
       admin_comment: a.admin_comment,
+      /**
+       * The join is exam_questions LEFT JOIN exam_answers, so a question with no
+       * row at all looks identical to a blank answer. The grade write is an
+       * UPDATE keyed on (attempt_id, question_id): with no row it updates
+       * nothing, so marks typed against it silently vanish on refetch. Submit
+       * backfills a row per question, so this is normally true — but say so
+       * rather than letting the UI guess.
+       */
+      has_answer_row: a.answer_id !== null,
     })),
   });
 });

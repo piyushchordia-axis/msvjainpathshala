@@ -3,6 +3,10 @@ import { Plus, Trash2, Check } from 'lucide-react';
 import { apiGet, apiPost, del, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminError } from '@/components/admin/AdminPageShell';
+import { describeApiError } from '@/lib/admin-error';
+import { Redirect } from 'wouter';
+import { canAdministerExams } from '@workspace/api-zod';
+import { useAuth } from '@/lib/auth-context';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -23,6 +27,13 @@ interface ExamOption {
   window_start?: string;
   total_marks?: number;
   question_marks_total?: number;
+  /**
+   * Questions lock once anyone has attempted the exam (server returns 409
+   * ERR_EXAM_HAS_ATTEMPTS). The list has always carried this count; the builder
+   * ignored it, so the only signal was a 409 arriving after the whole question
+   * had been typed out.
+   */
+  attempt_count?: number;
 }
 
 /** Same-named exams were indistinguishable in the picker (CTY-DSN-06). */
@@ -32,6 +43,7 @@ function examOptionLabel(e: ExamOption): string {
   if (e.window_start) {
     parts.push(new Date(e.window_start).toLocaleDateString('en-GB'));
   }
+  if ((e.attempt_count ?? 0) > 0) parts.push('locked');
   return parts.join(' · ');
 }
 
@@ -147,7 +159,8 @@ function AddQuestionDialog({ examId, onAdded }: { examId: string; onAdded: () =>
       reset();
       onAdded();
     } catch (er) {
-      toast.error('Failed to add question.', er instanceof ApiError ? er.message : undefined);
+      const d = describeApiError(er, 'Could not add the question');
+      toast.error(d.title, d.detail);
     } finally {
       setBusy(false);
     }
@@ -234,7 +247,17 @@ function AddQuestionDialog({ examId, onAdded }: { examId: string; onAdded: () =>
   );
 }
 
-function QuestionCard({ examId, q, onChanged }: { examId: string; q: QuestionRow; onChanged: () => void }) {
+function QuestionCard({
+  examId,
+  q,
+  locked,
+  onChanged,
+}: {
+  examId: string;
+  q: QuestionRow;
+  locked: boolean;
+  onChanged: () => void;
+}) {
   const [busy, setBusy] = useState(false);
 
   async function remove() {
@@ -246,7 +269,10 @@ function QuestionCard({ examId, q, onChanged }: { examId: string; q: QuestionRow
       toast.success('Question deleted.');
       onChanged();
     } catch (err) {
-      toast.error('Failed to delete question.', err instanceof ApiError ? err.message : undefined);
+      // Branch on the code: a 409 here means students have already attempted,
+      // which is a different instruction from "try again".
+      const d = describeApiError(err, 'Could not delete the question');
+      toast.error(d.title, d.detail);
     } finally {
       setBusy(false);
     }
@@ -284,7 +310,13 @@ function QuestionCard({ examId, q, onChanged }: { examId: string; q: QuestionRow
             <p className="mt-2 text-xs italic text-muted-foreground">Free-text answer — graded manually.</p>
           )}
         </div>
-        <Button size="sm" variant="ghost" disabled={busy} onClick={remove}>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={busy || locked}
+          title={locked ? 'Locked — students have already attempted this exam' : 'Delete this question'}
+          onClick={remove}
+        >
           <Trash2 className="h-4 w-4" />
         </Button>
       </div>
@@ -293,6 +325,8 @@ function QuestionCard({ examId, q, onChanged }: { examId: string; q: QuestionRow
 }
 
 export default function ExamBuilderPage() {
+  const { user, loading: authLoading } = useAuth();
+  const allowed = canAdministerExams(user?.role);
   const [exams, setExams] = useState<ExamOption[]>([]);
   const [examId, setExamId] = useState('');
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
@@ -325,6 +359,7 @@ export default function ExamBuilderPage() {
   }
 
   const selectedExam = exams.find((e) => e.id === examId) ?? null;
+  const locked = (selectedExam?.attempt_count ?? 0) > 0;
   // Running paper total vs declared total (CTY-API-07b) — the builder never
   // showed the sum, so a 20-mark paper declared out of 100 looked finished.
   const questionSum = questions.reduce((acc, q) => acc + (q.marks ?? 0), 0);
@@ -332,11 +367,18 @@ export default function ExamBuilderPage() {
   const marksMismatch =
     declaredTotal !== undefined && !loading && questionSum !== declaredTotal;
 
+  if (authLoading) return null;
+  if (!allowed) return <Redirect to="/admin" />;
+
   return (
     <AdminPageShell
       title="Exam builder"
       subtitle="Author questions and options for online exams in your city."
-      actions={examId ? <AddQuestionDialog examId={examId} onAdded={() => loadQuestions(examId)} /> : undefined}
+      actions={
+        examId && !locked
+          ? <AddQuestionDialog examId={examId} onAdded={() => loadQuestions(examId)} />
+          : undefined
+      }
     >
       {error ? <AdminError message={error} /> : null}
 
@@ -350,6 +392,14 @@ export default function ExamBuilderPage() {
             </SelectContent>
           </Select>
         </div>
+        {locked ? (
+          <p className="mt-3 text-sm font-medium text-status-warning">
+            {selectedExam?.attempt_count} student
+            {selectedExam?.attempt_count === 1 ? ' has' : 's have'} already attempted this exam, so its
+            questions are locked — editing them now would change scores that have already been given.
+            Create a new exam instead.
+          </p>
+        ) : null}
         {examId && declaredTotal !== undefined ? (
           <p className={`mt-3 text-sm ${marksMismatch ? 'font-medium text-destructive' : 'text-muted-foreground'}`}>
             Question marks: {questionSum} / declared total: {declaredTotal}
@@ -369,7 +419,13 @@ export default function ExamBuilderPage() {
       ) : (
         <div className="space-y-3">
           {questions.map((q) => (
-            <QuestionCard key={q.id} examId={examId} q={q} onChanged={() => loadQuestions(examId)} />
+            <QuestionCard
+              key={q.id}
+              examId={examId}
+              q={q}
+              locked={locked}
+              onChanged={() => loadQuestions(examId)}
+            />
           ))}
         </div>
       )}

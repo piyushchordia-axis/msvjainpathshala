@@ -9,6 +9,7 @@ import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-context';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminError } from '@/components/admin/AdminPageShell';
+import { describeApiError } from '@/lib/admin-error';
 import { Card } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -75,6 +76,8 @@ interface AttemptAnswer {
   is_correct: boolean | null;
   marks_awarded: number | null;
   admin_comment: string | null;
+  /** False when no exam_answers row exists — the grade write would update nothing. */
+  has_answer_row?: boolean;
 }
 
 interface AttemptDetail {
@@ -106,7 +109,7 @@ function formatWhen(iso: string | null): string {
 }
 
 export default function ExamGradingPage() {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const allowed = canAdministerExams(user?.role);
 
   const [exams, setExams] = useState<ExamOption[]>([]);
@@ -125,12 +128,13 @@ export default function ExamGradingPage() {
   const [marksDraft, setMarksDraft] = useState<Record<string, string>>({});
   const [commentDraft, setCommentDraft] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   const optionLabelById = useMemo(() => {
     const map = new Map<string, string>();
     for (const q of questions) {
       for (const o of q.options ?? []) {
-        map.set(o.id, o.option_en);
+        map.set(o.id, o.option_hi ? `${o.option_en} / ${o.option_hi}` : o.option_en);
       }
     }
     return map;
@@ -246,6 +250,34 @@ export default function ExamGradingPage() {
     setMarksDraft((prev) => ({ ...prev, [questionId]: String(clamped) }));
   }
 
+  /**
+   * A student whose browser died mid-exam leaves an in_progress attempt that
+   * still counts against max_attempts. POST .../reset frees the slot, and had
+   * no caller anywhere in web or mobile — the only remedy was a DB edit.
+   */
+  async function resetAttempt() {
+    if (!examId || !detail || resetting) return;
+    if (
+      !window.confirm(
+        `Reset ${detail.student_name}'s attempt?\n\nThe attempt is abandoned and the student can sit the exam again. Anything they had written is not graded.`,
+      )
+    ) {
+      return;
+    }
+    setResetting(true);
+    try {
+      await apiPost(`/v1/exams/${examId}/attempts/${detail.id}/reset`, {});
+      toast.success('Attempt reset — the student can start again.');
+      await loadAttempts(examId);
+      await openAttempt(detail.id);
+    } catch (err) {
+      const d = describeApiError(err, 'Could not reset the attempt');
+      toast.error(d.title, d.detail);
+    } finally {
+      setResetting(false);
+    }
+  }
+
   async function submitGrades() {
     if (!examId || !detail) return;
     const grades: { question_id: string; marks_awarded: number; admin_comment?: string }[] = [];
@@ -292,6 +324,10 @@ export default function ExamGradingPage() {
     }
   }
 
+  // user is undefined until auth resolves, and canAdministerExams(undefined) is
+  // false — redirecting on that bounced a city_admin off their own page on a
+  // hard refresh.
+  if (authLoading) return null;
   if (!allowed) {
     return <Redirect to="/admin" />;
   }
@@ -413,19 +449,43 @@ export default function ExamGradingPage() {
                     <h3 className="font-display text-lg text-secondary">{detail.student_name}</h3>
                     <p className="text-sm text-muted-foreground">{detail.student_code}</p>
                   </div>
-                  {detail.needs_grading ? (
-                    <Badge
-                      variant="outline"
-                      className="border-status-warning bg-status-warning-soft text-status-warning"
-                    >
-                      Needs grading
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline" className="capitalize">
-                      {detail.status}
-                    </Badge>
-                  )}
+                  <div className="flex flex-wrap items-center gap-2">
+                    {detail.needs_grading ? (
+                      <Badge
+                        variant="outline"
+                        className="border-status-warning bg-status-warning-soft text-status-warning"
+                      >
+                        Needs grading
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="capitalize">
+                        {detail.status}
+                      </Badge>
+                    )}
+                    {detail.status === 'in_progress' ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={resetting}
+                        onClick={() => void resetAttempt()}
+                      >
+                        {resetting ? 'Resetting…' : 'Reset attempt'}
+                      </Button>
+                    ) : null}
+                  </div>
                 </div>
+                {detail.status === 'in_progress' ? (
+                  <p className="text-xs text-muted-foreground">
+                    This attempt is still open, so it cannot be graded yet. Resetting it abandons
+                    the attempt and frees the student&apos;s retry.
+                  </p>
+                ) : detail.status === 'abandoned' ? (
+                  <p className="text-xs text-muted-foreground">
+                    This attempt was abandoned, so it cannot be graded — the student needs to sit
+                    the exam again.
+                  </p>
+                ) : null}
 
                 <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
                   <span className="text-muted-foreground">Running total: </span>
@@ -469,6 +529,15 @@ export default function ExamGradingPage() {
                           ) : null}
                         </div>
                         <p className="mt-2 text-sm font-medium">{a.question_en}</p>
+                        {a.question_hi ? (
+                          <p className="mt-0.5 text-sm text-muted-foreground">{a.question_hi}</p>
+                        ) : null}
+                        {a.has_answer_row === false ? (
+                          <p className="mt-2 text-xs font-medium text-status-warning">
+                            No answer row was recorded for this question, so it cannot be marked —
+                            anything entered here would be discarded.
+                          </p>
+                        ) : null}
 
                         {isText ? (
                           <div className="mt-3 space-y-2">
@@ -487,6 +556,7 @@ export default function ExamGradingPage() {
                                 max={a.marks}
                                 step={1}
                                 value={marksDraft[a.question_id] ?? ''}
+                                disabled={a.has_answer_row === false}
                                 onChange={(e) =>
                                   setMark(a.question_id, a.marks, e.target.value)
                                 }

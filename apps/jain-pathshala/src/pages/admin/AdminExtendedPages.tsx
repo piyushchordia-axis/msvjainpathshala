@@ -18,6 +18,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/lib/auth-context';
+import { canAdministerExams } from '@workspace/api-zod';
+import { Redirect } from 'wouter';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
 } from '@/components/ui/dialog';
@@ -607,10 +609,24 @@ function EditExamDialog({ exam, onSaved }: { exam: ExamRow; onSaved: () => void 
 }
 
 export function ExamsPage() {
+  const { user, loading: authLoading } = useAuth();
+  const allowed = canAdministerExams(user?.role);
   const { items, loading, error, reload } = useAdminList<ExamRow>('/v1/admin/exams?limit=50');
   const [busy, setBusy] = useState<string | null>(null);
 
   async function releaseResults(id: string) {
+    // Releasing publishes every student's result and cannot be undone — the
+    // button sits beside the edit pencil in a dense row, and deleting a single
+    // question already asks for confirmation.
+    const exam = items.find((e) => e.id === id);
+    const label = exam ? `"${exam.title_en}"` : 'this exam';
+    if (
+      !window.confirm(
+        `Release results for ${label}?\n\nEvery student who attempted it will see their score immediately. This cannot be undone.`,
+      )
+    ) {
+      return;
+    }
     setBusy(id);
     try {
       await apiPost(`/v1/admin/exams/${id}/release-results`, {});
@@ -623,6 +639,9 @@ export function ExamsPage() {
       setBusy(null);
     }
   }
+
+  if (authLoading) return null;
+  if (!allowed) return <Redirect to="/admin" />;
 
   return (
     <AdminPageShell

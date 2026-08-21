@@ -32,6 +32,14 @@ const BY_CODE: Record<string, { title: string; hint: string }> = {
     title: 'Too many attempts',
     hint: 'Wait a minute and try again.',
   },
+  ERR_RESULTS_PUBLISHED: {
+    title: 'Results already released',
+    hint: 'Total marks and pass mark are locked once results are released — the title and window are still editable.',
+  },
+  ERR_EXAM_HAS_ATTEMPTS: {
+    title: 'Students have already started',
+    hint: 'Questions lock once anyone has attempted this exam, because editing them would change scores mid-flight. Create a new exam instead.',
+  },
   ERR_NETWORK: {
     title: "Can't reach the server",
     hint: 'Check your connection and try again.',
