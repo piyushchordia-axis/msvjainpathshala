@@ -3,7 +3,6 @@
  * Must use PdfBuilder.createBilingual() so CU17 Devanagari honorifics render.
  */
 import { PdfBuilder } from "./pdf";
-import { firstName } from "./route-helpers";
 
 export type CertificateHonorific = {
   en: string;
@@ -59,7 +58,10 @@ export async function buildCourseCertificatePdf(opts: {
 }): Promise<Buffer> {
   const pdf = await PdfBuilder.createBilingual();
   const snap = opts.snapshot;
-  const studentFirst = firstName(snap.student_full_name);
+  // CU27's first-name-only rule is scoped to the public verify endpoint
+  // (certificates.ts). The PDF handed to the family prints the real full
+  // name — it is a rendering held by the family, not the public-facing view.
+  const studentName = snap.student_full_name;
   const issued = opts.issuedAt.toISOString().slice(0, 10);
 
   if (opts.kind === "section" && snap.kind === "section") {
@@ -67,7 +69,7 @@ export async function buildCourseCertificatePdf(opts: {
     pdf.spacer(6);
     pdf.bilingual("Section certificate", "अनुभाग प्रमाणपत्र");
     pdf.hr();
-    pdf.bilingual(`Student: ${studentFirst}`, `विद्यार्थी: ${studentFirst}`);
+    pdf.bilingual(`Student: ${studentName}`, `विद्यार्थी: ${studentName}`);
     pdf.bilingual(
       `Course: ${snap.course_name_en}`,
       snap.course_name_hi ? `पाठ्यक्रम: ${snap.course_name_hi}` : undefined,
@@ -87,7 +89,7 @@ export async function buildCourseCertificatePdf(opts: {
     pdf.spacer(6);
     pdf.bilingual("Course certificate", "पाठ्यक्रम प्रमाणपत्र");
     pdf.hr();
-    pdf.bilingual(`Student: ${studentFirst}`, `विद्यार्थी: ${studentFirst}`);
+    pdf.bilingual(`Student: ${studentName}`, `विद्यार्थी: ${studentName}`);
     pdf.bilingual(
       `Course: ${snap.course_name_en}`,
       snap.course_name_hi ? `पाठ्यक्रम: ${snap.course_name_hi}` : undefined,

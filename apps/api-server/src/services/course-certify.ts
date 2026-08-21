@@ -47,6 +47,42 @@ export class CourseCertifyError extends Error {
 
 export type CertifyNodeKind = "section" | "subsection";
 
+/**
+ * M44 — sane bound for a client-supplied certified_at (offline sync only;
+ * the online route never passes one). Ordinary clock skew is tolerated;
+ * anything further out, or anything predating the courses module ever
+ * existing, is rejected rather than silently written into certified_at /
+ * completed_at.
+ */
+const CLOCK_SKEW_TOLERANCE_MS = 5 * 60 * 1000; // 5 minutes
+const EARLIEST_PLAUSIBLE_CERTIFIED_AT = new Date("2020-01-01T00:00:00.000Z").getTime();
+
+function assertPlausibleCertifiedAt(certifiedAt: Date | null | undefined): void {
+  if (!certifiedAt) return; // online path — server always supplies `new Date()` itself
+  const t = certifiedAt.getTime();
+  if (!Number.isFinite(t)) {
+    throw new CourseCertifyError(
+      422,
+      Err.VALIDATION_FAILED,
+      "certified_at is not a valid date.",
+    );
+  }
+  if (t > Date.now() + CLOCK_SKEW_TOLERANCE_MS) {
+    throw new CourseCertifyError(
+      422,
+      Err.VALIDATION_FAILED,
+      "certified_at cannot be in the future.",
+    );
+  }
+  if (t < EARLIEST_PLAUSIBLE_CERTIFIED_AT) {
+    throw new CourseCertifyError(
+      422,
+      Err.VALIDATION_FAILED,
+      "certified_at is implausibly old.",
+    );
+  }
+}
+
 async function findLatestUnreversed(opts: {
   tx: Tx;
   studentId: string;
@@ -258,6 +294,16 @@ export type CertifyResult = {
 };
 
 export async function certifyCourseNode(input: CertifyInput): Promise<CertifyResult> {
+  // M44 — completed_at already only ever comes from the server clock on the
+  // online path (input.certifiedAt is undefined there, so `now` below falls
+  // back to `new Date()`). The offline/sync path (sync-batch.ts) lets the
+  // client dictate certified_at, and completed_at/started_at inherit
+  // whatever `now` resolves to (see `now` below) — so a bad client clock
+  // poisons both fields. Give it the same posture completed_at already gets:
+  // not in the future beyond ordinary clock skew, and not so far in the past
+  // that it predates the courses module existing at all (a zeroed/broken
+  // client clock, not a legitimately stale offline sync).
+  assertPlausibleCertifiedAt(input.certifiedAt);
   return db.transaction(async (tx) => {
     let sectionId: string | null = null;
     let subsectionId: string | null = null;

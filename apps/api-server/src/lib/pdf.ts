@@ -31,8 +31,17 @@ export function sanitize(text: string): string {
   return (text ?? "").replace(/[^\u0000-\u00ff]/g, "").replace(/\s+/g, " ").trim();
 }
 
-function hasDevanagari(text: string): boolean {
-  return /[\u0900-\u097F]/.test(text);
+/**
+ * WinAnsi (Helvetica) covers Latin-1 only (u0000-u00ff). Any script outside
+ * that range -- Devanagari, Gujarati, or anything else -- must be routed to
+ * the embedded face instead of being silently stripped (M43): the old
+ * `hasDevanagari` gate matched only the Devanagari Unicode block, so a
+ * Gujarati-script name (no Devanagari codepoints) fell through to
+ * `sanitize()` and came back blank.
+ */
+function needsEmbeddedFont(text: string): boolean {
+  // eslint-disable-next-line no-control-regex
+  return /[^\u0000-\u00ff]/.test(text);
 }
 
 /**
@@ -81,12 +90,12 @@ export class PdfBuilder {
   }
 
   private fontFor(text: string, preferBold = false): PDFFont {
-    if (this.hiFont && hasDevanagari(text)) return this.hiFont;
+    if (this.hiFont && needsEmbeddedFont(text)) return this.hiFont;
     return preferBold ? this.bold : this.font;
   }
 
   private prepare(text: string): string {
-    if (this.hiFont && hasDevanagari(text)) return (text ?? "").replace(/\s+/g, " ").trim();
+    if (this.hiFont && needsEmbeddedFont(text)) return (text ?? "").replace(/\s+/g, " ").trim();
     return sanitize(text);
   }
 

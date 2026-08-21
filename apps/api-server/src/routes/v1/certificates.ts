@@ -14,12 +14,6 @@ const router: IRouter = Router();
 /** Crockford base32, 12 chars — reject anything else before hitting the DB. */
 const CODE_RE = /^[0-9A-HJKMNP-TV-Z]{12}$/i;
 
-function clientIp(req: Request): string {
-  const xf = req.headers["x-forwarded-for"];
-  if (typeof xf === "string" && xf.length > 0) return xf.split(",")[0]!.trim();
-  return req.ip || "unknown";
-}
-
 function titlesFromSnapshot(snap: CertificateScopeSnapshot | null): {
   title_en: string;
   title_hi: string | null;
@@ -33,7 +27,10 @@ function titlesFromSnapshot(snap: CertificateScopeSnapshot | null): {
 
 /* GET /v1/certificates/verify/:code — public (CU27) */
 router.get("/verify/:code", async (req: Request, res: Response) => {
-  const ip = clientIp(req);
+  // req.ip resolves through Express's `trust proxy` setting (app.ts) — the
+  // same single-hop config the OTP-send/verify limiters rely on. Do not read
+  // x-forwarded-for directly; a client controls that header.
+  const ip = req.ip || "unknown";
   // Enumerable by construction — tight per-IP window.
   if (await rateLimit(`cert:verify:ip:${ip}`, 30, 60)) {
     fail(res, 429, "ERR_RATE_LIMITED", "Too many verification attempts — wait a minute and try again.");

@@ -348,13 +348,59 @@ export async function issueCourseCertificate(
   return { certificateId: inserted.id, created: inserted.created };
 }
 
+/**
+ * H32 — the enqueue call itself (not the queued job) is what used to fail
+ * silently: once a job is actually in BullMQ, `DEFAULT_JOB_OPTS` already
+ * retries processing up to 3x with backoff (queues.ts) and a permanent
+ * failure lands in `worker.on("failed", ...)` at error severity. A failure
+ * of `enqueueJob` never reaches any of that — the job was never queued, so
+ * there is nothing left for BullMQ to retry. Retry the enqueue itself a
+ * bounded number of times first (the same "transient blip" assumption
+ * DEFAULT_JOB_OPTS makes, just scaled to something that won't stall an
+ * inline HTTP request), then record the failure at error severity instead
+ * of a swallowed warn so it is actually actionable.
+ */
+const ENQUEUE_RETRY_ATTEMPTS = 3;
+const ENQUEUE_RETRY_DELAY_MS = 150;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Enqueue (or re-enqueue) the PDF job for an already-issued certificate.
+ * Idempotent-safe to call again for the same certificate_id at any time —
+ * the job handler (course-certificate-pdf.ts) early-returns once
+ * `storage_key` is set — which makes this exported function itself the
+ * re-trigger path: an admin action (or an ops one-off) that finds a
+ * certificate stuck with a NULL storage_key can call this again directly
+ * instead of a parallel retry mechanism being invented. Stays best-effort
+ * and non-throwing for its two existing callers (courses.ts certify route,
+ * sync-batch.ts) — CU26 already commits the certificate/Punya award before
+ * this runs, so a PDF hiccup must not turn a successful certification into
+ * a failed HTTP request.
+ */
 export async function enqueueCertificatePdf(certificateId: string): Promise<void> {
-  try {
-    await enqueueJob(QUEUE_NAMES.REPORT_GENERATION, {
-      kind: "course_certificate",
-      certificate_id: certificateId,
-    });
-  } catch (err) {
-    logger.warn({ err, certificateId }, "course certificate PDF enqueue failed");
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= ENQUEUE_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      await enqueueJob(QUEUE_NAMES.REPORT_GENERATION, {
+        kind: "course_certificate",
+        certificate_id: certificateId,
+      });
+      return;
+    } catch (err) {
+      lastErr = err;
+      if (attempt < ENQUEUE_RETRY_ATTEMPTS) {
+        await delay(ENQUEUE_RETRY_DELAY_MS * attempt);
+      }
+    }
   }
+  // Every attempt failed — this certificate is issued but its PDF is stuck
+  // with no worker ever having seen it. error (not warn): this must be
+  // actionable, not swallowed.
+  logger.error(
+    { err: lastErr, certificateId },
+    "course certificate PDF enqueue failed after retries — the certificate is issued but its PDF generation was never queued; call enqueueCertificatePdf(certificateId) again to retry",
+  );
 }
