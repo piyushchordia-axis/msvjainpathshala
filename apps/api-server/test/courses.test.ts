@@ -1223,3 +1223,205 @@ describe("public courses catalogue (guest)", () => {
     expect(missing.status).toBe(404);
   });
 });
+
+describe("courses step 4 — reachability, scope, visibility (H1, H2, H4, H30, M13)", () => {
+  it("state_admin blocked from creating a national course (CU8 — Q2 wins even for a state-wide role)", async () => {
+    const stateAdmin = await loginAs("state_admin");
+    const res = await request(app)
+      .post("/v1/admin/courses")
+      .set(auth(stateAdmin.token))
+      .send({ name_en: `National blocked ${stamp()}`, kind: "standard", city_id: null });
+    expect(res.status).toBe(403);
+  });
+
+  it("MSV create rejected for state_admin even inside their own state (CU8)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const stateAdmin = await loginAs("state_admin");
+    const cityId = await mumbaiCityId(superAdmin.token);
+
+    const res = await request(app)
+      .post("/v1/admin/courses")
+      .set(auth(stateAdmin.token))
+      .send({ name_en: `MSV blocked state ${stamp()}`, kind: "msv", city_id: cityId });
+    expect(res.status).toBe(403);
+  });
+
+  it("MSV re-kind by PATCH rejected for state_admin (CU8)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const stateAdmin = await loginAs("state_admin");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId } = await publishableCourse(superAdmin.token, cityId);
+
+    const res = await request(app)
+      .patch(`/v1/admin/courses/${courseId}`)
+      .set(auth(stateAdmin.token))
+      .send({ kind: "msv" });
+    expect(res.status).toBe(403);
+
+    const row = await pool.query<{ kind: string }>(`select kind from courses where id = $1`, [
+      courseId,
+    ]);
+    expect(row.rows[0]?.kind).toBe("standard");
+  });
+
+  it("section authoring under a national course rejected for state_admin (H2/CU8 — Q2 wins)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const stateAdmin = await loginAs("state_admin");
+
+    const national = await request(app)
+      .post("/v1/admin/courses")
+      .set(auth(superAdmin.token))
+      .send({ name_en: `National ${stamp()}`, kind: "standard", city_id: null });
+    expect(national.status).toBe(200);
+    const courseId = national.body.data.id as string;
+    plantedCourseIds.push(courseId);
+
+    const res = await request(app)
+      .post(`/v1/courses/${courseId}/sections`)
+      .set(auth(stateAdmin.token))
+      .send({ title_en: "State tries national", title_hi: "राज्य", punya_points: 10 });
+    expect(res.status).toBe(403);
+  });
+
+  it("sanchalak certify path succeeds for a student in their centre (Q12 safety net)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const sanchalak = await loginAs("sanchalak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const kid = await pool.query<{ id: string }>(
+      `select s.id from students s
+        join shikshak_batch_assignments a on a.batch_id = s.batch_id and a.is_active = true
+        join users u on u.id = a.user_id
+       where u.phone = '+919800000005' and s.status = 'active' and s.deleted_at is null
+       limit 1`,
+    );
+    expect(kid.rows[0]?.id).toBeTruthy();
+    const studentId = kid.rows[0]!.id;
+
+    await request(app)
+      .post(`/v1/courses/nodes/${sectionIds[0]}/progress`)
+      .set(auth(shikshak.token))
+      .send({ student_id: studentId, status: "completed" })
+      .expect(200);
+
+    // Sanchalak is centre-bound, not batch-bound (scope.batchIds === null) —
+    // Q12's safety net covers the whole centre, including a shikshak's batch.
+    const certify = await request(app)
+      .post(`/v1/courses/nodes/${sectionIds[0]}/certify`)
+      .set(auth(sanchalak.token))
+      .send({ student_id: studentId });
+    expect(certify.status).toBe(200);
+  });
+});
+
+describe("courses — C6/H6 regressions (already fixed elsewhere; tests confirmed/added here)", () => {
+  it("C6: a kind='msv' course is invisible to a non-approved student across all three read surfaces", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .patch(`/v1/admin/courses/${courseId}`)
+      .set(auth(superAdmin.token))
+      .send({ kind: "msv" })
+      .expect(200);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    // A non-approved child of the seeded parent (seed carries "none"/"applied"
+    // siblings alongside the MSV-approved one — pick one that is NOT approved).
+    const kid = await pool.query<{ id: string; msv_status: string }>(
+      `select s.id, s.msv_status from students s
+        join users u on u.id = s.parent_id
+       where u.phone = '+919800000006' and s.status = 'active' and s.deleted_at is null
+         and s.msv_status <> 'approved'
+       limit 1`,
+    );
+    expect(kid.rows[0]?.id).toBeTruthy();
+    const studentId = kid.rows[0]!.id;
+
+    // GET /v1/courses — scoped to this specific (non-approved) child.
+    const list = await request(app)
+      .get("/v1/courses")
+      .query({ student_id: studentId })
+      .set(auth(parent.token));
+    expect(list.status).toBe(200);
+    const ids = (list.body.data.items as Array<{ id: string }>).map((c) => c.id);
+    expect(ids).not.toContain(courseId);
+
+    // GET /v1/courses/:id/tree — CU3 fails closed as not-found (no existence leak).
+    const tree = await request(app)
+      .get(`/v1/courses/${courseId}/tree`)
+      .query({ student_id: studentId })
+      .set(auth(parent.token));
+    expect(tree.status).toBe(404);
+
+    // GET /v1/public/courses — MSV curricula are programme-internal (Q1/Q2).
+    const guestList = await request(app).get("/v1/public/courses?limit=200");
+    expect(guestList.status).toBe(200);
+    const guestIds = (guestList.body.data.items as Array<{ id: string }>).map((c) => c.id);
+    expect(guestIds).not.toContain(courseId);
+  });
+
+  it("H6: a batchless student can still be written and certified by sanchalak+ via the centre fallback", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const sanchalak = await loginAs("sanchalak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const centreRow = await pool.query<{ centre_id: string }>(
+      `select a.centre_id from sanchalak_centre_assignments a
+         join users u on u.id = a.user_id
+        where u.phone = '+919800000004' and a.is_active = true
+        limit 1`,
+    );
+    expect(centreRow.rows[0]?.centre_id).toBeTruthy();
+    const centreId = centreRow.rows[0]!.centre_id;
+
+    const tag = stamp();
+    const insert = await pool.query<{ id: string }>(
+      `insert into students
+         (centre_id, batch_id, full_name, student_code, status, dob, gender, age_group)
+       values ($1, null, $2, $3, 'active', '2014-01-01', 'female', 'kishor')
+       returning id`,
+      [centreId, `H6 ${tag}`, `H6${tag}`.slice(0, 24)],
+    );
+    const studentId = insert.rows[0]!.id;
+    plantedStudentIds.push(studentId);
+
+    // Shikshak stays batch-bound (scope.batchIds is an explicit array): no
+    // batch on the student means no write, even inside the shikshak's centre.
+    const shikshakAttempt = await request(app)
+      .post(`/v1/courses/nodes/${sectionIds[0]}/progress`)
+      .set(auth(shikshak.token))
+      .send({ student_id: studentId, status: "completed" });
+    expect(shikshakAttempt.status).toBe(403);
+
+    // Sanchalak resolves batchIds === null -> centre membership (scope.ts) —
+    // the safety net a newly-approved, not-yet-batched student depends on.
+    const sanchalakWrite = await request(app)
+      .post(`/v1/courses/nodes/${sectionIds[0]}/progress`)
+      .set(auth(sanchalak.token))
+      .send({ student_id: studentId, status: "completed" });
+    expect(sanchalakWrite.status).toBe(200);
+
+    const certify = await request(app)
+      .post(`/v1/courses/nodes/${sectionIds[0]}/certify`)
+      .set(auth(sanchalak.token))
+      .send({ student_id: studentId });
+    expect(certify.status).toBe(200);
+  });
+});

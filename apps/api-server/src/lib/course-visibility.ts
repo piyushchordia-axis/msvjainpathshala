@@ -42,6 +42,33 @@ export function courseVisibleToStudentSql(
   return and(eq(courses.status, "active"), isNull(courses.deleted_at), cityOk, kindOk)!;
 }
 
+/**
+ * H2 — the write-time twin of `courseVisibleToStudentSql`: a write must not be
+ * reachable where the CU3 read is not. Course-level half only (no student
+ * needed) — active and not soft-deleted. Draft/archived/deleted parents gate
+ * every write regardless of which student it targets.
+ */
+export function courseIsLive(course: { status: string; deleted_at: Date | null }): boolean {
+  return course.status === "active" && !course.deleted_at;
+}
+
+/**
+ * H2 — full CU3 predicate against a specific student: live course AND
+ * (national OR city matches) AND (not MSV OR student.msv_status approved).
+ * Mirrors `courseVisibleToStudentSql` exactly so a write can never succeed
+ * somewhere the matching read would 404.
+ */
+export function courseReachableForStudent(
+  course: { status: string; deleted_at: Date | null; city_id: string | null; kind: string },
+  student: { msv_status: string | null },
+  studentCityId: string | null,
+): boolean {
+  if (!courseIsLive(course)) return false;
+  if (course.city_id && course.city_id !== studentCityId) return false;
+  if (course.kind === "msv" && student.msv_status !== "approved") return false;
+  return true;
+}
+
 /** Load an active student row for visibility / scope checks. */
 export async function loadActiveStudent(studentId: string): Promise<{
   id: string;

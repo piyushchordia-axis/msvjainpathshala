@@ -5,15 +5,12 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import {
   db,
-  centres,
-  cities,
   course_sections,
   course_subsections,
   courses,
   student_course_progress,
   students,
   users,
-  type User,
 } from "@workspace/db";
 import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -21,13 +18,12 @@ import type { Role } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { requireMinRole, hasMinRole } from "../../lib/roles";
-import { resolveAdminScope, inBatchWriteScope, inCentreScope } from "../../lib/scope";
+import { resolveAdminScope, inBatchWriteScope, inCentreScope, cityIdsForUser } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import {
   courseVisibleToStudentSql,
   loadActiveStudent,
   studentCityId,
-  studentViewAgeRefusal,
 } from "../../lib/course-visibility";
 import { getCourseProgress } from "../../lib/course-progress";
 import {
@@ -48,6 +44,7 @@ import {
   correctCourseCertification,
 } from "../../services/course-certify";
 import { enqueueCertificatePdf } from "../../services/course-certificates";
+import { assertCourseProgressWriteAccess, assertCourseCertifyAccess } from "../../services/course-access";
 import { findSuccessfulSync, writeSyncOperation } from "../../lib/sync-operations";
 
 const router: IRouter = Router();
@@ -65,17 +62,6 @@ function handleErr(res: Response, err: unknown): boolean {
     return true;
   }
   return false;
-}
-
-async function cityIdsForAuthor(user: User): Promise<string[] | null> {
-  if (user.role === "super_admin") return null;
-  if (user.role === "city_admin") return user.city_id ? [user.city_id] : [];
-  if (user.role === "state_admin") {
-    if (!user.state_id) return [];
-    const rows = await db.select({ id: cities.id }).from(cities).where(eq(cities.state_id, user.state_id));
-    return rows.map((r) => r.id);
-  }
-  return [];
 }
 
 async function loadAuthorableCourse(
@@ -114,7 +100,9 @@ async function loadAuthorableCourse(
     throw err;
   }
   if (!course.city_id) return course;
-  const cityIds = await cityIdsForAuthor(req.authUser!);
+  // H1 — the SAME cityIdsForUser admin-courses.ts already resolves correctly
+  // for shikshak/sanchalak (via resolveAdminScope), not a second, broken copy.
+  const cityIds = await cityIdsForUser(req.authUser!);
   if (cityIds !== null && !cityIds.includes(course.city_id)) {
     fail(res, 404, "ERR_NOT_FOUND", "Course not found in your scope.");
     return null;
@@ -122,101 +110,53 @@ async function loadAuthorableCourse(
   return course;
 }
 
-async function resolveNodeKind(nodeId: string): Promise<{
+/**
+ * H2 — joins the parent `courses` row and rejects (returns null → 404) a node
+ * whose course is draft/archived/deleted: a write must not be reachable where
+ * the CU3 read is not. `requireLiveCourse: false` is for the CU19 correction
+ * route only — a super_admin correcting a certification on an archived course
+ * must still reach it (CU4: archiving never touches what was already earned).
+ */
+async function resolveNodeKind(
+  nodeId: string,
+  opts: { requireLiveCourse?: boolean } = {},
+): Promise<{
   kind: "section" | "subsection";
   courseId: string;
 } | null> {
+  const requireLive = opts.requireLiveCourse ?? true;
   const [sub] = await db
     .select({
       id: course_subsections.id,
       course_id: course_sections.course_id,
+      course_status: courses.status,
+      course_deleted_at: courses.deleted_at,
     })
     .from(course_subsections)
     .innerJoin(course_sections, eq(course_sections.id, course_subsections.section_id))
+    .innerJoin(courses, eq(courses.id, course_sections.course_id))
     .where(and(eq(course_subsections.id, nodeId), isNull(course_subsections.deleted_at)))
     .limit(1);
-  if (sub) return { kind: "subsection", courseId: sub.course_id };
+  if (sub) {
+    if (requireLive && (sub.course_status !== "active" || sub.course_deleted_at)) return null;
+    return { kind: "subsection", courseId: sub.course_id };
+  }
   const [sec] = await db
-    .select({ id: course_sections.id, course_id: course_sections.course_id })
+    .select({
+      id: course_sections.id,
+      course_id: course_sections.course_id,
+      course_status: courses.status,
+      course_deleted_at: courses.deleted_at,
+    })
     .from(course_sections)
+    .innerJoin(courses, eq(courses.id, course_sections.course_id))
     .where(and(eq(course_sections.id, nodeId), isNull(course_sections.deleted_at)))
     .limit(1);
-  if (sec) return { kind: "section", courseId: sec.course_id };
+  if (sec) {
+    if (requireLive && (sec.course_status !== "active" || sec.course_deleted_at)) return null;
+    return { kind: "section", courseId: sec.course_id };
+  }
   return null;
-}
-
-/**
- * Who may write progress for this student (single-student route).
- * Parent: own child. Student: self, and old enough per Q4 (MIN_STUDENT_VIEW_AGE).
- * Shikshak+: inBatchWriteScope.
- */
-async function assertProgressWriteAccess(
-  req: Request,
-  studentId: string,
-): Promise<{ ok: true } | { ok: false; status: number; code: "ERR_COURSE_STUDENT_OUT_OF_SCOPE" | "ERR_FORBIDDEN"; message: string }> {
-  const user = req.authUser!;
-  const stu = await loadActiveStudent(studentId);
-  if (!stu || stu.status !== "active") {
-    return {
-      ok: false,
-      status: 403,
-      code: "ERR_COURSE_STUDENT_OUT_OF_SCOPE",
-      message: "That student is outside your scope.",
-    };
-  }
-
-  if (user.role === "parent") {
-    if (stu.parent_id !== user.id) {
-      return {
-        ok: false,
-        status: 403,
-        code: "ERR_COURSE_STUDENT_OUT_OF_SCOPE",
-        message: "That student is not your child — you cannot update their progress.",
-      };
-    }
-    return { ok: true };
-  }
-
-  if (user.role === "student") {
-    if (stu.user_id !== user.id) {
-      return {
-        ok: false,
-        status: 403,
-        code: "ERR_COURSE_STUDENT_OUT_OF_SCOPE",
-        message: "You can only update your own course progress.",
-      };
-    }
-    const refusal = studentViewAgeRefusal(stu.dob);
-    if (refusal) {
-      return {
-        ok: false,
-        status: 403,
-        code: "ERR_FORBIDDEN",
-        message: refusal,
-      };
-    }
-    return { ok: true };
-  }
-
-  if (hasMinRole(user.role, "shikshak")) {
-    const scope = await resolveAdminScope(user);
-    if (!inBatchWriteScope(scope, stu.batch_id, stu.centre_id)) {
-      return {
-        ok: false,
-        status: 403,
-        code: "ERR_COURSE_STUDENT_OUT_OF_SCOPE",
-        message: "That student is outside your scope.",
-      };
-    }
-    return { ok: true };
-  }
-
-  return {
-    ok: false,
-    status: 403,
-    code: "ERR_FORBIDDEN",
-    message: "You do not have access to this resource.",
-  };
 }
 
 /* ═══════════════ CU3 catalogue ═══════════════ */
@@ -313,7 +253,9 @@ router.get("/", async (req: Request, res: Response) => {
 
   // Admin panel roles — active courses in city scope (still CU3 status=active).
   if (hasMinRole(user.role, "shikshak")) {
-    const cityIds = await cityIdsForAuthor(user);
+    // H1 — shikshak/sanchalak now resolve their real cities via
+    // resolveAdminScope instead of falling through to `[]` (WHERE false).
+    const cityIds = await cityIdsForUser(user);
     const rows = await db
       .select({
         id: courses.id,
@@ -892,9 +834,11 @@ router.post("/nodes/:nodeId/progress", async (req: Request, res: Response) => {
     fail(res, 404, "ERR_COURSE_NODE_NOT_FOUND", "That course node was not found.");
     return;
   }
-  const access = await assertProgressWriteAccess(req, body.student_id);
+  // M13 — the same gate the offline sync path uses (sync-batch.ts), so the
+  // online route and the sync handler can't drift into two implementations.
+  const access = await assertCourseProgressWriteAccess(req.authUser!, body.student_id);
   if (!access.ok) {
-    fail(res, access.status, access.code, access.message);
+    fail(res, 403, access.code, access.message);
     return;
   }
   try {
@@ -1064,14 +1008,10 @@ router.post(
       fail(res, 404, "ERR_COURSE_NODE_NOT_FOUND", "That course node was not found.");
       return;
     }
-    const stu = await loadActiveStudent(body.student_id);
-    if (!stu || stu.status !== "active") {
-      fail(res, 403, "ERR_COURSE_STUDENT_OUT_OF_SCOPE", "That student is outside your scope.");
-      return;
-    }
-    const scope = await resolveAdminScope(req.authUser!);
-    if (!inBatchWriteScope(scope, stu.batch_id, stu.centre_id)) {
-      fail(res, 403, "ERR_COURSE_STUDENT_OUT_OF_SCOPE", "That student is outside your scope.");
+    // M13 — the same gate the offline sync path uses (sync-batch.ts).
+    const access = await assertCourseCertifyAccess(req.authUser!, body.student_id);
+    if (!access.ok) {
+      fail(res, 403, access.code, access.message);
       return;
     }
     try {
@@ -1124,7 +1064,10 @@ router.post(
         status: z.enum(COURSE_PROGRESS_STATUSES).optional(),
       })
       .parse(req.body);
-    const node = await resolveNodeKind(String(req.params.nodeId));
+    // H2 gates a WRITE against an inactive/deleted course, but CU19 corrections
+    // are the exception: a super_admin fixing a certification on an ARCHIVED
+    // course must still reach it — archiving never touches what was earned.
+    const node = await resolveNodeKind(String(req.params.nodeId), { requireLiveCourse: false });
     if (!node) {
       fail(res, 404, "ERR_COURSE_NODE_NOT_FOUND", "That course node was not found.");
       return;

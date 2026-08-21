@@ -14,7 +14,6 @@ interface CourseListRow {
   name_hi: string | null;
   kind: string;
   academic_year: string | null;
-  punya_points: number;
 }
 
 interface CertificateRow {

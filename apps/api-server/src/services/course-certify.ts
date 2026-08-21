@@ -25,6 +25,7 @@ import {
   sectionAwardKey,
   sectionReverseKey,
 } from "../lib/course-points";
+import { courseReachableForStudent } from "../lib/course-visibility";
 import { writeAudit } from "../lib/audit";
 import {
   issueCourseCertificate,
@@ -238,15 +239,25 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
     let sectionPunyaPoints = 0;
     let coursePunyaPoints = 0;
 
+    // H2 — the certify lookup: join `courses` and reject a certify whose
+    // parent course is draft/archived/deleted/wrong-city/MSV-gated for THIS
+    // student. A write must not be reachable where the CU3 read is not.
+    let courseGate: { status: string; deleted_at: Date | null; city_id: string | null; kind: string };
+
     if (input.nodeKind === "subsection") {
       const [row] = await tx
         .select({
           id: course_subsections.id,
           section_id: course_subsections.section_id,
           course_id: course_sections.course_id,
+          course_status: courses.status,
+          course_deleted_at: courses.deleted_at,
+          course_city_id: courses.city_id,
+          course_kind: courses.kind,
         })
         .from(course_subsections)
         .innerJoin(course_sections, eq(course_sections.id, course_subsections.section_id))
+        .innerJoin(courses, eq(courses.id, course_sections.course_id))
         .where(and(eq(course_subsections.id, input.nodeId), isNull(course_subsections.deleted_at)))
         .limit(1);
       if (!row) {
@@ -255,6 +266,12 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
       subsectionId = row.id;
       sectionId = null; // XOR — subsection progress stores subsection_id only
       courseId = row.course_id;
+      courseGate = {
+        status: row.course_status,
+        deleted_at: row.course_deleted_at,
+        city_id: row.course_city_id,
+        kind: row.course_kind,
+      };
     } else {
       const [row] = await tx
         .select({
@@ -262,6 +279,10 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
           course_id: course_sections.course_id,
           punya_points: course_sections.punya_points,
           course_punya: courses.punya_points,
+          course_status: courses.status,
+          course_deleted_at: courses.deleted_at,
+          course_city_id: courses.city_id,
+          course_kind: courses.kind,
         })
         .from(course_sections)
         .innerJoin(courses, eq(courses.id, course_sections.course_id))
@@ -275,6 +296,35 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
       courseId = row.course_id;
       sectionPunyaPoints = row.punya_points;
       coursePunyaPoints = row.course_punya;
+      courseGate = {
+        status: row.course_status,
+        deleted_at: row.course_deleted_at,
+        city_id: row.course_city_id,
+        kind: row.course_kind,
+      };
+    }
+
+    // M21 — query through `tx`, not `db`, so this gate doesn't open a second
+    // pool connection alongside the certify transaction.
+    const [gateStudent] = await tx
+      .select({
+        status: students.status,
+        centre_id: students.centre_id,
+        msv_status: students.msv_status,
+      })
+      .from(students)
+      .where(and(eq(students.id, input.studentId), isNull(students.deleted_at)))
+      .limit(1);
+    if (!gateStudent || gateStudent.status !== "active") {
+      throw new CourseCertifyError(
+        403,
+        Err.COURSE_STUDENT_OUT_OF_SCOPE,
+        "That student is outside your scope.",
+      );
+    }
+    const gateCityId = await studentCityFromCentre(tx, gateStudent.centre_id);
+    if (!courseReachableForStudent(courseGate, gateStudent, gateCityId)) {
+      throw new CourseCertifyError(404, Err.COURSE_NODE_NOT_FOUND, "That course node was not found.");
     }
 
     // Load existing progress (may be absent — silence is not_started).
@@ -435,12 +485,9 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
 
     // Sub-section stars never carry Punya (CU21). Certificates only on section rows (CU25).
     if (input.nodeKind === "section" && sectionId) {
-      const [stu] = await tx
-        .select({ centre_id: students.centre_id })
-        .from(students)
-        .where(eq(students.id, input.studentId))
-        .limit(1);
-      const cityId = await studentCityFromCentre(tx, stu?.centre_id ?? null);
+      // H2's gate above already resolved this student's city — reuse it
+      // instead of a second (student, centre) round trip.
+      const cityId = gateCityId;
 
       const awardPoints = await resolveCourseAwardPoints(
         COURSE_SECTION_FEATURE_KEY,

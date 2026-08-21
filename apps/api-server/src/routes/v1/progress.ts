@@ -28,7 +28,7 @@ import { auditFromReq } from "../../lib/audit";
 import { storage, makeKey } from "../../lib/storage";
 import { signUploadUrl } from "../../lib/file-tokens";
 import { PdfBuilder } from "../../lib/pdf";
-import { inScope, ownedStudentsCondition, scopedCentreFilter } from "../../lib/route-helpers";
+import { ownedStudentsCondition, scopedCentreFilter } from "../../lib/route-helpers";
 import { getStudentHomeworkCompletionRate } from "../../lib/homework-completion-rate";
 import {
   CourseProgressError,
@@ -236,15 +236,18 @@ async function fetchStudent(id: string) {
   return row ?? null;
 }
 
-/** Shikshak: assigned batches only; city_admin+: centre membership. */
+/**
+ * H30 — Shikshak: assigned batches only; sanchalak+: centre membership
+ * (CU21/Q12 — the same gate niyam approve/reject and course certify already
+ * use). inBatchWriteScope already resolves batchIds===null to centre
+ * membership on its own, so this is no longer a hand-rolled branch over the
+ * deprecated centre-only inScope gate.
+ */
 function studentInProgressScope(
   scope: AdminScope,
   student: { centre_id: string | null; batch_id: string | null },
 ): boolean {
-  if (scope.batchIds !== null) {
-    return inBatchWriteScope(scope, student.batch_id, student.centre_id);
-  }
-  return inScope(scope, student.centre_id);
+  return inBatchWriteScope(scope, student.batch_id, student.centre_id);
 }
 
 /** The city of a student via their centre, or null (no centre / unassigned). */
@@ -578,12 +581,18 @@ router.post(
     }
     const scope = await resolveAdminScope(req.authUser!);
     const [report] = await db
-      .select({ id: progress_reports.id, centre_id: students.centre_id })
+      .select({
+        id: progress_reports.id,
+        centre_id: students.centre_id,
+        batch_id: students.batch_id,
+      })
       .from(progress_reports)
       .innerJoin(students, eq(students.id, progress_reports.student_id))
       .where(eq(progress_reports.id, id))
       .limit(1);
-    if (!report || !inScope(scope, report.centre_id)) {
+    // H30 — same CU21/Q12 gate as the rest of this file now: shikshak
+    // batch-bound, sanchalak+ centre-bound.
+    if (!report || !inBatchWriteScope(scope, report.batch_id, report.centre_id)) {
       fail(res, 404, "ERR_NOT_FOUND", "Report not found in your scope.");
       return;
     }

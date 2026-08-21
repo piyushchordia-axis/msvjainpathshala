@@ -5,14 +5,12 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import {
   db,
   cities,
-  centres,
   course_sections,
   course_subsections,
   course_template_sections,
   course_template_subsections,
   course_templates,
   courses,
-  type User,
 } from "@workspace/db";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
@@ -20,7 +18,7 @@ import type { Role } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { requireMinRole } from "../../lib/roles";
-import { resolveAdminScope } from "../../lib/scope";
+import { cityIdsForUser } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import {
   assertMayAuthorCourseKind,
@@ -37,24 +35,6 @@ const router: IRouter = Router();
 router.use(requireAuth, requireAdminPanel);
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-async function cityIdsForUser(user: User): Promise<string[] | null> {
-  if (user.role === "super_admin") return null;
-  if (user.role === "city_admin") return user.city_id ? [user.city_id] : [];
-  if (user.role === "state_admin") {
-    if (!user.state_id) return [];
-    const rows = await db.select({ id: cities.id }).from(cities).where(eq(cities.state_id, user.state_id));
-    return rows.map((r) => r.id);
-  }
-  const scope = await resolveAdminScope(user);
-  if (scope.centreIds === null) return null;
-  if (scope.centreIds.length === 0) return [];
-  const rows = await db
-    .select({ city_id: centres.city_id })
-    .from(centres)
-    .where(inArray(centres.id, scope.centreIds));
-  return Array.from(new Set(rows.map((r) => r.city_id).filter((c): c is string => !!c)));
-}
 
 function handleServiceError(res: Response, err: unknown): boolean {
   if (
@@ -345,9 +325,36 @@ router.patch(
       fail(res, 404, "ERR_NOT_FOUND", "Course not found in your scope.");
       return;
     }
+    // H4 — validate the DESTINATION city too. The OLD-city check above only
+    // stops a city_admin from touching a course they can't already see; on
+    // its own it lets that same PATCH move the course INTO a city its real
+    // city_admin cannot see or administer.
+    if (cityIds !== null && nextCity && !cityIds.includes(nextCity)) {
+      fail(res, 403, "ERR_FORBIDDEN", "City not in your scope.");
+      return;
+    }
     if (body.status === "archived" && course.status === "draft") {
       fail(res, 409, "ERR_INVALID_STATE", "Publish the course before archiving it.");
       return;
+    }
+    // M19 — re-run the CU4 publish gate's name_hi/academic_year half on every
+    // PATCH that leaves the course active: without this, a PATCH can null
+    // either field on a LIVE course, and CU4 only ever checked them once, at
+    // the draft→active transition.
+    const resultStatus = body.status === "archived" ? "archived" : course.status;
+    if (resultStatus === "active") {
+      const nextNameHi = body.name_hi !== undefined ? body.name_hi : course.name_hi;
+      const nextAcademicYear =
+        body.academic_year !== undefined ? body.academic_year : course.academic_year;
+      if (!nextNameHi?.trim() || !nextAcademicYear?.trim()) {
+        fail(
+          res,
+          422,
+          "ERR_COURSE_NOT_PUBLISHABLE",
+          "An active course must keep a Hindi name and an academic year — set both, or archive the course first.",
+        );
+        return;
+      }
     }
     // CU4 — active may not return to draft.
     const [row] = await db

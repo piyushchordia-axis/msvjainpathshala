@@ -365,7 +365,8 @@ router.get("/courses", async (req: Request, res: Response) => {
       name_hi: courses.name_hi,
       kind: courses.kind,
       academic_year: courses.academic_year,
-      punya_points: courses.punya_points,
+      // L16 — punya_points dropped from this guest/public payload: it's an
+      // internal award value, not catalogue browsing information.
       // Returned so the catalogue can show/filter by city instead of presenting
       // a Mumbai course and a national one as indistinguishable.
       city_id: courses.city_id,

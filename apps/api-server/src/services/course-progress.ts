@@ -5,8 +5,10 @@
  */
 import {
   db,
+  centres,
   course_sections,
   course_subsections,
+  courses,
   student_course_progress,
   students,
 } from "@workspace/db";
@@ -15,6 +17,7 @@ import type { ErrorCode } from "@workspace/api-zod";
 import { ErrorCode as Err } from "@workspace/api-zod";
 import type { AdminScope } from "../lib/scope";
 import { inBatchWriteScope } from "../lib/scope";
+import { courseReachableForStudent } from "../lib/course-visibility";
 import { writeAudits, type AuditInput } from "../lib/audit";
 import { isUniqueViolationOn } from "../lib/pg-errors";
 import type { Role } from "@workspace/api-zod";
@@ -81,38 +84,114 @@ function assertLiveStatus(status: string): asserts status is CourseProgressStatu
   }
 }
 
+const NODE_NOT_FOUND_MESSAGE =
+  "That course node was not found — check the id and try again.";
+
+/**
+ * H2 — load the student's centre-city + msv_status and reject a write whose
+ * parent course isn't reachable for THAT student (CU3): wrong city, or an
+ * MSV course for a non-approved student. A write must not be reachable where
+ * the CU3 read is not.
+ */
+async function assertCourseReachable(
+  client: DbOrTx,
+  studentId: string,
+  course: { status: string; deleted_at: Date | null; city_id: string | null; kind: string },
+): Promise<void> {
+  const [stu] = await client
+    .select({ centre_id: students.centre_id, msv_status: students.msv_status })
+    .from(students)
+    .where(eq(students.id, studentId))
+    .limit(1);
+  if (!stu) {
+    throw new CourseProgressError(404, Err.COURSE_NODE_NOT_FOUND, NODE_NOT_FOUND_MESSAGE);
+  }
+  let studentCityId: string | null = null;
+  if (stu.centre_id) {
+    const [c] = await client
+      .select({ city_id: centres.city_id })
+      .from(centres)
+      .where(eq(centres.id, stu.centre_id))
+      .limit(1);
+    studentCityId = c?.city_id ?? null;
+  }
+  if (!courseReachableForStudent(course, stu, studentCityId)) {
+    throw new CourseProgressError(404, Err.COURSE_NODE_NOT_FOUND, NODE_NOT_FOUND_MESSAGE);
+  }
+}
+
+/**
+ * H2 — joins the parent `courses` row and rejects a write whose course is
+ * draft/archived/deleted outright (course-level, no student needed), and —
+ * when `studentId` is given — also the per-student city/MSV half of CU3.
+ * Bulk/reset's upfront existence check calls this WITHOUT a studentId (the
+ * course-level check is enough to fail fast); the per-student inner-loop
+ * write (via upsertCourseProgress) always supplies one.
+ */
 async function resolveNode(
   nodeKind: CourseProgressNodeKind,
   nodeId: string,
   client: DbOrTx = db,
+  studentId?: string,
 ): Promise<{ sectionId: string | null; subsectionId: string | null }> {
   if (nodeKind === "subsection") {
     const [row] = await client
-      .select({ id: course_subsections.id })
+      .select({
+        id: course_subsections.id,
+        course_status: courses.status,
+        course_deleted_at: courses.deleted_at,
+        course_city_id: courses.city_id,
+        course_kind: courses.kind,
+      })
       .from(course_subsections)
+      .innerJoin(course_sections, eq(course_sections.id, course_subsections.section_id))
+      .innerJoin(courses, eq(courses.id, course_sections.course_id))
       .where(and(eq(course_subsections.id, nodeId), isNull(course_subsections.deleted_at)))
       .limit(1);
-    if (!row) {
-      throw new CourseProgressError(
-        404,
-        Err.COURSE_NODE_NOT_FOUND,
-        "That course node was not found — check the id and try again.",
-      );
+    if (
+      !row ||
+      row.course_status !== "active" ||
+      row.course_deleted_at
+    ) {
+      throw new CourseProgressError(404, Err.COURSE_NODE_NOT_FOUND, NODE_NOT_FOUND_MESSAGE);
+    }
+    if (studentId) {
+      await assertCourseReachable(client, studentId, {
+        status: row.course_status,
+        deleted_at: row.course_deleted_at,
+        city_id: row.course_city_id,
+        kind: row.course_kind,
+      });
     }
     return { sectionId: null, subsectionId: row.id };
   }
 
   const [row] = await client
-    .select({ id: course_sections.id })
+    .select({
+      id: course_sections.id,
+      course_status: courses.status,
+      course_deleted_at: courses.deleted_at,
+      course_city_id: courses.city_id,
+      course_kind: courses.kind,
+    })
     .from(course_sections)
+    .innerJoin(courses, eq(courses.id, course_sections.course_id))
     .where(and(eq(course_sections.id, nodeId), isNull(course_sections.deleted_at)))
     .limit(1);
-  if (!row) {
-    throw new CourseProgressError(
-      404,
-      Err.COURSE_NODE_NOT_FOUND,
-      "That course node was not found — check the id and try again.",
-    );
+  if (
+    !row ||
+    row.course_status !== "active" ||
+    row.course_deleted_at
+  ) {
+    throw new CourseProgressError(404, Err.COURSE_NODE_NOT_FOUND, NODE_NOT_FOUND_MESSAGE);
+  }
+  if (studentId) {
+    await assertCourseReachable(client, studentId, {
+      status: row.course_status,
+      deleted_at: row.course_deleted_at,
+      city_id: row.course_city_id,
+      kind: row.course_kind,
+    });
   }
   return { sectionId: row.id, subsectionId: null };
 }
@@ -156,7 +235,12 @@ export async function upsertCourseProgress(
 ): Promise<UpsertCourseProgressResult> {
   assertLiveStatus(input.status);
   const client: DbOrTx = tx ?? db;
-  const { sectionId, subsectionId } = await resolveNode(input.nodeKind, input.nodeId, client);
+  const { sectionId, subsectionId } = await resolveNode(
+    input.nodeKind,
+    input.nodeId,
+    client,
+    input.studentId,
+  );
 
   const existingWhere = subsectionId
     ? and(
