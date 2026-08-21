@@ -9,7 +9,20 @@ import { createPointsCache } from "./punya-points-cache";
 export const COURSE_SECTION_FEATURE_KEY = "course_section_certified";
 export const COURSE_COMPLETED_FEATURE_KEY = "course_completed";
 
-type FeatureBounds = { min_points: number; max_points: number; multiplier: number };
+type FeatureBounds = {
+  min_points: number;
+  max_points: number;
+  multiplier: number;
+  /**
+   * H3: whether a punya_features row for this key exists AND is active.
+   * `max_points` defaulting to 0 for a missing/inactive row made the old
+   * clamp (`max_points > 0 && points > max_points`) evaluate to false — the
+   * clamp was SKIPPED, not applied, so the multiplied points escaped
+   * unclamped. This flag lets the caller short-circuit to 0 before any
+   * clamp math runs, instead of relying on a clamp that silently no-ops.
+   */
+  active: boolean;
+};
 
 const TTL_MS = 60_000;
 const cache = createPointsCache<FeatureBounds>("course", TTL_MS);
@@ -69,6 +82,10 @@ async function resolveFeature(
     max_points: feat?.max_points ?? 0,
     // Missing config → 0 multiplier → award 0 (CU22 seed landmine).
     multiplier: multiplier ?? 0,
+    // H3 — `feat` is undefined for BOTH a missing row and an inactive one
+    // (the query already filters `is_active = true`), so this single flag
+    // covers both cases the finding calls out.
+    active: feat != null,
   };
   await cache.set(cacheKey, value);
   return value;
@@ -85,6 +102,12 @@ export async function resolveCourseAwardPoints(
 ): Promise<number> {
   if (authoredPoints <= 0) return 0;
   const cfg = await resolveFeature(featureKey, cityId);
+  // H3 — a missing or inactive punya_features row disables the award
+  // entirely. This must run BEFORE any clamp math: relying on max_points'
+  // default of 0 to "clamp" the award is exactly the bug — that condition
+  // is `max_points > 0`, which is false at 0, so the clamp never fired and
+  // the multiplied points went out unclamped.
+  if (!cfg.active) return 0;
   if (cfg.multiplier <= 0) return 0;
   let points = Math.round((authoredPoints * cfg.multiplier) / 100.0);
   if (cfg.min_points > 0 && points < cfg.min_points) points = cfg.min_points;

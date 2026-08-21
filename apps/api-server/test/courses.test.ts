@@ -6,7 +6,8 @@ import request from "supertest";
 import { pool } from "@workspace/db";
 import app from "../src/app";
 import { loginAs, auth, withLedgerMaintenance } from "./helpers";
-import { correctCourseCertification } from "../src/services/course-certify";
+import { correctCourseCertification, certifyCourseNode } from "../src/services/course-certify";
+import type { Role } from "@workspace/api-zod";
 
 /** Courses planted by this file, removed in afterAll. */
 const plantedCourseIds: string[] = [];
@@ -189,6 +190,24 @@ async function txCount(studentId: string, featureKey: string): Promise<number> {
     `select count(*)::text as n from punya_transactions
       where student_id = $1 and feature_key = $2 and points > 0`,
     [studentId, featureKey],
+  );
+  return Number(r.rows[0]!.n);
+}
+
+/**
+ * Same as txCount, scoped to one course's source_entity_id. Several tests in
+ * this file share the same seeded student, so an unscoped course_completed
+ * count picks up every OTHER test's course bonus for that student too.
+ */
+async function courseTxCount(
+  studentId: string,
+  featureKey: string,
+  courseId: string,
+): Promise<number> {
+  const r = await pool.query<{ n: string }>(
+    `select count(*)::text as n from punya_transactions
+      where student_id = $1 and feature_key = $2 and points > 0 and source_entity_id = $3`,
+    [studentId, featureKey, courseId],
   );
   return Number(r.rows[0]!.n);
 }
@@ -841,6 +860,109 @@ describe("courses step 3 — Punya awards", () => {
     expect(key.startsWith(`course_completed:${courseId}:${studentId}:${sectionIds[1]}:`)).toBe(
       true,
     );
+  });
+
+  it("H7/M6: concurrent certification of the last two sections mints the course bonus exactly once", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId, {
+      sections: 2,
+      punya: 30,
+    });
+    await pool.query(`update courses set punya_points = 20 where id = $1`, [courseId]);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const kid = await pool.query<{ id: string }>(
+      `select s.id from students s
+        join shikshak_batch_assignments a on a.batch_id = s.batch_id and a.is_active = true
+        join users u on u.id = a.user_id
+       where u.phone = '+919800000005' and s.status = 'active' and s.deleted_at is null
+       limit 1`,
+    );
+    const studentId = kid.rows[0]!.id;
+
+    for (const sid of sectionIds) {
+      await request(app)
+        .post(`/v1/courses/nodes/${sid}/progress`)
+        .set(auth(shikshak.token))
+        .send({ student_id: studentId, status: "completed" })
+        .expect(200);
+    }
+
+    // H7 — both requests race to certify the LAST outstanding section at
+    // once, calling the service directly (not through supertest) so the two
+    // transactions genuinely overlap instead of queueing behind one HTTP
+    // connection.
+    const [a, b] = await Promise.all([
+      certifyCourseNode({
+        nodeKind: "section",
+        nodeId: sectionIds[0]!,
+        studentId,
+        actorId: shikshak.user.id,
+        actorRole: shikshak.user.role as Role,
+      }),
+      certifyCourseNode({
+        nodeKind: "section",
+        nodeId: sectionIds[1]!,
+        studentId,
+        actorId: shikshak.user.id,
+        actorRole: shikshak.user.role as Role,
+      }),
+    ]);
+    expect(a.applied).toBe(true);
+    expect(b.applied).toBe(true);
+
+    // Exactly one course-bonus transaction FOR THIS COURSE — not zero (the
+    // pre-fix race, where both sides observed "not complete" and neither
+    // awarded it) and not two (a double award from a missing serialization
+    // point). Scoped by source_entity_id: this shared seeded student picks
+    // up course bonuses from other tests in this file too.
+    expect(await courseTxCount(studentId, "course_completed", courseId)).toBe(1);
+  });
+
+  it("H7: the per-(student, course) advisory lock genuinely blocks a second checker until the first commits", async () => {
+    // The end-to-end test above proves the OUTCOME (exactly one course
+    // bonus). This test proves the MECHANISM deterministically: a real local
+    // Postgres round trip is fast enough that two genuinely concurrent
+    // certify transactions do not reliably interleave at the exact
+    // allSectionsCertified line every run, which would make that test alone
+    // a weak regression guard. Driving two raw connections through the same
+    // pg_advisory_xact_lock(hashtextextended(...)) key course-certify.ts
+    // actually uses removes the timing dependency: the second acquisition
+    // must observably block until the first transaction ends.
+    const key = `course:lock-probe-${stamp()}:${stamp()}`;
+    const clientA = await pool.connect();
+    const clientB = await pool.connect();
+    try {
+      await clientA.query("begin");
+      await clientB.query("begin");
+      await clientA.query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [key]);
+
+      let bAcquired = false;
+      const bWait = clientB
+        .query(`select pg_advisory_xact_lock(hashtextextended($1, 0))`, [key])
+        .then(() => {
+          bAcquired = true;
+        });
+
+      // Give B every chance to (wrongly) acquire the lock immediately.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(bAcquired).toBe(false);
+
+      await clientA.query("commit");
+      await bWait;
+      expect(bAcquired).toBe(true);
+      await clientB.query("commit");
+    } finally {
+      await clientA.query("rollback").catch(() => {});
+      await clientB.query("rollback").catch(() => {});
+      clientA.release();
+      clientB.release();
+    }
   });
 
   it("super_admin correction reverses awards; re-certify lands a NEW award (AT17)", async () => {

@@ -170,31 +170,57 @@ async function studentCityFromCentre(tx: Tx, centreId: string | null): Promise<s
   return c?.city_id ?? null;
 }
 
+/**
+ * CU25 course-complete predicate: every non-deleted section of the course has
+ * a certified progress row for this student.
+ *
+ * H7 — two concurrent last-section certifications can each run this check in
+ * their own transaction before the other commits, both observe "not
+ * complete" under READ COMMITTED, and both skip the course bonus. Serialize
+ * on a per-(student, course) advisory lock held for the rest of the certify
+ * transaction (releases automatically at commit/rollback): whichever caller
+ * checks SECOND does so only after the first has committed, so it sees the
+ * first's certification and correctly finds the course complete. This
+ * guarantees the bonus fires exactly once, never zero, never twice.
+ *
+ * M6 — collapsed from N sequential per-section lookups into one query.
+ */
 async function allSectionsCertified(
   tx: Tx,
   courseId: string,
   studentId: string,
 ): Promise<boolean> {
-  const sections = await tx
-    .select({ id: course_sections.id })
-    .from(course_sections)
-    .where(and(eq(course_sections.course_id, courseId), isNull(course_sections.deleted_at)));
-  if (sections.length === 0) return false; // CU25 — empty course issues nothing
-  for (const s of sections) {
-    const [prog] = await tx
-      .select({ certified_at: student_course_progress.certified_at })
-      .from(student_course_progress)
-      .where(
-        and(
-          eq(student_course_progress.student_id, studentId),
-          eq(student_course_progress.section_id, s.id),
-          isNull(student_course_progress.subsection_id),
-        ),
-      )
-      .limit(1);
-    if (!prog?.certified_at) return false;
-  }
-  return true;
+  await tx.execute(
+    sql`select pg_advisory_xact_lock(hashtextextended(${`course:${studentId}:${courseId}`}, 0))`,
+  );
+
+  const result = await tx.execute(sql`
+    select
+      exists (
+        select 1 from course_sections
+         where course_id = ${courseId}::uuid and deleted_at is null
+      ) as has_sections,
+      not exists (
+        select 1
+          from course_sections cs
+         where cs.course_id = ${courseId}::uuid
+           and cs.deleted_at is null
+           and not exists (
+             select 1 from student_course_progress scp
+              where scp.section_id = cs.id
+                and scp.student_id = ${studentId}::uuid
+                and scp.subsection_id is null
+                and scp.certified_at is not null
+           )
+      ) as all_certified
+  `);
+  const row = (
+    result as unknown as {
+      rows?: Array<{ has_sections: boolean; all_certified: boolean }>;
+    }
+  ).rows?.[0];
+  if (!row?.has_sections) return false; // CU25 — empty course issues nothing
+  return Boolean(row.all_certified);
 }
 
 export type CertifyInput = {
