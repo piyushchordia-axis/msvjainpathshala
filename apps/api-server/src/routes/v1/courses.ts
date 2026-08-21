@@ -15,7 +15,7 @@ import {
 import { and, asc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Role } from "@workspace/api-zod";
-import { ok, fail } from "../../lib/envelope";
+import { ok, fail, zodDetails } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
 import { requireMinRole, hasMinRole } from "../../lib/roles";
 import { resolveAdminScope, inBatchWriteScope, inCentreScope, cityIdsForUser } from "../../lib/scope";
@@ -58,7 +58,15 @@ function handleErr(res: Response, err: unknown): boolean {
     err instanceof CourseAdminError ||
     err instanceof CourseCertifyError
   ) {
-    fail(res, err.httpStatus, err.code, err.message);
+    // L4 — forward `details` the same way admin-courses.ts's handleServiceError
+    // already does; only CourseAdminError actually carries one today.
+    fail(
+      res,
+      err.httpStatus,
+      err.code,
+      err.message,
+      "details" in err ? (err as CourseAdminError).details : undefined,
+    );
     return true;
   }
   return false;
@@ -124,6 +132,9 @@ async function resolveNodeKind(
   kind: "section" | "subsection";
   courseId: string;
 } | null> {
+  // M16 — guard before this ever reaches SQL; a malformed :nodeId used to
+  // raise a raw Postgres 22P02 off the uuid comparison instead of a clean 404.
+  if (!UUID_RE.test(nodeId)) return null;
   const requireLive = opts.requireLiveCourse ?? true;
   const [sub] = await db
     .select({
@@ -206,6 +217,11 @@ router.get("/", async (req: Request, res: Response) => {
           name_hi: courses.name_hi,
           kind: courses.kind,
           academic_year: courses.academic_year,
+          // L3 — normalize against the admin-panel branch below, which already
+          // returns `status`; courseVisibleToStudentSql always resolves it to
+          // 'active' here, but the field should exist so every branch's items
+          // share one shape.
+          status: courses.status,
           punya_points: courses.punya_points,
         })
         .from(courses)
@@ -243,6 +259,8 @@ router.get("/", async (req: Request, res: Response) => {
         name_hi: courses.name_hi,
         kind: courses.kind,
         academic_year: courses.academic_year,
+        // L3 — same normalization as the parent branch above.
+        status: courses.status,
         punya_points: courses.punya_points,
       })
       .from(courses)
@@ -465,8 +483,8 @@ router.post(
     let body: z.infer<typeof sectionBody>;
     try {
       body = sectionBody.parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid section data.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid section data.", zodDetails(err));
       return;
     }
     const course = await loadAuthorableCourse(req, res, String(req.params.courseId));
@@ -510,17 +528,23 @@ router.patch(
   requireAdminPanel,
   requireMinRole("city_admin"),
   async (req: Request, res: Response) => {
+    // M16 — guard :sectionId before it reaches SQL.
+    const sectionId = String(req.params.sectionId);
+    if (!UUID_RE.test(sectionId)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Section not found.");
+      return;
+    }
     let body: z.infer<typeof patchSectionBody>;
     try {
       body = patchSectionBody.parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid section data.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid section data.", zodDetails(err));
       return;
     }
     const [sec] = await db
       .select({ id: course_sections.id, course_id: course_sections.course_id })
       .from(course_sections)
-      .where(and(eq(course_sections.id, String(req.params.sectionId)), isNull(course_sections.deleted_at)))
+      .where(and(eq(course_sections.id, sectionId), isNull(course_sections.deleted_at)))
       .limit(1);
     if (!sec) {
       fail(res, 404, "ERR_NOT_FOUND", "Section not found.");
@@ -558,10 +582,16 @@ router.delete(
   requireAdminPanel,
   requireMinRole("city_admin"),
   async (req: Request, res: Response) => {
+    // M16 — guard :sectionId before it reaches SQL.
+    const sectionId = String(req.params.sectionId);
+    if (!UUID_RE.test(sectionId)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Section not found.");
+      return;
+    }
     const [sec] = await db
       .select({ id: course_sections.id, course_id: course_sections.course_id })
       .from(course_sections)
-      .where(and(eq(course_sections.id, String(req.params.sectionId)), isNull(course_sections.deleted_at)))
+      .where(and(eq(course_sections.id, sectionId), isNull(course_sections.deleted_at)))
       .limit(1);
     if (!sec) {
       fail(res, 404, "ERR_NOT_FOUND", "Section not found.");
@@ -595,8 +625,8 @@ router.post(
     let body: z.infer<typeof reorderSectionsBody>;
     try {
       body = reorderSectionsBody.parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid reorder data.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid reorder data.", zodDetails(err));
       return;
     }
     const course = await loadAuthorableCourse(req, res, String(req.params.courseId));
@@ -621,6 +651,14 @@ router.post(
           .where(eq(course_sections.id, body.section_ids[i]!));
       }
     });
+    // L5 — every other authoring write in this file audits.
+    await auditFromReq(req, {
+      action: "update",
+      entityKind: "course",
+      entityId: course.id,
+      summary: `Reordered ${body.section_ids.length} course section(s).`,
+      metadata: { section_ids: body.section_ids },
+    });
     ok(res, { id: course.id, reordered: body.section_ids.length });
   },
 );
@@ -640,17 +678,23 @@ router.post(
   requireAdminPanel,
   requireMinRole("city_admin"),
   async (req: Request, res: Response) => {
+    // M16 — guard :sectionId before it reaches SQL.
+    const sectionId = String(req.params.sectionId);
+    if (!UUID_RE.test(sectionId)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Section not found.");
+      return;
+    }
     let body: z.infer<typeof subsectionBody>;
     try {
       body = subsectionBody.parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid subsection data.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid subsection data.", zodDetails(err));
       return;
     }
     const [sec] = await db
       .select({ id: course_sections.id, course_id: course_sections.course_id })
       .from(course_sections)
-      .where(and(eq(course_sections.id, String(req.params.sectionId)), isNull(course_sections.deleted_at)))
+      .where(and(eq(course_sections.id, sectionId), isNull(course_sections.deleted_at)))
       .limit(1);
     if (!sec) {
       fail(res, 404, "ERR_NOT_FOUND", "Section not found.");
@@ -691,7 +735,20 @@ router.patch(
   requireAdminPanel,
   requireMinRole("city_admin"),
   async (req: Request, res: Response) => {
-    const body = subsectionBody.partial().parse(req.body ?? {});
+    // M16 — guard :subsectionId before it reaches SQL.
+    const subsectionId = String(req.params.subsectionId);
+    if (!UUID_RE.test(subsectionId)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Subsection not found.");
+      return;
+    }
+    // M17 — this .parse() used to be unwrapped (500 instead of 422).
+    let body: Partial<z.infer<typeof subsectionBody>>;
+    try {
+      body = subsectionBody.partial().parse(req.body ?? {});
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid subsection data.", zodDetails(err));
+      return;
+    }
     const [sub] = await db
       .select({
         id: course_subsections.id,
@@ -702,7 +759,7 @@ router.patch(
       .innerJoin(course_sections, eq(course_sections.id, course_subsections.section_id))
       .where(
         and(
-          eq(course_subsections.id, String(req.params.subsectionId)),
+          eq(course_subsections.id, subsectionId),
           isNull(course_subsections.deleted_at),
         ),
       )
@@ -722,6 +779,14 @@ router.patch(
         updated_at: new Date(),
       })
       .where(eq(course_subsections.id, sub.id));
+    // L5 — every other authoring write in this file audits.
+    await auditFromReq(req, {
+      action: "update",
+      entityKind: "course_subsection",
+      entityId: sub.id,
+      summary: "Updated course subsection.",
+      metadata: { section_id: sub.section_id, course_id: sub.course_id, ...body },
+    });
     ok(res, { id: sub.id });
   },
 );
@@ -731,6 +796,12 @@ router.delete(
   requireAdminPanel,
   requireMinRole("city_admin"),
   async (req: Request, res: Response) => {
+    // M16 — guard :subsectionId before it reaches SQL.
+    const subsectionId = String(req.params.subsectionId);
+    if (!UUID_RE.test(subsectionId)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Subsection not found.");
+      return;
+    }
     const [sub] = await db
       .select({
         id: course_subsections.id,
@@ -740,7 +811,7 @@ router.delete(
       .innerJoin(course_sections, eq(course_sections.id, course_subsections.section_id))
       .where(
         and(
-          eq(course_subsections.id, String(req.params.subsectionId)),
+          eq(course_subsections.id, subsectionId),
           isNull(course_subsections.deleted_at),
         ),
       )
@@ -774,17 +845,23 @@ router.post(
   requireAdminPanel,
   requireMinRole("city_admin"),
   async (req: Request, res: Response) => {
+    // M16 — guard :sectionId before it reaches SQL.
+    const sectionId = String(req.params.sectionId);
+    if (!UUID_RE.test(sectionId)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Section not found.");
+      return;
+    }
     let body: z.infer<typeof reorderSubsBody>;
     try {
       body = reorderSubsBody.parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid reorder data.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid reorder data.", zodDetails(err));
       return;
     }
     const [sec] = await db
       .select({ id: course_sections.id, course_id: course_sections.course_id })
       .from(course_sections)
-      .where(and(eq(course_sections.id, String(req.params.sectionId)), isNull(course_sections.deleted_at)))
+      .where(and(eq(course_sections.id, sectionId), isNull(course_sections.deleted_at)))
       .limit(1);
     if (!sec) {
       fail(res, 404, "ERR_NOT_FOUND", "Section not found.");
@@ -811,6 +888,14 @@ router.post(
           .where(eq(course_subsections.id, body.subsection_ids[i]!));
       }
     });
+    // L5 — every other authoring write in this file audits.
+    await auditFromReq(req, {
+      action: "update",
+      entityKind: "course_section",
+      entityId: sec.id,
+      summary: `Reordered ${body.subsection_ids.length} course subsection(s).`,
+      metadata: { subsection_ids: body.subsection_ids },
+    });
     ok(res, { id: sec.id, reordered: body.subsection_ids.length });
   },
 );
@@ -829,8 +914,8 @@ router.post("/nodes/:nodeId/progress", async (req: Request, res: Response) => {
   let body: z.infer<typeof progressBody>;
   try {
     body = progressBody.parse(req.body);
-  } catch {
-    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid progress payload.");
+  } catch (err) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid progress payload.", zodDetails(err));
     return;
   }
   const node = await resolveNodeKind(String(req.params.nodeId));
@@ -889,8 +974,14 @@ router.post(
     let body: z.infer<typeof bulkBody>;
     try {
       body = bulkBody.parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Provide exactly one of batch_id or student_ids.");
+    } catch (err) {
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        "Provide exactly one of batch_id or student_ids.",
+        zodDetails(err),
+      );
       return;
     }
     const node = await resolveNodeKind(String(req.params.nodeId));
@@ -960,8 +1051,14 @@ router.post(
     let body: z.infer<typeof bulkBody>;
     try {
       body = bulkBody.parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Provide exactly one of batch_id or student_ids.");
+    } catch (err) {
+      fail(
+        res,
+        422,
+        "ERR_VALIDATION_FAILED",
+        "Provide exactly one of batch_id or student_ids.",
+        zodDetails(err),
+      );
       return;
     }
     const node = await resolveNodeKind(String(req.params.nodeId));
@@ -1003,8 +1100,8 @@ router.post(
     let body: z.infer<typeof certifyBody>;
     try {
       body = certifyBody.parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid certify payload.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid certify payload.", zodDetails(err));
       return;
     }
     const node = await resolveNodeKind(String(req.params.nodeId));
@@ -1056,18 +1153,26 @@ router.post(
   },
 );
 
+const correctCertifyBody = z.object({
+  student_id: z.string().uuid(),
+  status: z.enum(COURSE_PROGRESS_STATUSES).optional(),
+});
+
 /** CU19 — super_admin correction (not a product feature). */
 router.post(
   "/nodes/:nodeId/certify/correct",
   requireAdminPanel,
   requireMinRole("super_admin"),
   async (req: Request, res: Response) => {
-    const body = z
-      .object({
-        student_id: z.string().uuid(),
-        status: z.enum(COURSE_PROGRESS_STATUSES).optional(),
-      })
-      .parse(req.body);
+    // M17 — this .parse() used to be unwrapped (500 instead of 422) — the one
+    // path that touches irreversible Punya.
+    let body: z.infer<typeof correctCertifyBody>;
+    try {
+      body = correctCertifyBody.parse(req.body);
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid correction payload.", zodDetails(err));
+      return;
+    }
     // H2 gates a WRITE against an inactive/deleted course, but CU19 corrections
     // are the exception: a super_admin fixing a certification on an ARCHIVED
     // course must still reach it — archiving never touches what was earned.

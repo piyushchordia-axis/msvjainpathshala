@@ -11,12 +11,13 @@ import {
   course_template_subsections,
   course_templates,
   courses,
+  COURSE_STATUSES,
 } from "@workspace/db";
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Role } from "@workspace/api-zod";
 import { ErrorCode as Err } from "@workspace/api-zod";
-import { ok, fail } from "../../lib/envelope";
+import { ok, fail, zodDetails } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { requireMinRole } from "../../lib/roles";
 import { cityIdsForUser } from "../../lib/scope";
@@ -64,8 +65,8 @@ router.post(
     let body: z.infer<typeof templateBody>;
     try {
       body = templateBody.parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid template data.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid template data.", zodDetails(err));
       return;
     }
     try {
@@ -111,8 +112,8 @@ router.patch(
     let body: z.infer<typeof patchTemplateBody>;
     try {
       body = patchTemplateBody.parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid template data.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid template data.", zodDetails(err));
       return;
     }
     if (body.kind) {
@@ -157,6 +158,11 @@ router.delete(
   requireRole("super_admin"),
   async (req: Request, res: Response) => {
     const id = String(req.params.id);
+    // M16 — guard :id before it reaches SQL.
+    if (!UUID_RE.test(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template not found.");
+      return;
+    }
     const now = new Date();
     const [row] = await db
       .update(course_templates)
@@ -188,16 +194,22 @@ router.post(
   "/course-templates/:id/derive",
   requireRole("super_admin"),
   async (req: Request, res: Response) => {
+    // M16 — guard :id before it reaches SQL.
+    const templateId = String(req.params.id);
+    if (!UUID_RE.test(templateId)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template not found.");
+      return;
+    }
     let body: z.infer<typeof deriveBody>;
     try {
       body = deriveBody.parse(req.body ?? {});
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid derive payload.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid derive payload.", zodDetails(err));
       return;
     }
     try {
       const row = await deriveCourseFromTemplate({
-        templateId: String(req.params.id),
+        templateId,
         cityId: body.city_id ?? null,
         academicYear: body.academic_year ?? null,
         name_en: body.name_en ?? null,
@@ -231,8 +243,8 @@ router.post(
     let body: z.infer<typeof createCourseBody>;
     try {
       body = createCourseBody.parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid course data.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid course data.", zodDetails(err));
       return;
     }
     const role = req.authUser!.role as Role;
@@ -298,8 +310,8 @@ router.patch(
     let body: z.infer<typeof patchCourseBody>;
     try {
       body = patchCourseBody.parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid course data.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid course data.", zodDetails(err));
       return;
     }
     const [course] = await db
@@ -577,6 +589,11 @@ router.post(
   requireMinRole("city_admin"),
   async (req: Request, res: Response) => {
     const id = String(req.params.id);
+    // M16 — guard :id before it reaches SQL.
+    if (!UUID_RE.test(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Course not found.");
+      return;
+    }
     const [course] = await db
       .select()
       .from(courses)
@@ -615,10 +632,22 @@ router.post(
   },
 );
 
+const listCoursesQuery = z.object({
+  kind: z.string().trim().min(1).optional(),
+  // M16 — a bad ?status= used to hit `eq(courses.status, status as ...)` and
+  // raise a raw Postgres 22P02 off the course_status_enum cast instead of a
+  // clean 422.
+  status: z.enum(COURSE_STATUSES).optional(),
+});
+
 router.get("/courses", requireMinRole("shikshak"), async (req: Request, res: Response) => {
+  const parsedQuery = listCoursesQuery.safeParse(req.query);
+  if (!parsedQuery.success) {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid query parameters.", zodDetails(parsedQuery.error));
+    return;
+  }
+  const { kind, status } = parsedQuery.data;
   const cityIds = await cityIdsForUser(req.authUser!);
-  const kind = typeof req.query.kind === "string" ? req.query.kind : undefined;
-  const status = typeof req.query.status === "string" ? req.query.status : undefined;
   const rows = await db
     .select({
       id: courses.id,
@@ -643,7 +672,7 @@ router.get("/courses", requireMinRole("shikshak"), async (req: Request, res: Res
       and(
         isNull(courses.deleted_at),
         kind ? eq(courses.kind, kind) : undefined,
-        status ? eq(courses.status, status as "draft" | "active" | "archived") : undefined,
+        status ? eq(courses.status, status) : undefined,
         cityIds === null
           ? undefined
           : cityIds.length === 0
@@ -857,11 +886,16 @@ router.post(
   requireRole("super_admin"),
   async (req: Request, res: Response) => {
     const id = String(req.params.id);
+    // M16 — guard :id before it reaches SQL.
+    if (!UUID_RE.test(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template not found.");
+      return;
+    }
     let body: z.infer<typeof templateSectionBody>;
     try {
       body = templateSectionBody.parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid section data.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid section data.", zodDetails(err));
       return;
     }
     const [tpl] = await db
@@ -910,11 +944,16 @@ router.patch(
   requireRole("super_admin"),
   async (req: Request, res: Response) => {
     const id = String(req.params.id);
+    // M16 — guard :id before it reaches SQL.
+    if (!UUID_RE.test(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template section not found.");
+      return;
+    }
     let body: Partial<z.infer<typeof templateSectionBody>>;
     try {
       body = templateSectionBody.partial().parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid section data.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid section data.", zodDetails(err));
       return;
     }
     const [row] = await db
@@ -946,6 +985,11 @@ router.delete(
   requireRole("super_admin"),
   async (req: Request, res: Response) => {
     const id = String(req.params.id);
+    // M16 — guard :id before it reaches SQL.
+    if (!UUID_RE.test(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template section not found.");
+      return;
+    }
     const [sec] = await db
       .select({ id: course_template_sections.id })
       .from(course_template_sections)
@@ -991,11 +1035,16 @@ router.post(
   requireRole("super_admin"),
   async (req: Request, res: Response) => {
     const sectionId = String(req.params.id);
+    // M16 — guard :id before it reaches SQL.
+    if (!UUID_RE.test(sectionId)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template section not found.");
+      return;
+    }
     let body: z.infer<typeof templateSubsectionBody>;
     try {
       body = templateSubsectionBody.parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid subsection data.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid subsection data.", zodDetails(err));
       return;
     }
     const [sec] = await db
@@ -1045,11 +1094,16 @@ router.patch(
   requireRole("super_admin"),
   async (req: Request, res: Response) => {
     const id = String(req.params.id);
+    // M16 — guard :id before it reaches SQL.
+    if (!UUID_RE.test(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template subsection not found.");
+      return;
+    }
     let body: Partial<z.infer<typeof templateSubsectionBody>>;
     try {
       body = templateSubsectionBody.partial().parse(req.body);
-    } catch {
-      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid subsection data.");
+    } catch (err) {
+      fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid subsection data.", zodDetails(err));
       return;
     }
     const [row] = await db
@@ -1082,6 +1136,11 @@ router.delete(
   requireRole("super_admin"),
   async (req: Request, res: Response) => {
     const id = String(req.params.id);
+    // M16 — guard :id before it reaches SQL.
+    if (!UUID_RE.test(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Template subsection not found.");
+      return;
+    }
     const now = new Date();
     const [row] = await db
       .update(course_template_subsections)

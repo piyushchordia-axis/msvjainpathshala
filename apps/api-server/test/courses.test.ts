@@ -1670,3 +1670,200 @@ describe("courses — C6/H6 regressions (already fixed elsewhere; tests confirme
     expect(certify.status).toBe(200);
   });
 });
+
+describe("courses — validation & error-envelope hardening (M16-M18, L3-L5)", () => {
+  const MALFORMED = "not-a-uuid";
+  const WELL_FORMED_BUT_UNKNOWN = "00000000-0000-4000-8000-000000000000";
+
+  it("M16: a malformed course :id on the tree route 404s, not 500s", async () => {
+    const parent = await loginAs("parent");
+    const res = await request(app)
+      .get(`/v1/courses/${MALFORMED}/tree`)
+      .set(auth(parent.token));
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe("ERR_NOT_FOUND");
+  });
+
+  it("M16: a malformed :id on admin PATCH /courses/:id 404s, not 500s", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const res = await request(app)
+      .patch(`/v1/admin/courses/${MALFORMED}`)
+      .set(auth(superAdmin.token))
+      .send({ name_en: "whatever" });
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe("ERR_NOT_FOUND");
+  });
+
+  it("M16: a malformed :nodeId on progress/certify routes 404s via resolveNodeKind, not 500s", async () => {
+    const parent = await loginAs("parent");
+    const res = await request(app)
+      .post(`/v1/courses/nodes/${MALFORMED}/progress`)
+      .set(auth(parent.token))
+      .send({ student_id: WELL_FORMED_BUT_UNKNOWN, status: "completed" });
+    expect(res.status).toBe(404);
+    expect(res.body.error.code).toBe("ERR_COURSE_NODE_NOT_FOUND");
+  });
+
+  it("M16: a malformed :sectionId on section authoring routes 404s, not 500s", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const patchRes = await request(app)
+      .patch(`/v1/courses/sections/${MALFORMED}`)
+      .set(auth(superAdmin.token))
+      .send({ title_en: "x", title_hi: "x", punya_points: 5 });
+    expect(patchRes.status).toBe(404);
+    expect(patchRes.body.error.code).toBe("ERR_NOT_FOUND");
+
+    const deleteRes = await request(app)
+      .delete(`/v1/courses/sections/${MALFORMED}`)
+      .set(auth(superAdmin.token));
+    expect(deleteRes.status).toBe(404);
+    expect(deleteRes.body.error.code).toBe("ERR_NOT_FOUND");
+  });
+
+  it("M16: a malformed :id on admin course-template routes 404s, not 500s", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const deleteRes = await request(app)
+      .delete(`/v1/admin/course-templates/${MALFORMED}`)
+      .set(auth(superAdmin.token));
+    expect(deleteRes.status).toBe(404);
+    expect(deleteRes.body.error.code).toBe("ERR_NOT_FOUND");
+
+    const deriveRes = await request(app)
+      .post(`/v1/admin/course-templates/${MALFORMED}/derive`)
+      .set(auth(superAdmin.token))
+      .send({});
+    expect(deriveRes.status).toBe(404);
+    expect(deriveRes.body.error.code).toBe("ERR_NOT_FOUND");
+  });
+
+  it("M16: a bad ?status= filter 422s with details[] populated instead of a raw 22P02", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const res = await request(app)
+      .get("/v1/admin/courses")
+      .query({ status: "not-a-real-status" })
+      .set(auth(superAdmin.token));
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe("ERR_VALIDATION_FAILED");
+    expect(Array.isArray(res.body.error.details)).toBe(true);
+    expect(res.body.error.details.length).toBeGreaterThan(0);
+
+    // A valid status still works.
+    const ok = await request(app)
+      .get("/v1/admin/courses")
+      .query({ status: "active" })
+      .set(auth(superAdmin.token));
+    expect(ok.status).toBe(200);
+  });
+
+  it("M17: the previously-unwrapped subsection PATCH .parse() 422s with details[] on a bad body", async () => {
+    const superAdmin = await loginAs("super_admin");
+    // sectionId doesn't need to exist — body validation runs before the
+    // existence lookup, so a well-formed-but-unknown id still exercises it.
+    const res = await request(app)
+      .patch(`/v1/courses/subsections/${WELL_FORMED_BUT_UNKNOWN}`)
+      .set(auth(superAdmin.token))
+      .send({ title_en: 12345 });
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe("ERR_VALIDATION_FAILED");
+    expect(Array.isArray(res.body.error.details)).toBe(true);
+    expect(res.body.error.details.length).toBeGreaterThan(0);
+  });
+
+  it("M17: the previously-unwrapped certify/correct .parse() 422s with details[] on a bad body", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const res = await request(app)
+      .post(`/v1/courses/nodes/${WELL_FORMED_BUT_UNKNOWN}/certify/correct`)
+      .set(auth(superAdmin.token))
+      .send({ student_id: "not-a-uuid", status: "bogus-status" });
+    expect(res.status).toBe(422);
+    expect(res.body.error.code).toBe("ERR_VALIDATION_FAILED");
+    expect(Array.isArray(res.body.error.details)).toBe(true);
+    expect(res.body.error.details.length).toBeGreaterThan(0);
+  });
+
+  it("L3: GET /v1/courses items carry a consistent shape (id + status) across the parent and admin branches", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const adminList = await request(app)
+      .get("/v1/courses")
+      .set(auth(superAdmin.token));
+    expect(adminList.status).toBe(200);
+    const adminItem = (adminList.body.data.items as Array<Record<string, unknown>>).find(
+      (c) => c.id === courseId,
+    );
+    expect(adminItem).toBeTruthy();
+    expect(adminItem!.status).toBe("active");
+
+    const parentList = await request(app)
+      .get("/v1/courses")
+      .set(auth(parent.token));
+    expect(parentList.status).toBe(200);
+    const parentItem = (parentList.body.data.items as Array<Record<string, unknown>>).find(
+      (c) => c.id === courseId,
+    );
+    expect(parentItem).toBeTruthy();
+    // L3 — both branches now carry `id` and `status`, not just the admin one.
+    expect(parentItem!.id).toBe(courseId);
+    expect(parentItem!.status).toBe("active");
+  });
+
+  it("L5: sub-section PATCH and both reorder routes write an audit_logs row", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId, {
+      sections: 2,
+    });
+
+    const sub = await request(app)
+      .post(`/v1/courses/sections/${sectionIds[0]}/subsections`)
+      .set(auth(superAdmin.token))
+      .send({ title_en: "Sub", title_hi: "उप" });
+    expect(sub.status).toBe(200);
+    const subsectionId = sub.body.data.id as string;
+
+    const patch = await request(app)
+      .patch(`/v1/courses/subsections/${subsectionId}`)
+      .set(auth(superAdmin.token))
+      .send({ title_en: "Sub renamed" });
+    expect(patch.status).toBe(200);
+
+    const patchAudit = await pool.query(
+      `select 1 from audit_logs where entity_kind = 'course_subsection' and entity_id = $1 and action = 'update'`,
+      [subsectionId],
+    );
+    expect(patchAudit.rows.length).toBeGreaterThan(0);
+
+    const sectionReorder = await request(app)
+      .post(`/v1/courses/${courseId}/sections/reorder`)
+      .set(auth(superAdmin.token))
+      .send({ section_ids: [...sectionIds].reverse() });
+    expect(sectionReorder.status).toBe(200);
+
+    const sectionReorderAudit = await pool.query(
+      `select 1 from audit_logs where entity_kind = 'course' and entity_id = $1 and action = 'update'
+        and summary like 'Reordered%section%'`,
+      [courseId],
+    );
+    expect(sectionReorderAudit.rows.length).toBeGreaterThan(0);
+
+    const subReorder = await request(app)
+      .post(`/v1/courses/sections/${sectionIds[0]}/subsections/reorder`)
+      .set(auth(superAdmin.token))
+      .send({ subsection_ids: [subsectionId] });
+    expect(subReorder.status).toBe(200);
+
+    const subReorderAudit = await pool.query(
+      `select 1 from audit_logs where entity_kind = 'course_section' and entity_id = $1 and action = 'update'
+        and summary like 'Reordered%subsection%'`,
+      [sectionIds[0]],
+    );
+    expect(subReorderAudit.rows.length).toBeGreaterThan(0);
+  });
+});
