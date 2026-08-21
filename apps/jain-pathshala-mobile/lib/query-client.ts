@@ -29,6 +29,15 @@ export const queryClient = new QueryClient({
       networkMode: "offlineFirst",
       refetchOnWindowFocus: false,
     },
+    // Mutations default to networkMode "online", which PAUSES them while
+    // NetInfo reports offline: isPending stays true forever and neither
+    // onSuccess nor onError ever fires. A student submitting an exam from a
+    // basement classroom got an indefinite spinner and, on force-quit, no
+    // submission — while the raw-fetch autosave on the same screen failed fast.
+    // offlineFirst attempts the request and surfaces a real error instead.
+    mutations: {
+      networkMode: "offlineFirst",
+    },
   },
 });
 

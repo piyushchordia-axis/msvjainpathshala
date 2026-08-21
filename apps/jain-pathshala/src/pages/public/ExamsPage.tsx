@@ -11,7 +11,7 @@
  * Auth is enforced server-side; student_id comes from /v1/me/children (same
  * pattern as service-requests / mobile ChildSwitcher).
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'wouter';
 import { Clock, FileQuestion, KeyRound, CheckCircle2, XCircle, ArrowLeft } from 'lucide-react';
 import { apiGet, apiPost, apiPut, ApiError } from '@/lib/api-client';
@@ -114,6 +114,36 @@ interface ResultResponse {
   }[];
 }
 
+/** One row of GET /v1/exams/attempts — the student's own attempt history. */
+interface AttemptHistoryRow {
+  attempt_id: string;
+  exam_id: string;
+  title_en: string;
+  title_hi: string | null;
+  window_end: string;
+  total_marks: number;
+  pass_mark: number;
+  status: string;
+  needs_grading: boolean;
+  result_available: boolean;
+  score: number | null;
+  passed: boolean | null;
+  submitted_at: string | null;
+}
+
+/** Seconds → "1:04:09" / "9:07" / "0:12". */
+function formatRemaining(total: number): string {
+  const s = Math.max(0, total);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const two = (n: number) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${two(m)}:${two(sec)}` : `${m}:${two(sec)}`;
+}
+
+/** Warn the student with five minutes to go. */
+const EXPIRY_WARNING_SECONDS = 5 * 60;
+
 /* ----------------------------------------------------- local answer state --- */
 
 type Phase =
@@ -126,7 +156,7 @@ type Phase =
       questions: StartQuestion[];
       initialAnswers?: AnswerState;
     }
-  | { kind: 'result'; exam: AvailableExam; attemptId: string; submit: SubmitResponse };
+  | { kind: 'result'; title: string; attemptId: string; needsGrading: boolean };
 
 /** questionId -> { selected option ids } | { text } */
 interface AnswerState {
@@ -435,39 +465,79 @@ function Taking({
     () => initialAnswers ?? { selected: {}, text: {} },
   );
   const [busy, setBusy] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  /**
+   * Save state is PER QUESTION. A single global flag plus a single generation
+   * counter meant only the newest request could paint: answering Q1 (save
+   * fails) then Q2 (save succeeds) showed "Saved", and the failure resolved to
+   * 'idle', which renders nothing at all.
+   */
+  const [saveState, setSaveState] = useState<Record<string, 'saving' | 'saved' | 'failed'>>({});
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const saveGen = useRef(0);
+  /** Debounced-but-not-yet-sent payloads, so leaving can flush them. */
+  const pendingSaves = useRef<
+    Record<string, { selected_option_ids?: string[]; text_answer?: string }>
+  >({});
 
-  useEffect(() => {
-    return () => {
-      for (const t of Object.values(saveTimers.current)) clearTimeout(t);
-      saveTimers.current = {};
-    };
-  }, []);
-
-  /** Debounced fire-and-forget autosave — failures are silent (submit is source of truth). */
-  function scheduleAutosave(
-    questionId: string,
-    payload: { selected_option_ids?: string[]; text_answer?: string },
-  ) {
-    const existing = saveTimers.current[questionId];
-    if (existing) clearTimeout(existing);
-    saveTimers.current[questionId] = setTimeout(() => {
-      delete saveTimers.current[questionId];
-      const gen = ++saveGen.current;
-      setSaveStatus('saving');
+  const sendSave = useCallback(
+    (questionId: string) => {
+      const payload = pendingSaves.current[questionId];
+      if (!payload) return;
+      delete pendingSaves.current[questionId];
+      const timer = saveTimers.current[questionId];
+      if (timer) {
+        clearTimeout(timer);
+        delete saveTimers.current[questionId];
+      }
+      setSaveState((s) => ({ ...s, [questionId]: 'saving' }));
       void apiPut(`/v1/exams/attempts/${attemptId}/answers/${questionId}`, {
         student_id: studentId,
         ...payload,
       })
         .then(() => {
-          if (gen === saveGen.current) setSaveStatus('saved');
+          setSaveState((s) => ({ ...s, [questionId]: 'saved' }));
         })
         .catch(() => {
-          if (gen === saveGen.current) setSaveStatus('idle');
+          // Keep the payload so "Retry" (and the flush below) can resend it.
+          pendingSaves.current[questionId] = payload;
+          setSaveState((s) => ({ ...s, [questionId]: 'failed' }));
         });
-    }, 2000);
+    },
+    [attemptId, studentId],
+  );
+
+  const flushPendingSaves = useCallback(() => {
+    for (const questionId of Object.keys(pendingSaves.current)) sendSave(questionId);
+  }, [sendSave]);
+
+  // Leaving used to clearTimeout every debounced save without sending it, so a
+  // sentence finished within 2s of pressing Leave simply vanished.
+  const flushRef = useRef<() => void>(() => {});
+  flushRef.current = flushPendingSaves;
+  useEffect(() => {
+    return () => {
+      flushRef.current();
+    };
+  }, []);
+
+  // A refresh or tab close mid-attempt should at least warn.
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (Object.keys(pendingSaves.current).length === 0) return;
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, []);
+
+  function scheduleAutosave(
+    questionId: string,
+    payload: { selected_option_ids?: string[]; text_answer?: string },
+  ) {
+    pendingSaves.current[questionId] = payload;
+    const existing = saveTimers.current[questionId];
+    if (existing) clearTimeout(existing);
+    saveTimers.current[questionId] = setTimeout(() => sendSave(questionId), 2000);
   }
 
   function pickSingle(qid: string, optionId: string) {
@@ -475,10 +545,15 @@ function Taking({
     scheduleAutosave(qid, { selected_option_ids: [optionId] });
   }
   function toggleMulti(qid: string, optionId: string) {
-    const cur = answers.selected[qid] ?? [];
-    const next = cur.includes(optionId) ? cur.filter((x) => x !== optionId) : [...cur, optionId];
-    setAnswers((p) => ({ ...p, selected: { ...p.selected, [qid]: next } }));
-    scheduleAutosave(qid, { selected_option_ids: next });
+    // Functional update: reading answers.selected from the render closure meant
+    // two clicks inside one React batch autosaved the stale set, exactly as
+    // pickSingle/setText already avoid.
+    setAnswers((p) => {
+      const cur = p.selected[qid] ?? [];
+      const next = cur.includes(optionId) ? cur.filter((x) => x !== optionId) : [...cur, optionId];
+      scheduleAutosave(qid, { selected_option_ids: next });
+      return { ...p, selected: { ...p.selected, [qid]: next } };
+    });
   }
   function setText(qid: string, value: string) {
     setAnswers((p) => ({ ...p, text: { ...p.text, [qid]: value } }));
@@ -489,6 +564,64 @@ function Taking({
     if (q.question_type === 'text') return (answers.text[q.id] ?? '').trim().length > 0;
     return (answers.selected[q.id] ?? []).length > 0;
   }).length;
+
+  /* ---- Countdown, T-5 warning, and auto-submit at zero ------------------- */
+
+  const expiryMs = useMemo(() => {
+    const t = new Date(exam.window_end).getTime();
+    return Number.isNaN(t) ? null : t;
+  }, [exam.window_end]);
+
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
+  const autoSubmittedRef = useRef(false);
+  const submitRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    if (expiryMs === null) {
+      setSecondsLeft(null);
+      return;
+    }
+    const tick = () => {
+      const left = Math.round((expiryMs - Date.now()) / 1000);
+      setSecondsLeft(left);
+      if (left <= 0 && !autoSubmittedRef.current) {
+        // Send what they have rather than letting the window close on it. The
+        // server stays the authority — if it has already shut we surface that
+        // error, but the student is never left holding unsubmittable answers.
+        autoSubmittedRef.current = true;
+        submitRef.current();
+      }
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [expiryMs]);
+
+  const expiringSoon =
+    secondsLeft !== null && secondsLeft > 0 && secondsLeft <= EXPIRY_WARNING_SECONDS;
+  const expired = secondsLeft !== null && secondsLeft <= 0;
+
+  // One mis-click on a dense page submitted instantly and, at the usual
+  // max_attempts of 1, ended the exam. Name what is unanswered.
+  function confirmSubmit() {
+    const unanswered = questions.length - answeredCount;
+    if (unanswered > 0) {
+      const message = hi
+        ? `${unanswered} प्रश्न अनुत्तरित हैं। जमा करने के बाद उत्तर नहीं बदले जा सकते। जमा करें?`
+        : `${unanswered} question${unanswered === 1 ? ' is' : 's are'} unanswered. You cannot change your answers after submitting. Submit anyway?`;
+      if (!window.confirm(message)) return;
+    }
+    void submit();
+  }
+
+  function confirmLeave() {
+    const message = hi
+      ? 'परीक्षा छोड़ें? आपके सहेजे गए उत्तर सुरक्षित रहेंगे और आप बाद में जारी रख सकते हैं।'
+      : 'Leave the exam? Your saved answers are kept and you can resume this attempt later.';
+    if (!window.confirm(message)) return;
+    flushPendingSaves();
+    onCancel();
+  }
 
   async function submit() {
     if (busy) return;
@@ -509,19 +642,36 @@ function Taking({
       const res = await apiPost<SubmitResponse>(`/v1/exams/attempts/${attemptId}/submit`, payload);
       onSubmitted(res);
     } catch (err) {
+      // State the problem AND the fix rather than passing a raw English server
+      // sentence into a Devanagari page.
       const code = err instanceof ApiError ? err.code : '';
       if (code === 'ERR_ALREADY_SUBMITTED') {
-        toast.error(hi ? 'यह प्रयास पहले ही जमा हो चुका है।' : 'This attempt was already submitted.');
+        toast.error(
+          hi ? 'यह प्रयास पहले ही जमा हो चुका है।' : 'This attempt was already submitted.',
+          hi ? 'अपना परिणाम देखने के लिए परीक्षा सूची पर लौटें।' : 'Go back to the exam list to see your result.',
+        );
+      } else if (code === 'ERR_WINDOW_CLOSED') {
+        toast.error(
+          hi ? 'परीक्षा का समय समाप्त हो चुका है।' : 'The exam window has closed.',
+          hi
+            ? 'अब उत्तर जमा नहीं किए जा सकते — अपने गुरुजी या दीदी को बताएँ।'
+            : 'Answers can no longer be submitted — please tell your Guruji or Didi.',
+        );
       } else {
         toast.error(
           hi ? 'उत्तर जमा नहीं हुए।' : 'Could not submit answers.',
-          err instanceof ApiError ? err.message : undefined,
+          hi ? 'अपना कनेक्शन जाँचें और पुनः जमा करें।' : 'Check your connection and submit again.',
         );
       }
     } finally {
       setBusy(false);
     }
   }
+
+  // The countdown fires this without re-subscribing its interval every render.
+  submitRef.current = () => {
+    void submit();
+  };
 
   const title = (hi ? exam.title_hi : exam.title_en) ?? exam.title_en;
   return (
@@ -531,16 +681,36 @@ function Taking({
           <h2 className="font-display text-lg text-secondary">{title}</h2>
           <p className="text-sm text-muted-foreground">
             {answeredCount}/{questions.length} {hi ? 'उत्तर दिए' : 'answered'}
-            {saveStatus === 'saving' ? (
-              <span className="ml-2 text-muted-foreground">{hi ? 'सहेजा जा रहा है…' : 'Saving…'}</span>
-            ) : saveStatus === 'saved' ? (
-              <span className="ml-2 text-muted-foreground">{hi ? 'सहेजा गया' : 'Saved'}</span>
-            ) : null}
           </p>
+          {expiringSoon ? (
+            <p className="mt-1 text-xs text-status-warning">
+              {hi
+                ? 'परीक्षा का समय समाप्त होने वाला है — समय पूरा होते ही आपके उत्तर स्वतः जमा हो जाएँगे।'
+                : 'The exam window is about to close — your answers will be submitted automatically when it does.'}
+            </p>
+          ) : expired ? (
+            <p className="mt-1 text-xs text-status-warning">
+              {hi
+                ? 'समय समाप्त हो गया — आपके उत्तर जमा किए जा रहे हैं।'
+                : 'Time is up — your answers are being submitted.'}
+            </p>
+          ) : null}
         </div>
-        <Badge variant="outline">
-          {exam.total_marks} {hi ? 'अंक' : 'marks'}
-        </Badge>
+        <div className="flex flex-wrap items-center gap-2">
+          {secondsLeft !== null ? (
+            <Badge variant={expired || expiringSoon ? 'destructive' : 'outline'}>
+              <Clock className="mr-1 h-3 w-3" />
+              {expired
+                ? hi
+                  ? 'समय समाप्त'
+                  : 'Time up'
+                : `${hi ? 'शेष' : 'Time left'} ${formatRemaining(secondsLeft)}`}
+            </Badge>
+          ) : null}
+          <Badge variant="outline">
+            {exam.total_marks} {hi ? 'अंक' : 'marks'}
+          </Badge>
+        </div>
       </Card>
 
       {questions.length === 0 ? (
@@ -554,7 +724,7 @@ function Taking({
           return (
             <Card key={q.id} className="p-5">
               <div className="flex items-start justify-between gap-3">
-                <p className="text-sm font-medium">
+                <p className="text-sm font-medium" id={`exam-q-${q.id}`}>
                   {i + 1}. {prompt}
                 </p>
                 <span className="shrink-0 text-xs text-muted-foreground">
@@ -562,16 +732,42 @@ function Taking({
                 </span>
               </div>
 
+              {/* A save that never landed must not look like one that did. */}
+              {saveState[q.id] === 'failed' ? (
+                <p className="mt-2 text-xs text-status-warning">
+                  {hi ? 'यह उत्तर सहेजा नहीं गया।' : 'This answer was not saved.'}{' '}
+                  <button
+                    type="button"
+                    onClick={() => sendSave(q.id)}
+                    className="underline underline-offset-2"
+                  >
+                    {hi ? 'पुनः प्रयास करें' : 'Retry'}
+                  </button>
+                </p>
+              ) : saveState[q.id] === 'saving' ? (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  {hi ? 'सहेजा जा रहा है…' : 'Saving…'}
+                </p>
+              ) : saveState[q.id] === 'saved' ? (
+                <p className="mt-2 text-xs text-muted-foreground">{hi ? 'सहेजा गया' : 'Saved'}</p>
+              ) : null}
+
               {q.question_type === 'text' ? (
                 <Textarea
                   className="mt-3"
                   rows={4}
                   value={answers.text[q.id] ?? ''}
                   onChange={(e) => setText(q.id, e.target.value)}
+                  disabled={expired}
+                  aria-labelledby={`exam-q-${q.id}`}
                   placeholder={hi ? 'अपना उत्तर लिखें…' : 'Write your answer…'}
                 />
               ) : (
-                <div className="mt-3 space-y-2">
+                <div
+                  className="mt-3 space-y-2"
+                  role={q.question_type === 'multi_choice' ? 'group' : 'radiogroup'}
+                  aria-labelledby={`exam-q-${q.id}`}
+                >
                   {q.options.map((o) => {
                     const on = selected.includes(o.id);
                     const label = (hi ? o.option_hi : o.option_en) ?? o.option_en;
@@ -580,14 +776,22 @@ function Taking({
                       <button
                         key={o.id}
                         type="button"
+                        // Selection was conveyed by border colour plus an icon
+                        // hidden with text-transparent, so a screen reader
+                        // announced four identical buttons with no idea which
+                        // was chosen.
+                        role={multi ? 'checkbox' : 'radio'}
+                        aria-checked={on}
+                        disabled={expired}
                         onClick={() => (multi ? toggleMulti(q.id, o.id) : pickSingle(q.id, o.id))}
-                        className={`flex w-full items-center gap-3 rounded-md border px-3 py-2.5 text-left text-sm transition-colors ${
+                        className={`flex w-full items-center gap-3 rounded-md border px-3 py-2.5 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
                           on
                             ? 'border-primary bg-primary/5 text-foreground'
                             : 'border-input bg-background text-foreground hover:bg-muted'
                         }`}
                       >
                         <span
+                          aria-hidden="true"
                           className={`flex h-5 w-5 shrink-0 items-center justify-center border text-[10px] ${
                             multi ? 'rounded' : 'rounded-full'
                           } ${on ? 'border-primary bg-primary text-primary-foreground' : 'border-input text-transparent'}`}
@@ -600,7 +804,9 @@ function Taking({
                   })}
                   {q.question_type === 'multi_choice' ? (
                     <p className="text-xs text-muted-foreground">
-                      {hi ? 'एक या अधिक विकल्प चुनें।' : 'Select one or more options.'}
+                      {hi
+                        ? 'सभी सही विकल्प चुनें — आंशिक रूप से सही उत्तर पर कोई अंक नहीं मिलता।'
+                        : 'Select every correct option — a partly correct answer scores nothing.'}
                     </p>
                   ) : null}
                 </div>
@@ -611,12 +817,119 @@ function Taking({
       )}
 
       <div className="flex flex-wrap justify-end gap-2 pt-2">
-        <Button variant="outline" onClick={onCancel} disabled={busy}>
+        <Button variant="outline" onClick={confirmLeave} disabled={busy}>
           {hi ? 'छोड़ें' : 'Leave'}
         </Button>
-        <Button onClick={submit} disabled={busy || questions.length === 0}>
+        <Button onClick={confirmSubmit} disabled={busy || questions.length === 0}>
           {busy ? (hi ? 'जमा हो रहा है…' : 'Submitting…') : hi ? 'परीक्षा जमा करें' : 'Submit exam'}
         </Button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ past exams --- */
+
+/**
+ * The student's own attempt history.
+ *
+ * /available lists only exams whose window is still open, so the instant one
+ * closed the result went with it — nothing else hands an attempt_id back, and
+ * the result phase lives in component state that "Back to exams" clears. A
+ * score released two weeks after the exam was simply unreachable.
+ */
+function PastExams({
+  studentId,
+  onOpen,
+}: {
+  studentId: string;
+  onOpen: (row: AttemptHistoryRow) => void;
+}) {
+  const hi = useLocale() === 'hi';
+  const [rows, setRows] = useState<AttemptHistoryRow[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  const load = useCallback(() => {
+    setFailed(false);
+    apiGet<{ items: AttemptHistoryRow[] }>(
+      `/v1/exams/attempts?student_id=${encodeURIComponent(studentId)}`,
+    )
+      .then((r) => setRows(r?.items ?? []))
+      .catch(() => {
+        setRows([]);
+        // A network blip must not read as "you have never sat an exam".
+        setFailed(true);
+      });
+  }, [studentId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  if (rows === null) return null;
+
+  if (failed) {
+    return (
+      <div className="mt-10">
+        <h2 className="font-display text-lg text-secondary">{hi ? 'पिछली परीक्षाएँ' : 'Past exams'}</h2>
+        <Card className="mt-3 flex flex-wrap items-center justify-between gap-3 p-4 text-sm text-muted-foreground">
+          {hi
+            ? 'पिछली परीक्षाएँ लोड नहीं हो सकीं।'
+            : 'Could not load your past exams.'}
+          <Button size="sm" variant="outline" onClick={load}>
+            {hi ? 'पुनः प्रयास करें' : 'Retry'}
+          </Button>
+        </Card>
+      </div>
+    );
+  }
+
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="mt-10">
+      <h2 className="font-display text-lg text-secondary">{hi ? 'पिछली परीक्षाएँ' : 'Past exams'}</h2>
+      <div className="mt-3 space-y-3">
+        {rows.map((row) => {
+          const title = (hi ? row.title_hi : row.title_en) ?? row.title_en;
+          let note: string;
+          if (row.result_available) {
+            note = `${row.score} / ${row.total_marks}`;
+          } else if (row.status === 'in_progress') {
+            note = hi ? 'जारी है' : 'In progress';
+          } else if (row.status === 'abandoned') {
+            note = hi
+              ? 'समय बीत जाने पर बंद — रीसेट के लिए गुरुजी या दीदी से कहें'
+              : 'Closed when the window passed — ask your Guruji or Didi to reset it';
+          } else if (row.needs_grading) {
+            note = hi ? 'मूल्यांकन बाकी है' : 'Awaiting grading';
+          } else {
+            note = hi ? 'परिणाम अभी जारी नहीं हुआ' : 'Result not released yet';
+          }
+          return (
+            <Card key={row.attempt_id} className="flex flex-wrap items-center justify-between gap-3 p-4">
+              <div>
+                <p className="text-sm font-medium">{title}</p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{note}</p>
+              </div>
+              <div className="flex items-center gap-2">
+                {row.result_available && row.passed !== null ? (
+                  <Badge variant={row.passed ? 'outline' : 'destructive'}>
+                    {row.passed ? (hi ? 'उत्तीर्ण' : 'Passed') : hi ? 'अनुत्तीर्ण' : 'Not passed'}
+                  </Badge>
+                ) : null}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={!row.result_available}
+                  onClick={() => onOpen(row)}
+                >
+                  {hi ? 'परिणाम देखें' : 'View result'}
+                </Button>
+              </div>
+            </Card>
+          );
+        })}
       </div>
     </div>
   );
@@ -625,15 +938,15 @@ function Taking({
 /* ------------------------------------------------------------ result view --- */
 
 function Result({
-  exam,
+  title,
   attemptId,
-  submit,
+  needsGrading,
   studentId,
   onDone,
 }: {
-  exam: AvailableExam;
+  title: string;
   attemptId: string;
-  submit: SubmitResponse;
+  needsGrading: boolean;
   studentId: string;
   onDone: () => void;
 }) {
@@ -650,7 +963,6 @@ function Result({
       .finally(() => setLoading(false));
   }, [attemptId, studentId]);
 
-  const title = (hi ? exam.title_hi : exam.title_en) ?? exam.title_en;
   const released = !!result && typeof result.score === 'number';
 
   return (
@@ -665,7 +977,7 @@ function Result({
             {hi ? 'आपका उत्तर जमा हो गया है।' : 'Your answers have been submitted.'}
           </p>
           <p className="text-sm text-muted-foreground">
-            {submit.needs_grading
+            {needsGrading || result?.needs_grading
               ? hi
                 ? 'इसमें मूल्यांकन हेतु प्रश्न हैं। परिणाम जारी होने पर उपलब्ध होगा।'
                 : 'This exam has questions awaiting grading. Your result will appear once released.'
@@ -685,7 +997,7 @@ function Result({
               </p>
             </div>
             {result.passed ? (
-              <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-3 py-1 text-sm font-medium text-emerald-700">
+              <span className="inline-flex items-center gap-1.5 rounded-full bg-status-success-soft px-3 py-1 text-sm font-medium text-status-success">
                 <CheckCircle2 className="h-4 w-4" />
                 {hi ? 'उत्तीर्ण' : 'Passed'}
               </span>
@@ -889,19 +1201,32 @@ export default function ExamsPage() {
         </div>
       ) : null}
       {phase.kind === 'list' && (
-        <ExamList
-          studentId={studentId}
-          onStart={(exam) => setPhase({ kind: 'otp', exam })}
-          onResumed={(exam, r) =>
-            setPhase({
-              kind: 'taking',
-              exam,
-              attemptId: r.attempt_id,
-              questions: r.questions ?? [],
-              initialAnswers: answersFromResume(r.answers ?? []),
-            })
-          }
-        />
+        <>
+          <ExamList
+            studentId={studentId}
+            onStart={(exam) => setPhase({ kind: 'otp', exam })}
+            onResumed={(exam, r) =>
+              setPhase({
+                kind: 'taking',
+                exam,
+                attemptId: r.attempt_id,
+                questions: r.questions ?? [],
+                initialAnswers: answersFromResume(r.answers ?? []),
+              })
+            }
+          />
+          <PastExams
+            studentId={studentId}
+            onOpen={(row) =>
+              setPhase({
+                kind: 'result',
+                title: (hi ? row.title_hi : row.title_en) ?? row.title_en,
+                attemptId: row.attempt_id,
+                needsGrading: row.needs_grading,
+              })
+            }
+          />
+        </>
       )}
       {phase.kind === 'otp' && (
         <OtpGate
@@ -922,15 +1247,20 @@ export default function ExamsPage() {
           initialAnswers={phase.initialAnswers}
           onCancel={() => setPhase({ kind: 'list' })}
           onSubmitted={(r) =>
-            setPhase({ kind: 'result', exam: phase.exam, attemptId: phase.attemptId, submit: r })
+            setPhase({
+              kind: 'result',
+              title: (hi ? phase.exam.title_hi : phase.exam.title_en) ?? phase.exam.title_en,
+              attemptId: phase.attemptId,
+              needsGrading: r.needs_grading,
+            })
           }
         />
       )}
       {phase.kind === 'result' && (
         <Result
-          exam={phase.exam}
+          title={phase.title}
           attemptId={phase.attemptId}
-          submit={phase.submit}
+          needsGrading={phase.needsGrading}
           studentId={studentId}
           onDone={() => setPhase({ kind: 'list' })}
         />

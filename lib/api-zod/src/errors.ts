@@ -43,6 +43,7 @@ export const ERROR_CODES = [
   "ERR_EXAM_HAS_ATTEMPTS",
   "ERR_WINDOW_CLOSED",
   "ERR_ALREADY_SUBMITTED",
+  "ERR_ATTEMPT_ABANDONED",
   "ERR_ALREADY_ATTEMPTED",
   "ERR_RESULTS_PUBLISHED",
   "ERR_NOT_OPEN",
@@ -139,6 +140,7 @@ export const ErrorCode = {
   EXAM_HAS_ATTEMPTS: "ERR_EXAM_HAS_ATTEMPTS",
   WINDOW_CLOSED: "ERR_WINDOW_CLOSED",
   ALREADY_SUBMITTED: "ERR_ALREADY_SUBMITTED",
+  ATTEMPT_ABANDONED: "ERR_ATTEMPT_ABANDONED",
   ALREADY_ATTEMPTED: "ERR_ALREADY_ATTEMPTED",
   RESULTS_PUBLISHED: "ERR_RESULTS_PUBLISHED",
   NOT_OPEN: "ERR_NOT_OPEN",
@@ -243,6 +245,15 @@ export const ERROR_MESSAGES = {
   ERR_ALREADY_SUBMITTED: {
     en: "This attempt was already submitted — open your results instead of submitting again.",
     hi: "यह प्रयास पहले ही जमा हो चुका है — दोबारा जमा करने के बजाय अपने परिणाम देखें।",
+  },
+  /**
+   * Distinct from ERR_ALREADY_SUBMITTED on purpose. An attempt the abandon cron
+   * closed was reported as "already submitted", so the student waited for a
+   * score that was never coming instead of asking for a reset.
+   */
+  ERR_ATTEMPT_ABANDONED: {
+    en: "This attempt was closed because the exam window passed — ask your Guruji or Didi to reset it so you can sit the exam again.",
+    hi: "परीक्षा का समय बीत जाने के कारण यह प्रयास बंद कर दिया गया — पुनः परीक्षा देने के लिए अपने गुरुजी या दीदी से इसे रीसेट कराने को कहें।",
   },
   ERR_RATE_LIMITED: {
     en: "Too many attempts — wait a few minutes and try again.",

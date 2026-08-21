@@ -23,7 +23,7 @@ import {
   cities,
   type User,
 } from "@workspace/db";
-import { and, asc, count, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { canAdministerExams } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
@@ -32,7 +32,7 @@ import { resolveAdminScope } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { rateLimit } from "../../lib/ratelimit";
 import { timingSafeEqualString, verifyOtpCode } from "../../lib/tokens";
-import { ownedStudentsCondition } from "../../lib/route-helpers";
+import { clampLimit, ownedStudentsCondition } from "../../lib/route-helpers";
 import { isUuid } from "../../lib/validation";
 import { resolveExamCompletionPoints } from "../../lib/exam-points";
 import { awardExamCompletionPunya } from "../../lib/exam-punya";
@@ -54,6 +54,25 @@ async function examHasAttempts(examId: string): Promise<boolean> {
     .from(exam_attempts)
     .where(eq(exam_attempts.exam_id, examId));
   return Number(n ?? 0) > 0;
+}
+
+/**
+ * Resume, autosave and submit all require an in-progress attempt. Reporting
+ * 'abandoned' as "already submitted" told a student whose attempt the abandon
+ * cron closed to wait for a score that was never coming, instead of asking for
+ * the reset that would let them sit the exam again.
+ */
+function failNotInProgress(res: Response, status: string): void {
+  if (status === "abandoned") {
+    fail(
+      res,
+      409,
+      "ERR_ATTEMPT_ABANDONED",
+      "This attempt was closed because the exam window passed — ask your Guruji or Didi to reset it so you can sit the exam again.",
+    );
+    return;
+  }
+  fail(res, 409, "ERR_ALREADY_SUBMITTED", "This attempt was already submitted.");
 }
 
 /* ---- city scope: null = all (super_admin); [] = nothing; else city ids ---- */
@@ -1070,6 +1089,75 @@ const answerSaveSchema = z.object({
 });
 
 /**
+ * GET /v1/exams/attempts — the student's own attempt history.
+ *
+ * /available filters on `window_end >= now`, so the moment an exam closed it
+ * left the only list a student has — and nothing else hands an attempt_id back
+ * (both clients held it in component state and dropped it on "Back to exams").
+ * Results released after the window therefore became unreachable forever.
+ *
+ * Disclosure follows the same rule as /result: a score is returned only once
+ * results are released AND the attempt is actually graded, so this route can
+ * never become a side door around the release gate.
+ *
+ * Registered before /attempts/:attemptId — a distinct single-segment path, so
+ * the two cannot collide.
+ */
+router.get("/attempts", async (req: Request, res: Response) => {
+  const hint = typeof req.query.student_id === "string" ? req.query.student_id : undefined;
+  const student = await resolveStudentContext(req, res, hint);
+  if (!student) return;
+  const limit = clampLimit(req.query.limit, 25, 100);
+
+  const rows = await db
+    .select({
+      attempt_id: exam_attempts.id,
+      exam_id: online_exams.id,
+      title_en: online_exams.title_en,
+      title_hi: online_exams.title_hi,
+      window_end: online_exams.window_end,
+      total_marks: online_exams.total_marks,
+      pass_mark: online_exams.pass_mark,
+      results_released: online_exams.results_released,
+      status: exam_attempts.status,
+      score: exam_attempts.score,
+      needs_grading: exam_attempts.needs_grading,
+      started_at: exam_attempts.started_at,
+      submitted_at: exam_attempts.submitted_at,
+    })
+    .from(exam_attempts)
+    .innerJoin(online_exams, eq(online_exams.id, exam_attempts.exam_id))
+    .where(eq(exam_attempts.student_id, student.id))
+    .orderBy(desc(exam_attempts.started_at))
+    .limit(limit);
+
+  const items = rows.map((r) => {
+    const graded = r.status === "graded" && !r.needs_grading && r.score !== null;
+    const disclosed = r.results_released && graded;
+    return {
+      attempt_id: r.attempt_id,
+      exam_id: r.exam_id,
+      title_en: r.title_en,
+      title_hi: r.title_hi,
+      window_end: r.window_end.toISOString(),
+      total_marks: r.total_marks,
+      pass_mark: r.pass_mark,
+      status: r.status,
+      needs_grading: r.needs_grading,
+      // Whether /result will actually show something, so a client can label the
+      // row honestly instead of opening a screen that says nothing.
+      result_available: disclosed,
+      score: disclosed ? r.score : null,
+      passed: disclosed ? (r.score as number) >= r.pass_mark : null,
+      started_at: r.started_at.toISOString(),
+      submitted_at: r.submitted_at ? r.submitted_at.toISOString() : null,
+    };
+  });
+
+  ok(res, { items }, { count: items.length });
+});
+
+/**
  * GET /v1/exams/attempts/:attemptId — resume an in_progress attempt (H3).
  * Returns questions (no is_correct) + saved answers (no marks_awarded).
  */
@@ -1099,7 +1187,7 @@ router.get("/attempts/:attemptId", async (req: Request, res: Response) => {
     return;
   }
   if (attempt.status !== "in_progress") {
-    fail(res, 409, "ERR_ALREADY_SUBMITTED", "This attempt was already submitted.");
+    failNotInProgress(res, attempt.status);
     return;
   }
 
@@ -1186,7 +1274,7 @@ router.put(
       return;
     }
     if (attempt.status !== "in_progress") {
-      fail(res, 409, "ERR_ALREADY_SUBMITTED", "This attempt was already submitted.");
+      failNotInProgress(res, attempt.status);
       return;
     }
 
@@ -1310,7 +1398,7 @@ router.post("/attempts/:attemptId/submit", async (req: Request, res: Response) =
     return;
   }
   if (attempt.status !== "in_progress") {
-    fail(res, 409, "ERR_ALREADY_SUBMITTED", "This attempt was already submitted.");
+    failNotInProgress(res, attempt.status);
     return;
   }
 

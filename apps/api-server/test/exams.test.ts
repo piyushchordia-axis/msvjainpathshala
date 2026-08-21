@@ -2101,4 +2101,125 @@ describe("online exams", () => {
       });
     expect(noHindi.status).toBe(422);
   });
+
+  it("attempt history survives the window closing and withholds the score until release", async () => {
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+    const examId = await createMumbaiExam(admin.token, cityId);
+
+    const q = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({
+        question_en: "Which is a Jain principle?",
+        question_type: "single_choice",
+        marks: 20,
+        options: [
+          { option_en: "Ahimsa", is_correct: true },
+          { option_en: "Himsa", is_correct: false },
+        ],
+      });
+    expect(q.status).toBe(200);
+    const qId: string = q.body.data.id;
+    // is_correct is only exposed on the admin question list, never to students.
+    const qList = await request(app)
+      .get(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token));
+    expect(qList.status).toBe(200);
+    const listed: Array<{ id: string; options: Array<{ id: string; is_correct: boolean }> }> =
+      qList.body.data.items;
+    const correctOptionId: string = listed
+      .find((row) => row.id === qId)!
+      .options.find((o) => o.is_correct)!.id;
+
+    const student = await loginAs("student");
+    const start = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({});
+    expect(start.status).toBe(200);
+    const attemptId: string = start.body.data.attempt_id;
+    const submit = await request(app)
+      .post(`/v1/exams/attempts/${attemptId}/submit`)
+      .set(auth(student.token))
+      .send({ answers: [{ question_id: qId, selected_option_ids: [correctOptionId] }] });
+    expect(submit.status).toBe(200);
+
+    // Close the window, exactly as time passing would.
+    const patch = await request(app)
+      .patch(`/v1/admin/exams/${examId}`)
+      .set(auth(admin.token))
+      .send({
+        window_start: new Date(Date.now() - 7_200_000).toISOString(),
+        window_end: new Date(Date.now() - 3_600_000).toISOString(),
+      });
+    expect(patch.status).toBe(200);
+
+    // Gone from /available — which is the whole reason history has to exist.
+    const available = await request(app)
+      .get("/v1/exams/available")
+      .set(auth(student.token));
+    expect(available.status).toBe(200);
+    expect(
+      (available.body.data.items as Array<{ id: string }>).some((e) => e.id === examId),
+    ).toBe(false);
+
+    // Present in history, but the score stays withheld until release.
+    const before = await request(app).get("/v1/exams/attempts").set(auth(student.token));
+    expect(before.status).toBe(200);
+    const rowBefore = (before.body.data.items as Array<Record<string, unknown>>).find(
+      (r) => r.attempt_id === attemptId,
+    );
+    expect(rowBefore).toBeDefined();
+    expect(rowBefore!.result_available).toBe(false);
+    expect(rowBefore!.score).toBeNull();
+    expect(rowBefore!.passed).toBeNull();
+
+    const release = await request(app)
+      .post(`/v1/admin/exams/${examId}/release-results`)
+      .set(auth(admin.token))
+      .send({});
+    expect(release.status).toBe(200);
+
+    const after = await request(app).get("/v1/exams/attempts").set(auth(student.token));
+    expect(after.status).toBe(200);
+    const rowAfter = (after.body.data.items as Array<Record<string, unknown>>).find(
+      (r) => r.attempt_id === attemptId,
+    );
+    expect(rowAfter!.result_available).toBe(true);
+    expect(rowAfter!.score).toBe(20);
+    expect(rowAfter!.passed).toBe(true);
+  });
+
+  it("resuming an abandoned attempt says so, rather than 'already submitted'", async () => {
+    const admin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(admin.token);
+    const examId = await createMumbaiExam(admin.token, cityId);
+
+    const q = await request(app)
+      .post(`/v1/exams/${examId}/questions`)
+      .set(auth(admin.token))
+      .send({ question_en: "What is Ahimsa?", question_type: "text", marks: 20 });
+    expect(q.status).toBe(200);
+
+    const student = await loginAs("student");
+    const start = await request(app)
+      .post(`/v1/exams/${examId}/start`)
+      .set(auth(student.token))
+      .send({});
+    expect(start.status).toBe(200);
+    const attemptId: string = start.body.data.attempt_id;
+
+    const reset = await request(app)
+      .post(`/v1/exams/${examId}/attempts/${attemptId}/reset`)
+      .set(auth(admin.token))
+      .send({});
+    expect(reset.status).toBe(200);
+
+    const resume = await request(app)
+      .get(`/v1/exams/attempts/${attemptId}`)
+      .set(auth(student.token));
+    expect(resume.status).toBe(409);
+    expect(resume.body.error.code).toBe("ERR_ATTEMPT_ABANDONED");
+  });
 });

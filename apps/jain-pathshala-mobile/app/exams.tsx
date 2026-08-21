@@ -11,8 +11,8 @@
  * multi-child parents hit the correct child's attempts. Query hooks stay local
  * to this screen to avoid touching the shared lib/queries.ts.
  */
-import { useEffect, useRef, useState } from "react";
-import { Alert, Pressable, TextInput, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Alert, BackHandler, Pressable, TextInput, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useColors } from "@/hooks/useColors";
@@ -76,6 +76,22 @@ interface ResumeResponse {
   }[];
 }
 
+/** One row of GET /v1/exams/attempts — the student's own attempt history. */
+interface AttemptHistoryRow {
+  attempt_id: string;
+  exam_id: string;
+  title_en: string;
+  title_hi: string | null;
+  total_marks: number;
+  pass_mark: number;
+  status: string;
+  needs_grading: boolean;
+  result_available: boolean;
+  score: number | null;
+  passed: boolean | null;
+  submitted_at: string | null;
+}
+
 interface SubmitResponse {
   attempt_id: string;
   status: string;
@@ -107,6 +123,7 @@ const examKeys = {
   available: (studentId: string) => ["me", "exams", "available", studentId] as const,
   result: (attemptId: string, studentId: string) =>
     ["me", "exams", "result", attemptId, studentId] as const,
+  history: (studentId: string) => ["me", "exams", "history", studentId] as const,
 };
 
 function useAvailableExams(studentId: string | undefined) {
@@ -170,8 +187,11 @@ function useSubmitExam() {
         answers,
         student_id,
       }),
-    onSuccess: (_data, vars) =>
-      qc.invalidateQueries({ queryKey: examKeys.available(vars.student_id) }),
+    onSuccess: (_data, vars) => {
+      void qc.invalidateQueries({ queryKey: examKeys.available(vars.student_id) });
+      // A just-submitted attempt must appear under "Past exams" straight away.
+      void qc.invalidateQueries({ queryKey: examKeys.history(vars.student_id) });
+    },
   });
 }
 
@@ -186,6 +206,22 @@ function useExamResult(attemptId: string | null, studentId: string | null) {
   });
 }
 
+/**
+ * The student's own attempt history. /available drops an exam the moment its
+ * window closes, and the attempt_id lived only in component state, so a result
+ * released afterwards was unreachable from the app entirely.
+ */
+function useExamHistory(studentId: string | undefined) {
+  return useQuery({
+    queryKey: examKeys.history(studentId ?? ""),
+    queryFn: () =>
+      apiGet<{ items: AttemptHistoryRow[] }>(
+        `/v1/exams/attempts?student_id=${encodeURIComponent(studentId!)}`,
+      ),
+    enabled: !!studentId,
+  });
+}
+
 /* ----------------------------------------------------------- local state --- */
 
 interface ActiveAttempt {
@@ -193,6 +229,13 @@ interface ActiveAttempt {
   titleEn: string;
   titleHi: string | null;
   totalMarks: number;
+  /**
+   * When the exam window shuts. Already on the wire from both /available and
+   * the resume route; the screen simply never read it, so a child writing a
+   * long answer past window_end had every autosave 422 silently and lost the
+   * lot at submit.
+   */
+  windowEnd: string | null;
   attemptId: string;
   questions: ExamQuestion[];
   /** questionId -> selected option ids (single = 1 element). */
@@ -200,6 +243,19 @@ interface ActiveAttempt {
   /** questionId -> text answer. */
   text: Record<string, string>;
 }
+
+/** Seconds → "1:04:09" / "9:07" / "0:12". */
+function formatRemaining(total: number): string {
+  const s = Math.max(0, total);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const two = (n: number) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${two(m)}:${two(sec)}` : `${m}:${two(sec)}`;
+}
+
+/** Warn the student with five minutes to go. */
+const EXPIRY_WARNING_SECONDS = 5 * 60;
 
 function fmtRange(start: string, end: string, hi: boolean): string {
   const loc = hi ? "hi-IN" : "en-IN";
@@ -215,12 +271,12 @@ function fmtRange(start: string, end: string, hi: boolean): string {
 
 function ResultCard({
   active,
-  submit,
+  needsGrading,
   studentId,
   onDone,
 }: {
   active: { titleEn: string; titleHi: string | null; attemptId: string };
-  submit: SubmitResponse;
+  needsGrading: boolean;
   studentId: string;
   onDone: () => void;
 }) {
@@ -300,21 +356,38 @@ function ResultCard({
                         </Body>
                       </Row>
                       {pq.is_correct != null ? (
-                        <Body
-                          style={{
-                            marginTop: 4,
-                            fontSize: 12,
-                            color: pq.is_correct ? c.successText : c.errorText,
-                          }}
-                        >
-                          {pq.is_correct
-                            ? hi
-                              ? "सही"
-                              : "Correct"
-                            : hi
-                              ? "गलत"
-                              : "Incorrect"}
-                        </Body>
+                        (() => {
+                          // is_correct is "scored above zero", so a 3/10 text
+                          // answer used to render a green "Correct" directly
+                          // above its own partial mark — a contradictory card.
+                          const awarded = pq.marks_awarded ?? 0;
+                          const partial = awarded > 0 && awarded < pq.marks;
+                          return (
+                            <Body
+                              style={{
+                                marginTop: 4,
+                                fontSize: 12,
+                                color: partial
+                                  ? c.inkDim
+                                  : pq.is_correct
+                                    ? c.successText
+                                    : c.errorText,
+                              }}
+                            >
+                              {partial
+                                ? hi
+                                  ? "आंशिक अंक"
+                                  : "Partly credited"
+                                : pq.is_correct
+                                  ? hi
+                                    ? "सही"
+                                    : "Correct"
+                                  : hi
+                                    ? "गलत"
+                                    : "Incorrect"}
+                            </Body>
+                          );
+                        })()
                       ) : null}
                     </View>
                   );
@@ -324,7 +397,7 @@ function ResultCard({
           </>
         ) : (
           <Body muted style={{ marginTop: 16, fontSize: 13 }}>
-            {submit.needs_grading
+            {needsGrading || result.data?.needs_grading
               ? hi
                 ? "इसमें मूल्यांकन हेतु प्रश्न हैं। परिणाम जारी होने पर दिखाई देगा।"
                 : "This exam has questions awaiting grading. Your result will appear once released."
@@ -354,25 +427,79 @@ export default function Exams() {
   const exams = useAvailableExams(activeStudentId ?? undefined);
   const rows = exams.data?.items ?? [];
 
+  const history = useExamHistory(activeStudentId ?? undefined);
+  const historyRows = history.data?.items ?? [];
+
   const startExam = useStartExam();
   const resumeExam = useResumeExam();
   const submitExam = useSubmitExam();
 
   const [active, setActive] = useState<ActiveAttempt | null>(null);
   const [result, setResult] = useState<
-    { titleEn: string; titleHi: string | null; attemptId: string; submit: SubmitResponse } | null
+    { titleEn: string; titleHi: string | null; attemptId: string; needsGrading: boolean } | null
   >(null);
+
+  // "Not open yet" was computed once per render with no ticker, so a 10:00 exam
+  // stayed disabled past 10:00 until the student pulled to refresh.
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTs(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
   // OTP entry state for the exam currently being started.
   const [otpFor, setOtpFor] = useState<AvailableExam | null>(null);
   const [otp, setOtp] = useState("");
-  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved">("idle");
+  /**
+   * Save state is PER QUESTION. A single global flag plus a single generation
+   * counter meant only the newest request could paint: answering Q1 (save
+   * fails) then Q2 (save succeeds) showed "Saved", and the failure resolved to
+   * "idle", which renders nothing at all. The student closed the app believing
+   * everything was stored.
+   */
+  const [saveState, setSaveState] = useState<
+    Record<string, "saving" | "saved" | "failed">
+  >({});
   const saveTimers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
-  const saveGen = useRef(0);
+  /** Debounced-but-not-yet-sent payloads, so exiting can flush them. */
+  const pendingSaves = useRef<
+    Record<string, { attemptId: string; payload: { selected_option_ids?: string[]; text_answer?: string } }>
+  >({});
 
+  function sendSave(questionId: string) {
+    const queued = pendingSaves.current[questionId];
+    if (!queued || !activeStudentId) return;
+    delete pendingSaves.current[questionId];
+    const timer = saveTimers.current[questionId];
+    if (timer) {
+      clearTimeout(timer);
+      delete saveTimers.current[questionId];
+    }
+    setSaveState((s) => ({ ...s, [questionId]: "saving" }));
+    void apiPut(`/v1/exams/attempts/${queued.attemptId}/answers/${questionId}`, {
+      student_id: activeStudentId,
+      ...queued.payload,
+    })
+      .then(() => {
+        setSaveState((s) => ({ ...s, [questionId]: "saved" }));
+      })
+      .catch(() => {
+        // Keep the payload so "Retry" (and the flush below) can resend it.
+        pendingSaves.current[questionId] = queued;
+        setSaveState((s) => ({ ...s, [questionId]: "failed" }));
+      });
+  }
+
+  function flushPendingSaves() {
+    for (const questionId of Object.keys(pendingSaves.current)) sendSave(questionId);
+  }
+
+  // Leaving the screen used to clearTimeout every debounced save without
+  // sending it, so a sentence finished within 2s of a back-swipe vanished.
+  const flushRef = useRef<() => void>(() => {});
+  flushRef.current = flushPendingSaves;
   useEffect(() => {
     return () => {
-      for (const t of Object.values(saveTimers.current)) clearTimeout(t);
-      saveTimers.current = {};
+      flushRef.current();
     };
   }, []);
 
@@ -382,23 +509,10 @@ export default function Exams() {
     payload: { selected_option_ids?: string[]; text_answer?: string },
   ) {
     if (!activeStudentId) return;
+    pendingSaves.current[questionId] = { attemptId, payload };
     const existing = saveTimers.current[questionId];
     if (existing) clearTimeout(existing);
-    saveTimers.current[questionId] = setTimeout(() => {
-      delete saveTimers.current[questionId];
-      const gen = ++saveGen.current;
-      setSaveStatus("saving");
-      void apiPut(`/v1/exams/attempts/${attemptId}/answers/${questionId}`, {
-        student_id: activeStudentId,
-        ...payload,
-      })
-        .then(() => {
-          if (gen === saveGen.current) setSaveStatus("saved");
-        })
-        .catch(() => {
-          if (gen === saveGen.current) setSaveStatus("idle");
-        });
-    }, 2000);
+    saveTimers.current[questionId] = setTimeout(() => sendSave(questionId), 2000);
   }
 
   function requestStart(exam: AvailableExam) {
@@ -423,12 +537,13 @@ export default function Exams() {
       {
         onSuccess: (data) => {
           const hydrated = hydrateAnswers(data.answers ?? []);
-          setSaveStatus("idle");
+          setSaveState({});
           setActive({
             examId: data.exam_id || exam.id,
             titleEn: data.title_en || exam.title_en,
             titleHi: data.title_hi ?? exam.title_hi,
             totalMarks: data.total_marks ?? exam.total_marks,
+            windowEnd: data.window_end ?? exam.window_end,
             attemptId: data.attempt_id,
             questions: data.questions ?? [],
             selected: hydrated.selected,
@@ -462,12 +577,13 @@ export default function Exams() {
       {
         onSuccess: (data) => {
           setOtpFor(null);
-          setSaveStatus("idle");
+          setSaveState({});
           setActive({
             examId: exam.id,
             titleEn: exam.title_en,
             titleHi: exam.title_hi,
             totalMarks: exam.total_marks,
+            windowEnd: exam.window_end,
             attemptId: data.attempt_id,
             questions: data.questions ?? [],
             selected: {},
@@ -522,10 +638,13 @@ export default function Exams() {
     setActive((prev) => (prev ? { ...prev, text: { ...prev.text, [qid]: value } } : prev));
   }
 
-  function submit() {
+  function doSubmit(auto = false) {
     if (!active || !activeStudentId) return;
+    // The submit body is a full snapshot, so dropping the debounced saves here
+    // loses nothing.
     for (const t of Object.values(saveTimers.current)) clearTimeout(t);
     saveTimers.current = {};
+    pendingSaves.current = {};
     const answers = active.questions.map((q) =>
       q.question_type === "text"
         ? { question_id: q.id, text_answer: active.text[q.id] ?? "" }
@@ -535,28 +654,86 @@ export default function Exams() {
       { attemptId: active.attemptId, answers, student_id: activeStudentId },
       {
         onSuccess: (data) => {
-          setResult({ titleEn: active.titleEn, titleHi: active.titleHi, attemptId: active.attemptId, submit: data });
+          setResult({
+            titleEn: active.titleEn,
+            titleHi: active.titleHi,
+            attemptId: active.attemptId,
+            needsGrading: data.needs_grading,
+          });
           setActive(null);
-          setSaveStatus("idle");
+          setSaveState({});
         },
         onError: (err) => {
           const code2 = err instanceof ApiError ? err.code : "";
-          Alert.alert(
-            hi ? "जमा नहीं हुआ" : "Could not submit",
+          // State the problem AND the fix, and never pass a raw English server
+          // sentence into a Devanagari screen.
+          const detail =
             code2 === "ERR_ALREADY_SUBMITTED"
               ? hi
-                ? "यह प्रयास पहले ही जमा हो चुका है।"
-                : "This attempt was already submitted."
-              : err instanceof Error
-                ? err.message
-                : hi
-                  ? "कृपया पुनः प्रयास करें।"
-                  : "Please try again.",
-          );
+                ? "यह प्रयास पहले ही जमा हो चुका है — अपना परिणाम देखने के लिए परीक्षा सूची पर लौटें।"
+                : "This attempt was already submitted — go back to the exam list to see your result."
+              : code2 === "ERR_WINDOW_CLOSED"
+                ? auto
+                  ? hi
+                    ? "परीक्षा का समय समाप्त हो गया और यह प्रयास बंद हो गया। अपने गुरुजी या दीदी से संपर्क करें।"
+                    : "The exam window closed before this could be submitted. Please tell your Guruji or Didi."
+                  : hi
+                    ? "परीक्षा का समय समाप्त हो चुका है — अब उत्तर जमा नहीं किए जा सकते। अपने गुरुजी या दीदी से संपर्क करें।"
+                    : "The exam window has closed, so answers can no longer be submitted. Please tell your Guruji or Didi."
+                : code2 === "ERR_NETWORK"
+                  ? hi
+                    ? "सर्वर से संपर्क नहीं हो सका — अपना कनेक्शन जाँचें और पुनः जमा करें।"
+                    : "Could not reach the server — check your connection and submit again."
+                  : hi
+                    ? "कृपया पुनः प्रयास करें।"
+                    : "Please try again.";
+          Alert.alert(hi ? "जमा नहीं हुआ" : "Could not submit", detail);
         },
       },
     );
   }
+
+  /* ---- Countdown, T-5 warning, and auto-submit at zero ------------------ */
+
+  const expiryMs = useMemo(() => {
+    if (!active?.windowEnd) return null;
+    const t = new Date(active.windowEnd).getTime();
+    return Number.isNaN(t) ? null : t;
+  }, [active?.windowEnd]);
+
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
+  const autoSubmittedRef = useRef(false);
+  const submitRef = useRef<(auto?: boolean) => void>(() => {});
+  submitRef.current = doSubmit;
+
+  useEffect(() => {
+    autoSubmittedRef.current = false;
+  }, [active?.attemptId]);
+
+  useEffect(() => {
+    if (expiryMs === null) {
+      setSecondsLeft(null);
+      return;
+    }
+    const tick = () => {
+      const left = Math.round((expiryMs - Date.now()) / 1000);
+      setSecondsLeft(left);
+      if (left <= 0 && !autoSubmittedRef.current) {
+        // Send what they have rather than letting the window close on it. The
+        // server stays the authority — if it has already shut we surface that
+        // error, but the child is never left holding unsubmittable answers.
+        autoSubmittedRef.current = true;
+        submitRef.current(true);
+      }
+    };
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [expiryMs]);
+
+  const expiringSoon =
+    secondsLeft !== null && secondsLeft > 0 && secondsLeft <= EXPIRY_WARNING_SECONDS;
+  const expired = secondsLeft !== null && secondsLeft <= 0;
 
   const answeredCount = active
     ? active.questions.filter((q) =>
@@ -565,6 +742,64 @@ export default function Exams() {
           : (active.selected[q.id] ?? []).length > 0,
       ).length
     : 0;
+
+  // One mis-tap on a dense screen submitted instantly and, at the usual
+  // max_attempts of 1, ended the exam. Name what is unanswered.
+  function confirmSubmit() {
+    if (!active) return;
+    const unanswered = active.questions.length - answeredCount;
+    if (unanswered <= 0) {
+      doSubmit();
+      return;
+    }
+    Alert.alert(
+      hi ? "परीक्षा जमा करें?" : "Submit exam?",
+      hi
+        ? `${unanswered} प्रश्न अनुत्तरित हैं। जमा करने के बाद उत्तर नहीं बदले जा सकते।`
+        : `${unanswered} question${unanswered === 1 ? " is" : "s are"} unanswered. You cannot change your answers after submitting.`,
+      [
+        { text: hi ? "वापस जाएँ" : "Keep writing", style: "cancel" },
+        {
+          text: hi ? "जमा करें" : "Submit",
+          style: "destructive",
+          onPress: () => doSubmit(),
+        },
+      ],
+    );
+  }
+
+  function confirmLeave() {
+    Alert.alert(
+      hi ? "परीक्षा छोड़ें?" : "Leave the exam?",
+      hi
+        ? "आपके सहेजे गए उत्तर सुरक्षित रहेंगे और आप बाद में जारी रख सकते हैं।"
+        : "Your saved answers are kept and you can resume this attempt later.",
+      [
+        { text: hi ? "वापस जाएँ" : "Stay", style: "cancel" },
+        {
+          text: hi ? "छोड़ें" : "Leave",
+          onPress: () => {
+            flushPendingSaves();
+            setActive(null);
+          },
+        },
+      ],
+    );
+  }
+
+  const confirmLeaveRef = useRef<() => void>(() => {});
+  confirmLeaveRef.current = confirmLeave;
+
+  // Android hardware back inside an attempt confirms rather than silently
+  // dropping the screen (and the last debounced answer with it).
+  useEffect(() => {
+    if (!active) return;
+    const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      confirmLeaveRef.current();
+      return true;
+    });
+    return () => sub.remove();
+  }, [active]);
 
   return (
     <ActivityThemed accent="exams">
@@ -583,7 +818,7 @@ export default function Exams() {
         {result && activeStudentId ? (
           <ResultCard
             active={result}
-            submit={result.submit}
+            needsGrading={result.needsGrading}
             studentId={activeStudentId}
             onDone={() => {
               setResult(null);
@@ -601,12 +836,33 @@ export default function Exams() {
                   tone={answeredCount === active.questions.length ? "success" : "neutral"}
                 />
                 <Pill label={`${active.totalMarks} ${hi ? "अंक" : "marks"}`} tone="info" />
-                {saveStatus === "saving" ? (
-                  <Pill label={hi ? "सहेजा जा रहा है…" : "Saving…"} tone="neutral" />
-                ) : saveStatus === "saved" ? (
-                  <Pill label={hi ? "सहेजा गया" : "Saved"} tone="success" />
+                {secondsLeft !== null ? (
+                  <Pill
+                    label={
+                      expired
+                        ? hi
+                          ? "समय समाप्त"
+                          : "Time up"
+                        : `${hi ? "शेष" : "Time left"} ${formatRemaining(secondsLeft)}`
+                    }
+                    tone={expired || expiringSoon ? "warning" : "info"}
+                  />
                 ) : null}
               </Row>
+              {expiringSoon ? (
+                <Body muted style={{ marginTop: 8, fontSize: 12 }}>
+                  {hi
+                    ? "परीक्षा का समय समाप्त होने वाला है — समय पूरा होते ही आपके उत्तर स्वतः जमा हो जाएँगे।"
+                    : "The exam window is about to close — your answers will be submitted automatically when it does."}
+                </Body>
+              ) : null}
+              {expired ? (
+                <Body muted style={{ marginTop: 8, fontSize: 12 }}>
+                  {hi
+                    ? "समय समाप्त हो गया — आपके उत्तर जमा किए जा रहे हैं।"
+                    : "Time is up — your answers are being submitted."}
+                </Body>
+              ) : null}
             </Card>
 
             {active.questions.length === 0 ? (
@@ -629,10 +885,31 @@ export default function Exams() {
                       </Body>
                     </Row>
 
+                    {/* A save that never landed must not look like one that did. */}
+                    {saveState[q.id] === "failed" ? (
+                      <Row style={{ marginTop: 8, gap: 10, alignItems: "center" }}>
+                        <Pill label={hi ? "सहेजा नहीं गया" : "Not saved"} tone="warning" />
+                        <Pressable onPress={() => sendSave(q.id)} hitSlop={8}>
+                          <Body style={{ fontSize: 12, color: c.primary, fontWeight: "600" }}>
+                            {hi ? "पुनः प्रयास करें" : "Retry"}
+                          </Body>
+                        </Pressable>
+                      </Row>
+                    ) : saveState[q.id] === "saving" ? (
+                      <Row style={{ marginTop: 8 }}>
+                        <Pill label={hi ? "सहेजा जा रहा है…" : "Saving…"} tone="neutral" />
+                      </Row>
+                    ) : saveState[q.id] === "saved" ? (
+                      <Row style={{ marginTop: 8 }}>
+                        <Pill label={hi ? "सहेजा गया" : "Saved"} tone="success" />
+                      </Row>
+                    ) : null}
+
                     {q.question_type === "text" ? (
                       <TextInput
                         value={active.text[q.id] ?? ""}
                         onChangeText={(v) => setText(q.id, v)}
+                        editable={!expired}
                         placeholder={hi ? "अपना उत्तर लिखें…" : "Write your answer…"}
                         placeholderTextColor={c.inkDim}
                         multiline
@@ -660,6 +937,10 @@ export default function Exams() {
                             <Pressable
                               key={opt.id}
                               onPress={() => (multi ? toggleMulti(q.id, opt.id) : pickSingle(q.id, opt.id))}
+                              disabled={expired}
+                              accessibilityRole={multi ? "checkbox" : "radio"}
+                              accessibilityState={{ checked: isOn, disabled: expired }}
+                              accessibilityLabel={label}
                               style={{
                                 flexDirection: "row",
                                 alignItems: "center",
@@ -693,7 +974,9 @@ export default function Exams() {
                         })}
                         {q.question_type === "multi_choice" ? (
                           <Body muted style={{ fontSize: 12 }}>
-                            {hi ? "एक या अधिक विकल्प चुनें।" : "Select one or more options."}
+                            {hi
+                              ? "सभी सही विकल्प चुनें — आंशिक रूप से सही उत्तर पर कोई अंक नहीं मिलता।"
+                              : "Select every correct option — a partly correct answer scores nothing."}
                           </Body>
                         ) : null}
                       </View>
@@ -708,9 +991,9 @@ export default function Exams() {
               icon="paper-plane"
               loading={submitExam.isPending}
               disabled={active.questions.length === 0}
-              onPress={submit}
+              onPress={confirmSubmit}
             />
-            <Button label={hi ? "छोड़ें" : "Leave"} variant="ghost" onPress={() => setActive(null)} />
+            <Button label={hi ? "छोड़ें" : "Leave"} variant="ghost" onPress={confirmLeave} />
           </>
         ) : otpFor ? (
           /* ---- OTP gate ------------------------------------------------- */
@@ -786,7 +1069,7 @@ export default function Exams() {
         ) : (
           /* ---- Available exam list ------------------------------------- */
           rows.map((exam) => {
-            const now = Date.now();
+            const now = nowTs;
             const open = now >= new Date(exam.window_start).getTime() && now <= new Date(exam.window_end).getTime();
             const upcoming = now < new Date(exam.window_start).getTime();
             const attemptsLeft = exam.max_attempts - exam.already_attempted_count;
@@ -855,6 +1138,75 @@ export default function Exams() {
             );
           })
         )}
+
+        {/* ---- Past exams ------------------------------------------------
+            /available drops an exam the moment its window closes, so without
+            this a result released later was unreachable from the app. */}
+        {historyRows.length > 0 ? (
+          <View style={{ marginTop: 22, gap: 10 }}>
+            <Title style={{ fontSize: 16 }}>{hi ? "पिछली परीक्षाएँ" : "Past exams"}</Title>
+            {historyRows.map((row) => {
+              const title = (hi ? row.title_hi : row.title_en) ?? row.title_en;
+              const note = row.result_available
+                ? `${row.score} / ${row.total_marks}`
+                : row.status === "in_progress"
+                  ? hi
+                    ? "जारी है"
+                    : "In progress"
+                  : row.status === "abandoned"
+                    ? hi
+                      ? "समय बीत जाने पर बंद — रीसेट के लिए गुरुजी या दीदी से कहें"
+                      : "Closed when the window passed — ask your Guruji or Didi to reset it"
+                    : row.needs_grading
+                      ? hi
+                        ? "मूल्यांकन बाकी है"
+                        : "Awaiting grading"
+                      : hi
+                        ? "परिणाम अभी जारी नहीं हुआ"
+                        : "Result not released yet";
+              return (
+                <Card key={row.attempt_id}>
+                  <Row style={{ justifyContent: "space-between", alignItems: "flex-start" }}>
+                    <View style={{ flex: 1, paddingRight: 10 }}>
+                      <Body style={{ fontSize: 14, fontWeight: "600" }}>{title}</Body>
+                      <Body muted style={{ fontSize: 12, marginTop: 3 }}>
+                        {note}
+                      </Body>
+                    </View>
+                    {row.result_available && row.passed != null ? (
+                      <Pill
+                        label={
+                          row.passed
+                            ? hi
+                              ? "उत्तीर्ण"
+                              : "Passed"
+                            : hi
+                              ? "अनुत्तीर्ण"
+                              : "Not passed"
+                        }
+                        tone={row.passed ? "success" : "error"}
+                      />
+                    ) : null}
+                  </Row>
+                  {row.result_available ? (
+                    <Button
+                      label={hi ? "परिणाम देखें" : "View result"}
+                      variant="ghost"
+                      onPress={() =>
+                        setResult({
+                          titleEn: row.title_en,
+                          titleHi: row.title_hi,
+                          attemptId: row.attempt_id,
+                          needsGrading: row.needs_grading,
+                        })
+                      }
+                    />
+                  ) : null}
+                </Card>
+              );
+            })}
+          </View>
+        ) : null}
           </>
         )}
       </Screen>
