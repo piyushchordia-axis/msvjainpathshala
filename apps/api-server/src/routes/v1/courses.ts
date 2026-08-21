@@ -628,8 +628,11 @@ router.post(
 const subsectionBody = z.object({
   title_en: z.string().min(1).max(500),
   title_hi: z.string().min(1).max(500),
-  description_en: z.string().max(4000).optional(),
-  description_hi: z.string().max(4000).optional(),
+  // L22 — nullable (not just optional): the admin UI sends an explicit `null`
+  // for a blank description so a PATCH can clear one, distinct from omitting
+  // the key entirely (which means "leave the stored value unchanged").
+  description_en: z.string().max(4000).nullable().optional(),
+  description_hi: z.string().max(4000).nullable().optional(),
 });
 
 router.post(
