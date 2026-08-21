@@ -2868,10 +2868,16 @@ export function useSetCourseNodeProgress(opts?: { offline?: boolean }) {
         const mine = results.find((r) => r.submission_op_id === submission_op_id);
         return { submission_op_id, result: mine ?? null, queued: true as const };
       }
+      // C3/CU31 — the online path is governed by the same newest-wins rule
+      // as offline sync; sending marked_at/client_op_id here means an
+      // offline replay that arrives later can't silently clobber this tap.
+      const { ulid } = await import("@/lib/offline/ulid");
       return apiPost(`/v1/courses/nodes/${body.nodeId}/progress`, {
         student_id: body.student_id,
         status: body.status,
         note: body.note,
+        client_op_id: ulid(),
+        client_marked_at: new Date().toISOString(),
       });
     },
     onSuccess: (_res, vars) => {
@@ -2884,24 +2890,33 @@ export function useSetCourseNodeProgress(opts?: { offline?: boolean }) {
 export function useBulkCourseNodeProgress() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (body: {
+    mutationFn: async (body: {
       nodeId: string;
       batch_id?: string;
       student_ids?: string[];
       status: "not_started" | "in_progress" | "completed";
       note?: string;
-    }) =>
-      apiPost<{ applied: number; skipped: number; student_ids?: string[] }>(
+    }) => {
+      // H25 — carry a submission_op_id so a flaky-wifi retry of the same
+      // bulk request replays via sync_operations instead of walking the
+      // roster a second time.
+      const { ulid } = await import("@/lib/offline/ulid");
+      return apiPost<{ applied: number; skipped: number; student_ids?: string[] }>(
         `/v1/courses/nodes/${body.nodeId}/progress/bulk`,
         {
           batch_id: body.batch_id,
           student_ids: body.student_ids,
           status: body.status,
           note: body.note,
+          submission_op_id: ulid(),
         },
-      ),
+      );
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["courses", "tree"] });
+      // M26 — a bulk write can touch many students at once; invalidate the
+      // whole admin-student-progress prefix rather than one id we don't have.
+      void qc.invalidateQueries({ queryKey: ["admin", "student"] });
     },
   });
 }

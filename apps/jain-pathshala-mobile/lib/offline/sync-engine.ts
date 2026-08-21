@@ -72,7 +72,22 @@ function applyDrainResult(
   httpStatus: number | undefined,
 ): "remove" | QueuedOp {
   if (!result) {
+    // H9 — the server dropped this op from `results` (e.g. its envelope could
+    // not even be identified). This must still respect MAX_ATTEMPTS like
+    // every other branch below, or an unidentifiable op spins forever instead
+    // of eventually surfacing for a manual retry.
     const attempts = op.attempts + 1;
+    if (!shouldRetry(attempts)) {
+      return {
+        ...op,
+        state: "failed",
+        attempts,
+        last_error: {
+          code: "ERR_NO_RESULT",
+          message: "The server did not return a result for this item after several attempts.",
+        },
+      };
+    }
     return {
       ...op,
       state: "queued",

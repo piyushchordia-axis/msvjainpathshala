@@ -66,8 +66,27 @@ const opSchema = z.object({
   client_timestamp: z.string().min(1),
 });
 
+/**
+ * Just enough to identify WHICH op this is, so a malformed sibling can be
+ * reported as its own `failed` result instead of taking the whole batch down
+ * (H8). Deliberately looser than opSchema's strict ulidSchema — a client bug
+ * that mangles op_type or client_timestamp on one op must not also make this
+ * op unidentifiable and therefore unreportable.
+ */
+const opEnvelopeSchema = z
+  .object({ submission_op_id: z.string().min(1) })
+  .passthrough();
+
+/**
+ * The outer envelope only. Per-op shape is validated per-op inside
+ * processSyncBatch — validating it here with z.array(opSchema) meant ONE
+ * malformed op's `.parse()` threw for the whole array, and the router 422'd
+ * the entire request: every queued checkin, attendance mark, niyam and course
+ * mark in that batch came back `failed` together (CLAUDE.md offline §4:
+ * "process every op independently and return a per-op result").
+ */
 export const syncBatchBodySchema = z.object({
-  ops: z.array(opSchema).min(1).max(200),
+  ops: z.array(z.unknown()).min(1).max(200),
 });
 
 export type SyncBatchBody = z.infer<typeof syncBatchBodySchema>;
@@ -837,7 +856,45 @@ export async function processSyncBatch(
 ): Promise<{ results: SyncResult[] }> {
   const results: SyncResult[] = [];
 
-  for (const op of body.ops) {
+  for (const rawOp of body.ops) {
+    // H8 — validate this op on its own so a malformed sibling elsewhere in
+    // the batch can never prevent this one (or vice versa) from being
+    // processed and reported.
+    const envelope = opEnvelopeSchema.safeParse(rawOp);
+    if (!envelope.success) {
+      // No submission_op_id could even be read — there is nothing to
+      // correlate a result to, so this op is silently absent from `results`.
+      // The client's missing-result handling (H9) terminal-fails it after
+      // MAX_ATTEMPTS instead of retrying forever.
+      continue;
+    }
+    const submissionOpId = envelope.data.submission_op_id;
+
+    const parsedOp = opSchema.safeParse(rawOp);
+    if (!parsedOp.success) {
+      const failed: SyncResult = {
+        submission_op_id: submissionOpId,
+        status: "failed",
+        error: {
+          code: "ERR_VALIDATION_FAILED",
+          message: parsedOp.error.issues[0]?.message ?? "Invalid sync op.",
+        },
+      };
+      await writeSyncOperation({
+        userId: actor.id,
+        submissionOpId,
+        opKind:
+          typeof (rawOp as { op_type?: unknown })?.op_type === "string"
+            ? ((rawOp as { op_type: string }).op_type)
+            : "unknown",
+        requestPayload: rawOp,
+        result: failed,
+      });
+      results.push(failed);
+      continue;
+    }
+    const op = parsedOp.data;
+
     const opType = normalizeOpType(op.op_type);
     if (!opType) {
       const failed: SyncResult = {

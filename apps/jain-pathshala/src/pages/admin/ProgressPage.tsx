@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, ChevronsUpDown, FileText, Star } from 'lucide-react';
+import { ulid } from 'ulid';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminError } from '@/components/admin/AdminPageShell';
@@ -418,9 +419,14 @@ export default function ProgressPage() {
   async function setNodeStatus(nodeId: string, status: ProgressStatus) {
     setSavingNode(nodeId);
     try {
+      // C3/CU31 — the online path is governed by the same newest-wins rule
+      // as offline sync; sending marked_at/client_op_id here means an
+      // offline replay that arrives later can't silently clobber this tap.
       await apiPost(`/v1/courses/nodes/${nodeId}/progress`, {
         student_id: studentId,
         status,
+        client_op_id: ulid(),
+        client_marked_at: new Date().toISOString(),
       });
       toast.success('Progress saved.');
       void loadTree(studentId, courseId);

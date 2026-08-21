@@ -5,11 +5,13 @@ import { describe, it, expect, afterAll } from "vitest";
 import request from "supertest";
 import { pool } from "@workspace/db";
 import app from "../src/app";
-import { loginAs, auth } from "./helpers";
+import { loginAs, auth, withLedgerMaintenance } from "./helpers";
 import { correctCourseCertification } from "../src/services/course-certify";
 
 /** Courses planted by this file, removed in afterAll. */
 const plantedCourseIds: string[] = [];
+/** Students planted by this file for bulk/reset scope tests, removed in afterAll. */
+const plantedStudentIds: string[] = [];
 
 afterAll(async () => {
   // Without this the catalogue grows by ~130 rows per run. At 178 active
@@ -43,6 +45,19 @@ afterAll(async () => {
       plantedCourseIds,
     ]);
     await pool.query(`delete from courses where id = any($1::uuid[])`, [plantedCourseIds]);
+  }
+  if (plantedStudentIds.length) {
+    // audit_logs is append-only (audit_writer role) — its rows for these
+    // students are left in place deliberately, matching the module's design.
+    // A certified planted student has a punya_transactions row; deleting the
+    // student cascades into it, and that table is append-only-enforced by a
+    // trigger, so the cascade must run under ledger maintenance (AT18 note).
+    await withLedgerMaintenance(async (c) => {
+      await c.query(`delete from student_course_progress where student_id = any($1::uuid[])`, [
+        plantedStudentIds,
+      ]);
+      await c.query(`delete from students where id = any($1::uuid[])`, [plantedStudentIds]);
+    });
   }
   await pool.end();
 });
@@ -176,6 +191,46 @@ async function txCount(studentId: string, featureKey: string): Promise<number> {
     [studentId, featureKey],
   );
   return Number(r.rows[0]!.n);
+}
+
+/**
+ * Plants a fresh student in the seeded shikshak's (+919800000005) batch, for
+ * bulk/reset scope tests that must not mutate shared seed rows other tests
+ * also depend on. Tracked in plantedStudentIds and hard-deleted in afterAll.
+ */
+async function plantStudentInShikshakBatch(opts?: {
+  status?: "active" | "inactive";
+}): Promise<{ studentId: string; batchId: string; centreId: string }> {
+  const shikshakBatch = await pool.query<{ batch_id: string; centre_id: string }>(
+    `select b.id as batch_id, b.centre_id from batches b
+       join shikshak_batch_assignments a on a.batch_id = b.id and a.is_active = true
+       join users u on u.id = a.user_id
+      where u.phone = '+919800000005' and b.deleted_at is null and b.status = 'active'
+      limit 1`,
+  );
+  expect(shikshakBatch.rows[0]?.batch_id).toBeTruthy();
+  const batchId = shikshakBatch.rows[0]!.batch_id;
+  const centreId = shikshakBatch.rows[0]!.centre_id;
+
+  const status = opts?.status ?? "active";
+  const tag = stamp();
+  const insert = await pool.query<{ id: string }>(
+    `insert into students
+       (centre_id, batch_id, full_name, student_code, status, dob, gender, age_group, deactivated_at)
+     values ($1, $2, $3, $4, $5, '2014-01-01', 'female', 'kishor', $6)
+     returning id`,
+    [
+      centreId,
+      batchId,
+      `Bulk/Reset ${tag}`,
+      `BR${tag}`.slice(0, 24),
+      status,
+      status === "inactive" ? new Date() : null,
+    ],
+  );
+  const studentId = insert.rows[0]!.id;
+  plantedStudentIds.push(studentId);
+  return { studentId, batchId, centreId };
 }
 
 describe("courses step 3 — authoring & visibility", () => {
@@ -444,6 +499,166 @@ describe("courses step 3 — progress scope & bulk", () => {
       [kid.rows[0]!.id, sectionIds[0]],
     );
     expect(row.rows[0]?.status).toBe("completed");
+  });
+
+  it("bulk by batch_id excludes a deactivated student (M8/M11)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const active = await plantStudentInShikshakBatch();
+    const deactivated = await plantStudentInShikshakBatch({ status: "inactive" });
+    expect(deactivated.batchId).toBe(active.batchId);
+
+    const res = await request(app)
+      .post(`/v1/courses/nodes/${sectionIds[0]}/progress/bulk`)
+      .set(auth(shikshak.token))
+      .send({ batch_id: active.batchId, status: "in_progress" });
+    expect(res.status).toBe(200);
+    expect(res.body.data.student_ids).toContain(active.studentId);
+    expect(res.body.data.student_ids).not.toContain(deactivated.studentId);
+
+    const activeRow = await pool.query<{ status: string }>(
+      `select status from student_course_progress
+        where student_id = $1 and section_id = $2 and subsection_id is null`,
+      [active.studentId, sectionIds[0]],
+    );
+    expect(activeRow.rows[0]?.status).toBe("in_progress");
+
+    // Q11 — the deactivated student never got a row at all (silence, CU15).
+    const deactivatedRow = await pool.query<{ n: string }>(
+      `select count(*)::text as n from student_course_progress where student_id = $1`,
+      [deactivated.studentId],
+    );
+    expect(deactivatedRow.rows[0]!.n).toBe("0");
+  });
+
+  it("bulk and reset both 422 on neither-or-both selectors", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const student = await plantStudentInShikshakBatch();
+
+    for (const route of ["bulk", "reset"] as const) {
+      const empty = await request(app)
+        .post(`/v1/courses/nodes/${sectionIds[0]}/progress/${route}`)
+        .set(auth(shikshak.token))
+        .send({ status: "in_progress" });
+      expect(empty.status).toBe(422);
+
+      const both = await request(app)
+        .post(`/v1/courses/nodes/${sectionIds[0]}/progress/${route}`)
+        .set(auth(shikshak.token))
+        .send({
+          batch_id: student.batchId,
+          student_ids: [student.studentId],
+          status: "in_progress",
+        });
+      expect(both.status).toBe(422);
+    }
+  });
+
+  it("POST /progress/reset — regresses, skips certified rows, excludes deactivated, one audit row per applied student (CU14/M7-M9/M11)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId, {
+      punya: 30,
+    });
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const toRegress = await plantStudentInShikshakBatch();
+    const toStayCertified = await plantStudentInShikshakBatch();
+    const deactivated = await plantStudentInShikshakBatch({ status: "inactive" });
+    expect(toStayCertified.batchId).toBe(toRegress.batchId);
+    expect(deactivated.batchId).toBe(toRegress.batchId);
+
+    // Both students reach "completed"; one gets certified (frozen, CU12).
+    for (const s of [toRegress, toStayCertified]) {
+      await request(app)
+        .post(`/v1/courses/nodes/${sectionIds[0]}/progress`)
+        .set(auth(shikshak.token))
+        .send({ student_id: s.studentId, status: "completed" })
+        .expect(200);
+    }
+    await request(app)
+      .post(`/v1/courses/nodes/${sectionIds[0]}/certify`)
+      .set(auth(shikshak.token))
+      .send({ student_id: toStayCertified.studentId })
+      .expect(200);
+
+    const auditBeforeRegress = await pool.query<{ n: string }>(
+      `select count(*)::text as n from audit_logs
+        where entity_kind = 'student_course_progress' and entity_id = $1`,
+      [toRegress.studentId],
+    );
+    const auditBeforeCertified = await pool.query<{ n: string }>(
+      `select count(*)::text as n from audit_logs
+        where entity_kind = 'student_course_progress' and entity_id = $1`,
+      [toStayCertified.studentId],
+    );
+
+    const reset = await request(app)
+      .post(`/v1/courses/nodes/${sectionIds[0]}/progress/reset`)
+      .set(auth(shikshak.token))
+      .send({ batch_id: toRegress.batchId, status: "in_progress" });
+    expect(reset.status).toBe(200);
+    expect(reset.body.data.applied).toBe(1);
+    expect(reset.body.data.skipped).toBeGreaterThanOrEqual(1);
+
+    // Regression applied to the uncertified student.
+    const regressedRow = await pool.query<{ status: string }>(
+      `select status from student_course_progress
+        where student_id = $1 and section_id = $2 and subsection_id is null`,
+      [toRegress.studentId, sectionIds[0]],
+    );
+    expect(regressedRow.rows[0]?.status).toBe("in_progress");
+
+    // Certified row untouched (CU12 — reset excludes certified rows too).
+    const certifiedRow = await pool.query<{ status: string; certified_at: Date | null }>(
+      `select status, certified_at from student_course_progress
+        where student_id = $1 and section_id = $2 and subsection_id is null`,
+      [toStayCertified.studentId, sectionIds[0]],
+    );
+    expect(certifiedRow.rows[0]?.status).toBe("completed");
+    expect(certifiedRow.rows[0]?.certified_at).toBeTruthy();
+
+    // Deactivated student never entered the roster at all.
+    const deactivatedRow = await pool.query<{ n: string }>(
+      `select count(*)::text as n from student_course_progress where student_id = $1`,
+      [deactivated.studentId],
+    );
+    expect(deactivatedRow.rows[0]!.n).toBe("0");
+
+    // One new audit row for the applied (regressed) student; none for the skipped one.
+    const auditAfterRegress = await pool.query<{ n: string }>(
+      `select count(*)::text as n from audit_logs
+        where entity_kind = 'student_course_progress' and entity_id = $1`,
+      [toRegress.studentId],
+    );
+    const auditAfterCertified = await pool.query<{ n: string }>(
+      `select count(*)::text as n from audit_logs
+        where entity_kind = 'student_course_progress' and entity_id = $1`,
+      [toStayCertified.studentId],
+    );
+    expect(Number(auditAfterRegress.rows[0]!.n) - Number(auditBeforeRegress.rows[0]!.n)).toBe(1);
+    expect(Number(auditAfterCertified.rows[0]!.n) - Number(auditBeforeCertified.rows[0]!.n)).toBe(
+      0,
+    );
   });
 
   it("certify on a non-completed node (409)", async () => {

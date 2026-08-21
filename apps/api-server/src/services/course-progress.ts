@@ -1,6 +1,6 @@
 /**
  * Course progress writes — CU9–CU15.
- * Single implementation for the online route and (later) offline sync/batch.
+ * Single implementation for the online route and offline sync/batch.
  * Never a parallel offline-only path.
  */
 import {
@@ -16,6 +16,7 @@ import { ErrorCode as Err } from "@workspace/api-zod";
 import type { AdminScope } from "../lib/scope";
 import { inBatchWriteScope } from "../lib/scope";
 import { writeAudits, type AuditInput } from "../lib/audit";
+import { isUniqueViolationOn } from "../lib/pg-errors";
 import type { Role } from "@workspace/api-zod";
 
 /** Live status values only — 'mastered' is reserved and never written (CU11). */
@@ -23,6 +24,9 @@ export const COURSE_PROGRESS_STATUSES = ["not_started", "in_progress", "complete
 export type CourseProgressStatus = (typeof COURSE_PROGRESS_STATUSES)[number];
 
 export type CourseProgressNodeKind = "section" | "subsection";
+
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+type DbOrTx = typeof db | Tx;
 
 export class CourseProgressError extends Error {
   constructor(
@@ -80,9 +84,10 @@ function assertLiveStatus(status: string): asserts status is CourseProgressStatu
 async function resolveNode(
   nodeKind: CourseProgressNodeKind,
   nodeId: string,
+  client: DbOrTx = db,
 ): Promise<{ sectionId: string | null; subsectionId: string | null }> {
   if (nodeKind === "subsection") {
-    const [row] = await db
+    const [row] = await client
       .select({ id: course_subsections.id })
       .from(course_subsections)
       .where(and(eq(course_subsections.id, nodeId), isNull(course_subsections.deleted_at)))
@@ -97,7 +102,7 @@ async function resolveNode(
     return { sectionId: null, subsectionId: row.id };
   }
 
-  const [row] = await db
+  const [row] = await client
     .select({ id: course_sections.id })
     .from(course_sections)
     .where(and(eq(course_sections.id, nodeId), isNull(course_sections.deleted_at)))
@@ -112,16 +117,46 @@ async function resolveNode(
   return { sectionId: row.id, subsectionId: null };
 }
 
+const progressReturning = {
+  id: student_course_progress.id,
+  student_id: student_course_progress.student_id,
+  section_id: student_course_progress.section_id,
+  subsection_id: student_course_progress.subsection_id,
+  status: student_course_progress.status,
+  note: student_course_progress.note,
+  started_at: student_course_progress.started_at,
+  completed_at: student_course_progress.completed_at,
+  certified_at: student_course_progress.certified_at,
+  revision: student_course_progress.revision,
+};
+
+type ProgressRow = {
+  id: string;
+  student_id: string;
+  section_id: string | null;
+  subsection_id: string | null;
+  status: "not_started" | "in_progress" | "completed" | "mastered";
+  note: string | null;
+  started_at: Date | null;
+  completed_at: Date | null;
+  certified_at: Date | null;
+  revision: number;
+};
+
 /**
  * UPSERT one (student, node) progress row (CU10).
  * Partial unique indexes require targetWhere — omitting it fails at runtime.
- * Newest client_marked_at wins (CU31) — comparison lives here so online obeys it too.
+ * Newest client_marked_at wins (CU31) — comparison lives here so online obeys
+ * it too, arbitrated atomically inside the upsert's setWhere (C3) rather than
+ * a read-then-write race between a pre-check SELECT and this INSERT.
  */
 export async function upsertCourseProgress(
   input: UpsertCourseProgressInput,
+  tx?: Tx,
 ): Promise<UpsertCourseProgressResult> {
   assertLiveStatus(input.status);
-  const { sectionId, subsectionId } = await resolveNode(input.nodeKind, input.nodeId);
+  const client: DbOrTx = tx ?? db;
+  const { sectionId, subsectionId } = await resolveNode(input.nodeKind, input.nodeId, client);
 
   const existingWhere = subsectionId
     ? and(
@@ -133,45 +168,6 @@ export async function upsertCourseProgress(
         eq(student_course_progress.section_id, sectionId!),
         isNull(student_course_progress.subsection_id),
       );
-
-  // CU31 — newest marked_at vs stored client_marked_at (never server receipt).
-  if (input.clientMarkedAt) {
-    const [prior] = await db
-      .select({
-        id: student_course_progress.id,
-        student_id: student_course_progress.student_id,
-        section_id: student_course_progress.section_id,
-        subsection_id: student_course_progress.subsection_id,
-        status: student_course_progress.status,
-        note: student_course_progress.note,
-        started_at: student_course_progress.started_at,
-        completed_at: student_course_progress.completed_at,
-        certified_at: student_course_progress.certified_at,
-        revision: student_course_progress.revision,
-        client_marked_at: student_course_progress.client_marked_at,
-      })
-      .from(student_course_progress)
-      .where(existingWhere)
-      .limit(1);
-    if (
-      prior?.client_marked_at &&
-      prior.client_marked_at.getTime() > input.clientMarkedAt.getTime()
-    ) {
-      return {
-        id: prior.id,
-        student_id: prior.student_id,
-        section_id: prior.section_id,
-        subsection_id: prior.subsection_id,
-        status: prior.status as CourseProgressStatus,
-        note: prior.note,
-        started_at: prior.started_at,
-        completed_at: prior.completed_at,
-        certified_at: prior.certified_at,
-        revision: prior.revision,
-        applied: false,
-      };
-    }
-  }
 
   const now = new Date();
   const startedAtInsert = input.status === "not_started" ? null : now;
@@ -191,9 +187,21 @@ export async function upsertCourseProgress(
     client_marked_at: input.clientMarkedAt ?? null,
   };
 
+  // C3 — omit client_op_id/client_marked_at from the UPDATE branch when this
+  // write doesn't carry them, instead of nulling out whatever CU31 state a
+  // prior (possibly offline) write already stored. M10 — same coalesce
+  // treatment for note: an op carrying no note is not a write of an empty one.
+  //
+  // Deliberately `!= null` (loose), not `!== undefined`: every call site in
+  // this codebase — the online route, bulk, reset — normalises "not
+  // provided" to an explicit `null` before it ever reaches this function
+  // (`body.note ?? null`, `body.client_op_id ?? null`, …), so an
+  // `undefined`-only check would never actually omit anything and this fix
+  // would silently do nothing. No caller has a legitimate reason to
+  // explicitly null out a previously-recorded note/op-id/clock, so treating
+  // null the same as "absent" here loses no real behaviour.
   const set = {
     status: input.status,
-    note: input.note ?? null,
     // First transition into progress stamps started_at; not_started clears it (CU11).
     started_at:
       input.status === "not_started"
@@ -203,89 +211,99 @@ export async function upsertCourseProgress(
     completed_at: input.status === "completed" ? sql`now()` : null,
     updated_by: input.updatedBy,
     updated_by_role: input.updatedByRole,
-    client_op_id: input.clientOpId ?? null,
-    client_marked_at: input.clientMarkedAt ?? null,
     updated_at: now,
+    ...(input.note != null ? { note: input.note } : {}),
+    ...(input.clientOpId != null ? { client_op_id: input.clientOpId } : {}),
+    ...(input.clientMarkedAt != null ? { client_marked_at: input.clientMarkedAt } : {}),
+    // M38 — the CU19 correction path clears the certified pair in the SAME
+    // statement it (optionally) regresses status, so a regressing write can
+    // never collide with the certified_requires_completed CHECK (23514 → 500).
+    ...(input.allowCertifiedWrite
+      ? { certified_at: null, certified_by: null, certification_note: null }
+      : {}),
   };
 
-  const returning = {
-    id: student_course_progress.id,
-    student_id: student_course_progress.student_id,
-    section_id: student_course_progress.section_id,
-    subsection_id: student_course_progress.subsection_id,
-    status: student_course_progress.status,
-    note: student_course_progress.note,
-    started_at: student_course_progress.started_at,
-    completed_at: student_course_progress.completed_at,
-    certified_at: student_course_progress.certified_at,
-    revision: student_course_progress.revision,
-  };
-
-  // CU12: do not overwrite certified rows unless the correction path opts in.
+  // CU31 — newest client_marked_at wins, folded into setWhere so Postgres
+  // arbitrates atomically. CU12 — certified rows are frozen unless the
+  // correction path opts in.
+  const staleGuard = input.clientMarkedAt
+    ? sql`(${student_course_progress.client_marked_at} is null or ${student_course_progress.client_marked_at} <= ${input.clientMarkedAt})`
+    : null;
   const setWhere = input.allowCertifiedWrite
-    ? undefined
-    : sql`${student_course_progress.certified_at} is null`;
+    ? (staleGuard ?? undefined)
+    : staleGuard
+      ? sql`${student_course_progress.certified_at} is null and ${staleGuard}`
+      : sql`${student_course_progress.certified_at} is null`;
 
-  let rows: Array<{
-    id: string;
-    student_id: string;
-    section_id: string | null;
-    subsection_id: string | null;
-    status: "not_started" | "in_progress" | "completed" | "mastered";
-    note: string | null;
-    started_at: Date | null;
-    completed_at: Date | null;
-    certified_at: Date | null;
-    revision: number;
-  }>;
-
-  if (subsectionId) {
-    rows = await db
-      .insert(student_course_progress)
-      .values(values)
-      .onConflictDoUpdate({
-        target: [student_course_progress.student_id, student_course_progress.subsection_id],
-        targetWhere: sql`${student_course_progress.subsection_id} is not null`,
-        set,
-        setWhere,
-      })
-      .returning(returning);
-  } else {
-    rows = await db
-      .insert(student_course_progress)
-      .values(values)
-      .onConflictDoUpdate({
-        target: [student_course_progress.student_id, student_course_progress.section_id],
-        targetWhere: sql`${student_course_progress.section_id} is not null`,
-        set,
-        setWhere,
-      })
-      .returning(returning);
+  let rows: ProgressRow[];
+  try {
+    if (subsectionId) {
+      rows = await client
+        .insert(student_course_progress)
+        .values(values)
+        .onConflictDoUpdate({
+          target: [student_course_progress.student_id, student_course_progress.subsection_id],
+          targetWhere: sql`${student_course_progress.subsection_id} is not null`,
+          set,
+          setWhere,
+        })
+        .returning(progressReturning);
+    } else {
+      rows = await client
+        .insert(student_course_progress)
+        .values(values)
+        .onConflictDoUpdate({
+          target: [student_course_progress.student_id, student_course_progress.section_id],
+          targetWhere: sql`${student_course_progress.section_id} is not null`,
+          set,
+          setWhere,
+        })
+        .returning(progressReturning);
+    }
+  } catch (err) {
+    // M20 — this client_op_id already belongs to a DIFFERENT (student, node)
+    // row. The ON CONFLICT target above is (student, node); a collision on
+    // the SEPARATE client_op_id unique index is a raw constraint violation,
+    // not a graceful "0 rows" — without this it 500s instead of reporting
+    // the idempotent duplicate a repeated offline op actually is.
+    if (
+      input.clientOpId &&
+      isUniqueViolationOn(err, "student_course_progress_client_op_id_unique")
+    ) {
+      const [owner] = await client
+        .select(progressReturning)
+        .from(student_course_progress)
+        .where(eq(student_course_progress.client_op_id, input.clientOpId))
+        .limit(1);
+      if (owner) {
+        return { ...owner, status: owner.status as CourseProgressStatus, applied: false };
+      }
+    }
+    throw err;
   }
 
   const row = rows[0];
   if (!row) {
-    // Conflict hit a certified row (setWhere blocked the update).
-    const existing = await db
-      .select({
-        certified_at: student_course_progress.certified_at,
-        status: student_course_progress.status,
-      })
+    // setWhere blocked the update — either the row is certified (and this
+    // isn't a correction write) or a newer client_marked_at already stands
+    // (CU31). Report the current state rather than erroring where the second
+    // case applies.
+    const [existing] = await client
+      .select(progressReturning)
       .from(student_course_progress)
       .where(existingWhere)
       .limit(1);
-    if (existing[0]?.certified_at) {
+    if (existing?.certified_at && !input.allowCertifiedWrite) {
       throw new CourseProgressError(
         409,
         Err.COURSE_NODE_CERTIFIED,
         "That node is already certified — only a super_admin correction can change it.",
       );
     }
-    throw new CourseProgressError(
-      500,
-      Err.INTERNAL,
-      "Progress write did not apply — try again.",
-    );
+    if (existing) {
+      return { ...existing, status: existing.status as CourseProgressStatus, applied: false };
+    }
+    throw new CourseProgressError(500, Err.INTERNAL, "Progress write did not apply — try again.");
   }
 
   return {
@@ -330,7 +348,8 @@ export type BulkProgressInput = {
 
 /**
  * CU13/CU14 — bulk advance only. Exactly one of batch_id / student_ids.
- * Out-of-scope student_ids → 403 whole, nothing applied.
+ * Out-of-scope student_ids → 403 whole, nothing applied. Unknown/deactivated
+ * ids → distinct 404 (M11), never conflated with a scope violation.
  */
 export async function bulkUpsertCourseProgress(input: BulkProgressInput): Promise<{
   applied: number;
@@ -365,6 +384,7 @@ export async function bulkUpsertCourseProgress(input: BulkProgressInput): Promis
         ),
       );
   } else {
+    // Q11 — unknown, soft-deleted or deactivated ids never resolve here.
     roster = await db
       .select({
         id: students.id,
@@ -380,10 +400,13 @@ export async function bulkUpsertCourseProgress(input: BulkProgressInput): Promis
         ),
       );
     if (roster.length !== input.studentIds!.length) {
+      // M11 — distinct from a scope violation: these ids simply don't
+      // resolve to a live, active student, which is a different problem for
+      // the caller to fix than "you can't touch that student."
       throw new CourseProgressError(
-        403,
-        Err.COURSE_STUDENT_OUT_OF_SCOPE,
-        "One or more students are outside your scope — nothing was applied.",
+        404,
+        Err.NOT_FOUND,
+        "One or more students were not found or are inactive — nothing was applied.",
       );
     }
   }
@@ -401,57 +424,65 @@ export async function bulkUpsertCourseProgress(input: BulkProgressInput): Promis
   // Resolve node once (throws 404 if missing).
   await resolveNode(input.nodeKind, input.nodeId);
 
-  let applied = 0;
-  let skipped = 0;
-  const appliedIds: string[] = [];
   const targetRank = STATUS_RANK[input.status];
 
-  for (const s of roster) {
-    const [existing] = await db
-      .select({
-        status: student_course_progress.status,
-        certified_at: student_course_progress.certified_at,
-      })
-      .from(student_course_progress)
-      .where(
-        input.nodeKind === "subsection"
-          ? and(
-              eq(student_course_progress.student_id, s.id),
-              eq(student_course_progress.subsection_id, input.nodeId),
-            )
-          : and(
-              eq(student_course_progress.student_id, s.id),
-              eq(student_course_progress.section_id, input.nodeId),
-              isNull(student_course_progress.subsection_id),
-            ),
-      )
-      .limit(1);
+  // M7 — one transaction for the whole roster; a mid-loop failure must not
+  // leave some students advanced and the rest untouched with no way to tell.
+  return db.transaction(async (tx) => {
+    let applied = 0;
+    let skipped = 0;
+    const appliedIds: string[] = [];
 
-    // CU12 — certified rows excluded from every bulk write.
-    if (existing?.certified_at) {
-      skipped += 1;
-      continue;
+    for (const s of roster) {
+      const [existing] = await tx
+        .select({
+          status: student_course_progress.status,
+          certified_at: student_course_progress.certified_at,
+        })
+        .from(student_course_progress)
+        .where(
+          input.nodeKind === "subsection"
+            ? and(
+                eq(student_course_progress.student_id, s.id),
+                eq(student_course_progress.subsection_id, input.nodeId),
+              )
+            : and(
+                eq(student_course_progress.student_id, s.id),
+                eq(student_course_progress.section_id, input.nodeId),
+                isNull(student_course_progress.subsection_id),
+              ),
+        )
+        .limit(1);
+
+      // CU12 — certified rows excluded from every bulk write.
+      if (existing?.certified_at) {
+        skipped += 1;
+        continue;
+      }
+      // CU14 — advance only; silence (no row) ranks as not_started.
+      if (statusRank(existing?.status) >= targetRank) {
+        skipped += 1;
+        continue;
+      }
+
+      await upsertCourseProgress(
+        {
+          studentId: s.id,
+          nodeKind: input.nodeKind,
+          nodeId: input.nodeId,
+          status: input.status,
+          note: input.note ?? null,
+          updatedBy: input.updatedBy,
+          updatedByRole: input.updatedByRole,
+        },
+        tx,
+      );
+      applied += 1;
+      appliedIds.push(s.id);
     }
-    // CU14 — advance only; silence (no row) ranks as not_started.
-    if (statusRank(existing?.status) >= targetRank) {
-      skipped += 1;
-      continue;
-    }
 
-    await upsertCourseProgress({
-      studentId: s.id,
-      nodeKind: input.nodeKind,
-      nodeId: input.nodeId,
-      status: input.status,
-      note: input.note ?? null,
-      updatedBy: input.updatedBy,
-      updatedByRole: input.updatedByRole,
-    });
-    applied += 1;
-    appliedIds.push(s.id);
-  }
-
-  return { applied, skipped, student_ids: appliedIds };
+    return { applied, skipped, student_ids: appliedIds };
+  });
 }
 
 export type ResetProgressInput = {
@@ -500,6 +531,8 @@ export async function resetCourseProgress(input: ResetProgressInput): Promise<{
         ),
       );
   } else {
+    // M8 — align with bulk's Q11 exclusion: naming a deactivated student's id
+    // explicitly must not let a regression land on them anyway.
     roster = await db
       .select({
         id: students.id,
@@ -507,12 +540,19 @@ export async function resetCourseProgress(input: ResetProgressInput): Promise<{
         centre_id: students.centre_id,
       })
       .from(students)
-      .where(and(inArray(students.id, input.studentIds!), isNull(students.deleted_at)));
+      .where(
+        and(
+          inArray(students.id, input.studentIds!),
+          eq(students.status, "active"),
+          isNull(students.deleted_at),
+        ),
+      );
     if (roster.length !== input.studentIds!.length) {
+      // M11 — distinct from a scope violation, same reasoning as bulk.
       throw new CourseProgressError(
-        403,
-        Err.COURSE_STUDENT_OUT_OF_SCOPE,
-        "One or more students are outside your scope — nothing was applied.",
+        404,
+        Err.NOT_FOUND,
+        "One or more students were not found or are inactive — nothing was applied.",
       );
     }
   }
@@ -529,67 +569,76 @@ export async function resetCourseProgress(input: ResetProgressInput): Promise<{
 
   await resolveNode(input.nodeKind, input.nodeId);
 
-  let applied = 0;
-  let skipped = 0;
-  const audits: AuditInput[] = [];
+  // M7 + M9 — one transaction for the whole roster AND its per-student audit
+  // rows: a mid-loop failure can't half-apply a regression, and the audit
+  // trail that is CU14's entire justification for this route can't be
+  // silently lost to a swallowed post-loop write.
+  return db.transaction(async (tx) => {
+    let applied = 0;
+    let skipped = 0;
+    const audits: AuditInput[] = [];
 
-  for (const s of roster) {
-    const [existing] = await db
-      .select({
-        status: student_course_progress.status,
-        certified_at: student_course_progress.certified_at,
-      })
-      .from(student_course_progress)
-      .where(
-        input.nodeKind === "subsection"
-          ? and(
-              eq(student_course_progress.student_id, s.id),
-              eq(student_course_progress.subsection_id, input.nodeId),
-            )
-          : and(
-              eq(student_course_progress.student_id, s.id),
-              eq(student_course_progress.section_id, input.nodeId),
-              isNull(student_course_progress.subsection_id),
-            ),
-      )
-      .limit(1);
+    for (const s of roster) {
+      const [existing] = await tx
+        .select({
+          status: student_course_progress.status,
+          certified_at: student_course_progress.certified_at,
+        })
+        .from(student_course_progress)
+        .where(
+          input.nodeKind === "subsection"
+            ? and(
+                eq(student_course_progress.student_id, s.id),
+                eq(student_course_progress.subsection_id, input.nodeId),
+              )
+            : and(
+                eq(student_course_progress.student_id, s.id),
+                eq(student_course_progress.section_id, input.nodeId),
+                isNull(student_course_progress.subsection_id),
+              ),
+        )
+        .limit(1);
 
-    if (existing?.certified_at) {
-      skipped += 1;
-      continue;
+      if (existing?.certified_at) {
+        skipped += 1;
+        continue;
+      }
+      if (!existing) {
+        skipped += 1;
+        continue;
+      }
+
+      await upsertCourseProgress(
+        {
+          studentId: s.id,
+          nodeKind: input.nodeKind,
+          nodeId: input.nodeId,
+          status: input.status,
+          note: input.note ?? null,
+          updatedBy: input.updatedBy,
+          updatedByRole: input.updatedByRole,
+        },
+        tx,
+      );
+      applied += 1;
+      audits.push({
+        actorId: input.updatedBy,
+        actorRole: input.updatedByRole,
+        action: "update",
+        entityKind: "student_course_progress",
+        entityId: s.id,
+        summary: `Reset course progress to ${input.status}.`,
+        metadata: {
+          student_id: s.id,
+          node_kind: input.nodeKind,
+          node_id: input.nodeId,
+          status: input.status,
+        },
+        ip: input.ip ?? null,
+      });
     }
-    if (!existing) {
-      skipped += 1;
-      continue;
-    }
 
-    await upsertCourseProgress({
-      studentId: s.id,
-      nodeKind: input.nodeKind,
-      nodeId: input.nodeId,
-      status: input.status,
-      note: input.note ?? null,
-      updatedBy: input.updatedBy,
-      updatedByRole: input.updatedByRole,
-    });
-    applied += 1;
-    audits.push({
-      actorId: input.updatedBy,
-      actorRole: input.updatedByRole,
-      action: "update",
-      entityKind: "student_course_progress",
-      entityId: s.id,
-      summary: `Reset course progress to ${input.status}.`,
-      metadata: {
-        student_id: s.id,
-        node_kind: input.nodeKind,
-        node_id: input.nodeId,
-        status: input.status,
-      },
-      ip: input.ip ?? null,
-    });
-  }
-
-  await writeAudits(audits);
-  return { applied, skipped };
+    await writeAudits(audits, tx);
+    return { applied, skipped };
+  });
 }

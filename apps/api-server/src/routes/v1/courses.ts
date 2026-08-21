@@ -48,6 +48,7 @@ import {
   correctCourseCertification,
 } from "../../services/course-certify";
 import { enqueueCertificatePdf } from "../../services/course-certificates";
+import { findSuccessfulSync, writeSyncOperation } from "../../lib/sync-operations";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -949,6 +950,18 @@ router.post(
       fail(res, 404, "ERR_COURSE_NODE_NOT_FOUND", "That course node was not found.");
       return;
     }
+
+    // H25 — CU13's body carries submission_op_id; sync_operations makes a
+    // flaky-wifi retry of the same bulk request a no-op instead of a second
+    // walk over the roster, exactly like every other write in this codebase.
+    if (body.submission_op_id) {
+      const replay = await findSuccessfulSync(req.authUser!.id, body.submission_op_id);
+      if (replay) {
+        ok(res, replay.data);
+        return;
+      }
+    }
+
     const scope = await resolveAdminScope(req.authUser!);
     try {
       const result = await bulkUpsertCourseProgress({
@@ -962,8 +975,30 @@ router.post(
         updatedBy: req.authUser!.id,
         updatedByRole: req.authUser!.role,
       });
+      if (body.submission_op_id) {
+        await writeSyncOperation({
+          userId: req.authUser!.id,
+          submissionOpId: body.submission_op_id,
+          opKind: "course_progress.bulk",
+          requestPayload: body,
+          result: { submission_op_id: body.submission_op_id, status: "success", data: result },
+        });
+      }
       ok(res, result);
     } catch (err) {
+      if (body.submission_op_id && err instanceof CourseProgressError) {
+        await writeSyncOperation({
+          userId: req.authUser!.id,
+          submissionOpId: body.submission_op_id,
+          opKind: "course_progress.bulk",
+          requestPayload: body,
+          result: {
+            submission_op_id: body.submission_op_id,
+            status: err.httpStatus === 409 ? "conflict" : "failed",
+            error: { code: err.code, message: err.message },
+          },
+        });
+      }
       if (!handleErr(res, err)) throw err;
     }
   },

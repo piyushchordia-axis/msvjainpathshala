@@ -7,6 +7,7 @@ import { readFileSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { upsertCourseProgress } from "../src/services/course-progress";
+import { ulid } from "../src/lib/ulid";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -264,5 +265,46 @@ describe("upsertCourseProgress (CU10)", () => {
       [studentId, nodeId],
     );
     expect(Number(count.rows[0]!.n)).toBe(1);
+  });
+
+  it("a repeated client_op_id on a DIFFERENT node returns applied:false, not a 500 (M20)", async () => {
+    const { userId, studentId } = await seedActor();
+    const courseId = await createCourse(`M20 ${Date.now()}`);
+    const sectionId = await addSection(courseId, "Sec", 0);
+    const nodeA = await addSubsection(sectionId, "A", 0);
+    const nodeB = await addSubsection(sectionId, "B", 1);
+
+    const clientOpId = ulid();
+    const first = await upsertCourseProgress({
+      studentId,
+      nodeKind: "subsection",
+      nodeId: nodeA,
+      status: "in_progress",
+      clientOpId,
+      updatedBy: userId,
+      updatedByRole: "super_admin",
+    });
+    expect(first.applied).toBe(true);
+
+    // Same client_op_id, but a genuinely different (student, node) row — this
+    // is not a conflict on the ON CONFLICT target, so it must not 500.
+    const second = await upsertCourseProgress({
+      studentId,
+      nodeKind: "subsection",
+      nodeId: nodeB,
+      status: "in_progress",
+      clientOpId,
+      updatedBy: userId,
+      updatedByRole: "super_admin",
+    });
+    expect(second.applied).toBe(false);
+    expect(second.subsection_id).toBe(nodeA);
+
+    const rowB = await pool.query<{ n: string }>(
+      `select count(*)::text as n from student_course_progress
+        where student_id = $1 and subsection_id = $2`,
+      [studentId, nodeB],
+    );
+    expect(rowB.rows[0]!.n).toBe("0");
   });
 });

@@ -350,4 +350,82 @@ describe("course sync step 5", () => {
       });
     expect(cert2.body.data.results[0].status).toBe("duplicate");
   });
+
+  it("6 — C3: an online write omitting client_marked_at doesn't erase the stored clock, so a later older offline replay stays a no-op", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { sectionId } = await publishableCourse(superAdmin.token, cityId);
+    const studentId = await shikshakStudent();
+
+    const t1 = new Date("2026-08-21T10:00:00.000Z");
+    const olderThanT1 = new Date("2026-08-21T08:00:00.000Z");
+
+    // 1) Offline: in_progress at 10:00 — establishes a real client_marked_at.
+    const offlineFirst = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(shikshak.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: ulid(),
+            op_type: "course_progress",
+            payload: {
+              node_kind: "section",
+              node_id: sectionId,
+              marks: [{ student_id: studentId, status: "in_progress", client_op_id: ulid() }],
+              marked_at: t1.toISOString(),
+            },
+            client_timestamp: t1.toISOString(),
+          },
+        ],
+      });
+    expect(offlineFirst.body.data.results[0].status).toBe("success");
+
+    // 2) Online: completed, with NO client_marked_at in the body — CU31/C3
+    //    requires the stored clock to survive this, not be nulled out by a
+    //    write that simply doesn't carry one.
+    const online = await request(app)
+      .post(`/v1/courses/nodes/${sectionId}/progress`)
+      .set(auth(shikshak.token))
+      .send({ student_id: studentId, status: "completed" });
+    expect(online.status).toBe(200);
+
+    const midRow = await pool.query<{ status: string; client_marked_at: Date | null }>(
+      `select status, client_marked_at from student_course_progress
+        where student_id = $1 and section_id = $2 and subsection_id is null`,
+      [studentId, sectionId],
+    );
+    expect(midRow.rows[0]?.status).toBe("completed");
+    // C3 — the online write must not have nulled the clock the offline write set.
+    expect(midRow.rows[0]?.client_marked_at).toBeTruthy();
+
+    // 3) Offline replay, OLDER than the clock still on the row — must be a no-op.
+    const staleReplay = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(shikshak.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: ulid(),
+            op_type: "course_progress",
+            payload: {
+              node_kind: "section",
+              node_id: sectionId,
+              marks: [{ student_id: studentId, status: "in_progress", client_op_id: ulid() }],
+              marked_at: olderThanT1.toISOString(),
+            },
+            client_timestamp: olderThanT1.toISOString(),
+          },
+        ],
+      });
+    expect(staleReplay.body.data.results[0].status).toBe("duplicate");
+
+    const finalRow = await pool.query<{ status: string }>(
+      `select status from student_course_progress
+        where student_id = $1 and section_id = $2 and subsection_id is null`,
+      [studentId, sectionId],
+    );
+    expect(finalRow.rows[0]?.status).toBe("completed");
+  });
 });
