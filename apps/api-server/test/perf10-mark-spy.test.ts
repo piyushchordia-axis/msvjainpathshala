@@ -102,7 +102,14 @@ describe("PERF #10 mark statement count", () => {
         ]),
       );
       await pool.query(`delete from punya_balances where student_id = any($1::uuid[])`, [planted]);
-      // Hard-deleting a student cascades into punya_transactions.
+      // L15 / Q11 — punya_transactions.student_id is RESTRICT, not CASCADE
+      // (students are deactivated, never hard-deleted, so nothing should
+      // assume a delete cascades off them). The source_entity_id delete above
+      // already clears every row this test could have created, but this is
+      // the explicit, non-assuming cleanup.
+      await withLedgerMaintenance((c) =>
+        c.query(`delete from punya_transactions where student_id = any($1::uuid[])`, [planted]),
+      );
       await withLedgerMaintenance((c) =>
         c.query(`delete from students where id = any($1::uuid[])`, [planted]),
       );

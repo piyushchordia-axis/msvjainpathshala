@@ -33,8 +33,9 @@ const plantedStudentIds: string[] = [];
  * the batch passed its capacity of 25 — a failure with no visible
  * connection to the file that caused it.
  *
- * The ledger is append-only at the database (0090) and students cascade into
- * it, so the teardown declares itself.
+ * The ledger is append-only at the database (0090); punya_transactions is
+ * cleared explicitly below since student_id there is RESTRICT, not CASCADE
+ * (L15 / Q11 — students are deactivated, never hard-deleted).
  */
 async function removePlantedStudents(): Promise<void> {
   if (plantedStudentIds.length === 0) return;
@@ -46,6 +47,9 @@ async function removePlantedStudents(): Promise<void> {
       plantedStudentIds,
     ]);
     await c.query(`delete from course_certificates where student_id = any($1::uuid[])`, [
+      plantedStudentIds,
+    ]);
+    await c.query(`delete from punya_transactions where student_id = any($1::uuid[])`, [
       plantedStudentIds,
     ]);
     await c.query(`delete from students where id = any($1::uuid[])`, [plantedStudentIds]);

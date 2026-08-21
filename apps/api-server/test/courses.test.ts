@@ -50,11 +50,16 @@ afterAll(async () => {
   if (plantedStudentIds.length) {
     // audit_logs is append-only (audit_writer role) — its rows for these
     // students are left in place deliberately, matching the module's design.
-    // A certified planted student has a punya_transactions row; deleting the
-    // student cascades into it, and that table is append-only-enforced by a
-    // trigger, so the cascade must run under ledger maintenance (AT18 note).
+    // A certified planted student has a punya_transactions row. That FK is
+    // RESTRICT, not CASCADE (L15 / Q11 — students are deactivated, never hard-
+    // deleted, so nothing should assume a cascading delete off them), so the
+    // ledger rows are removed explicitly, still under ledger maintenance since
+    // punya_transactions is append-only-enforced by a trigger (AT18 note).
     await withLedgerMaintenance(async (c) => {
       await c.query(`delete from student_course_progress where student_id = any($1::uuid[])`, [
+        plantedStudentIds,
+      ]);
+      await c.query(`delete from punya_transactions where student_id = any($1::uuid[])`, [
         plantedStudentIds,
       ]);
       await c.query(`delete from students where id = any($1::uuid[])`, [plantedStudentIds]);
@@ -1314,6 +1319,124 @@ describe("courses step 6 — admin panel exit criteria", () => {
     expect(sec.status_diverges).toBe(true);
     // Declaration is not blocked — row stays completed.
     expect(sec.certified_at).toBeNull();
+  });
+});
+
+describe("courses step 6 — delete guard, undelete, archive-from-draft, publish race guard (H10, L2, L6)", () => {
+  it("DELETE on a course with a certified section is blocked (H10)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const kid = await pool.query<{ id: string }>(
+      `select s.id from students s
+        join shikshak_batch_assignments a on a.batch_id = s.batch_id and a.is_active = true
+        join users u on u.id = a.user_id
+       where u.phone = '+919800000005' and s.status = 'active' and s.deleted_at is null
+       limit 1`,
+    );
+    await request(app)
+      .post(`/v1/courses/nodes/${sectionIds[0]!}/progress`)
+      .set(auth(shikshak.token))
+      .send({ student_id: kid.rows[0]!.id, status: "completed" })
+      .expect(200);
+    await request(app)
+      .post(`/v1/courses/nodes/${sectionIds[0]!}/certify`)
+      .set(auth(shikshak.token))
+      .send({ student_id: kid.rows[0]!.id })
+      .expect(200);
+
+    const del = await request(app)
+      .delete(`/v1/admin/courses/${courseId}`)
+      .set(auth(superAdmin.token));
+    expect(del.status).toBe(409);
+    expect(del.body.error.code).toBe("ERR_COURSE_NODE_HAS_CERTIFICATIONS");
+  });
+
+  it("DELETE on an uncertified course reports an impact count and can be restored via undelete (H10)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const kid = await pool.query<{ id: string }>(
+      `select s.id from students s
+        join shikshak_batch_assignments a on a.batch_id = s.batch_id and a.is_active = true
+        join users u on u.id = a.user_id
+       where u.phone = '+919800000005' and s.status = 'active' and s.deleted_at is null
+       limit 1`,
+    );
+    // In-progress, uncertified — counts toward the impact number.
+    await request(app)
+      .post(`/v1/courses/nodes/${sectionIds[0]!}/progress`)
+      .set(auth(shikshak.token))
+      .send({ student_id: kid.rows[0]!.id, status: "in_progress" })
+      .expect(200);
+
+    const del = await request(app)
+      .delete(`/v1/admin/courses/${courseId}`)
+      .set(auth(superAdmin.token));
+    expect(del.status).toBe(200);
+    expect(del.body.data.deleted).toBe(true);
+    expect(del.body.data.impact.in_progress_uncertified_students).toBeGreaterThanOrEqual(1);
+
+    const goneFromList = await request(app)
+      .get("/v1/admin/courses")
+      .set(auth(superAdmin.token));
+    expect(
+      (goneFromList.body.data.items as Array<{ id: string }>).some((c) => c.id === courseId),
+    ).toBe(false);
+
+    const undelete = await request(app)
+      .post(`/v1/admin/courses/${courseId}/undelete`)
+      .set(auth(superAdmin.token));
+    expect(undelete.status).toBe(200);
+    expect(undelete.body.data.id).toBe(courseId);
+
+    const restoredList = await request(app)
+      .get("/v1/admin/courses")
+      .set(auth(superAdmin.token));
+    expect(
+      (restoredList.body.data.items as Array<{ id: string }>).some((c) => c.id === courseId),
+    ).toBe(true);
+  });
+
+  it("a draft course can be archived directly, without publishing first (L2)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId } = await publishableCourse(superAdmin.token, cityId);
+
+    const archive = await request(app)
+      .patch(`/v1/admin/courses/${courseId}`)
+      .set(auth(superAdmin.token))
+      .send({ status: "archived" });
+    expect(archive.status).toBe(200);
+    expect(archive.body.data.status).toBe("archived");
+  });
+
+  it("publishing an already-active course is rejected, not re-applied (L6)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const again = await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token));
+    expect(again.status).toBe(409);
+    expect(again.body.error.message).toMatch(/already published/i);
   });
 });
 

@@ -86,3 +86,58 @@ export async function getCourseProgress(
     mastery: asRatio(row.mastery),
   };
 }
+
+export type CourseSectionRollup = { section_id: string } & CourseProgressStats;
+
+/**
+ * M5 — CU16's section roll-up for every section of a course, in ONE round
+ * trip instead of one `getCourseProgress` call per section. A LATERAL join
+ * still invokes fn_course_progress once per section (same CU28 arithmetic,
+ * still the one canonical calculation), but the whole set comes back over a
+ * single query instead of N sequential ones.
+ */
+export async function getCourseSectionRollups(
+  studentId: string,
+  courseId: string,
+): Promise<CourseSectionRollup[]> {
+  const result = await db.execute(sql`
+    select
+      cs.id as section_id,
+      fp.leaf_total,
+      fp.leaf_reached,
+      fp.leaf_certified,
+      fp.section_total,
+      fp.section_certified,
+      fp.coverage,
+      fp.mastery
+    from course_sections cs
+    cross join lateral fn_course_progress(${studentId}::uuid, ${courseId}::uuid, cs.id) fp
+    where cs.course_id = ${courseId}::uuid
+      and cs.deleted_at is null
+  `);
+  const rows =
+    (
+      result as unknown as {
+        rows?: Array<{
+          section_id: string;
+          leaf_total: string | number;
+          leaf_reached: string | number;
+          leaf_certified: string | number;
+          section_total: string | number;
+          section_certified: string | number;
+          coverage: string | number | null;
+          mastery: string | number | null;
+        }>;
+      }
+    ).rows ?? [];
+  return rows.map((row) => ({
+    section_id: row.section_id,
+    leaf_total: asInt(row.leaf_total),
+    leaf_reached: asInt(row.leaf_reached),
+    leaf_certified: asInt(row.leaf_certified),
+    section_total: asInt(row.section_total),
+    section_certified: asInt(row.section_certified),
+    coverage: asRatio(row.coverage),
+    mastery: asRatio(row.mastery),
+  }));
+}

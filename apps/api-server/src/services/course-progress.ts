@@ -405,12 +405,14 @@ export async function upsertCourseProgress(
   };
 }
 
-const STATUS_RANK: Record<CourseProgressStatus, number> = {
-  not_started: 0,
-  in_progress: 1,
-  completed: 2,
-};
-
+/**
+ * L10 — the single status ranking used everywhere a bulk/reset write needs to
+ * compare "how far along" one status is against another. Handles the legacy
+ * `mastered` value (M15 — never written going forward, CU11, but pre-existing
+ * rows may still carry it) so it is safe for both the write's OWN status
+ * (always one of the three live values, per `assertLiveStatus`) and an
+ * EXISTING row's status (which may be a `mastered` holdover).
+ */
 export function statusRank(status: string | null | undefined): number {
   if (!status || status === "not_started") return 0;
   if (status === "in_progress") return 1;
@@ -508,7 +510,7 @@ export async function bulkUpsertCourseProgress(input: BulkProgressInput): Promis
   // Resolve node once (throws 404 if missing).
   await resolveNode(input.nodeKind, input.nodeId);
 
-  const targetRank = STATUS_RANK[input.status];
+  const targetRank = statusRank(input.status);
 
   // M7 — one transaction for the whole roster; a mid-loop failure must not
   // leave some students advanced and the rest untouched with no way to tell.

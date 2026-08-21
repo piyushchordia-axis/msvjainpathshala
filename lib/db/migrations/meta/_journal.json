@@ -687,6 +687,41 @@
       "when": 1791974400000,
       "tag": "0097_push_quiz_age_groups",
       "breakpoints": true
+    },
+    {
+      "idx": 98,
+      "version": "7",
+      "when": 1792060800000,
+      "tag": "0098_courses_library_section_slot_safe",
+      "breakpoints": true
+    },
+    {
+      "idx": 99,
+      "version": "7",
+      "when": 1792060800001,
+      "tag": "0099_fn_course_progress_deactivated_and_childless",
+      "breakpoints": true
+    },
+    {
+      "idx": 100,
+      "version": "7",
+      "when": 1792060800002,
+      "tag": "0100_course_progress_student_fk_restrict",
+      "breakpoints": true
+    },
+    {
+      "idx": 101,
+      "version": "7",
+      "when": 1792060800003,
+      "tag": "0101_course_progress_student_fk_restrict_validate",
+      "breakpoints": true
+    },
+    {
+      "idx": 102,
+      "version": "7",
+      "when": 1792060800004,
+      "tag": "0102_course_progress_misc_hardening",
+      "breakpoints": true
     }
   ]
 }

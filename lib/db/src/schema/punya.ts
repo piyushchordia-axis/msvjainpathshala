@@ -114,9 +114,12 @@ export const punya_transactions = pgTable(
   "punya_transactions",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // L15 / Q11 — never CASCADE on a student: students are deactivated, never
+    // hard-deleted, so a cascading delete here assumes a delete that must
+    // never happen (migration 0100/0101).
     student_id: uuid("student_id")
       .notNull()
-      .references(() => students.id, { onDelete: "cascade" }),
+      .references(() => students.id, { onDelete: "restrict" }),
     feature_key: text("feature_key").notNull(),
     points: integer("points").notNull(),
     note: text("note"),

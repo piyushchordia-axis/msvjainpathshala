@@ -271,9 +271,12 @@ export const progress_reports = pgTable(
   "progress_reports",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // L15 / Q11 — never CASCADE on a student: students are deactivated, never
+    // hard-deleted, so a cascading delete here assumes a delete that must
+    // never happen (migration 0100/0101).
     student_id: uuid("student_id")
       .notNull()
-      .references(() => students.id, { onDelete: "cascade" }),
+      .references(() => students.id, { onDelete: "restrict" }),
     period_kind: text("period_kind").notNull(), // 'monthly' | 'termly'
     period_label: text("period_label").notNull(), // e.g. '2026-06', 'term-1'
     generated_at: timestamp("generated_at", { withTimezone: true }).notNull().defaultNow(),

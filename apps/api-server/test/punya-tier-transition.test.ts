@@ -23,6 +23,10 @@ const plantedStudentIds: string[] = [];
 afterAll(async () => {
   if (plantedStudentIds.length) {
     await withLedgerMaintenance(async (c) => {
+      // L15 / Q11 — punya_transactions.student_id is RESTRICT, not CASCADE.
+      await c.query(`delete from punya_transactions where student_id = any($1::uuid[])`, [
+        plantedStudentIds,
+      ]);
       await c.query(`delete from students where id = any($1::uuid[])`, [plantedStudentIds]);
     });
   }

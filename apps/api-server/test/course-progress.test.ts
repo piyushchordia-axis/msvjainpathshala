@@ -1,26 +1,21 @@
 /**
  * CU28 fn_course_progress + CU10 upsertCourseProgress exit criteria.
+ *
+ * Runs against whatever fn_course_progress the migration chain has actually
+ * applied — it used to re-install 0052's SQL by hand in `beforeAll`, which
+ * meant these tests silently passed against a function the migration chain
+ * might never have shipped, AND clobbered any later CREATE OR REPLACE
+ * (0099's M1/M2 fix) back to 0052's original body for the rest of this
+ * file's run. Run the full migration chain (`node lib/db/scripts/migrate.mjs`)
+ * before this suite, not a long-lived dev DB that may have drifted.
  */
-import { describe, it, expect, afterAll, beforeAll } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 import { pool } from "@workspace/db";
-import { readFileSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
 import { upsertCourseProgress } from "../src/services/course-progress";
 import { ulid } from "../src/lib/ulid";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-
 afterAll(async () => {
   await pool.end();
-});
-
-beforeAll(async () => {
-  const sql = readFileSync(
-    join(__dirname, "../../../lib/db/migrations/0052_fn_course_progress.sql"),
-    "utf8",
-  );
-  await pool.query(sql);
 });
 
 async function seedActor(): Promise<{ userId: string; studentId: string }> {
@@ -306,5 +301,140 @@ describe("upsertCourseProgress (CU10)", () => {
       [studentId, nodeB],
     );
     expect(rowB.rows[0]!.n).toBe("0");
+  });
+});
+
+/**
+ * DB-level constraint tests (block 6 / CU12's "the CHECK is the net" — the
+ * service guard is the contract, but the net itself must actually hold).
+ */
+describe("student_course_progress constraints (DB-level)", () => {
+  it("a second raw INSERT for the same (student_id, section_id) is rejected — 23505", async () => {
+    const { studentId } = await seedActor();
+    const courseId = await createCourse(`constraint dup ${Date.now()}`);
+    const sectionId = await addSection(courseId, "Dup section", 0);
+
+    await pool.query(
+      `insert into student_course_progress
+         (student_id, section_id, status, updated_by_role)
+       values ($1, $2, 'in_progress', 'super_admin')`,
+      [studentId, sectionId],
+    );
+
+    await expect(
+      pool.query(
+        `insert into student_course_progress
+           (student_id, section_id, status, updated_by_role)
+         values ($1, $2, 'in_progress', 'super_admin')`,
+        [studentId, sectionId],
+      ),
+    ).rejects.toMatchObject({ code: "23505" });
+  });
+
+  it("certified_at on a non-'completed' row raises 23514", async () => {
+    const { userId, studentId } = await seedActor();
+    const courseId = await createCourse(`constraint certified ${Date.now()}`);
+    const sectionId = await addSection(courseId, "Certified-guard section", 0);
+    const nodeId = await addSubsection(sectionId, "Guarded leaf", 0);
+
+    await expect(
+      pool.query(
+        `insert into student_course_progress
+           (student_id, subsection_id, status, certified_at, certified_by, updated_by_role)
+         values ($1, $2, 'in_progress', now(), $3, 'super_admin')`,
+        [studentId, nodeId, userId],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+
+  it("a malformed client_op_id is rejected — 23514", async () => {
+    const { studentId } = await seedActor();
+    const courseId = await createCourse(`constraint client_op_id ${Date.now()}`);
+    const sectionId = await addSection(courseId, "Op-id-guard section", 0);
+    const nodeId = await addSubsection(sectionId, "Guarded leaf 2", 0);
+
+    await expect(
+      pool.query(
+        `insert into student_course_progress
+           (student_id, subsection_id, status, client_op_id, updated_by_role)
+         values ($1, $2, 'in_progress', 'not-a-valid-ulid', 'super_admin')`,
+        [studentId, nodeId],
+      ),
+    ).rejects.toMatchObject({ code: "23514" });
+  });
+});
+
+describe("fn_course_progress excludes soft-deleted nodes and deactivated students (M1/M2, CU28/Q11)", () => {
+  it("a soft-deleted subsection drops out of leaf_total", async () => {
+    const { studentId } = await seedActor();
+    const courseId = await createCourse(`soft-delete leaf ${Date.now()}`);
+    const sectionId = await addSection(courseId, "Section", 0);
+    await addSubsection(sectionId, "Keep", 0);
+    const drop = await addSubsection(sectionId, "Drop", 1);
+
+    const before = await progress(studentId, courseId);
+    expect(before.leaf_total).toBe(2);
+
+    await pool.query(`update course_subsections set deleted_at = now() where id = $1`, [drop]);
+
+    const after = await progress(studentId, courseId);
+    expect(after.leaf_total).toBe(1);
+  });
+
+  it("a deactivated student's progress stops counting from deactivation forward; prior history is retained (Q11) — fails against the pre-0099 function", async () => {
+    const courseId = await createCourse(`deactivated student ${Date.now()}`);
+    const sectionId = await addSection(courseId, "Section", 0);
+    const nodeId = await addSubsection(sectionId, "Leaf", 0);
+
+    const { userId } = await seedActor();
+    const tag = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const student = await pool.query<{ id: string }>(
+      `insert into students (full_name, student_code, age_group, status)
+       values ('M1 Test Student', $1, 'kishor', 'active')
+       returning id`,
+      [`M1${tag}`.slice(0, 24)],
+    );
+    const studentId = student.rows[0]!.id;
+
+    try {
+      // Certified two hours ago, while active.
+      await pool.query(
+        `insert into student_course_progress
+           (student_id, subsection_id, status, certified_at, certified_by, updated_by_role, updated_at)
+         values ($1, $2, 'completed', now() - interval '2 hours', $3, 'super_admin', now() - interval '2 hours')`,
+        [studentId, nodeId, userId],
+      );
+
+      const whileActive = await progress(studentId, courseId);
+      expect(whileActive.leaf_reached).toBe(1);
+      expect(whileActive.leaf_certified).toBe(1);
+
+      // Deactivated one hour ago — AFTER the progress row's updated_at (2h
+      // ago), so that prior history is retained.
+      await pool.query(
+        `update students set status = 'inactive', deactivated_at = now() - interval '1 hour'
+          where id = $1`,
+        [studentId],
+      );
+      const retained = await progress(studentId, courseId);
+      expect(retained.leaf_reached).toBe(1);
+      expect(retained.leaf_certified).toBe(1);
+
+      // The row is now touched AGAIN, after deactivation — this must stop
+      // counting. The OLD function (pre-0099) never joined `students` at all
+      // and would still report 1/1 here.
+      await pool.query(
+        `update student_course_progress set updated_at = now()
+          where student_id = $1 and subsection_id = $2`,
+        [studentId, nodeId],
+      );
+      const afterTouch = await progress(studentId, courseId);
+      expect(afterTouch.leaf_reached).toBe(0);
+      expect(afterTouch.leaf_certified).toBe(0);
+      expect(Number(afterTouch.mastery ?? 0)).toBeFalsy();
+    } finally {
+      await pool.query(`delete from student_course_progress where student_id = $1`, [studentId]);
+      await pool.query(`delete from students where id = $1`, [studentId]);
+    }
   });
 });

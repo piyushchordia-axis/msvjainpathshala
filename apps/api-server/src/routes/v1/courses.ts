@@ -25,7 +25,7 @@ import {
   loadActiveStudent,
   studentCityId,
 } from "../../lib/course-visibility";
-import { getCourseProgress } from "../../lib/course-progress";
+import { getCourseProgress, getCourseSectionRollups } from "../../lib/course-progress";
 import {
   COURSE_PROGRESS_STATUSES,
   CourseProgressError,
@@ -371,24 +371,25 @@ router.get("/:id/tree", async (req: Request, res: Response) => {
 
   const stats = await getCourseProgress(studentId, id);
 
-  // CU16 — section-scoped roll-ups from the same fn_course_progress (never a second formula).
-  const sectionRollups = await Promise.all(
-    sections.map(async (s) => {
-      const roll = await getCourseProgress(studentId, id, s.id);
-      const subCount = subs.filter((row) => row.course_subsections.section_id === s.id).length;
-      let derived_status: "not_started" | "in_progress" | "completed" | null = null;
-      if (subCount === 0 || roll.leaf_total === 0) {
-        derived_status = null;
-      } else if (roll.leaf_reached <= 0) {
-        derived_status = "not_started";
-      } else if (roll.leaf_reached < roll.leaf_total) {
-        derived_status = "in_progress";
-      } else {
-        derived_status = "completed";
-      }
-      return { sectionId: s.id, roll, derived_status };
-    }),
-  );
+  // CU16 — section-scoped roll-ups from the same fn_course_progress (never a
+  // second formula). M5 — one set-based call for every section instead of an
+  // N-round-trip loop; M2 — the function itself now returns leaf_total = 0
+  // (so coverage/mastery are NULL) for a childless section, so this caller no
+  // longer needs its own "subCount === 0" special case.
+  const sectionRollupRows = await getCourseSectionRollups(studentId, id);
+  const sectionRollups = sectionRollupRows.map((roll) => {
+    let derived_status: "not_started" | "in_progress" | "completed" | null = null;
+    if (roll.leaf_total === 0) {
+      derived_status = null;
+    } else if (roll.leaf_reached <= 0) {
+      derived_status = "not_started";
+    } else if (roll.leaf_reached < roll.leaf_total) {
+      derived_status = "in_progress";
+    } else {
+      derived_status = "completed";
+    }
+    return { sectionId: roll.section_id, roll, derived_status };
+  });
   const rollupBySection = new Map(sectionRollups.map((r) => [r.sectionId, r]));
 
   ok(res, {

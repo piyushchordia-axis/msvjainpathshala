@@ -15,6 +15,7 @@ import {
 import { and, asc, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import type { Role } from "@workspace/api-zod";
+import { ErrorCode as Err } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel, requireRole } from "../../middlewares/auth";
 import { requireMinRole } from "../../lib/roles";
@@ -333,8 +334,11 @@ router.patch(
       fail(res, 403, "ERR_FORBIDDEN", "City not in your scope.");
       return;
     }
-    if (body.status === "archived" && course.status === "draft") {
-      fail(res, 409, "ERR_INVALID_STATE", "Publish the course before archiving it.");
+    // L2 — a draft can be archived directly (the only exit used to be the
+    // unguarded DELETE). CU4 only forbids the REVERSE move, active -> draft;
+    // it never required a course to be published before it can be archived.
+    if (body.status === "archived" && course.status === "archived") {
+      fail(res, 409, "ERR_INVALID_STATE", "That course is already archived.");
       return;
     }
     // M19 — re-run the CU4 publish gate's name_hi/academic_year half on every
@@ -385,11 +389,26 @@ router.patch(
   },
 );
 
+/**
+ * H10 — CU20 extends to the parent course: a course with any certified
+ * section (or subsection) cannot be deleted, only archived, same reasoning as
+ * node delete — deleting the parent of a certified section is the larger
+ * version of the act CU20 blocks at the node. The certification check and the
+ * delete run in the SAME transaction (the M4 pattern) so a certify landing
+ * mid-check can't slip a certified course out from under it. The response
+ * carries an impact count — how many students had uncertified, in-progress or
+ * completed work on this course — so the caller isn't guessing what just
+ * disappeared from their view.
+ */
 router.delete(
   "/courses/:id",
   requireMinRole("city_admin"),
   async (req: Request, res: Response) => {
     const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Course not found.");
+      return;
+    }
     const [course] = await db
       .select()
       .from(courses)
@@ -414,18 +433,142 @@ router.delete(
       fail(res, 404, "ERR_NOT_FOUND", "Course not found in your scope.");
       return;
     }
-    const now = new Date();
-    await db
+
+    try {
+      const impactCount = await db.transaction(async (tx) => {
+        const certifiedCheck = await tx.execute(sql`
+          select exists (
+            select 1
+              from student_course_progress p
+             where p.certified_at is not null
+               and (
+                 (
+                   p.section_id in (
+                     select id from course_sections
+                      where course_id = ${id}::uuid and deleted_at is null
+                   )
+                   and p.subsection_id is null
+                 )
+                 or p.subsection_id in (
+                   select ss.id
+                     from course_subsections ss
+                     join course_sections s on s.id = ss.section_id
+                    where s.course_id = ${id}::uuid
+                      and ss.deleted_at is null
+                      and s.deleted_at is null
+                 )
+               )
+          ) as has_certified
+        `);
+        const hasCertified = Boolean(
+          (certifiedCheck as unknown as { rows?: Array<{ has_certified: boolean }> }).rows?.[0]
+            ?.has_certified,
+        );
+        if (hasCertified) {
+          throw new CourseAdminError(
+            409,
+            Err.COURSE_NODE_HAS_CERTIFICATIONS,
+            "That course has certified sections — archive it instead of deleting it.",
+          );
+        }
+
+        const impactResult = await tx.execute(sql`
+          select count(distinct p.student_id)::int as count
+            from student_course_progress p
+           where p.certified_at is null
+             and p.status <> 'not_started'
+             and (
+               (
+                 p.section_id in (
+                   select id from course_sections
+                    where course_id = ${id}::uuid and deleted_at is null
+                 )
+                 and p.subsection_id is null
+               )
+               or p.subsection_id in (
+                 select ss.id
+                   from course_subsections ss
+                   join course_sections s on s.id = ss.section_id
+                  where s.course_id = ${id}::uuid
+                    and ss.deleted_at is null
+                    and s.deleted_at is null
+               )
+             )
+        `);
+        const count = Number(
+          (impactResult as unknown as { rows?: Array<{ count: number | string }> }).rows?.[0]
+            ?.count ?? 0,
+        );
+
+        const now = new Date();
+        await tx
+          .update(courses)
+          .set({ deleted_at: now, updated_at: now })
+          .where(eq(courses.id, id));
+
+        return Number.isFinite(count) ? count : 0;
+      });
+
+      await auditFromReq(req, {
+        action: "delete",
+        entityKind: "course",
+        entityId: id,
+        summary: `Soft-deleted course "${course.name_en}".`,
+        metadata: { in_progress_uncertified_students: impactCount },
+      });
+      ok(res, { id, deleted: true, impact: { in_progress_uncertified_students: impactCount } });
+    } catch (err) {
+      if (!handleServiceError(res, err)) throw err;
+    }
+  },
+);
+
+/** H10 / CU29 — admin-only, audited undelete: clears deleted_at. */
+router.post(
+  "/courses/:id/undelete",
+  requireMinRole("city_admin"),
+  async (req: Request, res: Response) => {
+    const id = String(req.params.id);
+    if (!UUID_RE.test(id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Course not found.");
+      return;
+    }
+    const [course] = await db
+      .select()
+      .from(courses)
+      .where(and(eq(courses.id, id), sql`${courses.deleted_at} is not null`))
+      .limit(1);
+    if (!course) {
+      fail(res, 404, "ERR_NOT_FOUND", "Deleted course not found.");
+      return;
+    }
+    try {
+      assertMayAuthorCourseKind({
+        role: req.authUser!.role as Role,
+        kind: course.kind,
+        cityId: course.city_id,
+      });
+    } catch (err) {
+      if (!handleServiceError(res, err)) throw err;
+      return;
+    }
+    const cityIds = await cityIdsForUser(req.authUser!);
+    if (cityIds !== null && course.city_id && !cityIds.includes(course.city_id)) {
+      fail(res, 404, "ERR_NOT_FOUND", "Course not found in your scope.");
+      return;
+    }
+    const [row] = await db
       .update(courses)
-      .set({ deleted_at: now, updated_at: now })
-      .where(eq(courses.id, id));
+      .set({ deleted_at: null, updated_at: new Date() })
+      .where(eq(courses.id, id))
+      .returning({ id: courses.id, status: courses.status });
     await auditFromReq(req, {
-      action: "delete",
+      action: "update",
       entityKind: "course",
       entityId: id,
-      summary: `Soft-deleted course "${course.name_en}".`,
+      summary: `Restored soft-deleted course "${course.name_en}".`,
     });
-    ok(res, { id, deleted: true });
+    ok(res, row);
   },
 );
 
