@@ -71,7 +71,11 @@ export function TopNav() {
   const [location] = useLocation();
   const [open, setOpen] = useState(false);
 
-  const navItems = user
+  // Both member links are parent/student surfaces — /exams renders "this page
+  // is for parents and student view" for anyone else, so offering it to a
+  // shikshak or city_admin is a dead end.
+  const isMember = user?.role === 'parent' || user?.role === 'student';
+  const navItems = isMember
     ? [...GUEST_NAV_ITEMS, ...MEMBER_NAV_EXTRA]
     : [...GUEST_NAV_ITEMS];
 

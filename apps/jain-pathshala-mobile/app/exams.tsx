@@ -302,6 +302,22 @@ function ResultCard({
           <Body muted style={{ marginTop: 16, fontSize: 13 }}>
             {hi ? "परिणाम लोड हो रहा है…" : "Loading result…"}
           </Body>
+        ) : result.isError ? (
+          <View style={{ marginTop: 16, gap: 10 }}>
+            {/* A network error used to fall through to "your result will appear
+                once it is released" — presenting a connection problem as a fact
+                about the exam. */}
+            <Body muted style={{ fontSize: 13 }}>
+              {hi
+                ? "परिणाम लोड नहीं हो सका — अपना कनेक्शन जाँचें।"
+                : "Could not load your result — check your connection."}
+            </Body>
+            <Button
+              label={hi ? "पुनः प्रयास करें" : "Try again"}
+              variant="ghost"
+              onPress={() => void result.refetch()}
+            />
+          </View>
         ) : released && result.data ? (
           <>
             <Row style={{ justifyContent: "space-between", marginTop: 18, alignItems: "flex-end" }}>

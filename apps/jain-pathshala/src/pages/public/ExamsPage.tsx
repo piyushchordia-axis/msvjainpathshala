@@ -200,6 +200,14 @@ function ExamList({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [resumingId, setResumingId] = useState<string | null>(null);
+  // "Not open yet" was computed once per render with no ticker, so a 10:00 exam
+  // stayed disabled past 10:00 — and stayed enabled past window_end, sending the
+  // student into a 422.
+  const [nowTs, setNowTs] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNowTs(Date.now()), 30_000);
+    return () => clearInterval(t);
+  }, []);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -263,11 +271,11 @@ function ExamList({
     );
   }
 
-  const now = Date.now();
   return (
     <div className="mt-10 grid gap-4 sm:grid-cols-2">
       {items.map((ex) => {
         const title = (hi ? ex.title_hi : ex.title_en) ?? ex.title_en;
+        const now = nowTs;
         const open = now >= new Date(ex.window_start).getTime() && now <= new Date(ex.window_end).getTime();
         const upcoming = now < new Date(ex.window_start).getTime();
         const attemptsLeft = ex.max_attempts - ex.already_attempted_count;
@@ -953,15 +961,23 @@ function Result({
   const hi = useLocale() === 'hi';
   const [result, setResult] = useState<ResultResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
 
   useEffect(() => {
     apiGet<ResultResponse>(
       `/v1/exams/attempts/${attemptId}/result?student_id=${encodeURIComponent(studentId)}`,
     )
-      .then((r) => setResult(r ?? null))
-      .catch(() => setResult(null))
+      .then((r) => {
+        setResult(r ?? null);
+        setFailed(false);
+      })
+      .catch(() => {
+        setResult(null);
+        setFailed(true);
+      })
       .finally(() => setLoading(false));
-  }, [attemptId, studentId]);
+  }, [attemptId, studentId, reloadTick]);
 
   const released = !!result && typeof result.score === 'number';
 
@@ -971,6 +987,17 @@ function Result({
 
       {loading ? (
         <p className="mt-4 text-sm text-muted-foreground">{hi ? 'लोड हो रहा है…' : 'Loading…'}</p>
+      ) : failed ? (
+        <div className="mt-4 space-y-3">
+          <p className="text-sm text-muted-foreground">
+            {hi
+              ? 'परिणाम लोड नहीं हो सका — अपना कनेक्शन जाँचें।'
+              : 'Could not load your result — check your connection.'}
+          </p>
+          <Button size="sm" variant="outline" onClick={() => setReloadTick((n) => n + 1)}>
+            {hi ? 'पुनः प्रयास करें' : 'Try again'}
+          </Button>
+        </div>
       ) : !released ? (
         <div className="mt-4 space-y-2">
           <p className="text-sm font-medium text-foreground">
@@ -1068,6 +1095,11 @@ export default function ExamsPage() {
   const [children, setChildren] = useState<ChildOption[]>([]);
   const [studentId, setStudentId] = useState<string | null>(null);
   const [childrenLoading, setChildrenLoading] = useState(false);
+  // A blip on /v1/me/children used to clear the list, which renders the same
+  // terminal "your student profile is not ready yet" card as a genuine
+  // zero-children account — with no retry short of a full reload.
+  const [childrenFailed, setChildrenFailed] = useState(false);
+  const [childrenReloadTick, setChildrenReloadTick] = useState(0);
 
   const canTake = user?.role === 'parent' || user?.role === 'student';
 
@@ -1079,6 +1111,7 @@ export default function ExamsPage() {
     }
     let active = true;
     setChildrenLoading(true);
+    setChildrenFailed(false);
     apiGet<{ items: ChildOption[] }>('/v1/me/children')
       .then((res) => {
         if (!active) return;
@@ -1092,6 +1125,7 @@ export default function ExamsPage() {
         if (!active) return;
         setChildren([]);
         setStudentId(null);
+        setChildrenFailed(true);
       })
       .finally(() => {
         if (active) setChildrenLoading(false);
@@ -1099,7 +1133,7 @@ export default function ExamsPage() {
     return () => {
       active = false;
     };
-  }, [canTake]);
+  }, [canTake, childrenReloadTick]);
 
   const header = (
     <>
@@ -1157,6 +1191,22 @@ export default function ExamsPage() {
       <section className="container py-12 md:py-16">
         {header}
         <p className="mt-10 text-muted-foreground">{hi ? 'लोड हो रहा है…' : 'Loading…'}</p>
+      </section>
+    );
+  }
+
+  if (childrenFailed) {
+    return (
+      <section className="container py-12 md:py-16">
+        {header}
+        <Card className="mt-10 flex max-w-md flex-wrap items-center justify-between gap-3 p-6 text-sm text-muted-foreground">
+          {hi
+            ? 'विद्यार्थी की जानकारी लोड नहीं हो सकी — अपना कनेक्शन जाँचें।'
+            : 'Could not load your student details — check your connection.'}
+          <Button size="sm" variant="outline" onClick={() => setChildrenReloadTick((n) => n + 1)}>
+            {hi ? 'पुनः प्रयास करें' : 'Retry'}
+          </Button>
+        </Card>
       </section>
     );
   }

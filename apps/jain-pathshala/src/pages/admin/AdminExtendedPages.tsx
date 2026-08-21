@@ -19,7 +19,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useAuth } from '@/lib/auth-context';
 import { canAdministerExams } from '@workspace/api-zod';
-import { Redirect } from 'wouter';
+import { Link, Redirect } from 'wouter';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogClose,
 } from '@/components/ui/dialog';
@@ -611,7 +611,10 @@ function EditExamDialog({ exam, onSaved }: { exam: ExamRow; onSaved: () => void 
 export function ExamsPage() {
   const { user, loading: authLoading } = useAuth();
   const allowed = canAdministerExams(user?.role);
-  const { items, loading, error, reload } = useAdminList<ExamRow>('/v1/admin/exams?limit=50');
+  // 200 is the server's clampLimit ceiling. The list has no cursor, so rather
+  // than truncate in silence at 50 it fetches the maximum and says so when the
+  // cap is actually reached (CLAUDE.md: no silent caps).
+  const { items, loading, error, reload } = useAdminList<ExamRow>('/v1/admin/exams?limit=200');
   const [busy, setBusy] = useState<string | null>(null);
 
   async function releaseResults(id: string) {
@@ -650,6 +653,11 @@ export function ExamsPage() {
       actions={<AddExamDialog onAdded={reload} />}
     >
       {error ? <AdminError message={error} /> : null}
+      {items.length >= 200 ? (
+        <p className="text-sm text-status-warning">
+          Showing the 200 most recent exams — older ones are not listed.
+        </p>
+      ) : null}
       <AdminTable
         columns={['Exam', 'City', 'Window', 'Marks', 'Access code', 'Attempts', 'Allowed', 'Results', 'Actions']}
         loading={loading}
@@ -686,8 +694,18 @@ export function ExamsPage() {
             <td className="px-4 py-3">{e.max_attempts}</td>
             <td className="px-4 py-3">{e.results_released ? 'Released' : 'Pending'}</td>
             <td className="px-4 py-3">
-              <div className="flex items-center gap-1">
+              <div className="flex flex-wrap items-center gap-1">
                 <EditExamDialog exam={e} onSaved={reload} />
+                {/* The three exam screens had no link between them: the builder
+                    and the grading page each started from a bare picker of up to
+                    fifty identical-looking titles, and attempt_count was inert
+                    text. */}
+                <Button size="sm" variant="outline" asChild>
+                  <Link href={`/admin/exam-builder?exam=${e.id}`}>Questions</Link>
+                </Button>
+                <Button size="sm" variant="outline" asChild>
+                  <Link href={`/admin/exam-grading?exam=${e.id}`}>Grading</Link>
+                </Button>
                 {!e.results_released ? (
                   <Button
                     size="sm"

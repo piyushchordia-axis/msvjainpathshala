@@ -4,7 +4,7 @@ import { apiGet, apiPost, del, ApiError } from '@/lib/api-client';
 import { toast } from '@/components/ui/toast-jp';
 import { AdminPageShell, AdminError } from '@/components/admin/AdminPageShell';
 import { describeApiError } from '@/lib/admin-error';
-import { Redirect } from 'wouter';
+import { Redirect, useSearch } from 'wouter';
 import { canAdministerExams } from '@workspace/api-zod';
 import { useAuth } from '@/lib/auth-context';
 import { Card } from '@/components/ui/card';
@@ -123,6 +123,13 @@ function AddQuestionDialog({ examId, onAdded }: { examId: string; onAdded: () =>
   function validate(): string | null {
     if (!text.trim()) return 'Question text (English) is required.';
     if (!textHi.trim()) return 'Question text (Hindi) is required.';
+    // A cleared field used to fall through Number('') || 1 and silently post a
+    // one-mark question, which then broke the paper total against the declared
+    // one with nothing on screen to explain it.
+    const parsedMarks = Number(marks);
+    if (!marks.trim() || !Number.isInteger(parsedMarks) || parsedMarks < 1 || parsedMarks > 100) {
+      return 'Marks must be a whole number between 1 and 100.';
+    }
     if (!isChoice) return null;
     const filled = options.filter((o) => o.option_en.trim());
     if (filled.length < 2) return 'Choice questions need at least two options.';
@@ -142,7 +149,7 @@ function AddQuestionDialog({ examId, onAdded }: { examId: string; onAdded: () =>
         question_en: text.trim(),
         question_hi: textHi.trim(),
         question_type: type,
-        marks: Number(marks) || 1,
+        marks: Number(marks),
       };
       if (isChoice) {
         payload.options = options
@@ -327,6 +334,11 @@ function QuestionCard({
 export default function ExamBuilderPage() {
   const { user, loading: authLoading } = useAuth();
   const allowed = canAdministerExams(user?.role);
+  // ?exam= lets the exams list (and a notification) open straight onto the
+  // right paper. Without it every route started from a bare picker of up to a
+  // hundred same-looking titles.
+  const search = useSearch();
+  const requestedExamId = new URLSearchParams(search).get('exam') ?? '';
   const [exams, setExams] = useState<ExamOption[]>([]);
   const [examId, setExamId] = useState('');
   const [questions, setQuestions] = useState<QuestionRow[]>([]);
@@ -338,6 +350,24 @@ export default function ExamBuilderPage() {
       .then((r) => setExams(r?.items ?? []))
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load exams.'));
   }, []);
+
+  useEffect(() => {
+    if (!requestedExamId) return;
+    setExamId(requestedExamId);
+    void loadQuestions(requestedExamId);
+    // Deliberately keyed on the id alone: re-running when loadQuestions changes
+    // identity would refetch on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedExamId]);
+
+  async function loadExams() {
+    try {
+      const r = await apiGet<{ items: ExamOption[] }>('/v1/admin/exams?limit=200');
+      setExams(r?.items ?? []);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Could not load exams.');
+    }
+  }
 
   async function loadQuestions(id: string) {
     if (!id) { setQuestions([]); return; }
@@ -356,6 +386,7 @@ export default function ExamBuilderPage() {
   function onSelect(id: string) {
     setExamId(id);
     void loadQuestions(id);
+    void loadExams();
   }
 
   const selectedExam = exams.find((e) => e.id === examId) ?? null;

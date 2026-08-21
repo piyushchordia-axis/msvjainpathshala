@@ -20,15 +20,13 @@ import {
   exam_answers,
   students,
   centres,
-  cities,
-  type User,
 } from "@workspace/db";
 import { and, asc, count, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { z } from "zod";
 import { canAdministerExams } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
-import { resolveAdminScope } from "../../lib/scope";
+import { cityIdsForUser } from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
 import { rateLimit } from "../../lib/ratelimit";
 import { timingSafeEqualString, verifyOtpCode } from "../../lib/tokens";
@@ -75,27 +73,14 @@ function failNotInProgress(res: Response, status: string): void {
   fail(res, 409, "ERR_ALREADY_SUBMITTED", "This attempt was already submitted.");
 }
 
-/* ---- city scope: null = all (super_admin); [] = nothing; else city ids ---- */
-async function cityScopeForUser(user: User): Promise<string[] | null> {
-  if (user.role === "super_admin") return null;
-  if (user.role === "city_admin") return user.city_id ? [user.city_id] : [];
-  if (user.role === "state_admin") {
-    if (!user.state_id) return [];
-    const rows = await db
-      .select({ id: cities.id })
-      .from(cities)
-      .where(eq(cities.state_id, user.state_id));
-    return rows.map((r) => r.id);
-  }
-  const scope = await resolveAdminScope(user);
-  if (scope.centreIds === null) return null;
-  if (scope.centreIds.length === 0) return [];
-  const rows = await db
-    .select({ city_id: centres.city_id })
-    .from(centres)
-    .where(inArray(centres.id, scope.centreIds));
-  return Array.from(new Set(rows.map((r) => r.city_id)));
-}
+/*
+ * City scope comes from the shared cityIdsForUser (lib/scope.ts). A local copy
+ * lived here and had drifted: it never filtered isNull(centres.deleted_at), so
+ * a soft-deleted centre still widened its owner's scope, and it resolved a
+ * city_admin with no city_id differently. Unreachable today — the fallback
+ * branch needs a role canAdministerExams excludes — but it was one gate change
+ * away from mattering, and two copies of a scope rule is how that happens.
+ */
 
 function cityInScope(cityIds: string[] | null, cityId: string | null): boolean {
   if (cityIds === null) return true;
@@ -161,7 +146,7 @@ router.get("/:id/questions", async (req: Request, res: Response) => {
     fail(res, 403, "ERR_FORBIDDEN", "Only city admins and above can administer exams.");
     return;
   }
-  const cityIds = await cityScopeForUser(req.authUser!);
+  const cityIds = await cityIdsForUser(req.authUser!);
   const examId = String(req.params.id);
   const [exam] = await db
     .select({ id: online_exams.id, city_id: online_exams.city_id })
@@ -239,7 +224,7 @@ router.post("/:id/questions", async (req: Request, res: Response) => {
     return;
   }
 
-  const cityIds = await cityScopeForUser(req.authUser!);
+  const cityIds = await cityIdsForUser(req.authUser!);
   const examId = String(req.params.id);
   const [exam] = await db
     .select({ id: online_exams.id, city_id: online_exams.city_id })
@@ -329,7 +314,7 @@ router.delete("/:id/questions/:qid", async (req: Request, res: Response) => {
     fail(res, 403, "ERR_FORBIDDEN", "Only city admins and above can administer exams.");
     return;
   }
-  const cityIds = await cityScopeForUser(req.authUser!);
+  const cityIds = await cityIdsForUser(req.authUser!);
   const examId = String(req.params.id);
   const qid = String(req.params.qid);
   const [exam] = await db
@@ -382,7 +367,7 @@ router.get("/:id/attempts/:attemptId", async (req: Request, res: Response) => {
     fail(res, 403, "ERR_FORBIDDEN", "Only city admins and above can administer exams.");
     return;
   }
-  const cityIds = await cityScopeForUser(req.authUser!);
+  const cityIds = await cityIdsForUser(req.authUser!);
   const examId = String(req.params.id);
   const attemptId = String(req.params.attemptId);
   const [exam] = await db
@@ -496,7 +481,7 @@ router.post("/:id/attempts/:attemptId/grade", async (req: Request, res: Response
     return;
   }
 
-  const cityIds = await cityScopeForUser(req.authUser!);
+  const cityIds = await cityIdsForUser(req.authUser!);
   const examId = String(req.params.id);
   const attemptId = String(req.params.attemptId);
   const [exam] = await db
@@ -739,7 +724,7 @@ router.post("/:id/attempts/:attemptId/reset", async (req: Request, res: Response
     fail(res, 403, "ERR_FORBIDDEN", "Only city admins and above can administer exams.");
     return;
   }
-  const cityIds = await cityScopeForUser(req.authUser!);
+  const cityIds = await cityIdsForUser(req.authUser!);
   const examId = String(req.params.id);
   const attemptId = String(req.params.attemptId);
   const [exam] = await db

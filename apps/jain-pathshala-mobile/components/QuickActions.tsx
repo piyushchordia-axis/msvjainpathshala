@@ -198,7 +198,11 @@ function ActionTile({ action }: { action: QuickAction }) {
         <Body
           style={{
             fontSize: 13,
-            lineHeight: 18,
+            // CLAUDE.md sets a 22px floor for any Devanagari text — its matras
+            // and ascenders are taller than Latin. This label is Hindi on every
+            // Hindi home screen, and an 18px override clipped them. Body's own
+            // default is already 22; do not re-tighten it here.
+            lineHeight: 22,
             marginTop: 6,
             textAlign: "center",
             color: c.activityInkStrong,

@@ -3,7 +3,7 @@
  * Choice questions are auto-scored; this screen only awards marks for text.
  */
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Redirect } from 'wouter';
+import { Redirect, useSearch } from 'wouter';
 import { canAdministerExams } from '@workspace/api-zod';
 import { apiGet, apiPost, ApiError } from '@/lib/api-client';
 import { useAuth } from '@/lib/auth-context';
@@ -111,6 +111,8 @@ function formatWhen(iso: string | null): string {
 export default function ExamGradingPage() {
   const { user, loading: authLoading } = useAuth();
   const allowed = canAdministerExams(user?.role);
+  const search = useSearch();
+  const requestedExamId = new URLSearchParams(search).get('exam') ?? '';
 
   const [exams, setExams] = useState<ExamOption[]>([]);
   const [examId, setExamId] = useState('');
@@ -170,6 +172,12 @@ export default function ExamGradingPage() {
       setListLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!requestedExamId || !allowed) return;
+    setExamId(requestedExamId);
+    void loadAttempts(requestedExamId);
+  }, [requestedExamId, allowed, loadAttempts]);
 
   function onSelectExam(id: string) {
     setExamId(id);
