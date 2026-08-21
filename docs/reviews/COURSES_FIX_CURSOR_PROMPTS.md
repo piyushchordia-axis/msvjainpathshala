@@ -458,6 +458,16 @@ implausibly old) — same posture completed_at already gets from the server cloc
 Run: pnpm typecheck && pnpm --filter @workspace/api-server run test -- certificate
 ```
 
+**Status (2026-08-21):** implemented in commit `566713f`. One residual gap flagged by
+that work, not yet closed: M43's font-routing fix is correct (non-WinAnsi text now
+routes to the embedded face instead of being stripped), but the embedded face itself
+(`assets/fonts/NotoSansDevanagari-Regular.ttf`) has zero Gujarati glyph coverage
+(confirmed via fontkit) — a Gujarati name now routes correctly but may still render as
+`.notdef` boxes until the font asset is swapped for one with real Gujarati coverage.
+That swap touches every `PdfBuilder.createBilingual()` caller (centre monthly reports
+included, not just certificates), so it needs its own follow-up prompt rather than
+folding into this one.
+
 ---
 
 ## 9 — Client UX parity, mobile + web (H18, H19, H22–H24, M25, M27, M33–M37, M41, L17-client, L18–L21)
