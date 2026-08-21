@@ -41,6 +41,7 @@ import type {
 } from "@/lib/types";
 import type { SessionUser } from "@/lib/auth";
 import { galleryHomeKey, galleryWallKey } from "@/lib/gallery-query-keys";
+import type { CoursePunyaConfigRow, CoursePunyaFeatureRow } from "@/lib/course-labels";
 
 type List<T> = ListResponse<T>;
 
@@ -86,6 +87,9 @@ export const qk = {
     ["courses", "tree", courseId, studentId] as const,
   studentCertificates: (studentId: string) =>
     ["students", studentId, "certificates"] as const,
+  /** H22 — CU22 clamp inputs, shared across every certify confirm. */
+  adminPunyaConfigs: ["admin", "punya-configs"] as const,
+  adminPunyaFeatures: ["admin", "punya-features-all"] as const,
   punyaAwardLimit: () => ["admin", "punya-award-limit"] as const,
   pendingNiyam: (batchId: string | null, niyamType: string | null) =>
     ["shikshak", "niyam-pending", batchId ?? "all", niyamType ?? "all"] as const,
@@ -2779,6 +2783,8 @@ export type AdminCourseBrowseTree = {
     academic_year: string | null;
     status: string;
     punya_points: number;
+    /** H22 — the city that gates the CU22 punya_configs lookup for this course. */
+    city_id: string | null;
   };
   sections: Array<{
     id: string;
@@ -2830,6 +2836,31 @@ export function useStudentCertificates(studentId?: string, enabled = true) {
     queryFn: () =>
       apiGet<List<CourseCertificateRow>>(`/v1/students/${studentId}/certificates`),
     enabled: !!studentId && enabled,
+  });
+}
+
+/**
+ * H22 — the same punya_configs/punya_features rows CoursesAdminPage's H16
+ * certify panel reads on web, so the CU18 confirm can show the real clamped
+ * Punya value instead of the raw authored punya_points. Long staleTime: these
+ * change about never, and re-fetching them per certify-open would just delay
+ * the confirm sheet.
+ */
+export function useAdminPunyaConfigs(enabled = true) {
+  return useQuery({
+    queryKey: qk.adminPunyaConfigs,
+    queryFn: () => apiGet<List<CoursePunyaConfigRow>>("/v1/admin/punya/configs"),
+    enabled,
+    staleTime: 5 * 60_000,
+  });
+}
+
+export function useAdminPunyaFeatures(enabled = true) {
+  return useQuery({
+    queryKey: qk.adminPunyaFeatures,
+    queryFn: () => apiGet<List<CoursePunyaFeatureRow>>("/v1/admin/punya/features"),
+    enabled,
+    staleTime: 5 * 60_000,
   });
 }
 

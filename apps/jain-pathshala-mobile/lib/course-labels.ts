@@ -49,6 +49,117 @@ export function certifiedFrozenExplanation(hi: boolean): string {
     : "This node is certified — status cannot change. Certification is irreversible.";
 }
 
+/** L17-client — bilingual label instead of the raw `courses.kind` enum value. */
+export function courseKindLabel(kind: string, hi: boolean): string {
+  if (kind === "msv") return "MSV";
+  if (kind === "standard") return hi ? "मानक" : "Standard";
+  return kind;
+}
+
+/**
+ * H23/CU32 — one bilingual, problem-and-fix mapping for the six course error
+ * codes, reused across every catch handler so the copy cannot drift per site.
+ * CU21 — ERR_COURSE_STUDENT_OUT_OF_SCOPE names the Sanchalak handoff: a
+ * student whose batch changed needs the centre head, not a retry.
+ */
+export function courseErrorCopy(
+  code: string | undefined,
+  hi: boolean,
+  fallbackBody: string,
+): { title: string; body: string } {
+  switch (code) {
+    case "ERR_COURSE_NODE_CERTIFIED":
+      return {
+        title: hi ? "प्रमाणित नोड" : "Certified node",
+        body: certifiedFrozenExplanation(hi),
+      };
+    case "ERR_COURSE_NODE_NOT_COMPLETE":
+      return {
+        title: hi ? "अभी पूर्ण नहीं" : "Not complete yet",
+        body: hi
+          ? "प्रमाणित करने से पहले इसे “पूर्ण” के रूप में चिह्नित करें, फिर फिर कोशिश करें।"
+          : "Mark this as completed before it can be certified, then try again.",
+      };
+    case "ERR_COURSE_NODE_HAS_CERTIFICATIONS":
+      return {
+        title: hi ? "प्रमाणन मौजूद हैं" : "Certifications exist",
+        body: hi
+          ? "इसमें प्रमाणित प्रगति है इसलिए इसे हटाया नहीं जा सकता — इसके बजाय पाठ्यक्रम संग्रहित करें।"
+          : "This can't be deleted — it has certified progress. Archive the course instead.",
+      };
+    case "ERR_COURSE_NODE_NOT_FOUND":
+      return {
+        title: hi ? "नोड नहीं मिला" : "Node not found",
+        body: hi
+          ? "यह अनुभाग या उप-अनुभाग अब मौजूद नहीं है — रीफ़्रेश करें।"
+          : "This section or subsection no longer exists — refresh and try again.",
+      };
+    case "ERR_COURSE_STUDENT_OUT_OF_SCOPE":
+      return {
+        title: hi ? "विद्यार्थी आपके दायरे से बाहर है" : "Student outside your scope",
+        body: hi
+          ? "यह विद्यार्थी अब आपके बैच में नहीं है — इसे संभालने के लिए अपने संचालक से कहें।"
+          : "This student is no longer in your batch — ask your Sanchalak to handle it.",
+      };
+    case "ERR_COURSE_NOT_PUBLISHABLE":
+      return {
+        title: hi ? "पाठ्यक्रम तैयार नहीं" : "Course not ready",
+        body: hi
+          ? "यह पाठ्यक्रम अभी प्रकाशित करने योग्य नहीं है।"
+          : "This course isn't publishable yet.",
+      };
+    default:
+      return { title: hi ? "त्रुटि" : "Error", body: fallbackBody };
+  }
+}
+
+/**
+ * CU22 — mirrors resolveCourseAwardPoints (apps/api-server/src/lib/course-points.ts)
+ * exactly, using the same punya_configs/punya_features rows the server reads,
+ * so the CU18 confirm can show the real clamped value instead of the raw
+ * authored punya_points. A missing/inactive config awards 0 (H3), never an
+ * unclamped multiply. Mirrors resolveClampedCoursePoints in
+ * apps/jain-pathshala/src/pages/admin/CoursesAdminPage.tsx (H16) — same
+ * approach, reused rather than reinvented.
+ */
+export type CoursePunyaConfigRow = {
+  feature_key: string;
+  points: number;
+  is_active: boolean;
+  city_id: string | null;
+};
+
+export type CoursePunyaFeatureRow = {
+  key: string;
+  min_points: number;
+  max_points: number;
+  is_active: boolean;
+};
+
+export function resolveClampedCoursePoints(
+  authoredPoints: number,
+  featureKey: "course_section_certified" | "course_completed",
+  cityId: string | null,
+  configs: CoursePunyaConfigRow[],
+  features: CoursePunyaFeatureRow[],
+): number {
+  if (authoredPoints <= 0) return 0;
+  const feature = features.find((f) => f.key === featureKey && f.is_active);
+  if (!feature) return 0;
+  const cityConfig = cityId
+    ? configs.find((c) => c.feature_key === featureKey && c.city_id === cityId && c.is_active)
+    : undefined;
+  const globalConfig = configs.find(
+    (c) => c.feature_key === featureKey && c.city_id == null && c.is_active,
+  );
+  const multiplier = cityConfig?.points ?? globalConfig?.points ?? null;
+  if (multiplier == null || multiplier <= 0) return 0;
+  let points = Math.round((authoredPoints * multiplier) / 100);
+  if (feature.min_points > 0 && points < feature.min_points) points = feature.min_points;
+  if (feature.max_points > 0 && points > feature.max_points) points = feature.max_points;
+  return Math.max(0, points);
+}
+
 /**
  * The shape `sectionProgressSummary` needs. Structural, not the DTO, so this
  * module stays free of anything that reaches react-native — the test bundler

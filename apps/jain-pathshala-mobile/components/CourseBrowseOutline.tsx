@@ -110,12 +110,16 @@ export function CourseBrowseOutline(props: {
                   onPress={() =>
                     setOpenSectionId((cur) => (cur === section.id ? null : section.id))
                   }
+                  accessibilityRole="button"
+                  accessibilityLabel={title}
+                  accessibilityState={{ expanded }}
                   style={{
                     flexDirection: "row",
                     alignItems: "center",
                     gap: 8,
-                    paddingVertical: 12,
+                    paddingVertical: 13,
                     paddingHorizontal: 14,
+                    minHeight: 44,
                     borderBottomWidth: StyleSheet.hairlineWidth,
                     borderBottomColor: c.border,
                     backgroundColor: expanded ? c.muted : c.card,
@@ -136,7 +140,7 @@ export function CourseBrowseOutline(props: {
                     style={{
                       flex: 1,
                       fontSize: 14,
-                      lineHeight: 20,
+                      lineHeight: 22,
                       fontFamily: bodyFamily(hi),
                       color: c.foreground,
                     }}
@@ -171,13 +175,16 @@ export function CourseBrowseOutline(props: {
                               description_hi: sub.description_hi,
                             })
                           }
+                          accessibilityRole="button"
+                          accessibilityLabel={subTitle}
                           style={{
                             flexDirection: "row",
                             alignItems: "center",
                             gap: 8,
-                            paddingVertical: 11,
+                            paddingVertical: 12,
                             paddingLeft: 36,
                             paddingRight: 14,
+                            minHeight: 44,
                             borderBottomWidth: StyleSheet.hairlineWidth,
                             borderBottomColor: c.border,
                             backgroundColor: c.background,
@@ -198,7 +205,7 @@ export function CourseBrowseOutline(props: {
                             style={{
                               flex: 1,
                               fontSize: 14,
-                              lineHeight: 20,
+                              lineHeight: 22,
                               fontFamily: bodyFamily(hi),
                               color: c.foreground,
                             }}
@@ -260,9 +267,12 @@ export function CourseBrowseOutline(props: {
             >
               {(() => {
                 if (!content) return "";
+                // L18 — hi falls back to en (en is the guaranteed language,
+                // CU5), but en must never silently show Hindi body text to an
+                // English reader.
                 const body = hi
                   ? content.description_hi || content.description_en
-                  : content.description_en || content.description_hi;
+                  : content.description_en;
                 return (
                   body ||
                   (hi

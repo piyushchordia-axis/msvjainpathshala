@@ -45,6 +45,7 @@ export function CourseFolderCard(props: {
           onPress={props.onPress}
           accessibilityRole="button"
           accessibilityLabel={props.title}
+          hitSlop={{ top: 4, bottom: 4, left: 4, right: 4 }}
           style={styles.header}
         >
           <Ionicons
@@ -69,7 +70,7 @@ export function CourseFolderCard(props: {
               <Text
                 style={{
                   fontSize: 12,
-                  lineHeight: 18,
+                  lineHeight: 22,
                   fontFamily: bodyFamily(hi),
                   color: c.mutedForeground,
                   marginTop: 2,
@@ -88,6 +89,7 @@ export function CourseFolderCard(props: {
               onPress={props.onCertificatePress}
               accessibilityRole="button"
               accessibilityLabel={props.certificateLabel ?? undefined}
+              hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
               style={[
                 styles.cert,
                 { borderColor: c.gold, backgroundColor: c.card },
@@ -97,10 +99,11 @@ export function CourseFolderCard(props: {
               <Text
                 style={{
                   fontSize: 11,
-                  lineHeight: 16,
+                  lineHeight: 22,
                   fontFamily: bodyFamily(hi, "semibold"),
                   color: c.gold,
-                  maxWidth: 96,
+                  // M25 — wide enough for the longer "issuing" state label.
+                  maxWidth: 140,
                 }}
                 numberOfLines={1}
               >

@@ -14,10 +14,15 @@ import { CertifyConfirmModal } from "@/components/CertifyConfirmModal";
 import { SyncOpStatus } from "@/components/SyncOpStatus";
 import {
   certifiedFrozenExplanation,
+  courseErrorCopy,
   divergenceNote,
+  resolveClampedCoursePoints,
   type CourseProgressStatus,
 } from "@/lib/course-labels";
 import {
+  useAdminCourseTree,
+  useAdminPunyaConfigs,
+  useAdminPunyaFeatures,
   useBulkCourseNodeProgress,
   useCertifyCourseNode,
   useCourseTree,
@@ -46,8 +51,32 @@ export function CourseTreeView(props: {
   const bulk = useBulkCourseNodeProgress();
   const certify = useCertifyCourseNode();
 
+  // H22 — the same city_id + punya_configs/punya_features lookup the web H16
+  // certify panel uses, so the CU18 confirm shows the real clamped award
+  // instead of the raw authored punya_points. Only needed in admin (Guruji/
+  // Sanchalak) mode — a read-only learner view never certifies.
+  const adminTreeQ = useAdminCourseTree(props.courseId, props.mode === "admin");
+  const punyaConfigsQ = useAdminPunyaConfigs(props.mode === "admin");
+  const punyaFeaturesQ = useAdminPunyaFeatures(props.mode === "admin");
+  const courseCityId = adminTreeQ.data?.course.city_id ?? null;
+  const pointsReady =
+    props.mode !== "admin" ||
+    (adminTreeQ.isSuccess && punyaConfigsQ.isSuccess && punyaFeaturesQ.isSuccess);
+
+  function clampedSectionPoints(authoredPoints: number): number {
+    if (!punyaConfigsQ.data || !punyaFeaturesQ.data) return 0;
+    return resolveClampedCoursePoints(
+      authoredPoints,
+      "course_section_certified",
+      courseCityId,
+      punyaConfigsQ.data.items,
+      punyaFeaturesQ.data.items,
+    );
+  }
+
   const [certifyTarget, setCertifyTarget] = useState<{
     nodeId: string;
+    nodeKind: "section" | "subsection";
     title: string;
     punyaPoints: number;
   } | null>(null);
@@ -107,15 +136,16 @@ export function CourseTreeView(props: {
       });
       await refreshSync();
     } catch (err) {
-      const msg =
-        err instanceof ApiError && err.code === "ERR_COURSE_NODE_CERTIFIED"
-          ? certifiedFrozenExplanation(hi)
-          : err instanceof ApiError
-            ? err.message
-            : hi
-              ? "प्रगति सहेजी नहीं जा सकी — फिर कोशिश करें।"
-              : "Could not save progress — try again.";
-      Alert.alert(hi ? "त्रुटि" : "Error", msg);
+      // H23/CU32 — branch on error.code so a Hindi UI never shows a raw
+      // English server string, and the CU21 Sanchalak handoff is named.
+      const { title, body } = courseErrorCopy(
+        err instanceof ApiError ? err.code : undefined,
+        hi,
+        hi
+          ? "प्रगति सहेजी नहीं जा सकी — फिर कोशिश करें।"
+          : "Could not save progress — try again.",
+      );
+      Alert.alert(title, body);
       await treeQ.refetch();
     } finally {
       setBusyNode(null);
@@ -147,15 +177,14 @@ export function CourseTreeView(props: {
       });
       await refreshSync();
     } catch (err) {
-      const msg =
-        err instanceof ApiError && err.code === "ERR_COURSE_NODE_CERTIFIED"
-          ? certifiedFrozenExplanation(hi)
-          : err instanceof ApiError
-            ? err.message
-            : hi
-              ? "प्रगति सहेजी नहीं जा सकी — फिर कोशिश करें।"
-              : "Could not save progress — try again.";
-      Alert.alert(hi ? "त्रुटि" : "Error", msg);
+      const { title, body } = courseErrorCopy(
+        err instanceof ApiError ? err.code : undefined,
+        hi,
+        hi
+          ? "प्रगति सहेजी नहीं जा सकी — फिर कोशिश करें।"
+          : "Could not save progress — try again.",
+      );
+      Alert.alert(title, body);
       await treeQ.refetch();
     } finally {
       setBusyNode(null);
@@ -188,14 +217,12 @@ export function CourseTreeView(props: {
       // invalidates the tree query, so an immediate refetch here would just
       // throw (and mis-report this as failed) on a genuinely offline device.
     } catch (err) {
-      Alert.alert(
-        hi ? "त्रुटि" : "Error",
-        err instanceof ApiError
-          ? err.message
-          : hi
-            ? `${verbHi} असफल — फिर कोशिश करें।`
-            : `${verbEn} failed — try again.`,
+      const { title, body } = courseErrorCopy(
+        err instanceof ApiError ? err.code : undefined,
+        hi,
+        hi ? `${verbHi} असफल — फिर कोशिश करें।` : `${verbEn} failed — try again.`,
       );
+      Alert.alert(title, body);
     } finally {
       setBusyNode(null);
     }
@@ -207,7 +234,7 @@ export function CourseTreeView(props: {
     try {
       await certify.mutateAsync({
         nodeId: certifyTarget.nodeId,
-        nodeKind: "section",
+        nodeKind: certifyTarget.nodeKind,
         student_id: props.studentId,
         offline: props.mode === "admin",
       });
@@ -217,14 +244,14 @@ export function CourseTreeView(props: {
       // on a genuinely offline device even though the certify was queued.
       await refreshSync();
     } catch (err) {
-      Alert.alert(
-        hi ? "प्रमाणन असफल" : "Certification failed",
-        err instanceof ApiError
-          ? err.message
-          : hi
-            ? "प्रमाणित नहीं हो सका — स्थिति जाँचें और फिर कोशिश करें।"
-            : "Could not certify — check status and try again.",
+      const { title, body } = courseErrorCopy(
+        err instanceof ApiError ? err.code : undefined,
+        hi,
+        hi
+          ? "प्रमाणित नहीं हो सका — स्थिति जाँचें और फिर कोशिश करें।"
+          : "Could not certify — check status and try again.",
       );
+      Alert.alert(title, body);
     } finally {
       setBusyNode(null);
     }
@@ -272,7 +299,7 @@ export function CourseTreeView(props: {
         >
           {courseTitle}
         </Text>
-        <Body muted style={{ lineHeight: 20, fontSize: 13 }} numberOfLines={1}>
+        <Body muted style={{ lineHeight: 22, fontSize: 13 }} numberOfLines={1}>
           {props.studentName}
           {readyCount > 0
             ? ` · ${readyCount} ${hi ? "प्रमाणन योग्य" : "ready"}`
@@ -283,9 +310,15 @@ export function CourseTreeView(props: {
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
         <Pressable
           onPress={() => setReadyOnly((v) => !v)}
+          accessibilityRole="button"
+          accessibilityState={{ selected: readyOnly }}
+          accessibilityLabel={hi ? "केवल प्रमाणन योग्य दिखाएँ" : "Show ready to certify only"}
+          hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
           style={{
             paddingVertical: 6,
             paddingHorizontal: 12,
+            minHeight: 44,
+            justifyContent: "center",
             borderRadius: 999,
             borderWidth: 1,
             borderColor: readyOnly ? c.primary : c.border,
@@ -295,7 +328,7 @@ export function CourseTreeView(props: {
           <Text
             style={{
               fontSize: 13,
-              lineHeight: 20,
+              lineHeight: 22,
               color: readyOnly ? c.primaryForeground : c.foreground,
               fontFamily: bodyFamily(hi, readyOnly ? "semibold" : "regular"),
             }}
@@ -306,12 +339,18 @@ export function CourseTreeView(props: {
         {props.batchId ? (
           <Pressable
             onPress={() => setBatchOpen((v) => !v)}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: batchOpen }}
+            accessibilityLabel={hi ? "बैच सामूहिक नियंत्रण" : "Batch bulk controls"}
+            hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
             style={{
               flexDirection: "row",
               alignItems: "center",
               gap: 4,
               paddingVertical: 6,
               paddingHorizontal: 10,
+              minHeight: 44,
+              justifyContent: "center",
             }}
           >
             <Ionicons
@@ -319,7 +358,7 @@ export function CourseTreeView(props: {
               size={16}
               color={c.mutedForeground}
             />
-            <Body muted style={{ fontSize: 13, lineHeight: 20 }}>
+            <Body muted style={{ fontSize: 13, lineHeight: 22 }}>
               {hi ? "बैच" : "Batch"}
             </Body>
           </Pressable>
@@ -356,7 +395,7 @@ export function CourseTreeView(props: {
                   style={{
                     flex: 1,
                     fontSize: 13,
-                    lineHeight: 18,
+                    lineHeight: 22,
                     fontFamily: bodyFamily(hi),
                     color: c.foreground,
                   }}
@@ -367,18 +406,42 @@ export function CourseTreeView(props: {
                 <Pressable
                   disabled={busy || !!section.certified_at}
                   onPress={() => void bulkSetSection(section, "in_progress")}
-                  style={{ opacity: busy || section.certified_at ? 0.4 : 1 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    hi ? `${title} — पूरे बैच के लिए शुरू करें` : `Start whole batch on ${title}`
+                  }
+                  accessibilityState={{ disabled: busy || !!section.certified_at }}
+                  hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }}
+                  style={{
+                    minHeight: 44,
+                    minWidth: 44,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    opacity: busy || section.certified_at ? 0.4 : 1,
+                  }}
                 >
-                  <Body muted style={{ fontSize: 12, lineHeight: 18 }}>
+                  <Body muted style={{ fontSize: 12, lineHeight: 22 }}>
                     {hi ? "शुरू" : "Start"}
                   </Body>
                 </Pressable>
                 <Pressable
                   disabled={busy || !!section.certified_at}
                   onPress={() => void bulkSetSection(section, "completed")}
-                  style={{ opacity: busy || section.certified_at ? 0.4 : 1 }}
+                  accessibilityRole="button"
+                  accessibilityLabel={
+                    hi ? `${title} — पूरे बैच के लिए पूर्ण करें` : `Close whole batch on ${title}`
+                  }
+                  accessibilityState={{ disabled: busy || !!section.certified_at }}
+                  hitSlop={{ top: 14, bottom: 14, left: 10, right: 10 }}
+                  style={{
+                    minHeight: 44,
+                    minWidth: 44,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    opacity: busy || section.certified_at ? 0.4 : 1,
+                  }}
                 >
-                  <Body muted style={{ fontSize: 12, lineHeight: 18 }}>
+                  <Body muted style={{ fontSize: 12, lineHeight: 22 }}>
                     {hi ? "बंद" : "Close"}
                   </Body>
                 </Pressable>
@@ -398,7 +461,7 @@ export function CourseTreeView(props: {
             borderColor: c.border,
           }}
         >
-          <Body style={{ color: c.infoText, lineHeight: 20, fontSize: 13 }}>
+          <Body style={{ color: c.infoText, lineHeight: 22, fontSize: 13 }}>
             {lastBulkMsg}
           </Body>
         </View>
@@ -415,7 +478,7 @@ export function CourseTreeView(props: {
             gap: 6,
           }}
         >
-          <Body style={{ color: c.warningText, fontWeight: "600", fontSize: 13, lineHeight: 20 }}>
+          <Body style={{ color: c.warningText, fontWeight: "600", fontSize: 13, lineHeight: 22 }}>
             {hi
               ? `${divergentSections.length} अनुभाग — घोषित बनाम वास्तविक प्रगति में अंतर`
               : `${divergentSections.length} section${divergentSections.length === 1 ? "" : "s"} where declared and actual progress differ`}
@@ -427,7 +490,7 @@ export function CourseTreeView(props: {
               <Body
                 key={s.id}
                 muted
-                style={{ fontSize: 12, lineHeight: 18 }}
+                style={{ fontSize: 12, lineHeight: 22 }}
                 numberOfLines={2}
               >
                 {note ? `${sTitle} — ${note}` : sTitle}
@@ -522,11 +585,15 @@ export function CourseTreeView(props: {
                       onPress={() =>
                         setCertifyTarget({
                           nodeId: section.id,
+                          nodeKind: "section",
                           title,
-                          punyaPoints: section.punya_points,
+                          // H22 — the real clamped award, not raw authored
+                          // points; the confirm sheet must show what the
+                          // server will actually credit (CU18).
+                          punyaPoints: clampedSectionPoints(section.punya_points),
                         })
                       }
-                      disabled={busyNode === section.id}
+                      disabled={busyNode === section.id || !pointsReady}
                     />
                   </View>
                 ) : null}
@@ -535,6 +602,11 @@ export function CourseTreeView(props: {
                       const subTitle = hi
                         ? sub.title_hi || sub.title_en
                         : sub.title_en;
+                      // H19 — CU17: sub-sections can be starred too (0 Punya,
+                      // CU21's "recognition without currency"). Today only
+                      // nodeKind: "section" ever reached the certify sheet.
+                      const subCanCertify =
+                        !sub.certified_at && sub.status === "completed";
                       return (
                         <View
                           key={sub.id}
@@ -551,6 +623,24 @@ export function CourseTreeView(props: {
                               void changeSubsectionStatus(section, sub, status)
                             }
                           />
+                          {subCanCertify ? (
+                            <View style={{ paddingHorizontal: 12, paddingBottom: 10 }}>
+                              <Button
+                                variant="outline"
+                                label={hi ? "प्रमाणित करें" : "Certify"}
+                                onPress={() =>
+                                  setCertifyTarget({
+                                    nodeId: sub.id,
+                                    nodeKind: "subsection",
+                                    title: subTitle,
+                                    // CU21 — sub-section stars never carry Punya.
+                                    punyaPoints: 0,
+                                  })
+                                }
+                                disabled={busyNode === sub.id}
+                              />
+                            </View>
+                          ) : null}
                         </View>
                       );
                     })
@@ -566,7 +656,7 @@ export function CourseTreeView(props: {
         studentName={props.studentName}
         nodeTitle={certifyTarget?.title ?? ""}
         punyaPoints={certifyTarget?.punyaPoints ?? 0}
-        nodeKind="section"
+        nodeKind={certifyTarget?.nodeKind ?? "section"}
         busy={!!certifyTarget && busyNode === certifyTarget.nodeId}
         onCancel={() => setCertifyTarget(null)}
         onConfirm={() => void confirmCertify()}

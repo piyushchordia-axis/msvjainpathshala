@@ -20,6 +20,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { CentreSwitcher, usePersistedCentreId } from "@/components/CentreSwitcher";
 import { CourseFolderCard } from "@/components/CourseFolderCard";
 import { Body, Button, Card, Pill, Screen, StateView, Title } from "@/components/ui";
+import { courseKindLabel } from "@/lib/course-labels";
 import {
   useAdminBatches,
   useAdminCentres,
@@ -186,7 +187,7 @@ export default function CourseAdmin({ persona }: { persona: CourseAdminPersona }
             }}
           >
             <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
-              <Body muted style={{ fontSize: 12, lineHeight: 18 }}>
+              <Body muted style={{ fontSize: 12, lineHeight: 22 }}>
                 {hi ? "प्रगति के लिए चुना" : "Selected for Progress"}
               </Body>
               <Text
@@ -243,7 +244,7 @@ export default function CourseAdmin({ persona }: { persona: CourseAdminPersona }
                 onPress={() => openBrowse(course.id)}
               >
                 <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 6 }}>
-                  <Pill label={course.kind} />
+                  <Pill label={courseKindLabel(course.kind, hi)} />
                   {course.academic_year ? <Pill label={course.academic_year} /> : null}
                   <Pill
                     label={`${course.punya_points} ${hi ? "पुण्य" : "Punya"}`}
@@ -344,9 +345,14 @@ export default function CourseAdmin({ persona }: { persona: CourseAdminPersona }
             >
               <Pressable
                 onPress={() => setPickerBatchId(null)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: !pickerBatchId }}
+                hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
                 style={{
                   paddingVertical: 8,
                   paddingHorizontal: 12,
+                  minHeight: 44,
+                  justifyContent: "center",
                   borderRadius: 999,
                   borderWidth: 1,
                   borderColor: !pickerBatchId ? c.primary : c.border,
@@ -366,13 +372,20 @@ export default function CourseAdmin({ persona }: { persona: CourseAdminPersona }
               </Pressable>
               {batches.map((b) => {
                 const active = pickerBatchId === b.id;
+                const batchLabel = b.name ?? b.centre_name;
                 return (
                   <Pressable
                     key={b.id}
                     onPress={() => setPickerBatchId(b.id)}
+                    accessibilityRole="button"
+                    accessibilityLabel={batchLabel}
+                    accessibilityState={{ selected: active }}
+                    hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
                     style={{
                       paddingVertical: 8,
                       paddingHorizontal: 12,
+                      minHeight: 44,
+                      justifyContent: "center",
                       borderRadius: 999,
                       borderWidth: 1,
                       borderColor: active ? c.primary : c.border,
@@ -389,7 +402,7 @@ export default function CourseAdmin({ persona }: { persona: CourseAdminPersona }
                       }}
                       numberOfLines={1}
                     >
-                      {b.name ?? b.centre_name}
+                      {batchLabel}
                     </Text>
                   </Pressable>
                 );
@@ -414,9 +427,13 @@ export default function CourseAdmin({ persona }: { persona: CourseAdminPersona }
                       <Pressable
                         key={s.id}
                         onPress={() => pickStudent(s)}
+                        accessibilityRole="button"
+                        accessibilityLabel={label}
                         style={{
                           paddingVertical: 12,
                           paddingHorizontal: 12,
+                          minHeight: 44,
+                          justifyContent: "center",
                           borderRadius: c.radius,
                           borderWidth: 1,
                           borderColor: c.border,
@@ -435,13 +452,40 @@ export default function CourseAdmin({ persona }: { persona: CourseAdminPersona }
                           {label}
                         </Text>
                         {s.student_code && s.full_name ? (
-                          <Body muted style={{ fontSize: 12, lineHeight: 18, marginTop: 2 }}>
+                          <Body muted style={{ fontSize: 12, lineHeight: 22, marginTop: 2 }}>
                             {s.student_code}
                           </Body>
                         ) : null}
                       </Pressable>
                     );
                   })}
+                  {/* M27 — the list silently capped at 50 with no way to reach
+                      the rest of a large centre's roster. */}
+                  {studentsQ.hasNextPage ? (
+                    <Pressable
+                      onPress={() => void studentsQ.fetchNextPage()}
+                      disabled={studentsQ.isFetchingNextPage}
+                      accessibilityRole="button"
+                      accessibilityLabel={hi ? "और विद्यार्थी लोड करें" : "Load more students"}
+                      style={{
+                        paddingVertical: 12,
+                        minHeight: 44,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        opacity: studentsQ.isFetchingNextPage ? 0.6 : 1,
+                      }}
+                    >
+                      <Body style={{ color: c.primary, lineHeight: 22 }}>
+                        {studentsQ.isFetchingNextPage
+                          ? hi
+                            ? "लोड हो रहा है…"
+                            : "Loading…"
+                          : hi
+                            ? "और विद्यार्थी लोड करें"
+                            : "Load more students"}
+                      </Body>
+                    </Pressable>
+                  ) : null}
                 </View>
               )}
             </ScrollView>

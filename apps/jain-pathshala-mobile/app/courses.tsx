@@ -12,17 +12,20 @@ import { ChildSwitcher } from "@/components/ChildSwitcher";
 import { CourseFolderCard } from "@/components/CourseFolderCard";
 import { Button, Screen, StateView } from "@/components/ui";
 import { routeForRole } from "@/lib/roles";
+import { courseKindLabel } from "@/lib/course-labels";
 import {
   useCoursesCatalogue,
   usePublicCoursesCatalogue,
   useStudentCertificates,
+  type CourseCertificateRow,
 } from "@/lib/queries";
 
-function courseSubtitle(course: {
-  academic_year: string | null;
-  kind: string;
-}): string {
-  return course.academic_year ? course.academic_year : course.kind;
+// L17 — bilingual label instead of the raw `kind` enum fallback.
+function courseSubtitle(
+  course: { academic_year: string | null; kind: string },
+  hi: boolean,
+): string {
+  return course.academic_year ? course.academic_year : courseKindLabel(course.kind, hi);
 }
 
 export default function CoursesCatalogueScreen() {
@@ -37,10 +40,10 @@ export default function CoursesCatalogueScreen() {
   const certsQ = useStudentCertificates(activeStudentId ?? undefined, !guest && !!activeStudentId);
   // Matched by course_id, not title: a renamed course used to lose its badge,
   // and two courses sharing a title badged each other.
-  const certifiedCourseIds = new Set<string>();
+  const certifiedCourses = new Map<string, CourseCertificateRow>();
   for (const row of certsQ.data?.items ?? []) {
     if (row.kind !== "course" || row.voided_at) continue;
-    if (row.course_id) certifiedCourseIds.add(row.course_id);
+    if (row.course_id) certifiedCourses.set(row.course_id, row);
   }
 
   const certificatesBtn = guest ? undefined : (
@@ -110,7 +113,7 @@ export default function CoursesCatalogueScreen() {
                   <CourseFolderCard
                     key={course.id}
                     title={title}
-                    subtitle={courseSubtitle(course)}
+                    subtitle={courseSubtitle(course, hi)}
                     showChevron
                     onPress={() => router.push(`/course/${course.id}` as never)}
                   />
@@ -177,19 +180,27 @@ export default function CoursesCatalogueScreen() {
               <View style={{ gap: 10 }}>
                 {courses.map((course) => {
                   const title = hi ? course.name_hi || course.name_en : course.name_en;
-                  const certified =
-                    certifiedCourseIds.has(course.id);
+                  const certRow = certifiedCourses.get(course.id);
+                  // M25 — a certificate row's own status/pdf_url decide the
+                  // ribbon; a NULL storage_key is "issuing", not ready (CU24).
+                  const certLabel = !certRow
+                    ? null
+                    : certRow.status === "issuing" && !certRow.pdf_url
+                      ? hi
+                        ? "प्रमाणपत्र बन रहा है"
+                        : "Certificate issuing"
+                      : hi
+                        ? "प्रमाणपत्र"
+                        : "Certificate";
                   return (
                     <CourseFolderCard
                       key={course.id}
                       title={title}
-                      subtitle={courseSubtitle(course)}
+                      subtitle={courseSubtitle(course, hi)}
                       showChevron
-                      certificateLabel={
-                        certified ? (hi ? "प्रमाणपत्र" : "Certificate") : null
-                      }
+                      certificateLabel={certLabel}
                       onCertificatePress={
-                        certified
+                        certRow
                           ? () => router.push("/certificates" as never)
                           : undefined
                       }

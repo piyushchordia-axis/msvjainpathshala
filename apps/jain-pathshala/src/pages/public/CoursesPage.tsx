@@ -5,7 +5,7 @@ import { Card } from '@/components/ui/card';
 import { CourseFolderCard } from '@/components/public/CourseFolderCard';
 import { useLocale } from '@/lib/locale-context';
 import { useAuth } from '@/lib/auth-context';
-import { apiGet } from '@/lib/api-client';
+import { get, apiGet } from '@/lib/api-client';
 import { GuestError, GuestLoading } from '@/components/public/GuestLoadState';
 
 interface CourseListRow {
@@ -24,6 +24,8 @@ interface CertificateRow {
   title_en: string;
   title_hi: string | null;
   voided_at: string | null;
+  status: string;
+  pdf_url: string | null;
 }
 
 interface ChildOption {
@@ -31,12 +33,25 @@ interface ChildOption {
   full_name: string;
 }
 
+/** L21 — the shape `get<T>` returns before envelope unwrapping. */
+interface CourseListEnvelope {
+  data?: { items?: CourseListRow[] };
+  meta?: { has_more?: boolean; next_offset?: number | null };
+}
+
 function pickTitle(hi: boolean, row: CourseListRow): string {
   return hi ? row.name_hi || row.name_en : row.name_en;
 }
 
-function subtitle(row: CourseListRow): string | null {
-  const parts = [row.academic_year, row.kind].filter(Boolean);
+/** L17 — bilingual label instead of the raw `kind` enum fallback. */
+function kindLabel(kind: string, hi: boolean): string {
+  if (kind === 'msv') return 'MSV';
+  if (kind === 'standard') return hi ? 'मानक' : 'Standard';
+  return kind;
+}
+
+function subtitle(hi: boolean, row: CourseListRow): string | null {
+  const parts = [row.academic_year, kindLabel(row.kind, hi)].filter(Boolean);
   return parts.length ? parts.join(' · ') : null;
 }
 
@@ -58,14 +73,12 @@ export default function CoursesPage() {
     if (guestNextOffset == null || loadingMore) return;
     setLoadingMore(true);
     try {
-      const r = await fetch(`/v1/public/courses?limit=200&offset=${guestNextOffset}`, {
-        headers: { Accept: 'application/json' },
-      });
-      if (!r.ok) throw new Error(`courses ${r.status}`);
-      const json = (await r.json()) as {
-        data?: { items?: CourseListRow[] };
-        meta?: { has_more?: boolean; next_offset?: number | null };
-      };
+      // L21 — the shared client (still typed against the full envelope so
+      // `meta.has_more`/`next_offset` stay reachable) instead of a hand-rolled
+      // fetch + manual JSON parse.
+      const json = await get<CourseListEnvelope>(
+        `/v1/public/courses?limit=200&offset=${guestNextOffset}`,
+      );
       setItems((prev) => [...prev, ...(json.data?.items ?? [])]);
       setGuestHasMore(json.meta?.has_more === true);
       setGuestNextOffset(
@@ -81,7 +94,9 @@ export default function CoursesPage() {
   const [children, setChildren] = useState<ChildOption[]>([]);
   // Matched by course_id, not title: a renamed course used to lose its badge,
   // and two courses sharing a title badged each other.
-  const [certifiedCourseIds, setCertifiedCourseIds] = useState<Set<string>>(new Set());
+  const [certifiedCourses, setCertifiedCourses] = useState<Map<string, CertificateRow>>(
+    new Map(),
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -95,25 +110,17 @@ export default function CoursesPage() {
         apiGet<{ items: CourseListRow[] }>(
           studentId ? `/v1/courses?student_id=${encodeURIComponent(studentId)}` : '/v1/courses',
         )
-      : fetch('/v1/public/courses?limit=200', { headers: { Accept: 'application/json' } })
-          .then(async (r) => {
-            if (!r.ok) throw new Error(`courses ${r.status}`);
-            return r.json();
-          })
-          .then(
-            (json: {
-              data?: { items?: CourseListRow[] };
-              meta?: { has_more?: boolean; next_offset?: number | null };
-            }) => {
-              if (!cancelled) {
-                setGuestHasMore(json.meta?.has_more === true);
-                setGuestNextOffset(
-                  typeof json.meta?.next_offset === 'number' ? json.meta.next_offset : null,
-                );
-              }
-              return { items: json.data?.items ?? [] };
-            },
-          );
+      : // L21 — the shared client instead of a hand-rolled fetch + manual
+        // envelope unwrap; `get` (not `apiGet`) keeps `meta` reachable.
+        get<CourseListEnvelope>('/v1/public/courses?limit=200').then((json) => {
+          if (!cancelled) {
+            setGuestHasMore(json.meta?.has_more === true);
+            setGuestNextOffset(
+              typeof json.meta?.next_offset === 'number' ? json.meta.next_offset : null,
+            );
+          }
+          return { items: json.data?.items ?? [] };
+        });
 
     Promise.resolve(load)
       .then((res) => {
@@ -140,7 +147,7 @@ export default function CoursesPage() {
     if (!authed) {
       setStudentId(null);
       setChildren([]);
-      setCertifiedCourseIds(new Set());
+      setCertifiedCourses(new Map());
       return;
     }
     let cancelled = false;
@@ -162,22 +169,22 @@ export default function CoursesPage() {
 
   useEffect(() => {
     if (!studentId) {
-      setCertifiedCourseIds(new Set());
+      setCertifiedCourses(new Map());
       return;
     }
     let cancelled = false;
     apiGet<{ items: CertificateRow[] }>(`/v1/students/${studentId}/certificates`)
       .then((res) => {
         if (cancelled) return;
-        const ids = new Set<string>();
+        const rows = new Map<string, CertificateRow>();
         for (const row of res.items ?? []) {
           if (row.kind !== 'course' || row.voided_at) continue;
-          if (row.course_id) ids.add(row.course_id);
+          if (row.course_id) rows.set(row.course_id, row);
         }
-        setCertifiedCourseIds(ids);
+        setCertifiedCourses(rows);
       })
       .catch(() => {
-        if (!cancelled) setCertifiedCourseIds(new Set());
+        if (!cancelled) setCertifiedCourses(new Map());
       });
     return () => {
       cancelled = true;
@@ -256,19 +263,27 @@ export default function CoursesPage() {
         <ul className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
           {items.map((course) => {
             const title = pickTitle(hi, course);
-            const certified =
-              certifiedCourseIds.has(course.id);
+            const certRow = certifiedCourses.get(course.id);
+            // M25 — a NULL storage_key means "issuing", not ready (CU24); the
+            // ribbon must not claim a still-generating PDF is finished.
+            const certIssuing = !!certRow && certRow.status === 'issuing' && !certRow.pdf_url;
             return (
               <li key={course.id}>
                 <CourseFolderCard
                   title={title}
-                  subtitle={subtitle(course)}
+                  subtitle={subtitle(hi, course)}
                   href={`/courses/${course.id}`}
                   certificate={
-                    certified ? (
+                    certRow ? (
                       <span className="inline-flex items-center gap-1 rounded-full border border-border bg-card px-2 py-1 text-xs font-medium text-gold">
                         <Award className="h-3.5 w-3.5" aria-hidden />
-                        {hi ? 'प्रमाणपत्र' : 'Certificate'}
+                        {certIssuing
+                          ? hi
+                            ? 'प्रमाणपत्र बन रहा है'
+                            : 'Certificate issuing'
+                          : hi
+                            ? 'प्रमाणपत्र'
+                            : 'Certificate'}
                       </span>
                     ) : null
                   }

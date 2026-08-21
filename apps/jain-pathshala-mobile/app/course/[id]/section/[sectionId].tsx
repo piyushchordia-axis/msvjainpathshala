@@ -17,6 +17,7 @@ import { CourseSectionProgress } from "@/components/CourseSectionProgress";
 import { Body, Button, Screen, StateView, Title } from "@/components/ui";
 import {
   certifiedFrozenExplanation,
+  courseErrorCopy,
   descriptionPreview,
   type CourseProgressStatus,
 } from "@/lib/course-labels";
@@ -81,15 +82,16 @@ export default function LearnerSectionScreen() {
         status,
       });
     } catch (err) {
-      const msg =
-        err instanceof ApiError && err.code === "ERR_COURSE_NODE_CERTIFIED"
-          ? certifiedFrozenExplanation(hi)
-          : err instanceof ApiError
-            ? err.message
-            : hi
-              ? "प्रगति सहेजी नहीं जा सकी — फिर कोशिश करें।"
-              : "Could not save progress — try again.";
-      Alert.alert(hi ? "त्रुटि" : "Error", msg);
+      // H23/CU32 — branch on error.code so a Hindi reader never gets a raw
+      // English server string, and CU21's Sanchalak handoff is named.
+      const { title, body } = courseErrorCopy(
+        err instanceof ApiError ? err.code : undefined,
+        hi,
+        hi
+          ? "प्रगति सहेजी नहीं जा सकी — फिर कोशिश करें।"
+          : "Could not save progress — try again.",
+      );
+      Alert.alert(title, body);
       await treeQ.refetch();
     } finally {
       setBusyNode(null);
@@ -259,9 +261,12 @@ export default function LearnerSectionScreen() {
             >
               {(() => {
                 if (!contentSub) return "";
+                // L18 — hi falls back to en (en is the guaranteed language,
+                // CU5), but en must never silently show Hindi body text to an
+                // English reader.
                 const body = hi
                   ? contentSub.description_hi || contentSub.description_en
-                  : contentSub.description_en || contentSub.description_hi;
+                  : contentSub.description_en;
                 return (
                   body ||
                   (hi
@@ -271,38 +276,56 @@ export default function LearnerSectionScreen() {
               })()}
             </Text>
             {contentSub && !guest && !contentSub.certified_at ? (
-              <View style={{ flexDirection: "row", gap: 10, marginTop: 18 }}>
-                {contentSub.status !== "completed" ? (
-                  <View style={{ flex: 1 }}>
-                    <Button
-                      label={hi ? "पूर्ण करें" : "Mark complete"}
-                      onPress={() => {
-                        const sub = contentSub;
-                        setContentSub(null);
-                        void changeStatus(sub, "completed");
-                      }}
-                    />
-                  </View>
-                ) : (
-                  <View style={{ flex: 1 }}>
-                    <Button
-                      variant="outline"
-                      label={hi ? "फिर खोलें" : "Reopen"}
-                      onPress={() => {
-                        const sub = contentSub;
-                        setContentSub(null);
-                        void changeStatus(sub, "in_progress");
-                      }}
-                    />
-                  </View>
-                )}
-                <View style={{ flex: 1 }}>
-                  <Button
-                    variant="outline"
-                    label={hi ? "बंद करें" : "Close"}
-                    onPress={() => setContentSub(null)}
-                  />
+              <View style={{ gap: 10, marginTop: 18 }}>
+                <View style={{ flexDirection: "row", gap: 10 }}>
+                  {/* M37 — a "Start" action that stamps started_at via the
+                      existing progress route; previously the sheet jumped
+                      straight from not_started to completed. */}
+                  {contentSub.status === "not_started" ? (
+                    <View style={{ flex: 1 }}>
+                      <Button
+                        variant="outline"
+                        label={hi ? "शुरू करें" : "Start"}
+                        onPress={() => {
+                          const sub = contentSub;
+                          setContentSub(null);
+                          void changeStatus(sub, "in_progress");
+                        }}
+                      />
+                    </View>
+                  ) : null}
+                  {contentSub.status !== "completed" ? (
+                    <View style={{ flex: 1 }}>
+                      <Button
+                        label={hi ? "पूर्ण करें" : "Mark complete"}
+                        onPress={() => {
+                          const sub = contentSub;
+                          setContentSub(null);
+                          void changeStatus(sub, "completed");
+                        }}
+                      />
+                    </View>
+                  ) : (
+                    <View style={{ flex: 1 }}>
+                      <Button
+                        variant="outline"
+                        label={hi ? "फिर खोलें" : "Reopen"}
+                        onPress={() => {
+                          const sub = contentSub;
+                          setContentSub(null);
+                          void changeStatus(sub, "in_progress");
+                        }}
+                      />
+                    </View>
+                  )}
                 </View>
+                {/* M36 — a pure dismiss, not a completion; "Close" stays
+                    CU11's completion verb everywhere else in the app. */}
+                <Button
+                  variant="outline"
+                  label={hi ? "रद्द करें" : "Cancel"}
+                  onPress={() => setContentSub(null)}
+                />
               </View>
             ) : (
               <View style={{ marginTop: 18 }}>
@@ -313,7 +336,7 @@ export default function LearnerSectionScreen() {
                 ) : null}
                 <Button
                   variant="outline"
-                  label={hi ? "बंद करें" : "Close"}
+                  label={hi ? "रद्द करें" : "Cancel"}
                   onPress={() => setContentSub(null)}
                 />
               </View>

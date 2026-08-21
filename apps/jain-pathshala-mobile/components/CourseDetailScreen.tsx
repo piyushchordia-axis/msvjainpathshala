@@ -19,7 +19,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { CourseBrowseOutline } from "@/components/CourseBrowseOutline";
 import { CourseTreeView } from "@/components/CourseTree";
 import { Body, Button, Screen, StateView, Title } from "@/components/ui";
-import { useAdminBatches, useAdminStudents } from "@/lib/queries";
+import { useAdminBatches, useAdminStudentDetail, useAdminStudents } from "@/lib/queries";
 
 export function CourseDetailScreen({ persona }: { persona: "shikshak" | "sanchalak" }) {
   const c = useColors();
@@ -47,6 +47,14 @@ export function CourseDetailScreen({ persona }: { persona: "shikshak" | "sanchal
     q: pickerQ.trim() || undefined,
     enabled: pickerOpen,
   });
+  // H18 — a resolvable batch_id must not depend on the picker's optional
+  // batch chip: when the route carries none, fall back to the selected
+  // student's own batch so CU13 bulk controls stay reachable.
+  const studentDetailQ = useAdminStudentDetail(
+    !batchId && studentId ? studentId : undefined,
+    !batchId && !!studentId,
+  );
+  const effectiveBatchId = batchId ?? studentDetailQ.data?.batch_id ?? null;
 
   const batches = batchesQ.data?.items ?? [];
   const students = useMemo(
@@ -58,13 +66,18 @@ export function CourseDetailScreen({ persona }: { persona: "shikshak" | "sanchal
     id: string;
     full_name: string | null;
     student_code: string;
+    batch_id?: string | null;
   }) {
     const name = (student.full_name ?? student.student_code).trim();
     const qs = new URLSearchParams({
       student_id: student.id,
       student_name: name,
     });
-    if (pickerBatchId) qs.set("batch_id", pickerBatchId);
+    // H18 — matches CourseAdmin.tsx's pickStudent: fall back to the
+    // student's own batch_id when no chip was picked, rather than leaving
+    // bulk controls unreachable.
+    const resolvedBatchId = pickerBatchId ?? student.batch_id ?? null;
+    if (resolvedBatchId) qs.set("batch_id", resolvedBatchId);
     setPickerOpen(false);
     const base = persona === "sanchalak" ? "/admin/course" : "/shikshak/course";
     router.replace(`${base}/${courseId}?${qs.toString()}` as never);
@@ -109,7 +122,7 @@ export function CourseDetailScreen({ persona }: { persona: "shikshak" | "sanchal
             studentId={studentId}
             studentName={studentName}
             mode="admin"
-            batchId={batchId}
+            batchId={effectiveBatchId}
             persona={persona}
           />
         ) : (
@@ -187,9 +200,14 @@ export function CourseDetailScreen({ persona }: { persona: "shikshak" | "sanchal
             >
               <Pressable
                 onPress={() => setPickerBatchId(null)}
+                accessibilityRole="button"
+                accessibilityState={{ selected: !pickerBatchId }}
+                hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
                 style={{
                   paddingVertical: 8,
                   paddingHorizontal: 12,
+                  minHeight: 44,
+                  justifyContent: "center",
                   borderRadius: 999,
                   borderWidth: 1,
                   borderColor: !pickerBatchId ? c.primary : c.border,
@@ -209,13 +227,20 @@ export function CourseDetailScreen({ persona }: { persona: "shikshak" | "sanchal
               </Pressable>
               {batches.map((b) => {
                 const active = pickerBatchId === b.id;
+                const batchLabel = b.name ?? b.centre_name;
                 return (
                   <Pressable
                     key={b.id}
                     onPress={() => setPickerBatchId(b.id)}
+                    accessibilityRole="button"
+                    accessibilityLabel={batchLabel}
+                    accessibilityState={{ selected: active }}
+                    hitSlop={{ top: 10, bottom: 10, left: 6, right: 6 }}
                     style={{
                       paddingVertical: 8,
                       paddingHorizontal: 12,
+                      minHeight: 44,
+                      justifyContent: "center",
                       borderRadius: 999,
                       borderWidth: 1,
                       borderColor: active ? c.primary : c.border,
@@ -232,7 +257,7 @@ export function CourseDetailScreen({ persona }: { persona: "shikshak" | "sanchal
                       }}
                       numberOfLines={1}
                     >
-                      {b.name ?? b.centre_name}
+                      {batchLabel}
                     </Text>
                   </Pressable>
                 );
@@ -254,9 +279,13 @@ export function CourseDetailScreen({ persona }: { persona: "shikshak" | "sanchal
                     <Pressable
                       key={s.id}
                       onPress={() => applyStudent(s)}
+                      accessibilityRole="button"
+                      accessibilityLabel={s.full_name ?? s.student_code}
                       style={{
                         paddingVertical: 12,
                         paddingHorizontal: 12,
+                        minHeight: 44,
+                        justifyContent: "center",
                         borderRadius: c.radius,
                         borderWidth: 1,
                         borderColor: c.border,
@@ -276,6 +305,33 @@ export function CourseDetailScreen({ persona }: { persona: "shikshak" | "sanchal
                       </Text>
                     </Pressable>
                   ))}
+                  {/* M27 — the list silently capped at 50 with no way to reach
+                      the rest of a large centre's roster. */}
+                  {studentsQ.hasNextPage ? (
+                    <Pressable
+                      onPress={() => void studentsQ.fetchNextPage()}
+                      disabled={studentsQ.isFetchingNextPage}
+                      accessibilityRole="button"
+                      accessibilityLabel={hi ? "और विद्यार्थी लोड करें" : "Load more students"}
+                      style={{
+                        paddingVertical: 12,
+                        minHeight: 44,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        opacity: studentsQ.isFetchingNextPage ? 0.6 : 1,
+                      }}
+                    >
+                      <Body style={{ color: c.primary, lineHeight: 22 }}>
+                        {studentsQ.isFetchingNextPage
+                          ? hi
+                            ? "लोड हो रहा है…"
+                            : "Loading…"
+                          : hi
+                            ? "और विद्यार्थी लोड करें"
+                            : "Load more students"}
+                      </Body>
+                    </Pressable>
+                  ) : null}
                 </View>
               )}
             </ScrollView>

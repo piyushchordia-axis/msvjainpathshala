@@ -96,6 +96,7 @@ export function CourseLearnerRow(props: {
         disabled={!props.onPress && !menuOpen}
         style={styles.main}
         accessibilityRole={props.onPress ? "button" : undefined}
+        accessibilityLabel={props.onPress ? props.title : undefined}
       >
         <Text
           style={{
@@ -123,7 +124,7 @@ export function CourseLearnerRow(props: {
               style={{
                 flex: 1,
                 fontSize: 14,
-                lineHeight: 20,
+                lineHeight: 22,
                 fontFamily: bodyFamily(hi),
                 color: fg,
                 minWidth: 0,
@@ -136,7 +137,7 @@ export function CourseLearnerRow(props: {
               <Text
                 style={{
                   fontSize: 12,
-                  lineHeight: 18,
+                  lineHeight: 22,
                   fontFamily: bodyFamily(hi),
                   color: c.mutedForeground,
                 }}
@@ -150,7 +151,7 @@ export function CourseLearnerRow(props: {
             <Text
               style={{
                 fontSize: 12,
-                lineHeight: 18,
+                lineHeight: 22,
                 fontFamily: bodyFamily(hi),
                 color: c.mutedForeground,
               }}
@@ -187,6 +188,7 @@ export function CourseLearnerRow(props: {
                   : `Status: ${statusText}. Tap to change.`
                 : statusText
             }
+            hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }}
             style={[
               styles.pill,
               {
@@ -199,10 +201,13 @@ export function CourseLearnerRow(props: {
             <Text
               style={{
                 fontSize: 11,
-                lineHeight: 16,
+                lineHeight: 22,
                 fontFamily: bodyFamily(hi, "semibold"),
                 color: certified ? c.gold : c.foreground,
-                maxWidth: 110,
+                // M35 — the honorific ("गुरुजी द्वारा प्रमाणित") is the part
+                // naming who certified the child; 110px + numberOfLines=1
+                // clipped it. Widened per the +35% Hindi string-length buffer.
+                maxWidth: 180,
               }}
               numberOfLines={1}
             >
@@ -241,16 +246,27 @@ export function CourseLearnerRow(props: {
                     style={[
                       styles.menuItem,
                       {
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 6,
+                        minHeight: 44,
                         backgroundColor: selected ? c.muted : "transparent",
                       },
                     ]}
                     accessibilityRole="button"
+                    accessibilityLabel={label}
                     accessibilityState={{ selected }}
                   >
+                    {/* L20 — icon set, not a ✓ dingbat, for the selected mark. */}
+                    {selected ? (
+                      <Ionicons name="checkmark" size={16} color={c.primary} />
+                    ) : (
+                      <View style={{ width: 16 }} />
+                    )}
                     <Text
                       style={{
                         fontSize: 13,
-                        lineHeight: 20,
+                        lineHeight: 22,
                         fontFamily: bodyFamily(
                           hi,
                           selected ? "semibold" : "regular",
@@ -259,7 +275,7 @@ export function CourseLearnerRow(props: {
                       }}
                       numberOfLines={1}
                     >
-                      {selected ? `✓ ${label}` : label}
+                      {label}
                     </Text>
                   </Pressable>
                 );
@@ -277,7 +293,8 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     borderBottomWidth: StyleSheet.hairlineWidth,
-    paddingVertical: 6,
+    // M41 — >=44pt hit target for the row's tap area (drill-down / open content).
+    paddingVertical: 11,
     paddingHorizontal: 10,
     gap: 8,
     overflow: "visible",

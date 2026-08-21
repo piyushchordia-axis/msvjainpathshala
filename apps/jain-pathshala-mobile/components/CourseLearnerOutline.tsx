@@ -9,7 +9,11 @@ import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
 import { Body, StateView } from "@/components/ui";
 import { CourseLearnerRow } from "@/components/CourseLearnerRow";
-import { certifiedFrozenExplanation, type CourseProgressStatus } from "@/lib/course-labels";
+import {
+  certifiedFrozenExplanation,
+  courseErrorCopy,
+  type CourseProgressStatus,
+} from "@/lib/course-labels";
 import {
   useCourseTree,
   usePublicCourseTree,
@@ -63,15 +67,16 @@ export function CourseLearnerOutline(props: {
         status,
       });
     } catch (err) {
-      const msg =
-        err instanceof ApiError && err.code === "ERR_COURSE_NODE_CERTIFIED"
-          ? certifiedFrozenExplanation(hi)
-          : err instanceof ApiError
-            ? err.message
-            : hi
-              ? "प्रगति सहेजी नहीं जा सकी — फिर कोशिश करें।"
-              : "Could not save progress — try again.";
-      Alert.alert(hi ? "त्रुटि" : "Error", msg);
+      // H23/CU32 — branch on error.code so a Hindi reader never gets a raw
+      // English server string, and CU21's Sanchalak handoff is named.
+      const { title, body } = courseErrorCopy(
+        err instanceof ApiError ? err.code : undefined,
+        hi,
+        hi
+          ? "प्रगति सहेजी नहीं जा सकी — फिर कोशिश करें।"
+          : "Could not save progress — try again.",
+      );
+      Alert.alert(title, body);
       await treeQ.refetch();
     } finally {
       setBusyNode(null);
@@ -115,7 +120,7 @@ export function CourseLearnerOutline(props: {
 
   return (
     <View style={{ gap: 4 }}>
-      <Body muted style={{ fontSize: 12, lineHeight: 16 }} numberOfLines={1}>
+      <Body muted style={{ fontSize: 12, lineHeight: 22 }} numberOfLines={1}>
         {metricsParts.join(" · ")}
       </Body>
 
