@@ -110,6 +110,7 @@ export function CourseDetailScreen({ persona }: { persona: "shikshak" | "sanchal
             studentName={studentName}
             mode="admin"
             batchId={batchId}
+            persona={persona}
           />
         ) : (
           <CourseBrowseOutline

@@ -20,7 +20,6 @@ import {
   descriptionPreview,
   type CourseProgressStatus,
 } from "@/lib/course-labels";
-import { applySubsectionStatusCascade } from "@/lib/course-progress-cascade";
 import {
   useCourseTree,
   usePublicCourseTree,
@@ -42,7 +41,9 @@ export default function LearnerSectionScreen() {
   const memberQ = useCourseTree(courseId, activeStudentId ?? undefined, !guest && !!activeStudentId);
   const publicQ = usePublicCourseTree(courseId, guest);
   const treeQ = guest ? publicQ : memberQ;
-  const setProgress = useSetCourseNodeProgress({ offline: false });
+  // H20 — parent/student route through the SAME durable queue path as the
+  // shikshak; CU31 scopes offline parity by op type, not persona.
+  const setProgress = useSetCourseNodeProgress({ offline: true });
   const [busyNode, setBusyNode] = useState<string | null>(null);
   const [contentSub, setContentSub] = useState<CourseTreeSubsection | null>(null);
 
@@ -70,14 +71,15 @@ export default function LearnerSectionScreen() {
     }
     setBusyNode(sub.id);
     try {
-      await applySubsectionStatusCascade({
-        section,
-        subsection: sub,
+      // C4 — a single declared write, never a client-side fan-out onto the
+      // parent section (CU15/CU16). onMutate already patches the row
+      // optimistically (H21), so no immediate refetch is needed here.
+      await setProgress.mutateAsync({
+        nodeId: sub.id,
+        nodeKind: "subsection",
+        student_id: activeStudentId,
         status,
-        studentId: activeStudentId,
-        mutate: (input) => setProgress.mutateAsync(input),
       });
-      await treeQ.refetch();
     } catch (err) {
       const msg =
         err instanceof ApiError && err.code === "ERR_COURSE_NODE_CERTIFIED"

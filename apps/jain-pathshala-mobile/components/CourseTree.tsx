@@ -14,12 +14,9 @@ import { CertifyConfirmModal } from "@/components/CertifyConfirmModal";
 import { SyncOpStatus } from "@/components/SyncOpStatus";
 import {
   certifiedFrozenExplanation,
+  divergenceNote,
   type CourseProgressStatus,
 } from "@/lib/course-labels";
-import {
-  applySectionStatusCascade,
-  applySubsectionStatusCascade,
-} from "@/lib/course-progress-cascade";
 import {
   useBulkCourseNodeProgress,
   useCertifyCourseNode,
@@ -39,6 +36,8 @@ export function CourseTreeView(props: {
   mode: "admin" | "learner";
   /** When set, enables CU13 bulk behind header overflow. */
   batchId?: string | null;
+  /** C4/CU16 — sanchalak gets an extra divergence summary panel. */
+  persona?: "shikshak" | "sanchalak";
 }) {
   const c = useColors();
   const { hi } = useLocale();
@@ -77,6 +76,13 @@ export function CourseTreeView(props: {
     return sections.filter((s) => s.status === "completed" && !s.certified_at);
   }, [tree?.sections, readyOnly]);
 
+  // C4/CU16 — declared-vs-derived divergence is information, never an error;
+  // the Sanchalak gets a standing summary panel over it.
+  const divergentSections = useMemo(
+    () => (tree?.sections ?? []).filter((s) => s.status_diverges),
+    [tree?.sections],
+  );
+
   async function changeSectionStatus(
     section: CourseTreeSection,
     status: CourseProgressStatus,
@@ -90,13 +96,15 @@ export function CourseTreeView(props: {
     }
     setBusyNode(section.id);
     try {
-      await applySectionStatusCascade({
-        section,
+      // C4 — a single declared write, never a client-side fan-out onto
+      // sub-sections (CU15/CU16). onMutate already patches the row
+      // optimistically (H21), so no immediate refetch is needed here.
+      await setProgress.mutateAsync({
+        nodeId: section.id,
+        nodeKind: "section",
+        student_id: props.studentId,
         status,
-        studentId: props.studentId,
-        mutate: (input) => setProgress.mutateAsync(input),
       });
-      await treeQ.refetch();
       await refreshSync();
     } catch (err) {
       const msg =
@@ -128,14 +136,15 @@ export function CourseTreeView(props: {
     }
     setBusyNode(subsection.id);
     try {
-      await applySubsectionStatusCascade({
-        section,
-        subsection,
+      // C4 — a single declared write, never a client-side fan-out onto the
+      // parent section (CU15/CU16). onMutate already patches the row
+      // optimistically (H21), so no immediate refetch is needed here.
+      await setProgress.mutateAsync({
+        nodeId: subsection.id,
+        nodeKind: "subsection",
+        student_id: props.studentId,
         status,
-        studentId: props.studentId,
-        mutate: (input) => setProgress.mutateAsync(input),
       });
-      await treeQ.refetch();
       await refreshSync();
     } catch (err) {
       const msg =
@@ -175,7 +184,9 @@ export function CourseTreeView(props: {
           ? `${verbHi}: ${applied} विद्यार्थी प्रभावित, ${skipped} छोड़े गए।`
           : `${verbEn}: ${applied} student${applied === 1 ? "" : "s"} affected, ${skipped} skipped.`,
       );
-      await treeQ.refetch();
+      // H17 — bulk now routes offline too; the hook's onSuccess already
+      // invalidates the tree query, so an immediate refetch here would just
+      // throw (and mis-report this as failed) on a genuinely offline device.
     } catch (err) {
       Alert.alert(
         hi ? "त्रुटि" : "Error",
@@ -201,7 +212,9 @@ export function CourseTreeView(props: {
         offline: props.mode === "admin",
       });
       setCertifyTarget(null);
-      await treeQ.refetch();
+      // The hook's onSuccess already invalidates the tree query; an
+      // immediate refetch here would throw (and mis-report this as failed)
+      // on a genuinely offline device even though the certify was queued.
       await refreshSync();
     } catch (err) {
       Alert.alert(
@@ -391,6 +404,39 @@ export function CourseTreeView(props: {
         </View>
       ) : null}
 
+      {props.persona === "sanchalak" && divergentSections.length > 0 ? (
+        <View
+          style={{
+            backgroundColor: c.warningSoft,
+            borderRadius: c.radius,
+            padding: 10,
+            borderWidth: 1,
+            borderColor: c.border,
+            gap: 6,
+          }}
+        >
+          <Body style={{ color: c.warningText, fontWeight: "600", fontSize: 13, lineHeight: 20 }}>
+            {hi
+              ? `${divergentSections.length} अनुभाग — घोषित बनाम वास्तविक प्रगति में अंतर`
+              : `${divergentSections.length} section${divergentSections.length === 1 ? "" : "s"} where declared and actual progress differ`}
+          </Body>
+          {divergentSections.map((s) => {
+            const note = divergenceNote(s, hi);
+            const sTitle = hi ? s.title_hi || s.title_en : s.title_en;
+            return (
+              <Body
+                key={s.id}
+                muted
+                style={{ fontSize: 12, lineHeight: 18 }}
+                numberOfLines={2}
+              >
+                {note ? `${sTitle} — ${note}` : sTitle}
+              </Body>
+            );
+          })}
+        </View>
+      ) : null}
+
       {syncOps.map((op) => (
         <SyncOpStatus
           key={op.submission_op_id}
@@ -456,6 +502,9 @@ export function CourseTreeView(props: {
                       ? `(${section.subsections.length})`
                       : null
                   }
+                  // C4/CU16 — declared-vs-derived divergence, rendered for the
+                  // shikshak too (not sanchalak-only), never auto-corrected.
+                  caption={divergenceNote(section, hi)}
                   onPress={
                     section.subsections.length > 0
                       ? () =>

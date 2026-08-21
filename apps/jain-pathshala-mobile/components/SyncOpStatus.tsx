@@ -18,12 +18,7 @@ export function SyncOpStatus(props: {
   const c = useColors();
   const { hi } = useLocale();
 
-  if (props.state === "duplicate") return null;
-
-  const styles: Record<
-    Exclude<SyncUiState, "duplicate">,
-    { bg: string; fg: string; title: string; detail: string }
-  > = {
+  const styles: Record<SyncUiState, { bg: string; fg: string; title: string; detail: string }> = {
     queued: {
       bg: c.infoSoft,
       fg: c.infoText,
@@ -47,6 +42,19 @@ export function SyncOpStatus(props: {
       detail:
         props.detail ??
         (hi ? "सर्वर पर सुरक्षित। यह संदेश जल्द हट जाएगा।" : "Saved on the server. This will clear shortly."),
+    },
+    // M22 — a duplicate means the server already had a newer mark than this
+    // one; it is not new information reaching the server, so it must never
+    // read as "Synced" (that implies THIS change just landed).
+    duplicate: {
+      bg: c.infoSoft,
+      fg: c.infoText,
+      title: props.title ?? (hi ? "पहले से अद्यतन" : "Already up to date"),
+      detail:
+        props.detail ??
+        (hi
+          ? "सर्वर पर इससे नई जानकारी पहले से मौजूद है — कुछ करने की आवश्यकता नहीं।"
+          : "The server already has a newer version of this — nothing more to do."),
     },
     conflict: {
       bg: c.errorSoft,

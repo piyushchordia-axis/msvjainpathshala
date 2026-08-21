@@ -1,11 +1,14 @@
 /**
  * Poll course offline queues for a student and expose UI sync states.
- * Ops removed after success still flash "synced" briefly (CLAUDE.md failure table).
+ * An op removed after a confirmed success flashes "synced" briefly, and one
+ * removed after a confirmed duplicate flashes "already up to date" — never
+ * inferred from the op merely disappearing (C5; CLAUDE.md failure table).
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState } from "react-native";
 import { QUEUE_KEYS, type QueueKey } from "@/lib/offline/queue-keys";
 import { readQueue } from "@/lib/offline/storage";
+import { getRecentDrainResult } from "@/lib/offline/sync-engine";
 import type { SyncUiState, QueuedOp } from "@/lib/offline/types";
 
 const SYNCED_HOLD_MS = 4000;
@@ -53,7 +56,11 @@ export function useCourseSyncOps(opts: {
       const view = toView(op, queue, kind);
       liveIds.add(op.submission_op_id);
 
-      if (op.state === "synced" || op.state === "duplicate") {
+      // L27 — `op.state` read directly from storage is never "duplicate":
+      // applyDrainResult removes a duplicate op from storage just like a
+      // successful one, so that outcome only ever reaches this hook through
+      // the vanished-op branch below (via getRecentDrainResult), never here.
+      if (op.state === "synced") {
         heldSynced.current.set(op.submission_op_id, {
           ...view,
           state: "synced",
@@ -87,15 +94,24 @@ export function useCourseSyncOps(opts: {
       consider(op, QUEUE_KEYS.course_certification, "certification", matches);
     }
 
-    // Ops that vanished after syncing → brief synced confirmation.
+    // Ops that vanished after syncing — but "vanished" alone is never enough
+    // to call it synced (C5). applyDrainResult removes an op from storage on
+    // BOTH success and duplicate, and a corrupt read (storage.ts) or an
+    // unrelated bug can also make an op disappear. Consult the recorded
+    // outcome from the drain that actually removed it; anything without a
+    // confirmed success/duplicate result is dropped from view, not reported
+    // as saved.
     for (const [id, prev] of [...known.current.entries()]) {
       if (liveIds.has(id)) continue;
       if (prev.state === "syncing" || prev.state === "queued") {
-        heldSynced.current.set(id, {
-          ...prev,
-          state: "synced",
-          until: now + SYNCED_HOLD_MS,
-        });
+        const recorded = getRecentDrainResult(id);
+        if (recorded?.status === "success") {
+          heldSynced.current.set(id, { ...prev, state: "synced", until: now + SYNCED_HOLD_MS });
+        } else if (recorded?.status === "duplicate") {
+          // M22 — a duplicate is "already up to date", never "synced".
+          heldSynced.current.set(id, { ...prev, state: "duplicate", until: now + SYNCED_HOLD_MS });
+        }
+        // No recorded terminal result yet: say nothing rather than guess.
       }
       known.current.delete(id);
     }
@@ -108,7 +124,7 @@ export function useCourseSyncOps(opts: {
       views.push({
         submission_op_id: held.submission_op_id,
         queue: held.queue,
-        state: "synced",
+        state: held.state,
         kind: held.kind,
       });
     }

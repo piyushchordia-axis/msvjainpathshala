@@ -13,6 +13,7 @@ import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiGetEnvelope, ApiError 
 // Type-only: the sync engine itself is imported dynamically at each call site so
 // the offline module stays out of the initial bundle.
 import type { PendingProofMedia, SyncUiState } from "@/lib/offline/types";
+import type { DrainOpResult, SyncOpOutcome } from "@/lib/offline/sync-engine";
 import type {
   AdminBatchRow,
   AdminStudentRow,
@@ -2833,51 +2834,158 @@ export function useStudentCertificates(studentId?: string, enabled = true) {
 }
 
 /**
- * Single-student progress write. Guruji/Sanchalak enqueue for offline parity;
- * parent/student hit the online path (CU11 bidirectional).
+ * C5 — throw whenever a drain resolved to a genuinely terminal outcome
+ * (conflict, or failed with attempts exhausted) so `onError` actually fires.
+ * "queued" (still retrying) and "duplicate" are NOT errors and must not
+ * throw — see resolveSyncOpOutcome's doc for why "failed" alone is not a
+ * reliable signal on its own.
  */
+function throwIfTerminalSyncOutcome(outcome: SyncOpOutcome): void {
+  if (outcome.status !== "conflict" && outcome.status !== "failed") return;
+  const err = outcome.result?.error;
+  const statusCode = outcome.status === "conflict" ? 409 : 500;
+  const fallback =
+    outcome.status === "conflict"
+      ? "A newer update already exists on the server — refresh and re-mark if needed."
+      : "This could not be saved after several attempts — tap retry to try again.";
+  throw new ApiError(
+    err?.code ?? (outcome.status === "conflict" ? "ERR_CONFLICT" : "ERR_SYNC_FAILED"),
+    err?.message ?? fallback,
+    statusCode,
+  );
+}
+
+/** CU13 — resolve a batch's active roster client-side for an offline bulk write (H17). */
+async function fetchActiveBatchRoster(batchId: string): Promise<string[]> {
+  const ids: string[] = [];
+  let cursor: string | null = null;
+  // Bounded so a misbehaving API can't loop forever.
+  for (let page = 0; page < 40; page += 1) {
+    const qs = new URLSearchParams({ limit: "50", status: "active", batch_id: batchId });
+    if (cursor) qs.set("cursor", cursor);
+    const res = await apiGet<AdminStudentsPage>(`/v1/admin/students?${qs.toString()}`);
+    ids.push(...res.items.map((s) => s.id));
+    cursor = res.next_cursor ?? null;
+    if (!cursor) break;
+  }
+  return ids;
+}
+
+/** H21 — immutable patch used by onMutate so a tap shows its own status right away. */
+function patchCourseTreeStatus(
+  tree: StudentCourseTree,
+  nodeKind: "section" | "subsection",
+  nodeId: string,
+  status: "not_started" | "in_progress" | "completed",
+): StudentCourseTree {
+  if (nodeKind === "section") {
+    return {
+      ...tree,
+      sections: tree.sections.map((s) => (s.id === nodeId ? { ...s, status } : s)),
+    };
+  }
+  return {
+    ...tree,
+    sections: tree.sections.map((s) => ({
+      ...s,
+      subsections: s.subsections.map((sub) => (sub.id === nodeId ? { ...sub, status } : sub)),
+    })),
+  };
+}
+
+export type SetCourseNodeProgressInput = {
+  nodeId: string;
+  nodeKind: "section" | "subsection";
+  student_id: string;
+  status: "not_started" | "in_progress" | "completed";
+  note?: string;
+};
+
+export type CourseSyncWriteResult = {
+  submission_op_id?: string;
+  result?: DrainOpResult | null;
+  queued: boolean;
+  duplicate?: boolean;
+};
+
+/**
+ * Single-student progress write. Guruji/Sanchalak enqueue for offline parity;
+ * parent/student now route through the SAME queue path (H20 — CU31 scopes
+ * offline parity by op type, not persona).
+ *
+ * C5 — throws on a conflict or a genuinely exhausted failure so `onError`
+ * fires; a still-retrying op resolves normally (it is safely queued).
+ */
+export async function runSetCourseNodeProgress(
+  body: SetCourseNodeProgressInput,
+  opts?: { offline?: boolean },
+): Promise<CourseSyncWriteResult> {
+  if (opts?.offline) {
+    const { enqueueCourseProgress, drainQueues, resolveSyncOpOutcome } = await import(
+      "@/lib/offline/sync-engine"
+    );
+    const { QUEUE_KEYS } = await import("@/lib/offline/queue-keys");
+    const { ulid } = await import("@/lib/offline/ulid");
+    const submission_op_id = await enqueueCourseProgress({
+      node_kind: body.nodeKind,
+      node_id: body.nodeId,
+      marks: [
+        {
+          student_id: body.student_id,
+          status: body.status,
+          note: body.note,
+          client_op_id: ulid(),
+        },
+      ],
+    });
+    const results = await drainQueues();
+    const outcome = await resolveSyncOpOutcome(
+      QUEUE_KEYS.course_progress,
+      submission_op_id,
+      results,
+    );
+    throwIfTerminalSyncOutcome(outcome);
+    return {
+      submission_op_id,
+      result: outcome.result ?? null,
+      queued: outcome.status === "queued",
+      duplicate: outcome.status === "duplicate",
+    };
+  }
+  // C3/CU31 — the online path is governed by the same newest-wins rule
+  // as offline sync; sending marked_at/client_op_id here means an
+  // offline replay that arrives later can't silently clobber this tap.
+  const { ulid } = await import("@/lib/offline/ulid");
+  await apiPost(`/v1/courses/nodes/${body.nodeId}/progress`, {
+    student_id: body.student_id,
+    status: body.status,
+    note: body.note,
+    client_op_id: ulid(),
+    client_marked_at: new Date().toISOString(),
+  });
+  return { queued: false };
+}
+
 export function useSetCourseNodeProgress(opts?: { offline?: boolean }) {
   const qc = useQueryClient();
   const offline = opts?.offline ?? false;
   return useMutation({
-    mutationFn: async (body: {
-      nodeId: string;
-      nodeKind: "section" | "subsection";
-      student_id: string;
-      status: "not_started" | "in_progress" | "completed";
-      note?: string;
-    }) => {
-      if (offline) {
-        const { enqueueCourseProgress, drainQueues } = await import(
-          "@/lib/offline/sync-engine"
-        );
-        const { ulid } = await import("@/lib/offline/ulid");
-        const submission_op_id = await enqueueCourseProgress({
-          node_kind: body.nodeKind,
-          node_id: body.nodeId,
-          marks: [
-            {
-              student_id: body.student_id,
-              status: body.status,
-              note: body.note,
-              client_op_id: ulid(),
-            },
-          ],
-        });
-        const results = await drainQueues();
-        const mine = results.find((r) => r.submission_op_id === submission_op_id);
-        return { submission_op_id, result: mine ?? null, queued: true as const };
-      }
-      // C3/CU31 — the online path is governed by the same newest-wins rule
-      // as offline sync; sending marked_at/client_op_id here means an
-      // offline replay that arrives later can't silently clobber this tap.
-      const { ulid } = await import("@/lib/offline/ulid");
-      return apiPost(`/v1/courses/nodes/${body.nodeId}/progress`, {
-        student_id: body.student_id,
-        status: body.status,
-        note: body.note,
-        client_op_id: ulid(),
-        client_marked_at: new Date().toISOString(),
+    mutationFn: (body: SetCourseNodeProgressInput) =>
+      runSetCourseNodeProgress(body, { offline }),
+    // H21 — patch the cached tree immediately so a queued tap shows its own
+    // new status right away instead of waiting on a refetch (which, offline,
+    // may not resolve for a while). Rolled back in onError.
+    onMutate: async (vars) => {
+      await qc.cancelQueries({ queryKey: ["courses", "tree"] });
+      const previous = qc.getQueriesData<StudentCourseTree>({ queryKey: ["courses", "tree"] });
+      qc.setQueriesData<StudentCourseTree>({ queryKey: ["courses", "tree"] }, (old) =>
+        old ? patchCourseTreeStatus(old, vars.nodeKind, vars.nodeId, vars.status) : old,
+      );
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      context?.previous.forEach(([key, data]) => {
+        qc.setQueryData(key, data);
       });
     },
     onSuccess: (_res, vars) => {
@@ -2887,31 +2995,84 @@ export function useSetCourseNodeProgress(opts?: { offline?: boolean }) {
   });
 }
 
+export type BulkCourseNodeProgressInput = {
+  nodeId: string;
+  nodeKind?: "section" | "subsection";
+  batch_id?: string;
+  student_ids?: string[];
+  status: "not_started" | "in_progress" | "completed";
+  note?: string;
+  /** When true (default), queue + drain like every other shikshak write. */
+  offline?: boolean;
+};
+
+/**
+ * H17 — bulk now routes through the EXISTING jp.queue.course_progress queue
+ * when offline, same as the single-student write. Its `marks` array already
+ * carries a roster (CLAUDE.md offline §1); a `batch_id` alone is resolved to
+ * an active student id list client-side first, since the canonical queue
+ * payload has no batch_id field for the server to resolve.
+ */
+export async function runBulkCourseNodeProgress(
+  body: BulkCourseNodeProgressInput,
+): Promise<{ applied: number; skipped: number; student_ids?: string[] }> {
+  const { ulid } = await import("@/lib/offline/ulid");
+  const useOffline = body.offline !== false;
+  if (useOffline) {
+    const studentIds = body.student_ids?.length
+      ? body.student_ids
+      : body.batch_id
+        ? await fetchActiveBatchRoster(body.batch_id)
+        : [];
+    if (studentIds.length === 0) {
+      throw new ApiError(
+        "ERR_COURSE_ROSTER_UNAVAILABLE",
+        "Could not resolve this batch's roster for a bulk update — check your connection and try again.",
+        409,
+      );
+    }
+    const { enqueueCourseProgress, drainQueues, resolveSyncOpOutcome } = await import(
+      "@/lib/offline/sync-engine"
+    );
+    const { QUEUE_KEYS } = await import("@/lib/offline/queue-keys");
+    const submission_op_id = await enqueueCourseProgress({
+      node_kind: body.nodeKind ?? "section",
+      node_id: body.nodeId,
+      marks: studentIds.map((student_id) => ({
+        student_id,
+        status: body.status,
+        note: body.note,
+        client_op_id: ulid(),
+      })),
+    });
+    const results = await drainQueues();
+    const outcome = await resolveSyncOpOutcome(
+      QUEUE_KEYS.course_progress,
+      submission_op_id,
+      results,
+    );
+    throwIfTerminalSyncOutcome(outcome);
+    return { applied: studentIds.length, skipped: 0, student_ids: studentIds };
+  }
+  // H25 — carry a submission_op_id so a flaky-wifi retry of the same
+  // bulk request replays via sync_operations instead of walking the
+  // roster a second time.
+  return apiPost<{ applied: number; skipped: number; student_ids?: string[] }>(
+    `/v1/courses/nodes/${body.nodeId}/progress/bulk`,
+    {
+      batch_id: body.batch_id,
+      student_ids: body.student_ids,
+      status: body.status,
+      note: body.note,
+      submission_op_id: ulid(),
+    },
+  );
+}
+
 export function useBulkCourseNodeProgress() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (body: {
-      nodeId: string;
-      batch_id?: string;
-      student_ids?: string[];
-      status: "not_started" | "in_progress" | "completed";
-      note?: string;
-    }) => {
-      // H25 — carry a submission_op_id so a flaky-wifi retry of the same
-      // bulk request replays via sync_operations instead of walking the
-      // roster a second time.
-      const { ulid } = await import("@/lib/offline/ulid");
-      return apiPost<{ applied: number; skipped: number; student_ids?: string[] }>(
-        `/v1/courses/nodes/${body.nodeId}/progress/bulk`,
-        {
-          batch_id: body.batch_id,
-          student_ids: body.student_ids,
-          status: body.status,
-          note: body.note,
-          submission_op_id: ulid(),
-        },
-      );
-    },
+    mutationFn: runBulkCourseNodeProgress,
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["courses", "tree"] });
       // M26 — a bulk write can touch many students at once; invalidate the
@@ -2921,41 +3082,59 @@ export function useBulkCourseNodeProgress() {
   });
 }
 
+export type CertifyCourseNodeInput = {
+  nodeId: string;
+  nodeKind: "section" | "subsection";
+  student_id: string;
+  note?: string;
+  /** When true (default for admin personas), queue + drain. */
+  offline?: boolean;
+};
+
 /**
  * Certify one student. Always enqueue offline for Guruji/Sanchalak so CU31
  * parity holds; call only after CU18 confirm on device.
+ *
+ * C5 — throws on a conflict or a genuinely exhausted failure so `onError`
+ * fires instead of the caller reading loss as success.
  */
+export async function runCertifyCourseNode(body: CertifyCourseNodeInput) {
+  const useOffline = body.offline !== false;
+  if (useOffline) {
+    const { enqueueCourseCertification, drainQueues, resolveSyncOpOutcome } = await import(
+      "@/lib/offline/sync-engine"
+    );
+    const { QUEUE_KEYS } = await import("@/lib/offline/queue-keys");
+    const submission_op_id = await enqueueCourseCertification({
+      node_kind: body.nodeKind,
+      node_id: body.nodeId,
+      student_id: body.student_id,
+      certification_note: body.note,
+    });
+    const results = await drainQueues();
+    const outcome = await resolveSyncOpOutcome(
+      QUEUE_KEYS.course_certification,
+      submission_op_id,
+      results,
+    );
+    throwIfTerminalSyncOutcome(outcome);
+    return {
+      submission_op_id,
+      result: outcome.result ?? null,
+      queued: outcome.status === "queued",
+      duplicate: outcome.status === "duplicate",
+    } satisfies CourseSyncWriteResult;
+  }
+  return apiPost(`/v1/courses/nodes/${body.nodeId}/certify`, {
+    student_id: body.student_id,
+    note: body.note,
+  });
+}
+
 export function useCertifyCourseNode() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (body: {
-      nodeId: string;
-      nodeKind: "section" | "subsection";
-      student_id: string;
-      note?: string;
-      /** When true (default for admin personas), queue + drain. */
-      offline?: boolean;
-    }) => {
-      const useOffline = body.offline !== false;
-      if (useOffline) {
-        const { enqueueCourseCertification, drainQueues } = await import(
-          "@/lib/offline/sync-engine"
-        );
-        const submission_op_id = await enqueueCourseCertification({
-          node_kind: body.nodeKind,
-          node_id: body.nodeId,
-          student_id: body.student_id,
-          certification_note: body.note,
-        });
-        const results = await drainQueues();
-        const mine = results.find((r) => r.submission_op_id === submission_op_id);
-        return { submission_op_id, result: mine ?? null, queued: true as const };
-      }
-      return apiPost(`/v1/courses/nodes/${body.nodeId}/certify`, {
-        student_id: body.student_id,
-        note: body.note,
-      });
-    },
+    mutationFn: runCertifyCourseNode,
     onSuccess: (_res, vars) => {
       void qc.invalidateQueries({ queryKey: ["courses", "tree"] });
       void qc.invalidateQueries({ queryKey: qk.studentCertificates(vars.student_id) });

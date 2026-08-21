@@ -17,9 +17,11 @@ export {
   startSyncLoop,
   hasPendingSyncWork,
   classifyTransportStatus,
+  getRecentDrainResult,
+  resolveSyncOpOutcome,
   MAX_OPS_PER_BATCH,
 } from "./sync-engine";
-export type { DrainOpResult } from "./sync-engine";
+export type { DrainOpResult, SyncOpOutcome, SyncOpOutcomeStatus } from "./sync-engine";
 export type {
   SyncUiState,
   QueuedOp,

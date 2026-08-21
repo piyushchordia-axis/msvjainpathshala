@@ -4,6 +4,7 @@ import {
   certifiedLabel,
   courseStatusLabel,
   courseStripTone,
+  divergenceNote,
 } from "../course-labels";
 
 describe("course-labels (CU11 / CU12 / CU17)", () => {
@@ -31,5 +32,68 @@ describe("course-labels (CU11 / CU12 / CU17)", () => {
     expect(courseStripTone("completed", false)).toBe("successSoft");
     expect(courseStripTone("completed", true)).toBe("accent");
     expect(courseStripTone("not_started", true)).toBe("accent");
+  });
+});
+
+describe("divergenceNote (C4/CU16)", () => {
+  it("says nothing when the section does not diverge", () => {
+    expect(
+      divergenceNote(
+        {
+          status: "completed",
+          derived_status: "completed",
+          derived_leaf_total: 4,
+          derived_leaf_reached: 4,
+          status_diverges: false,
+        },
+        false,
+      ),
+    ).toBeNull();
+  });
+
+  it("says nothing when there is no roll-up to compare against (no leaves)", () => {
+    expect(
+      divergenceNote(
+        {
+          status: "completed",
+          derived_status: null,
+          derived_leaf_total: 0,
+          derived_leaf_reached: 0,
+          status_diverges: true,
+        },
+        false,
+      ),
+    ).toBeNull();
+  });
+
+  it("states declared vs derived, never auto-correcting either side", () => {
+    const note = divergenceNote(
+      {
+        status: "completed",
+        derived_status: "in_progress",
+        derived_leaf_total: 8,
+        derived_leaf_reached: 3,
+        status_diverges: true,
+      },
+      false,
+    );
+    expect(note).toContain("Completed");
+    expect(note).toContain("In progress");
+    expect(note).toContain("3/8");
+  });
+
+  it("renders Hindi labels in the hi branch", () => {
+    const note = divergenceNote(
+      {
+        status: "completed",
+        derived_status: "in_progress",
+        derived_leaf_total: 8,
+        derived_leaf_reached: 3,
+        status_diverges: true,
+      },
+      true,
+    );
+    expect(note).toContain("पूर्ण");
+    expect(note).toContain("चल रहा है");
   });
 });

@@ -25,7 +25,22 @@ export async function readQueue<T extends PendingOpPayload = PendingOpPayload>(
   if (!raw) return [];
   try {
     return JSON.parse(raw) as QueuedOp<T>[];
-  } catch {
+  } catch (err) {
+    // C5 — a corrupt payload must never silently read back as "nothing was
+    // ever queued"; that is how a night's worth of offline stars disappear
+    // with no trace. Quarantine the raw bytes under `<key>.corrupt` (moved,
+    // not copied, so the next read doesn't keep re-hitting the same parse
+    // failure) and log loudly instead of swallowing it.
+    console.error(
+      `[offline] Corrupt queue payload for "${key}" — quarantining instead of discarding.`,
+      err,
+    );
+    try {
+      await AsyncStorage.setItem(`${key}.corrupt`, raw);
+      await AsyncStorage.removeItem(key);
+    } catch (quarantineErr) {
+      console.error(`[offline] Failed to quarantine corrupt payload for "${key}".`, quarantineErr);
+    }
     return [];
   }
 }

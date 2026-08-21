@@ -116,6 +116,36 @@ export function sectionProgressSummary(
 }
 
 /**
+ * CU16 — a section carries its own declared status AND a derived roll-up
+ * over its sub-sections; both are surfaced, and divergence between them is
+ * information for the Sanchalak, never an error and never auto-corrected
+ * (that auto-correction is exactly what the deleted course-progress-cascade
+ * module used to do — see CU15/CU16 and C4/M24 in the courses review).
+ */
+export type SectionDivergenceInput = {
+  status: CourseProgressStatus;
+  derived_status: CourseProgressStatus | null;
+  derived_leaf_total: number;
+  derived_leaf_reached: number;
+  status_diverges: boolean;
+};
+
+/**
+ * One-line "declared vs derived" note for a section, or null when there is
+ * nothing to say (no divergence, or the section has no sub-sections to roll
+ * up — `derived_status` is null in that case, per fn_course_progress/CU28).
+ */
+export function divergenceNote(section: SectionDivergenceInput, hi: boolean): string | null {
+  if (!section.status_diverges || section.derived_status == null) return null;
+  const declared = courseStatusLabel(section.status, hi);
+  const derived = courseStatusLabel(section.derived_status, hi);
+  const count = `${section.derived_leaf_reached}/${section.derived_leaf_total}`;
+  return hi
+    ? `घोषित: ${declared} · उप-अनुभागों से: ${derived} (${count})`
+    : `Declared: ${declared} · from sub-sections: ${derived} (${count})`;
+}
+
+/**
  * A one-line preview of a subsection description for a list row.
  *
  * Descriptions are plain text (the admin edits them in a plain textarea), so

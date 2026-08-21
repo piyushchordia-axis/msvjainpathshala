@@ -10,7 +10,6 @@ import { useLocale } from "@/contexts/LocaleContext";
 import { Body, StateView } from "@/components/ui";
 import { CourseLearnerRow } from "@/components/CourseLearnerRow";
 import { certifiedFrozenExplanation, type CourseProgressStatus } from "@/lib/course-labels";
-import { applySectionStatusCascade } from "@/lib/course-progress-cascade";
 import {
   useCourseTree,
   usePublicCourseTree,
@@ -33,7 +32,9 @@ export function CourseLearnerOutline(props: {
   );
   const publicQ = usePublicCourseTree(props.courseId, !!props.readOnly);
   const treeQ = props.readOnly ? publicQ : memberQ;
-  const setProgress = useSetCourseNodeProgress({ offline: false });
+  // H20 — parent/student route through the SAME durable queue path as the
+  // shikshak; CU31 scopes offline parity by op type, not persona.
+  const setProgress = useSetCourseNodeProgress({ offline: true });
   const [busyNode, setBusyNode] = useState<string | null>(null);
 
   const tree = treeQ.data;
@@ -52,13 +53,15 @@ export function CourseLearnerOutline(props: {
     }
     setBusyNode(section.id);
     try {
-      await applySectionStatusCascade({
-        section,
+      // C4 — a single declared write, never a client-side fan-out onto
+      // sub-sections (CU15/CU16). onMutate already patches the row
+      // optimistically (H21), so no immediate refetch is needed here.
+      await setProgress.mutateAsync({
+        nodeId: section.id,
+        nodeKind: "section",
+        student_id: props.studentId,
         status,
-        studentId: props.studentId,
-        mutate: (input) => setProgress.mutateAsync(input),
       });
-      await treeQ.refetch();
     } catch (err) {
       const msg =
         err instanceof ApiError && err.code === "ERR_COURSE_NODE_CERTIFIED"

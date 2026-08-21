@@ -47,10 +47,6 @@ let draining = false;
 const ACTIVE_INTERVAL_MS = 5_000;
 const IDLE_INTERVAL_MS = 60_000;
 
-function toTransportPayload(_queue: QueueKey, op: QueuedOp): unknown {
-  return op.payload;
-}
-
 async function flushDirtyQueues(
   queues: Record<QueueKey, QueuedOp[]>,
   dirty: Set<QueueKey>,
@@ -104,9 +100,14 @@ function applyDrainResult(
     return {
       ...op,
       state: "conflict",
+      // M23 — this fallback only fires when the server sent no error detail
+      // of its own; sync-engine has no locale context to pick EN/HI, so the
+      // string carries both, and states the fix (not just the problem), per
+      // CLAUDE.md's error-voice rule.
       last_error: result.error ?? {
         code: "ERR_CONFLICT",
-        message: "This change conflicts with a newer update on the server.",
+        message:
+          "A newer update already exists on the server — refresh and re-mark if needed. / सर्वर पर पहले से एक नया अपडेट मौजूद है — रीफ़्रेश करें और ज़रूरत हो तो फिर से चिह्नित करें।",
       },
     };
   }
@@ -566,6 +567,81 @@ export function classifyTransportStatus(err: {
   return status;
 }
 
+/**
+ * Short-lived, in-memory record of each op's actual outcome, keyed by
+ * submission_op_id.
+ *
+ * applyDrainResult REMOVES a successful or duplicate op from durable storage
+ * (`"remove"`), so nothing reading storage alone can tell "gone because it
+ * synced" from "gone for any other reason". This cache exists purely so a
+ * poller watching an op drained by the BACKGROUND loop (useCourseSyncOps)
+ * can read the real, recorded outcome instead of inferring "synced" from the
+ * op's disappearance (C5). Bounded lifetime so a long session can't grow it
+ * without limit.
+ */
+const RECENT_RESULT_TTL_MS = 2 * 60_000;
+const recentResults = new Map<string, { result: DrainOpResult; at: number }>();
+
+function recordRecentResults(results: DrainOpResult[]): void {
+  const now = Date.now();
+  for (const r of results) {
+    recentResults.set(r.submission_op_id, { result: r, at: now });
+  }
+  for (const [id, entry] of recentResults) {
+    if (now - entry.at > RECENT_RESULT_TTL_MS) recentResults.delete(id);
+  }
+}
+
+/** The real outcome of a recently-drained op, if one was recorded (C5). */
+export function getRecentDrainResult(submissionOpId: string): DrainOpResult | undefined {
+  return recentResults.get(submissionOpId)?.result;
+}
+
+export type SyncOpOutcomeStatus = "success" | "duplicate" | "queued" | "conflict" | "failed";
+
+export type SyncOpOutcome = {
+  status: SyncOpOutcomeStatus;
+  result?: DrainOpResult;
+};
+
+/**
+ * Reconcile the true outcome of one op after a drain this caller triggered
+ * itself (or that ran in the background).
+ *
+ * `DrainOpResult.status === "failed"` on its own conflates a single
+ * transport hiccup that is still retrying (see the H9 branch in
+ * applyDrainResult) with a genuinely exhausted op — it reports what the
+ * transport said for THIS attempt, not what applyDrainResult decided for the
+ * queue. Queue storage is authoritative for conflict/failed/queued; an op no
+ * longer in storage was removed on success or duplicate, so fall back to the
+ * caller's own results array, then the recent-result cache, to tell which.
+ */
+export async function resolveSyncOpOutcome(
+  queue: QueueKey,
+  submissionOpId: string,
+  results?: DrainOpResult[],
+): Promise<SyncOpOutcome> {
+  const arr = await readQueue(queue);
+  const op = arr.find((o) => o.submission_op_id === submissionOpId);
+  if (op) {
+    if (op.state === "conflict" || op.state === "failed") {
+      return {
+        status: op.state,
+        result: op.last_error
+          ? { submission_op_id: submissionOpId, status: op.state, error: op.last_error }
+          : undefined,
+      };
+    }
+    // Still queued/syncing — a legitimate transient state, never an error.
+    return { status: "queued" };
+  }
+  const mine =
+    results?.find((r) => r.submission_op_id === submissionOpId) ??
+    getRecentDrainResult(submissionOpId);
+  if (mine?.status === "duplicate") return { status: "duplicate", result: mine };
+  return { status: "success", result: mine };
+}
+
 export async function drainQueues(): Promise<DrainOpResult[]> {
   if (draining) return [];
   draining = true;
@@ -608,7 +684,7 @@ export async function drainQueues(): Promise<DrainOpResult[]> {
       ops: planned.map(({ queue, op }) => ({
         submission_op_id: op.submission_op_id,
         op_type: QUEUE_OP_TYPE[queue],
-        payload: toTransportPayload(queue, op),
+        payload: op.payload,
         client_timestamp:
           (op.payload as { client_timestamp?: string }).client_timestamp ??
           new Date().toISOString(),
@@ -657,6 +733,7 @@ export async function drainQueues(): Promise<DrainOpResult[]> {
       dirty.add(queue);
     }
     await flushDirtyQueues(queues, dirty);
+    recordRecentResults(results);
     return results;
   } finally {
     draining = false;
