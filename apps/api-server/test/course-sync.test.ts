@@ -85,6 +85,64 @@ async function punyaTxCount(studentId: string): Promise<number> {
 }
 
 describe("course sync step 5", () => {
+  it("1 — a plain course_progress op applies via sync: row created, status and client_marked_at stored (CU9/CU31 baseline)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { sectionId } = await publishableCourse(superAdmin.token, cityId);
+    const studentId = await shikshakStudent();
+
+    const markedAt = new Date();
+    const clientOpId = ulid();
+    const opId = ulid();
+    const res = await request(app)
+      .post("/v1/sync/batch")
+      .set(auth(shikshak.token))
+      .send({
+        ops: [
+          {
+            submission_op_id: opId,
+            op_type: "course_progress",
+            payload: {
+              node_kind: "section",
+              node_id: sectionId,
+              marks: [{ student_id: studentId, status: "in_progress", client_op_id: clientOpId }],
+              marked_at: markedAt.toISOString(),
+            },
+            client_timestamp: markedAt.toISOString(),
+          },
+        ],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.data.results[0].status).toBe("success");
+    expect(res.body.data.results[0].error).toBeUndefined();
+    expect(res.body.data.results[0].server_id).toBeTruthy();
+
+    const row = await pool.query<{
+      status: string;
+      client_marked_at: Date | null;
+      client_op_id: string | null;
+      certified_at: Date | null;
+    }>(
+      `select status, client_marked_at, client_op_id, certified_at from student_course_progress
+        where student_id = $1 and section_id = $2 and subsection_id is null`,
+      [studentId, sectionId],
+    );
+    expect(row.rows[0]?.status).toBe("in_progress");
+    expect(row.rows[0]?.client_marked_at).toBeTruthy();
+    expect(row.rows[0]?.client_op_id).toBe(clientOpId);
+    expect(row.rows[0]?.certified_at).toBeNull();
+
+    // sync_operations replay record (CLAUDE.md offline §5) — required, not
+    // a read-only lookup table.
+    const syncRow = await pool.query<{ status: string; op_kind: string }>(
+      `select status, op_kind from sync_operations where submission_op_id = $1`,
+      [opId],
+    );
+    expect(syncRow.rows[0]?.status).toBe("success");
+    expect(syncRow.rows[0]?.op_kind).toBe("course_progress");
+  });
+
   it("2 — certify with no prior completion soft-transitions to completed+certified", async () => {
     const superAdmin = await loginAs("super_admin");
     const shikshak = await loginAs("shikshak");

@@ -769,6 +769,17 @@ describe("courses step 3 — Punya awards", () => {
     const studentId = kid.rows[0]!.id;
     const beforeBal = await balanceOf(studentId);
     const beforeTx = await txCount(studentId, "course_section_certified");
+    const auditCountFor = async (): Promise<number> => {
+      const r = await pool.query<{ n: string }>(
+        `select count(*)::text as n from audit_logs
+          where entity_kind = 'course_certification'
+            and metadata->>'student_id' = $1
+            and metadata->>'node_id' = $2`,
+        [studentId, sectionIds[0]],
+      );
+      return Number(r.rows[0]!.n);
+    };
+    const beforeAudit = await auditCountFor();
 
     await request(app)
       .post(`/v1/courses/nodes/${sectionIds[0]}/progress`)
@@ -791,6 +802,22 @@ describe("courses step 3 — Punya awards", () => {
     expect(midBal - beforeBal).toBe(totalAwarded);
     expect(await txCount(studentId, "course_section_certified")).toBe(beforeTx + 1);
 
+    // CU18 — every certify writes an audit entry (entityKind: 'course_certification').
+    // Removing writeAudit from the certify path must break this, not just the
+    // reset/publish paths that already asserted it.
+    const afterFirstCertifyAudit = await auditCountFor();
+    expect(afterFirstCertifyAudit).toBe(beforeAudit + 1);
+    const auditRow = await pool.query<{ action: string; summary: string | null }>(
+      `select action, summary from audit_logs
+        where entity_kind = 'course_certification'
+          and metadata->>'student_id' = $1
+          and metadata->>'node_id' = $2
+        order by created_at desc limit 1`,
+      [studentId, sectionIds[0]],
+    );
+    expect(auditRow.rows[0]?.action).toBe("approve");
+    expect(auditRow.rows[0]?.summary).toMatch(/certified/i);
+
     const replay = await request(app)
       .post(`/v1/courses/nodes/${sectionIds[0]}/certify`)
       .set(auth(shikshak.token))
@@ -803,6 +830,8 @@ describe("courses step 3 — Punya awards", () => {
     expect(replay.body.data.course_points_awarded).toBe(courseAwarded);
     expect(await balanceOf(studentId)).toBe(midBal);
     expect(await txCount(studentId, "course_section_certified")).toBe(beforeTx + 1);
+    // Idempotent replay is an early-return before writeAudit — no second row.
+    expect(await auditCountFor()).toBe(afterFirstCertifyAudit);
   });
 
   it("certify final section → section award AND course bonus with trigger section in key", async () => {
@@ -1432,11 +1461,30 @@ describe("courses step 6 — delete guard, undelete, archive-from-draft, publish
       .set(auth(superAdmin.token))
       .expect(200);
 
+    // CU4/CU18 — the draft→active transition is an explicit audited transition,
+    // not a field edit. Removing writeAudit from publishCourse breaks this.
+    const auditAfterPublish = await pool.query<{ n: string }>(
+      `select count(*)::text as n from audit_logs
+        where entity_kind = 'course' and entity_id = $1 and action = 'update'
+          and summary ilike 'published course%'`,
+      [courseId],
+    );
+    expect(Number(auditAfterPublish.rows[0]!.n)).toBe(1);
+
     const again = await request(app)
       .post(`/v1/admin/courses/${courseId}/publish`)
       .set(auth(superAdmin.token));
     expect(again.status).toBe(409);
     expect(again.body.error.message).toMatch(/already published/i);
+
+    // The rejected re-publish attempt must not mint a second audit row.
+    const auditAfterRejectedRepublish = await pool.query<{ n: string }>(
+      `select count(*)::text as n from audit_logs
+        where entity_kind = 'course' and entity_id = $1 and action = 'update'
+          and summary ilike 'published course%'`,
+      [courseId],
+    );
+    expect(Number(auditAfterRejectedRepublish.rows[0]!.n)).toBe(1);
   });
 });
 
@@ -1668,6 +1716,116 @@ describe("courses — C6/H6 regressions (already fixed elsewhere; tests confirme
       .set(auth(sanchalak.token))
       .send({ student_id: studentId });
     expect(certify.status).toBe(200);
+  });
+});
+
+describe("courses — student persona + CU3 city scoping (block 12 test-gap closure)", () => {
+  it("student sees their own published, in-city course via GET /v1/courses (closes the 0-student-login gap)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const student = await loginAs("student");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const list = await request(app).get("/v1/courses").set(auth(student.token));
+    expect(list.status).toBe(200);
+    const ids = (list.body.data.items as Array<{ id: string }>).map((c) => c.id);
+    expect(ids).toContain(courseId);
+  });
+
+  it("student can write and read their own progress, but not another student's (Q4 self-write scope)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const student = await loginAs("student");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const own = await pool.query<{ id: string }>(
+      `select id from students
+        where user_id = $1 and status = 'active' and deleted_at is null
+        limit 1`,
+      [student.user.id],
+    );
+    expect(own.rows[0]?.id).toBeTruthy();
+    const ownStudentId = own.rows[0]!.id;
+
+    const selfWrite = await request(app)
+      .post(`/v1/courses/nodes/${sectionIds[0]}/progress`)
+      .set(auth(student.token))
+      .send({ student_id: ownStudentId, status: "in_progress" });
+    expect(selfWrite.status).toBe(200);
+
+    const tree = await request(app)
+      .get(`/v1/courses/${courseId}/tree`)
+      .query({ student_id: ownStudentId })
+      .set(auth(student.token));
+    expect(tree.status).toBe(200);
+    expect(tree.body.data.sections[0].status).toBe("in_progress");
+
+    // A different student's row is out of the logged-in student's own scope,
+    // regardless of who else may be allowed to write it (ERR_COURSE_STUDENT_OUT_OF_SCOPE).
+    const other = await pool.query<{ id: string }>(
+      `select s.id from students s
+        where s.status = 'active' and s.deleted_at is null and s.id <> $1
+        limit 1`,
+      [ownStudentId],
+    );
+    expect(other.rows[0]?.id).toBeTruthy();
+    const otherWrite = await request(app)
+      .post(`/v1/courses/nodes/${sectionIds[0]}/progress`)
+      .set(auth(student.token))
+      .send({ student_id: other.rows[0]!.id, status: "in_progress" });
+    expect(otherWrite.status).toBe(403);
+    expect(otherWrite.body.error.code).toBe("ERR_COURSE_STUDENT_OUT_OF_SCOPE");
+  });
+
+  it("CU3: a city-B course never appears for a city-A student across list and tree (mumbaiCityId's cities[0] fallback previously made every test course land in-city)", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const parent = await loginAs("parent");
+    const cityA = await mumbaiCityId(superAdmin.token);
+
+    const geo = await request(app).get("/v1/admin/geography").set(auth(superAdmin.token));
+    expect(geo.status).toBe(200);
+    const otherCity = (geo.body.data.cities as Array<{ id: string }>).find((c) => c.id !== cityA);
+    expect(otherCity).toBeTruthy();
+    const cityB = otherCity!.id;
+
+    const { courseId } = await publishableCourse(superAdmin.token, cityB);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    // The seeded parent's child lives in cityA (Mumbai) — must not see cityB's course.
+    const kid = await pool.query<{ id: string }>(
+      `select s.id from students s
+        join users u on u.id = s.parent_id
+       where u.phone = '+919800000006' and s.status = 'active' and s.deleted_at is null
+       limit 1`,
+    );
+    expect(kid.rows[0]?.id).toBeTruthy();
+    const studentId = kid.rows[0]!.id;
+
+    const list = await request(app)
+      .get("/v1/courses")
+      .query({ student_id: studentId })
+      .set(auth(parent.token));
+    expect(list.status).toBe(200);
+    const ids = (list.body.data.items as Array<{ id: string }>).map((c) => c.id);
+    expect(ids).not.toContain(courseId);
+
+    // CU3 fails closed as not-found — no existence leak across cities.
+    const tree = await request(app)
+      .get(`/v1/courses/${courseId}/tree`)
+      .query({ student_id: studentId })
+      .set(auth(parent.token));
+    expect(tree.status).toBe(404);
   });
 });
 

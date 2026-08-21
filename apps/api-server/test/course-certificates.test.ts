@@ -240,6 +240,113 @@ describe("course certificates step 4", () => {
     expect(pdfStreamContains(bilingual, "NotoSansDevanagari")).toBe(true);
   });
 
+  it("1b — a female Guruji (Didi) honorific reaches the real scope_snapshot, not just the pure honorificForGender() function", async () => {
+    // Every other integration test in this file runs ensureShikshakGender("male")
+    // — a regression hardcoding "Guruji" into loadCertifierContext would pass
+    // every one of them. This is the only integration run on the female branch.
+    await ensureShikshakGender("female");
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const { studentId } = await shikshakStudent();
+    const ids = await completeAndCertify(shikshak.token, sectionIds[0]!, studentId);
+    expect(ids.length).toBeGreaterThanOrEqual(1);
+
+    const row = await pool.query<{
+      id: string;
+      scope_snapshot: { honorific_en?: string; honorific_hi?: string };
+    }>(
+      `select id, scope_snapshot from course_certificates
+         where student_id = $1 and section_id = $2`,
+      [studentId, sectionIds[0]],
+    );
+    expect(row.rows[0]).toBeTruthy();
+    expect(row.rows[0]!.scope_snapshot.honorific_en).toBe("Certified by Didi");
+    expect(row.rows[0]!.scope_snapshot.honorific_hi).toBe("दीदी द्वारा प्रमाणित");
+
+    const key = await waitForStorageKey(row.rows[0]!.id);
+    const uploadsDir = process.env.UPLOADS_DIR ?? path.join(process.cwd(), "uploads");
+    const buf = await readFile(path.join(uploadsDir, ...key.split("/")));
+    expect(buf.subarray(0, 4).toString("ascii")).toBe("%PDF");
+    expect(pdfStreamContains(buf, "NotoSansDevanagari")).toBe(true);
+
+    // Restore the shared seed shikshak to the gender the rest of this file
+    // (and courses.test.ts, which shares the same seeded phone) assumes.
+    await ensureShikshakGender("male");
+  });
+
+  it("2 — a certified sub-section awards 0 Punya and issues no course_certificates row (CU21/CU24 — only section/course kinds are certificate-worthy)", async () => {
+    await ensureShikshakGender("male");
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId, {
+      sections: 1,
+    });
+    const sectionId = sectionIds[0]!;
+
+    const sub = await request(app)
+      .post(`/v1/courses/sections/${sectionId}/subsections`)
+      .set(auth(superAdmin.token))
+      .send({ title_en: "Leaf", title_hi: "पत्ती" });
+    expect(sub.status).toBe(200);
+    const subsectionId = sub.body.data.id as string;
+
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const { studentId } = await shikshakStudent();
+    const beforeBal = await pool.query<{ total_points: number }>(
+      `select coalesce(total_points, 0)::int as total_points from punya_balances where student_id = $1`,
+      [studentId],
+    );
+
+    await request(app)
+      .post(`/v1/courses/nodes/${subsectionId}/progress`)
+      .set(auth(shikshak.token))
+      .send({ student_id: studentId, status: "completed" })
+      .expect(200);
+    const certify = await request(app)
+      .post(`/v1/courses/nodes/${subsectionId}/certify`)
+      .set(auth(shikshak.token))
+      .send({ student_id: studentId });
+    expect(certify.status).toBe(200);
+    expect(certify.body.data.section_points_awarded).toBe(0);
+    expect(certify.body.data.course_points_awarded).toBe(0);
+    expect(certify.body.data.certificate_ids).toEqual([]);
+
+    const afterBal = await pool.query<{ total_points: number }>(
+      `select coalesce(total_points, 0)::int as total_points from punya_balances where student_id = $1`,
+      [studentId],
+    );
+    expect(afterBal.rows[0]?.total_points ?? 0).toBe(beforeBal.rows[0]?.total_points ?? 0);
+
+    // The progress row itself IS starred (CU17 — sub-sections can be certified too)...
+    const progressRow = await pool.query<{ certified_at: Date | null }>(
+      `select certified_at from student_course_progress
+        where student_id = $1 and subsection_id = $2`,
+      [studentId, subsectionId],
+    );
+    expect(progressRow.rows[0]?.certified_at).toBeTruthy();
+
+    // ...but no certificate row exists anywhere for this student/course — CU24's
+    // kind IN ('section','course') means a sub-section never mints one.
+    const certs = await pool.query<{ n: string }>(
+      `select count(*)::text as n from course_certificates
+        where student_id = $1 and course_id = $2`,
+      [studentId, courseId],
+    );
+    expect(certs.rows[0]!.n).toBe("0");
+  });
+
   it("3 — all sections → exactly one course cert; zero-section course → none", async () => {
     await ensureShikshakGender("male");
     const superAdmin = await loginAs("super_admin");
