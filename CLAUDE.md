@@ -328,6 +328,330 @@ Resource-nested and hyphenated. These are the only attendance/session routes —
 
 ---
 
+## Courses module — binding decisions (resolved 2026-08-07, folded in 2026-08-21)
+
+These are decisions, not options. Implement exactly as written. They override any conflicting text
+in `SPEC.md` and supersede `SPEC.md` §5.13, §6.16 and Step 19 where they conflict. Full rationale
+and worked examples live in `docs/CURRICULUM_ENHANCEMENT.md` (the rationale archive, per its own
+header) — read it when this section is silent. CU31 (offline sync) already lives in the
+**"Offline sync — canonical model"** section above; the `course_progress`/`course_certification`
+queue entries, drain order and conflict rules there are this rule's implementation — do not
+duplicate it here.
+
+Gaps between these rules and the shipped code are tracked in
+`docs/reviews/COURSES_MODULE_REVIEW.md` and closed via `docs/reviews/COURSES_FIX_CURSOR_PROMPTS.md`
+— these rules state the target, not a claim that every line of code matches it yet.
+
+### CU1 — Rename to courses; three levels, frozen
+`course_templates` (one-time copy, CU7) → `courses` → `course_sections` → `course_subsections`.
+Exactly three levels — do not add a fourth. `curriculum_level_enum` keeps its pgEnum name; renaming
+it is churn with no payoff.
+
+### CU2 — Courses are never assigned to a batch or centre
+No `course_assignments` table, no `batches.course_id`, no course↔batch link of any kind. A course is
+a body of material; a student's relationship to it is their own progress rows and nothing else.
+
+### CU3 — Course visibility
+A student sees a course when **all** of: `courses.status = 'active'` (CU4); `courses.city_id IS
+NULL` (national) OR matches the student's centre's city; and if `courses.kind = 'msv'`,
+`students.msv_status = 'approved'` (reads `students.msv_status`, not `msv_enrolments` — the same
+predicate `msvCurriculumByStudent()` already uses elsewhere). No age-group targeting —
+`course_templates.age_group` is authoring metadata only and is never copied onto derived courses or
+used to filter visibility. Parents see every child's courses; a student in student-view (8+, Q4)
+sees their own.
+
+### CU4 — Course lifecycle
+`courses.status` is `'draft' | 'active' | 'archived'`, default `'draft'`. `draft → active` is an
+explicit audited transition (not a field edit), rejected unless `name_hi` is set (CU5),
+`academic_year` is set, the course has ≥1 section, and every section has `punya_points` explicitly
+set (CU22). Once `'active'`, a course can only move to `'archived'`, never back to `'draft'`.
+Archiving removes the course from CU3 visibility for new work but never touches what a student
+already earned — progress, Punya, certificates and CU27 verification all survive, and an archived
+course still appears in the student's own history and CU30 reports. The archive confirm must state
+how many students currently have in-progress, uncertified work on it.
+
+### CU5 — Courses and templates are bilingual
+`name_en` NOT NULL, `name_hi` nullable (CU4's publish gate makes it effectively required before a
+course can go live — nullable only so the migration over live rows is possible without violating the
+Devanagari rule).
+
+### CU6 — PATCH and DELETE for courses
+`PATCH /v1/admin/courses/:id` and `DELETE /v1/admin/courses/:id` (soft, per CU29) must exist and be
+reachable — a course must be renameable, re-kindable, re-yearable and archivable after creation.
+
+### CU7 — Templates are a one-time copy; there is no drift
+Deriving a course from a template snapshots it: sections and sub-sections are copied,
+`courses.template_id` records provenance, and the two are independent from that moment forward.
+Editing or deleting a template never touches a derived course — no sync, no propagation, no override
+flags. Templates are authored and derived by `super_admin` only.
+
+### CU8 — Q2 resolution: MSV authoring is super_admin only
+Creating or editing a `kind='msv'` course, or any course with `city_id IS NULL`, is `super_admin`
+only, enforced in the **service layer**. This closes two gaps: `kind='msv'` must be gated even when
+the caller supplies an in-scope `city_id`, and section/sub-section authoring under a **national**
+course is super_admin only — Q2 wins over any SPEC list that also allows `state_admin` there.
+
+### CU9 — One row per student per node
+ONE `student_course_progress` row per `(student, node)` — exactly one of `section_id`/`subsection_id`
+is set (`num_nonnulls = 1` CHECK), `certified_at`/`certified_by` are set together or not at all, and
+`certified_at IS NOT NULL` requires `status = 'completed'`. Uniqueness is **two partial indexes**
+(one per node type), never one composite — Postgres treats NULLs as distinct, so a composite index
+over a nullable column silently stops constraining. `client_marked_at` is the client's clock (same
+reasoning as AT26) and is what CU31's conflict rule compares — never server receipt time.
+
+### CU10 — Every write is an UPSERT, with the index predicate repeated
+Every progress write is `ON CONFLICT … DO UPDATE`, never read-then-insert. Because the unique indexes
+are partial, the conflict target must repeat the predicate (`target` + `targetWhere` in Drizzle) or
+it fails at runtime with "no unique or exclusion constraint matching the ON CONFLICT specification."
+
+### CU11 — Status has three values; `mastered` is dead
+`not_started ⇄ in_progress ⇄ completed` ("to be started" in the UI). `start` stamps `started_at`
+(first time only); `close` stamps `completed_at`. Movement is free in both directions while
+`certified_at IS NULL`, for every actor including parent and student. `'mastered'` is never written —
+certification (`certified_at`/`certified_by`, CU17) is what `mastered` would have meant; the enum
+value stays reserved (dropping a pgEnum value requires recreating the type) but writing it is a bug.
+
+### CU12 — Certified rows are frozen for everyone, at both layers
+Once `certified_at IS NOT NULL`, any write that would change `status` returns `409
+ERR_COURSE_NODE_CERTIFIED` for parent, student, shikshak and sanchalak alike. Only the CU19
+super_admin correction path may move it, clearing `certified_at`/`certified_by` in the same
+statement. The `certified_requires_completed` CHECK (CU9) is the net — if a service guard is missed,
+the write 500s (23514) instead of the designed 409. **Both layers are required.**
+
+### CU13 — Bulk status write is the primary path for a shikshak
+`POST /v1/courses/nodes/:nodeId/progress/bulk` — exactly one of `batch_id`/`student_ids` (both or
+neither is 422). `batch_id` is a student-selector only (courses have no batch link, CU2); it resolves
+to the batch's active roster and never includes deactivated students (Q11). Every resolved student
+must pass `inBatchWriteScope(scope, student.batch_id, student.centre_id)` — same gate as CU21 — and
+a `student_ids` list containing anyone out of scope is rejected whole with 403, never partially
+applied.
+
+### CU14 — Bulk advances, never regresses
+A bulk write applies to a student only if the new status is strictly further along CU11 than their
+current one. Regression requires an explicit `reset: true` on a separate route, shikshak+ only, with
+an audited entry **per affected student** — without it, one bulk tap silently walks a whole roster
+backwards with no trace. Certified rows (`certified_at IS NOT NULL`) are excluded from every bulk
+write, `reset` included (CU12). Single-student self-correction stays free (CU11) — this rule governs
+the bulk route only.
+
+### CU15 — Silence is not regression
+A student with no progress row for a node is `not_started` by absence, not by assertion. Never
+backfill `not_started` rows on course publish or enrolment — a row exists only once someone has acted
+on that node. Mirrors AT6.
+
+### CU16 — Section status is stored AND derived; divergence is information
+A section carries its own declared progress row (CU9) *and* a derived roll-up over that student's
+sub-section rows within it — the roll-up is `fn_course_progress` (CU28) scoped to one section, never
+a second formula. Both are surfaced, on every surface that shows section progress. A section declared
+`completed` while its sub-sections sit at `not_started` is **not an error** — it is information for
+the Sanchalak, exactly as AT32 treats a session marked without check-in. Never auto-correct one from
+the other, and never block the declaration because the roll-up disagrees. A section with zero
+sub-sections has a derived roll-up of `NULL`, not `0` and not `100` — this belongs in the function
+itself, not in one caller.
+
+### CU17 — The star requires `completed`
+Certification is an orthogonal flag (`certified_at`/`certified_by`), not a status — `status` stays
+`completed`. A node must be `completed` before it can be certified; online, a request against a node
+that isn't returns `409 ERR_COURSE_NODE_NOT_COMPLETE`. **Offline soft-transition** (AT32 pattern):
+when a certification arrives via `/v1/sync/batch` and the node isn't yet `completed`, the certify
+transaction sets `status`, `completed_at`, `certified_at` and `certified_by` in one statement, same
+reasoning as AT8/AT32. Both sections and sub-sections can be starred; sub-section stars never carry
+Punya (CU21). The star's label names the certifying shikshak with the correct honorific from
+`users.gender` — male → "Certified by Guruji"/"गुरुजी द्वारा प्रमाणित", female → "Certified by
+Didi"/"दीदी द्वारा प्रमाणित", **NULL or other → "Certified"/"प्रमाणित"**. The third branch is required,
+not optional — `users.gender` is nullable with no backfill.
+
+### CU18 — Certification is irreversible; every certification is audited
+No revoke route. Final for shikshak, sanchalak, city_admin and state_admin. Every certify writes an
+audit entry (`entityKind: 'course_certification'`) — same rule extends to CU6 PATCH/DELETE, CU4
+publish, CU7 derive, and any edit to `course_sections.punya_points`. Certification is per-student with
+no bulk route; the client shows an explicit confirm (student name, node title, the actual **clamped**
+Punya value) before the write — bulk the reversible thing (CU13), make the irreversible thing
+deliberate, same posture as AT25's `force_cancel`.
+
+### CU19 — The super_admin correction path
+Reachable only from the super_admin console, service-layer role-checked (not just the route). It, in
+one transaction: (1) increments `student_course_progress.revision`; (2) clears
+`certified_at`/`certified_by`, optionally regressing `status`; (3) writes a reversing
+`punya_transactions` row with its own idempotency key and `source_revision = revision` (AT18
+reverse-only — without its own key, running the correction twice double-reverses); (4) **only when
+the correction is on a `section` node and the course was complete**, reverses the course bonus too
+(CU23) — a sub-section correction touches no course-level state, because sub-sections carry no Punya
+under CU21 and are not part of CU25's course-complete predicate; (5) sets `voided_at`/`voided_by` on
+any issued section certificate, and on the course certificate too if the course was complete (CU24) —
+voided certificates are never deleted, CU27 reports them as `void`; a later correct re-certification
+clears the void fields and re-issues rather than leaving the certificate voided forever; (6) writes
+two audit entries — one for the correction, one naming the acting super_admin from the real caller,
+never hardcoded.
+
+### CU20 — Deleting a certified node is blocked
+Soft-deleting a `course_section`/`course_subsection` is rejected with `409
+ERR_COURSE_NODE_HAS_CERTIFICATIONS` if any progress row for it has `certified_at IS NOT NULL` —
+archive the course instead (CU4). This is a **service-layer precondition inside the delete
+transaction**, checked before the delete, not a database FK — CU29 makes deletion soft, so `ON DELETE
+RESTRICT` never fires on it. The same guard applies to deleting the parent **course** (CU29): a course
+with certified sections cannot be deleted, only archived.
+
+### CU21 — Punya is minted by certification alone
+Start/close/reopen any node, by anyone: 0 Punya. Sub-section certified: 0 Punya (recognition without
+currency). Section certified: `course_sections.punya_points × city multiplier`,
+`source_entity_kind='course_section'`. Course fully certified (CU25): `courses.punya_points × city
+multiplier`, `source_entity_kind='course'` — a milestone award (AT22's repeating-streak spirit) that
+fires from the same transaction as the final section's certification, never a cron sweep. Certification
+scope gates on `inBatchWriteScope(scope, student.batch_id, student.centre_id)` — identical to niyam
+approve/reject (Q12) — resolving `batchIds === null` to centre membership so sanchalak+ keep whole-
+centre reach with no special case. **Never ship the shikshak certification gate without the
+sanchalak's mobile certification screen in the same release** — an unstaffed batch's queue strands
+otherwise (Q12).
+
+### CU22 — Points are authored; the multiplier is `punya_configs`
+`course_sections.punya_points` (0–1000) and `courses.punya_points` (0–2000) are authored by the
+city_admin at design time — authored data, not a hardcoded constant (AT21). `courses.punya_points = 0`
+is legitimate ("certificate, no bonus"); a section's `punya_points` is a CU4 publish precondition
+precisely because 0 there silently disables the main award path. The multiplier lives in the existing
+`punya_features`/`punya_configs` tables (`key`/`feature_key` = `'course_section_certified'` |
+`'course_completed'`), stored as **integer percent** (`100` = 1×, `250` = 2.5×) — never a numeric
+multiplier column. `award = ROUND(punya_points * punya_configs.points / 100.0)`, clamped to
+`punya_features.min_points…max_points`, resolved at award time (city-scoped, global fallback,
+Redis-cached per AT21) and snapshotted into the transaction row. **A missing or inactive
+`punya_features` row means the award is 0, never unclamped** — the clamp must not be skippable just
+because `max_points` defaults to 0. Mechanics otherwise follow AT20 unchanged: guarded insert `ON
+CONFLICT DO NOTHING … RETURNING`, balance moves only by the amount actually returned.
+
+### CU23 — Idempotency keys
+```
+section award:     course_section_certified:{section_id}:{student_id}:{revision}
+section reversal:  course_section_certified:reverse:{section_id}:{student_id}:{revision}
+course  award:     course_completed:{course_id}:{student_id}:{trigger_section_id}:{revision}
+course  reversal:  course_completed:reverse:{course_id}:{student_id}:{trigger_section_id}:{revision}
+```
+`revision` is `student_course_progress.revision` (CU9). The section key needs the revision because
+CU19 makes re-certification after a correction reachable — without it the guarded insert returns
+nothing and the student gets a star with zero points (the AT17 failure). The course key needs the
+**triggering section** because course completion recurs (AT22's repeating-milestone problem): a
+correction can de-complete a course and a later certification can re-complete it, keyed on whichever
+section triggered that completion.
+
+### CU24 — Certificate schema
+`course_certificates`: `kind IN ('section','course')`, `section_id` set iff `kind='section'`,
+`verification_code char(12)` (Crockford base32, CSPRNG, ~60 bits, retry on collision), `voided_at`/
+`voided_by` nullable, `storage_key` NULL until the PDF worker finishes (NULL = "issuing", not
+broken). Unique per `(student_id, section_id)` and `(student_id, course_id)` (partial indexes on
+`section_id IS NOT NULL`/`IS NULL`).
+
+### CU25 — What "fully certified" means, and certificates are point-in-time
+A section certificate issues when that section's own progress row is certified (not when its
+sub-sections are). A course certificate issues when every non-deleted section is certified — a
+course with zero sections issues nothing (the predicate would otherwise be vacuously true) — in the
+same transaction as the triggering section's certification, alongside the CU21 course bonus.
+`scope_snapshot` records the node ids/titles the certificate covered **at issue time**; adding a
+section to an active course later does not void or re-issue anything, and CU27 verifies against the
+snapshot, not the live tree. This is why CU4 forbids `active → draft` but permits editing an active
+course — coverage (CU28) may drop for every student; that is honest and expected.
+
+### CU26 — Generation
+`PdfBuilder.createBilingual()` (not `.create()`, which is English-first/WinAnsi and cannot render
+Devanagari) — the same builder the monthly centre report uses. No Handlebars, no Puppeteer. Queued on
+the existing `report.generation` queue with a payload discriminator — do not add a queue name.
+Signed URL with TTL, never a public URL.
+
+### CU27 — Certificates verify live and leak nothing
+`GET /v1/certificates/verify/:code` is public, rate-limited per **IP** (not a client-controlled
+header) in Redis, and returns only: validity (`valid`/`void`/`not_found`), the course/section title,
+issue date, and the student's **first name only** — never full name, DOB, centre or any id. This rule
+is scoped to the public verification endpoint; the certificate **PDF** artefact handed to the family
+prints the student's real full name. A PDF in a parent's hand is a rendering of state, not the state
+itself — the only thing that makes CU19's correction path survivable, since a voided certificate
+would otherwise still circulate looking valid.
+
+### CU28 — One canonical progress calculation, in SQL
+ONE PostgreSQL function, `fn_course_progress(p_student_id, p_course_id, p_section_id DEFAULT NULL)` —
+not a TypeScript service helper; the PDF worker, mobile, the admin panel and CU16's section roll-up
+all read from this one place. Leaf nodes = all non-deleted `course_subsections`, plus non-deleted
+`course_sections` with zero non-deleted sub-sections (a section-only course must still report
+non-NULL progress). `coverage = leaf_reached / leaf_total`, `mastery = leaf_certified / leaf_reached`
+(NULL, not 0, when `leaf_reached = 0`) — both `::numeric` cast (int/int truncates), both via a real
+`LEFT JOIN` (CU15: untouched nodes have no row), both `COUNT(*) FILTER (WHERE …)` never `COUNT(expr IN
+(…))`, and the leaf-certified filter applied on the join predicate (CU9 puts sections and
+sub-sections in the same table — an unrestricted count pulls certified sections into a
+leaf-denominated numerator). Excluded everywhere: soft-deleted nodes (CU29); students from
+`deactivated_at` forward, prior history retained (Q11). No materialised view — the frozen MV list
+above is not extended for this.
+
+### CU29 — Soft delete; RESTRICT is the net, not the guard
+`courses`, `course_sections`, `course_subsections` and `course_templates` carry `deleted_at`. Every
+CASCADE FK in the tree (including `student_id`) becomes RESTRICT — the `student_id` cascade
+especially, since it contradicts Q11's never-hard-delete rule by assuming a delete that must never
+happen. RESTRICT alone protects nothing once deletion is soft (the FK only fires on a hard `DELETE`)
+— **CU20's service-layer precondition is the actual guard**; the FK exists only so a stray hard
+delete can't do the damage either. Undelete (`deleted_at = NULL`) is admin-only, audited, and restores
+the node plus its progress rows.
+
+### CU30 — Progress report gains a versioned curriculum block
+`progress_reports.snapshot` gains a `snapshot_version` column and a `courses: [{ course_id, coverage,
+mastery, section_certified, section_total, certified_nodes[] }]` block, read from `fn_course_progress`
+(CU28) — never recomputed in the report worker. Readers branch on `snapshot_version`; pre-change
+snapshots are version 1 with no `courses` key.
+
+### CU32 — Error codes
+`ERR_COURSE_NODE_CERTIFIED` (409, CU12), `ERR_COURSE_NODE_NOT_COMPLETE` (409, CU17 online path),
+`ERR_COURSE_NODE_HAS_CERTIFICATIONS` (409, CU20), `ERR_COURSE_NODE_NOT_FOUND` (404),
+`ERR_COURSE_STUDENT_OUT_OF_SCOPE` (403, CU13/CU21/parent-student scope),
+`ERR_COURSE_NOT_PUBLISHABLE` (422, CU4). Never a raw string.
+
+### CU33 — Manual archive, with a staleness nudge
+No automatic archiving, no year filter — a city_admin decides, because archiving removes a course
+from every student's view. The admin course list carries a persistent banner listing active courses
+whose `academic_year` is older than the current one (one-tap archive per course), plus a secondary
+warning once a city exceeds 15 active courses. The archive confirm states how many students have
+in-progress uncertified work on that course (CU4).
+
+---
+
+## Courses — frozen route table
+
+Resource-nested. These are the only course routes — do not invent alternatives. Roles are the
+minimum; a higher role can always do what a lower role can (role hierarchy above).
+
+| Method | Route | Roles / notes |
+|---|---|---|
+| POST · PATCH · DELETE | `/v1/admin/course-templates[/:id]` | super_admin (CU7) |
+| POST | `/v1/admin/course-templates/:id/derive` | super_admin — snapshot copy (CU7) |
+| POST | `/v1/admin/courses` | city_admin; super_admin only for msv / `city_id IS NULL` (CU8) |
+| PATCH · DELETE | `/v1/admin/courses/:id` | city_admin — soft delete (CU6, CU29) |
+| POST | `/v1/admin/courses/:id/publish` | city_admin — draft → active, gated + audited (CU4) |
+| GET | `/v1/admin/courses?kind=&status=` | shikshak |
+| GET | `/v1/admin/courses/:id/tree` | shikshak |
+| POST | `/v1/courses/:courseId/sections` | city_admin — body includes `punya_points` (CU22) |
+| PATCH · DELETE | `/v1/courses/sections/:sectionId` | city_admin (CU20 guard) |
+| POST | `/v1/courses/:courseId/sections/reorder` | city_admin |
+| POST | `/v1/courses/sections/:sectionId/subsections` | city_admin |
+| PATCH · DELETE | `/v1/courses/subsections/:subsectionId` | city_admin (CU20 guard) |
+| POST | `/v1/courses/sections/:sectionId/subsections/reorder` | city_admin |
+| GET | `/v1/courses` | any authenticated — active + city/national + MSV gate (CU3) |
+| GET | `/v1/courses/:id/tree?student_id=` | any authenticated — student-facing read path with status + star per node |
+| GET | `/v1/students/:id/course-progress?course_id=` | owner or in-scope admin |
+| POST | `/v1/courses/nodes/:nodeId/progress` | shikshak, sanchalak, parent (own child), student (self, 8+) |
+| POST | `/v1/courses/nodes/:nodeId/progress/bulk` | shikshak (CU13) |
+| POST | `/v1/courses/nodes/:nodeId/progress/reset` | shikshak — audited (CU14) |
+| POST | `/v1/courses/nodes/:nodeId/certify` | shikshak — batch-bound (CU21) |
+| GET | `/v1/students/:id/certificates` | owner or in-scope admin |
+| GET | `/v1/certificates/verify/:code` | public, rate-limited (CU27) |
+| POST | `/v1/sync/batch` | offline transport for `course_progress`/`course_certification` (CU31, offline section above) |
+
+`:nodeId` resolves against `course_sections` then `course_subsections`; matching neither is `404
+ERR_COURSE_NODE_NOT_FOUND`. Both core write bodies are per-student (`student_id` in the body, not the
+path — a parent has more than one child):
+```ts
+POST /v1/courses/nodes/:nodeId/progress   { student_id, status, note?, client_op_id, marked_at }
+POST /v1/courses/nodes/:nodeId/certify    { student_id, certification_note?, client_op_id, certified_at }
+```
+A `parent` writes only for their own children; a `student` (student-view, 8+ per Q4) only for
+themselves — never a sibling (`403 ERR_COURSE_STUDENT_OUT_OF_SCOPE`), and never a certified row
+(CU12).
+
+---
+
 ## Cron table (frozen — single list)
 
 Source of truth: `CRON_EXPRESSIONS` in `apps/jp-shared/src/constants.ts` (`@jp/shared/constants`). Times are IST (`Asia/Kolkata` via `node-cron`, not `@nestjs/schedule` — Nest schedule is **NOT YET IMPLEMENTED**).
@@ -938,4 +1262,4 @@ SMS_MONTHLY_CAP_INR             # daily SMS spend cap
 
 ---
 
-*Last updated: August 2026 — Stack reconciled to Express/`apps/api-server` + `QUEUE_NAMES`/`CRON_EXPRESSIONS`; offline sync; AT1–AT32; CLAUDE.md > SPEC.md*
+*Last updated: August 2026 — Stack reconciled to Express/`apps/api-server` + `QUEUE_NAMES`/`CRON_EXPRESSIONS`; offline sync; AT1–AT32; CU1–CU30/CU32/CU33 (CU31 in the offline section); CLAUDE.md > SPEC.md*
