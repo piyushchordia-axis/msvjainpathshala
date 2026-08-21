@@ -1054,7 +1054,23 @@ router.post(
       for (const certId of result.certificate_ids) {
         await enqueueCertificatePdf(certId);
       }
-      ok(res, result);
+      // L1 — course_award_key is the internal Punya idempotency key; it's an
+      // implementation detail (table/column shape), not something a client
+      // needs or should see.
+      ok(res, {
+        progress_id: result.progress_id,
+        section_id: result.section_id,
+        subsection_id: result.subsection_id,
+        status: result.status,
+        certified_at: result.certified_at,
+        revision: result.revision,
+        section_points_awarded: result.section_points_awarded,
+        course_points_awarded: result.course_points_awarded,
+        section_transaction_id: result.section_transaction_id,
+        course_transaction_id: result.course_transaction_id,
+        certificate_ids: result.certificate_ids,
+        applied: result.applied,
+      });
     } catch (err) {
       if (!handleErr(res, err)) throw err;
     }
@@ -1084,6 +1100,7 @@ router.post(
         nodeId: String(req.params.nodeId),
         studentId: body.student_id,
         actorId: req.authUser!.id,
+        actorRole: req.authUser!.role as Role,
         status: body.status,
         ip: req.ip ?? null,
       });

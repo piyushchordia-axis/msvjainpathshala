@@ -6,6 +6,7 @@ import request from "supertest";
 import { pool } from "@workspace/db";
 import app from "../src/app";
 import { loginAs, auth } from "./helpers";
+import { correctCourseCertification } from "../src/services/course-certify";
 
 /** Courses planted by this file, removed in afterAll. */
 const plantedCourseIds: string[] = [];
@@ -507,7 +508,7 @@ describe("courses step 3 — progress scope & bulk", () => {
 });
 
 describe("courses step 3 — Punya awards", () => {
-  it("certify → one transaction and balance delta; replay awards nothing", async () => {
+  it("certify → one transaction and balance delta; replay reuses the award, mints nothing new", async () => {
     const superAdmin = await loginAs("super_admin");
     const shikshak = await loginAs("shikshak");
     const cityId = await mumbaiCityId(superAdmin.token);
@@ -556,8 +557,11 @@ describe("courses step 3 — Punya awards", () => {
       .set(auth(shikshak.token))
       .send({ student_id: studentId });
     expect(replay.status).toBe(200);
-    expect(replay.body.data.section_points_awarded).toBe(0);
-    expect(replay.body.data.course_points_awarded).toBe(0);
+    // L8 — replay reports the REAL reused award (matches the original mint),
+    // not a synthetic zero; no second transaction, no balance movement.
+    expect(replay.body.data.applied).toBe(false);
+    expect(replay.body.data.section_points_awarded).toBe(sectionAwarded);
+    expect(replay.body.data.course_points_awarded).toBe(courseAwarded);
     expect(await balanceOf(studentId)).toBe(midBal);
     expect(await txCount(studentId, "course_section_certified")).toBe(beforeTx + 1);
   });
@@ -607,7 +611,17 @@ describe("courses step 3 — Punya awards", () => {
     expect(final.status).toBe(200);
     expect(final.body.data.section_points_awarded).toBeGreaterThan(0);
     expect(final.body.data.course_points_awarded).toBeGreaterThan(0);
-    const key = final.body.data.course_award_key as string;
+    // L1 — the internal Punya idempotency key never leaves the service; the
+    // trigger-section-in-key property is verified against the ledger row
+    // instead, via the transaction id the response DOES carry.
+    expect(final.body.data.course_award_key).toBeUndefined();
+    const courseTxId = final.body.data.course_transaction_id as string;
+    expect(courseTxId).toBeTruthy();
+    const txRow = await pool.query<{ idempotency_key: string }>(
+      `select idempotency_key from punya_transactions where id = $1`,
+      [courseTxId],
+    );
+    const key = txRow.rows[0]!.idempotency_key;
     expect(key).toContain(sectionIds[1]!);
     expect(key.startsWith(`course_completed:${courseId}:${studentId}:${sectionIds[1]}:`)).toBe(
       true,
@@ -678,6 +692,58 @@ describe("courses step 3 — Punya awards", () => {
     expect(again.body.data.course_points_awarded).toBeGreaterThan(0);
     expect(await txCount(studentId, "course_section_certified")).toBe(sectionTxBefore + 1);
     expect(await txCount(studentId, "course_completed")).toBe(courseTxBefore + 1);
+  });
+
+  it("H26: non-super_admin correction is rejected at both the route and the service layer", async () => {
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId);
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const kid = await pool.query<{ id: string }>(
+      `select s.id from students s
+        join shikshak_batch_assignments a on a.batch_id = s.batch_id and a.is_active = true
+        join users u on u.id = a.user_id
+       where u.phone = '+919800000005' and s.status = 'active' and s.deleted_at is null
+       limit 1`,
+    );
+    const studentId = kid.rows[0]!.id;
+    const sectionId = sectionIds[0]!;
+
+    await request(app)
+      .post(`/v1/courses/nodes/${sectionId}/progress`)
+      .set(auth(shikshak.token))
+      .send({ student_id: studentId, status: "completed" })
+      .expect(200);
+    await request(app)
+      .post(`/v1/courses/nodes/${sectionId}/certify`)
+      .set(auth(shikshak.token))
+      .send({ student_id: studentId })
+      .expect(200);
+
+    // Route layer — requireMinRole("super_admin") gate.
+    const routeAttempt = await request(app)
+      .post(`/v1/courses/nodes/${sectionId}/certify/correct`)
+      .set(auth(shikshak.token))
+      .send({ student_id: studentId });
+    expect(routeAttempt.status).toBe(403);
+
+    // Service layer (H26) — must refuse even if a caller reached the service
+    // directly, not only via this route's middleware.
+    await expect(
+      correctCourseCertification({
+        nodeKind: "section",
+        nodeId: sectionId,
+        studentId,
+        actorId: shikshak.user.id,
+        actorRole: "shikshak",
+        ip: null,
+      }),
+    ).rejects.toMatchObject({ httpStatus: 403, code: "ERR_FORBIDDEN" });
   });
 });
 

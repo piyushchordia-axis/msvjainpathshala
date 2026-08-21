@@ -10,7 +10,7 @@ import {
   students,
   users,
 } from "@workspace/db";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, isNotNull } from "drizzle-orm";
 import { QUEUE_NAMES } from "@jp/shared/constants";
 import { enqueueJob } from "../lib/queues";
 import { logger } from "../lib/logger";
@@ -46,6 +46,9 @@ async function findExistingCertificate(
     kind: "section" | "course";
   },
 ): Promise<string | null> {
+  // C2 — a voided row is not a live certificate; without this filter,
+  // re-certification after a CU19 correction finds the voided row here and
+  // reports created:false, leaving the certificate void forever.
   if (values.kind === "section" && values.section_id) {
     const [existing] = await client
       .select({ id: course_certificates.id })
@@ -54,6 +57,7 @@ async function findExistingCertificate(
         and(
           eq(course_certificates.student_id, values.student_id),
           eq(course_certificates.section_id, values.section_id),
+          isNull(course_certificates.voided_at),
         ),
       )
       .limit(1);
@@ -67,10 +71,77 @@ async function findExistingCertificate(
         eq(course_certificates.student_id, values.student_id),
         eq(course_certificates.course_id, values.course_id),
         isNull(course_certificates.section_id),
+        isNull(course_certificates.voided_at),
       ),
     )
     .limit(1);
   return existing?.id ?? null;
+}
+
+/** C2 — separate lookup for a VOIDED row at the same (student, course|section). */
+async function findVoidedCertificate(
+  client: DbOrTx,
+  values: {
+    student_id: string;
+    course_id: string;
+    section_id: string | null;
+    kind: "section" | "course";
+  },
+): Promise<string | null> {
+  if (values.kind === "section" && values.section_id) {
+    const [existing] = await client
+      .select({ id: course_certificates.id })
+      .from(course_certificates)
+      .where(
+        and(
+          eq(course_certificates.student_id, values.student_id),
+          eq(course_certificates.section_id, values.section_id),
+          isNotNull(course_certificates.voided_at),
+        ),
+      )
+      .limit(1);
+    return existing?.id ?? null;
+  }
+  const [existing] = await client
+    .select({ id: course_certificates.id })
+    .from(course_certificates)
+    .where(
+      and(
+        eq(course_certificates.student_id, values.student_id),
+        eq(course_certificates.course_id, values.course_id),
+        isNull(course_certificates.section_id),
+        isNotNull(course_certificates.voided_at),
+      ),
+    )
+    .limit(1);
+  return existing?.id ?? null;
+}
+
+/**
+ * C2 — revive a voided certificate in place rather than issuing a second row:
+ * the partial unique indexes (CU24) on (student_id, section_id) and
+ * (student_id, course_id) forbid a second live row for the same target anyway,
+ * and CU19 says a later correct re-certification must clear the void fields
+ * and re-issue, not leave the certificate voided forever. The verification
+ * code and id are kept — a printed certificate a family already holds becomes
+ * valid again instead of orphaned.
+ */
+async function reviveVoidedCertificate(
+  client: DbOrTx,
+  id: string,
+  scopeSnapshot: CertificateScopeSnapshot,
+): Promise<void> {
+  await client
+    .update(course_certificates)
+    .set({
+      voided_at: null,
+      voided_by: null,
+      scope_snapshot: scopeSnapshot as Record<string, unknown>,
+      issued_at: new Date(),
+      storage_key: null,
+      updated_at: new Date(),
+    })
+    .where(eq(course_certificates.id, id));
 }
 
 async function insertCertificateWithCodeRetry(
@@ -86,22 +157,37 @@ async function insertCertificateWithCodeRetry(
   const already = await findExistingCertificate(client, values);
   if (already) return { id: already, created: false };
 
+  const voided = await findVoidedCertificate(client, values);
+  if (voided) {
+    await reviveVoidedCertificate(client, voided, values.scope_snapshot);
+    // `created` also means "needs a (re)generated PDF" to the caller
+    // (course-certify.ts pushes onto certificate_ids only when true) — a
+    // revived certificate needs exactly that, so it is true here too.
+    return { id: voided, created: true };
+  }
+
   for (let attempt = 0; attempt < 8; attempt += 1) {
     const code = generateVerificationCode();
     try {
-      const [row] = await client
-        .insert(course_certificates)
-        .values({
-          student_id: values.student_id,
-          course_id: values.course_id,
-          section_id: values.section_id,
-          kind: values.kind,
-          verification_code: code,
-          scope_snapshot: values.scope_snapshot as Record<string, unknown>,
-          storage_key: null,
-        })
-        .returning({ id: course_certificates.id });
-      if (row) return { id: row.id, created: true };
+      // H27 — each attempt runs in its own SAVEPOINT so a verification_code
+      // collision only rolls back this attempt, not the caller's whole
+      // transaction (this can run inside the certify tx).
+      const insertedId = await client.transaction(async (savepointTx) => {
+        const [row] = await savepointTx
+          .insert(course_certificates)
+          .values({
+            student_id: values.student_id,
+            course_id: values.course_id,
+            section_id: values.section_id,
+            kind: values.kind,
+            verification_code: code,
+            scope_snapshot: values.scope_snapshot as Record<string, unknown>,
+            storage_key: null,
+          })
+          .returning({ id: course_certificates.id });
+        return row?.id ?? null;
+      });
+      if (insertedId) return { id: insertedId, created: true };
     } catch (err: unknown) {
       const pgCode = (err as { code?: string })?.code;
       if (pgCode !== "23505") throw err;

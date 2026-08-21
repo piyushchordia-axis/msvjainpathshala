@@ -157,9 +157,11 @@ async function reverseAward(opts: {
   return { reversed: true, points: Math.abs(debit) };
 }
 
-async function studentCityFromCentre(centreId: string | null): Promise<string | null> {
+// M21 — takes the caller's tx handle so this doesn't open a second pool
+// connection alongside the certify transaction.
+async function studentCityFromCentre(tx: Tx, centreId: string | null): Promise<string | null> {
   if (!centreId) return null;
-  const [c] = await db
+  const [c] = await tx
     .select({ city_id: centres.city_id })
     .from(centres)
     .where(eq(centres.id, centreId))
@@ -294,7 +296,31 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
       .limit(1);
 
     if (existing?.certified_at) {
-      // Idempotent replay of certify — return current state, no second award.
+      // Idempotent replay of certify (CU31 duplicate) — L8: report the REAL
+      // reused award, not a synthetic zero, so a retried request reads the
+      // same as the original one did. No second transaction, no second cert.
+      let sectionPointsAwarded = 0;
+      let sectionTxId: string | null = null;
+      let coursePointsAwarded = 0;
+      let courseTxId: string | null = null;
+      if (sectionId) {
+        const priorSection = await findLatestUnreversed({
+          tx,
+          studentId: input.studentId,
+          sourceEntityKind: "course_section",
+          sourceEntityId: sectionId,
+          featureKey: COURSE_SECTION_FEATURE_KEY,
+        });
+        if (priorSection) {
+          sectionPointsAwarded = priorSection.points;
+          sectionTxId = priorSection.id;
+        }
+        const priorCourse = await findLatestUnreversedCourseBonus(tx, input.studentId, courseId);
+        if (priorCourse) {
+          coursePointsAwarded = priorCourse.points;
+          courseTxId = priorCourse.id;
+        }
+      }
       return {
         progress_id: existing.id,
         section_id: existing.section_id,
@@ -302,10 +328,10 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
         status: existing.status,
         certified_at: existing.certified_at.toISOString(),
         revision: existing.revision,
-        section_points_awarded: 0,
-        course_points_awarded: 0,
-        section_transaction_id: null,
-        course_transaction_id: null,
+        section_points_awarded: sectionPointsAwarded,
+        course_points_awarded: coursePointsAwarded,
+        section_transaction_id: sectionTxId,
+        course_transaction_id: courseTxId,
         course_award_key: null,
         certificate_ids: [],
         applied: false,
@@ -313,14 +339,16 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
     }
 
     const statusNow = existing?.status ?? "not_started";
-    if (statusNow !== "completed") {
-      if (!input.softTransition) {
-        throw new CourseCertifyError(
-          409,
-          Err.COURSE_NODE_NOT_COMPLETE,
-          "That node must be completed before it can be certified — close it first.",
-        );
-      }
+    // M15 — a legacy 'mastered' row (CU11: the value is dead and never written
+    // going forward, but old rows may still carry it) is already as complete
+    // as 'completed' for the purposes of this gate.
+    const alreadyComplete = statusNow === "completed" || statusNow === "mastered";
+    if (!alreadyComplete && !input.softTransition) {
+      throw new CourseCertifyError(
+        409,
+        Err.COURSE_NODE_NOT_COMPLETE,
+        "That node must be completed before it can be certified — close it first.",
+      );
     }
 
     const now = input.certifiedAt ?? new Date();
@@ -412,7 +440,7 @@ export async function certifyCourseNode(input: CertifyInput): Promise<CertifyRes
         .from(students)
         .where(eq(students.id, input.studentId))
         .limit(1);
-      const cityId = await studentCityFromCentre(stu?.centre_id ?? null);
+      const cityId = await studentCityFromCentre(tx, stu?.centre_id ?? null);
 
       const awardPoints = await resolveCourseAwardPoints(
         COURSE_SECTION_FEATURE_KEY,
@@ -555,6 +583,8 @@ export type CorrectCertifyInput = {
   nodeId: string;
   studentId: string;
   actorId: string;
+  /** Real caller role (H26) — the service enforces super_admin itself, not just the route. */
+  actorRole: Role;
   /** Optional status after clearing certification. */
   status?: "not_started" | "in_progress" | "completed";
   ip?: string | null;
@@ -568,6 +598,15 @@ export async function correctCourseCertification(input: CorrectCertifyInput): Pr
   section_points_reversed: number;
   course_points_reversed: number;
 }> {
+  // H26 — Q2's house rule: role checks on value-minting/reversing operations
+  // live in the SERVICE layer, not only on the route's requireMinRole.
+  if (input.actorRole !== "super_admin") {
+    throw new CourseCertifyError(
+      403,
+      Err.FORBIDDEN,
+      "Only a super_admin may correct a course certification.",
+    );
+  }
   return db.transaction(async (tx) => {
     let sectionId: string | null = null;
     let subsectionId: string | null = null;
@@ -581,7 +620,7 @@ export async function correctCourseCertification(input: CorrectCertifyInput): Pr
         })
         .from(course_subsections)
         .innerJoin(course_sections, eq(course_sections.id, course_subsections.section_id))
-        .where(eq(course_subsections.id, input.nodeId))
+        .where(and(eq(course_subsections.id, input.nodeId), isNull(course_subsections.deleted_at)))
         .limit(1);
       if (!row) {
         throw new CourseCertifyError(404, Err.COURSE_NODE_NOT_FOUND, "That course node was not found.");
@@ -592,7 +631,7 @@ export async function correctCourseCertification(input: CorrectCertifyInput): Pr
       const [row] = await tx
         .select({ id: course_sections.id, course_id: course_sections.course_id })
         .from(course_sections)
-        .where(eq(course_sections.id, input.nodeId))
+        .where(and(eq(course_sections.id, input.nodeId), isNull(course_sections.deleted_at)))
         .limit(1);
       if (!row) {
         throw new CourseCertifyError(404, Err.COURSE_NODE_NOT_FOUND, "That course node was not found.");
@@ -626,7 +665,16 @@ export async function correctCourseCertification(input: CorrectCertifyInput): Pr
       );
     }
 
-    const wasCourseComplete = await allSectionsCertified(tx, courseId, input.studentId);
+    // C1 — a sub-section correction touches only its own progress row.
+    // Sub-sections carry no Punya (CU21) and are not part of CU25's
+    // course-complete predicate, so there is nothing course-level to reverse
+    // or void; computing this for a subsection would key off whether the
+    // COURSE happens to be fully certified via unrelated sections, not
+    // whether THIS correction changed that.
+    const wasCourseComplete =
+      input.nodeKind === "section"
+        ? await allSectionsCertified(tx, courseId, input.studentId)
+        : false;
     const newRevision = existing.revision + 1;
     const newStatus = input.status ?? existing.status;
 
@@ -642,7 +690,7 @@ export async function correctCourseCertification(input: CorrectCertifyInput): Pr
         started_at:
           newStatus === "not_started" ? null : existing.started_at ?? new Date(),
         updated_by: input.actorId,
-        updated_by_role: "super_admin",
+        updated_by_role: input.actorRole,
         updated_at: new Date(),
       })
       .where(eq(student_course_progress.id, existing.id));
@@ -735,11 +783,14 @@ export async function correctCourseCertification(input: CorrectCertifyInput): Pr
         );
     }
 
-    // Two audit entries — correction + naming the acting super_admin (CU19).
+    // Two audit entries (CU19): one for the correction itself, one naming the
+    // acting super_admin. actorId/actorRole already carry "who" on every audit
+    // row, so the second entry must not repeat that in its metadata (L7) — it
+    // carries only what the first doesn't.
     await writeAudit(
       {
         actorId: input.actorId,
-        actorRole: "super_admin",
+        actorRole: input.actorRole,
         action: "update",
         entityKind: "course_certification",
         entityId: existing.id,
@@ -759,12 +810,11 @@ export async function correctCourseCertification(input: CorrectCertifyInput): Pr
     await writeAudit(
       {
         actorId: input.actorId,
-        actorRole: "super_admin",
+        actorRole: input.actorRole,
         action: "update",
         entityKind: "course_certification",
         entityId: existing.id,
-        summary: `Correction performed by super_admin ${input.actorId}.`,
-        metadata: { acting_super_admin_id: input.actorId },
+        summary: "Correction performed by the acting super_admin.",
         ip: input.ip ?? null,
       },
       tx,

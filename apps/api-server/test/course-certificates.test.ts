@@ -472,4 +472,157 @@ describe("course certificates step 4", () => {
     expect(Array.isArray(list.body.data.items)).toBe(true);
     expect(list.body.data.items.length).toBeGreaterThan(0);
   });
+
+  it("7 — C1: correcting a certified sub-section on a fully-certified course leaves the course bonus and course certificate untouched", async () => {
+    await ensureShikshakGender("male");
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId, {
+      sections: 1,
+      punya: 40,
+    });
+    await pool.query(`update courses set punya_points = 25 where id = $1`, [courseId]);
+    const sectionId = sectionIds[0]!;
+
+    const sub = await request(app)
+      .post(`/v1/courses/sections/${sectionId}/subsections`)
+      .set(auth(superAdmin.token))
+      .send({ title_en: "Leaf", title_hi: "पत्ती" });
+    expect(sub.status).toBe(200);
+    const subsectionId = sub.body.data.id as string;
+
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const { studentId } = await shikshakStudent();
+
+    // Certify the sub-section (0 Punya, CU21) and — separately — the section,
+    // which fully certifies this single-section course (section + course bonus).
+    await request(app)
+      .post(`/v1/courses/nodes/${subsectionId}/progress`)
+      .set(auth(shikshak.token))
+      .send({ student_id: studentId, status: "completed" })
+      .expect(200);
+    const subCertify = await request(app)
+      .post(`/v1/courses/nodes/${subsectionId}/certify`)
+      .set(auth(shikshak.token))
+      .send({ student_id: studentId });
+    expect(subCertify.status).toBe(200);
+
+    await completeAndCertify(shikshak.token, sectionId, studentId);
+
+    const balBefore = await pool.query<{ total_points: number }>(
+      `select coalesce(total_points, 0)::int as total_points from punya_balances where student_id = $1`,
+      [studentId],
+    );
+    const courseTxBefore = await pool.query<{ n: string }>(
+      `select count(*)::text as n from punya_transactions
+        where student_id = $1 and feature_key = 'course_completed' and points > 0`,
+      [studentId],
+    );
+    const courseCertBefore = await pool.query<{ voided_at: Date | null }>(
+      `select voided_at from course_certificates
+        where student_id = $1 and course_id = $2 and section_id is null`,
+      [studentId, courseId],
+    );
+    expect(courseCertBefore.rows[0]?.voided_at ?? null).toBeNull();
+
+    // Correct the CERTIFIED SUB-SECTION — must not touch course-level state.
+    const correct = await request(app)
+      .post(`/v1/courses/nodes/${subsectionId}/certify/correct`)
+      .set(auth(superAdmin.token))
+      .send({ student_id: studentId });
+    expect(correct.status).toBe(200);
+    expect(correct.body.data.section_points_reversed).toBe(0);
+    expect(correct.body.data.course_points_reversed).toBe(0);
+
+    const balAfter = await pool.query<{ total_points: number }>(
+      `select coalesce(total_points, 0)::int as total_points from punya_balances where student_id = $1`,
+      [studentId],
+    );
+    expect(balAfter.rows[0]!.total_points).toBe(balBefore.rows[0]!.total_points);
+
+    const courseTxAfter = await pool.query<{ n: string }>(
+      `select count(*)::text as n from punya_transactions
+        where student_id = $1 and feature_key = 'course_completed' and points > 0`,
+      [studentId],
+    );
+    expect(courseTxAfter.rows[0]!.n).toBe(courseTxBefore.rows[0]!.n);
+
+    const courseCertAfter = await pool.query<{ voided_at: Date | null }>(
+      `select voided_at from course_certificates
+        where student_id = $1 and course_id = $2 and section_id is null`,
+      [studentId, courseId],
+    );
+    expect(courseCertAfter.rows[0]!.voided_at).toBeNull();
+  });
+
+  it("8 — C2: correcting a certified section then re-certifying revives the SAME certificate row; verify → valid", async () => {
+    await ensureShikshakGender("male");
+    const superAdmin = await loginAs("super_admin");
+    const shikshak = await loginAs("shikshak");
+    const cityId = await mumbaiCityId(superAdmin.token);
+    const { courseId, sectionIds } = await publishableCourse(superAdmin.token, cityId, {
+      sections: 1,
+    });
+    await request(app)
+      .post(`/v1/admin/courses/${courseId}/publish`)
+      .set(auth(superAdmin.token))
+      .expect(200);
+
+    const { studentId } = await shikshakStudent();
+    const sectionId = sectionIds[0]!;
+    await completeAndCertify(shikshak.token, sectionId, studentId);
+
+    const cert = await pool.query<{ id: string; verification_code: string }>(
+      `select id, verification_code from course_certificates
+        where student_id = $1 and section_id = $2`,
+      [studentId, sectionId],
+    );
+    expect(cert.rows[0]).toBeTruthy();
+    const certId = cert.rows[0]!.id;
+    const code = cert.rows[0]!.verification_code;
+
+    await request(app)
+      .post(`/v1/courses/nodes/${sectionId}/certify/correct`)
+      .set(auth(superAdmin.token))
+      .send({ student_id: studentId, status: "completed" })
+      .expect(200);
+
+    const voided = await pool.query<{ voided_at: Date | null }>(
+      `select voided_at from course_certificates where id = $1`,
+      [certId],
+    );
+    expect(voided.rows[0]!.voided_at).toBeTruthy();
+
+    // Re-certify: C2 must revive the SAME row (partial unique index forbids
+    // a second one for this student+section anyway), not leave it voided.
+    const recert = await request(app)
+      .post(`/v1/courses/nodes/${sectionId}/certify`)
+      .set(auth(shikshak.token))
+      .send({ student_id: studentId });
+    expect(recert.status).toBe(200);
+    expect(recert.body.data.certificate_ids).toContain(certId);
+
+    const revived = await pool.query<{
+      id: string;
+      voided_at: Date | null;
+      verification_code: string;
+    }>(
+      `select id, voided_at, verification_code from course_certificates
+        where student_id = $1 and section_id = $2`,
+      [studentId, sectionId],
+    );
+    expect(revived.rows).toHaveLength(1); // never a second row
+    expect(revived.rows[0]!.id).toBe(certId);
+    expect(revived.rows[0]!.voided_at).toBeNull();
+    expect(revived.rows[0]!.verification_code).toBe(code);
+
+    const verify = await request(app).get(`/v1/certificates/verify/${code}`);
+    expect(verify.status).toBe(200);
+    expect(verify.body.data.validity).toBe("valid");
+  });
 });
