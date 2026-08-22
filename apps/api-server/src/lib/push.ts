@@ -9,7 +9,14 @@ import { logger } from "./logger";
 
 const expo = new Expo();
 
-const DEAD_TOKEN_ERRORS = new Set(["DeviceNotRegistered", "InvalidCredentials"]);
+// X-5 (review 2026-08) — InvalidCredentials is an app-level credentials
+// fault (an expired/rotated FCM service-account key), not a dead device. It
+// used to sit in this set, so one bad key deactivated every token in the
+// install base on the very next send, with no automatic recovery path.
+// DeviceNotRegistered (and MismatchSenderId, which behaves the same way) are
+// the only outcomes that actually mean "this token will never work again."
+const DEAD_TOKEN_ERRORS = new Set(["DeviceNotRegistered", "MismatchSenderId"]);
+const CREDENTIALS_ERRORS = new Set(["InvalidCredentials"]);
 
 export function isValidExpoPushToken(token: string): boolean {
   return Expo.isExpoPushToken(token);
@@ -62,15 +69,26 @@ export async function sendPush(payloads: PushPayload[]): Promise<ExpoPushTicket[
   const tickets: ExpoPushTicket[] = [];
   const deadTokens: string[] = [];
   const okReceipts: Array<{ ticket_id: string; expo_token: string }> = [];
+  let credentialsErrorSeen = false;
 
-  try {
-    for (const chunk of expo.chunkPushNotifications(messages)) {
+  // X-14 (review 2026-08) — try/catch per chunk, not around the whole loop:
+  // one transient socket error on chunk 3 of 50 previously silently dropped
+  // every remaining chunk. AT31's SLO (5000 marks in 60s) makes multi-chunk
+  // sends routine, not an edge case.
+  const chunks = expo.chunkPushNotifications(messages);
+  let failedChunks = 0;
+  for (const chunk of chunks) {
+    try {
       const chunkTickets = await expo.sendPushNotificationsAsync(chunk);
       for (let i = 0; i < chunkTickets.length; i++) {
         const ticket = chunkTickets[i]!;
         const token = String(chunk[i]?.to ?? "");
         tickets.push(ticket);
         const err = ticketErrorCode(ticket);
+        if (err && CREDENTIALS_ERRORS.has(err)) {
+          credentialsErrorSeen = true;
+          continue;
+        }
         if (err && DEAD_TOKEN_ERRORS.has(err) && token) {
           deadTokens.push(token);
           continue;
@@ -79,10 +97,25 @@ export async function sendPush(payloads: PushPayload[]): Promise<ExpoPushTicket[
           okReceipts.push({ ticket_id: ticket.id, expo_token: token });
         }
       }
+    } catch (err) {
+      failedChunks++;
+      logger.warn({ err, chunkSize: chunk.length }, "Expo push send failed for one chunk");
     }
-  } catch (err) {
-    logger.warn({ err }, "Expo push send failed");
-    return tickets;
+  }
+  if (failedChunks > 0) {
+    logger.warn(
+      { failedChunks, totalChunks: chunks.length },
+      "Expo push send: some chunks failed, continued with the rest",
+    );
+  }
+  if (credentialsErrorSeen) {
+    // Alertable server fault, not a per-device condition — never deactivate
+    // tokens for this. Surfaced at error level so it pages someone instead
+    // of silently wiping is_active across the install base.
+    logger.error(
+      { deadLetterExamples: tickets.filter((t) => ticketErrorCode(t) === "InvalidCredentials").length },
+      "Expo push: InvalidCredentials — FCM service-account key likely rotated/revoked",
+    );
   }
 
   try {
@@ -132,13 +165,20 @@ export async function sweepPushReceipts(): Promise<{
   const checkedTicketIds: string[] = [];
   const ticketIds = unchecked.map((r) => r.ticket_id);
 
-  try {
-    for (const chunk of expo.chunkPushNotificationReceiptIds(ticketIds)) {
+  for (const chunk of expo.chunkPushNotificationReceiptIds(ticketIds)) {
+    try {
       const receipts = await expo.getPushNotificationReceiptsAsync(chunk);
       for (const ticketId of chunk) {
-        checkedTicketIds.push(ticketId);
         const receipt = receipts[ticketId];
-        if (!receipt || receipt.status !== "error") continue;
+        // X-6 (review 2026-08) — only mark an id checked once Expo has
+        // actually produced a receipt for it. DeviceNotRegistered often
+        // appears only on the async receipt, not the immediate ticket
+        // (schema/notifications.ts's own comment on push_receipts); stamping
+        // checked_at unconditionally excluded ids Expo hadn't finished
+        // processing yet from every future sweep, permanently.
+        if (!receipt) continue;
+        checkedTicketIds.push(ticketId);
+        if (receipt.status !== "error") continue;
         const err =
           (receipt.details as { error?: string } | undefined)?.error ?? null;
         if (err && DEAD_TOKEN_ERRORS.has(err)) {
@@ -146,9 +186,9 @@ export async function sweepPushReceipts(): Promise<{
           if (token) deadTokens.push(token);
         }
       }
+    } catch (err) {
+      logger.warn({ err, chunkSize: chunk.length }, "Expo receipt sweep failed for one chunk");
     }
-  } catch (err) {
-    logger.warn({ err }, "Expo receipt sweep failed");
   }
 
   if (deadTokens.length > 0) {
