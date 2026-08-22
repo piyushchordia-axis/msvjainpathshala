@@ -9,13 +9,14 @@
  * so importing this router does not schedule work on every API instance.
  */
 import { Router, type IRouter, type Request, type Response } from "express";
-import { db, notifications, device_push_tokens, students } from "@workspace/db";
+import { db, notifications, device_push_tokens, students, users } from "@workspace/db";
 import { and, desc, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import { z } from "zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth } from "../../middlewares/auth";
-import { notifyUsers } from "../../lib/notify";
+import { notifyUsers, prefsAllowKind } from "../../lib/notify";
 import { clampLimit } from "../../lib/route-helpers";
+import { logger } from "../../lib/logger";
 
 const router: IRouter = Router();
 router.use(requireAuth);
@@ -126,6 +127,45 @@ router.post("/push-token", async (req: Request, res: Response) => {
   }
 
   ok(res, { ok: true });
+});
+
+const pushTokenDeactivateSchema = z.object({
+  expo_token: z.string().min(1).max(500),
+});
+
+/**
+ * POST /v1/notifications/push-token/deactivate — X-4 (review 2026-08). Call
+ * this on sign-out. Without it, a shared family handset kept delivering the
+ * previous account's notifications (child names, attendance, approvals)
+ * forever, since the only other thing that frees a token is Expo returning
+ * DeviceNotRegistered on a healthy device, which never happens.
+ *
+ * Scoped to the caller's own token: deactivating someone else's token is a
+ * silent no-op (404-shaped `deactivated: false`), never a 403 that would
+ * leak whether a given token belongs to another account.
+ */
+router.post("/push-token/deactivate", async (req: Request, res: Response) => {
+  let body: z.infer<typeof pushTokenDeactivateSchema>;
+  try {
+    body = pushTokenDeactivateSchema.parse(req.body);
+  } catch {
+    fail(res, 422, "ERR_VALIDATION_FAILED", "Invalid push-token data.");
+    return;
+  }
+
+  const callerId = req.authUser!.id;
+  const updated = await db
+    .update(device_push_tokens)
+    .set({ is_active: false, updated_at: new Date() })
+    .where(
+      and(
+        eq(device_push_tokens.expo_token, body.expo_token),
+        eq(device_push_tokens.user_id, callerId),
+      ),
+    )
+    .returning({ id: device_push_tokens.id });
+
+  ok(res, { deactivated: updated.length > 0 });
 });
 
 /* GET /v1/notifications?limit=&cursor= — keyset inbox (created_at DESC, id DESC) */
@@ -242,16 +282,27 @@ router.post("/:id/read", async (req: Request, res: Response) => {
 
 /* ═══════════════════════════ BIRTHDAY CRON ═══════════════════════════ */
 
-/** IST MM-DD for a given instant (defaults to now). */
-function istMonthDay(when: Date): string {
-  // en-CA gives YYYY-MM-DD; slice the MM-DD in the Asia/Kolkata zone.
+/** IST YYYY-MM-DD for a given instant (defaults to now). */
+function istDateParts(when: Date): { year: number; month: number; day: number } {
   const ymd = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Kolkata",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
   }).format(when);
-  return ymd.slice(5); // "MM-DD"
+  const [y, m, d] = ymd.split("-").map(Number);
+  return { year: y!, month: m!, day: d! };
+}
+
+function isLeapYear(year: number): boolean {
+  return (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+}
+
+/** Bilingual "A, B and C" / "A, B और C" join for merged-twin birthday copy (X-24). */
+function joinNames(names: string[], andWord: "and" | "और"): string {
+  if (names.length <= 1) return names[0] ?? "";
+  if (names.length === 2) return `${names[0]} ${andWord} ${names[1]}`;
+  return `${names.slice(0, -1).join(", ")} ${andWord} ${names[names.length - 1]}`;
 }
 
 /**
@@ -261,13 +312,31 @@ function istMonthDay(when: Date): string {
  */
 export async function runBirthdayWishes(today?: Date): Promise<{ students: number; notifications: number }> {
   const when = today ?? new Date();
-  const mmdd = istMonthDay(when);
-  const [mmStr, ddStr] = mmdd.split("-");
-  const month = Number(mmStr);
-  const day = Number(ddStr);
+  const { year, month, day } = istDateParts(when);
+
+  // X-29 — a 29-Feb birthday needs a fallback in a non-leap year, or the
+  // child is never wished at all that year. Wish them on 28-Feb instead,
+  // the conventional civil fallback.
+  const feb29Fallback = month === 2 && day === 28 && !isLeapYear(year);
 
   // Active students whose birthday (month+day) is today.
   // EXTRACT is IMMUTABLE-compatible for expression indexes (PERF #6); to_char is not.
+  const dobMatch = feb29Fallback
+    ? or(
+        and(
+          sql`EXTRACT(MONTH FROM ${students.dob}) = ${month}`,
+          sql`EXTRACT(DAY FROM ${students.dob}) = ${day}`,
+        ),
+        and(
+          sql`EXTRACT(MONTH FROM ${students.dob}) = 2`,
+          sql`EXTRACT(DAY FROM ${students.dob}) = 29`,
+        ),
+      )!
+    : and(
+        sql`EXTRACT(MONTH FROM ${students.dob}) = ${month}`,
+        sql`EXTRACT(DAY FROM ${students.dob}) = ${day}`,
+      )!;
+
   const birthdayStudents = await db
     .select({
       id: students.id,
@@ -276,31 +345,25 @@ export async function runBirthdayWishes(today?: Date): Promise<{ students: numbe
       parent_id: students.parent_id,
     })
     .from(students)
-    .where(
-      and(
-        eq(students.status, "active"),
-        isNull(students.deleted_at),
-        sql`EXTRACT(MONTH FROM ${students.dob}) = ${month}`,
-        sql`EXTRACT(DAY FROM ${students.dob}) = ${day}`,
-      ),
-    );
+    .where(and(eq(students.status, "active"), isNull(students.deleted_at), dobMatch));
 
   if (birthdayStudents.length === 0) {
     return { students: 0, notifications: 0 };
   }
 
-  // One notification per (recipient user). A student maps to up to two
-  // recipients: their own user (if linked) and their parent.
-  const recipients: { userId: string; studentName: string }[] = [];
-  const seen = new Set<string>();
+  // One notification per (recipient user), naming EVERY birthday child of
+  // theirs today — X-24: two children sharing a birthday under one parent
+  // used to have the second one silently dropped rather than merged in.
+  const namesByUser = new Map<string, string[]>();
   for (const s of birthdayStudents) {
     for (const userId of [s.user_id, s.parent_id]) {
-      if (!userId || seen.has(userId)) continue;
-      seen.add(userId);
-      recipients.push({ userId, studentName: s.full_name });
+      if (!userId) continue;
+      const names = namesByUser.get(userId) ?? [];
+      if (!names.includes(s.full_name)) names.push(s.full_name);
+      namesByUser.set(userId, names);
     }
   }
-
+  const recipients = [...namesByUser.entries()].map(([userId, names]) => ({ userId, names }));
   const recipientUserIds = recipients.map((r) => r.userId);
 
   // The calendar date (IST) this run is for — also the advisory-lock key, so all
@@ -340,17 +403,31 @@ export async function runBirthdayWishes(today?: Date): Promise<{ students: numbe
     const pending = recipients.filter((r) => !alreadyNotified.has(r.userId));
     if (pending.length === 0) return pending;
 
+    // X-11 — the raw insert used to bypass notification_preferences entirely,
+    // so {birthday: false} still produced an inbox row every year; only the
+    // push respected it. Apply the same kind gate the standard notifyUsers
+    // path now uses (X-1), so a user who muted birthdays gets neither.
+    const prefRows = await tx
+      .select({ id: users.id, prefs: users.notification_preferences })
+      .from(users)
+      .where(and(inArray(users.id, pending.map((r) => r.userId)), eq(users.is_active, true)));
+    const prefsById = new Map(prefRows.map((r) => [r.id, r.prefs] as const));
+    const toNotify = pending.filter((r) =>
+      prefsById.has(r.userId) && prefsAllowKind(prefsById.get(r.userId), "birthday"),
+    );
+    if (toNotify.length === 0) return toNotify;
+
     await tx.insert(notifications).values(
-      pending.map((r) => ({
+      toNotify.map((r) => ({
         user_id: r.userId,
         kind: "birthday" as const,
         title_en: "Happy Birthday!",
         title_hi: "जन्मदिन की शुभकामनाएँ!",
-        body_en: `Wishing ${r.studentName} a joyful and blessed birthday from all of us at Jain Pathshala.`,
-        body_hi: `जैन पाठशाला परिवार की ओर से ${r.studentName} को जन्मदिन की हार्दिक शुभकामनाएँ।`,
+        body_en: `Wishing ${joinNames(r.names, "and")} a joyful and blessed birthday from all of us at Jain Pathshala.`,
+        body_hi: `जैन पाठशाला परिवार की ओर से ${joinNames(r.names, "और")} को जन्मदिन की हार्दिक शुभकामनाएँ।`,
       })),
     );
-    return pending;
+    return toNotify;
   });
 
   if (toInsert.length === 0) {
@@ -358,20 +435,31 @@ export async function runBirthdayWishes(today?: Date): Promise<{ students: numbe
   }
 
   // Best-effort push OUTSIDE the transaction. Inbox rows already inserted above;
-  // inbox:false so push-opt-out does not suppress the durable birthday notice.
-  // Per-recipient body (student name) — one notifyUsers call each.
+  // inbox:false so a re-run/retry does not double-insert the inbox row (the
+  // channel gate inside notifyUsers still applies to the push itself).
+  // Per-recipient body (student name(s)) — one notifyUsers call each.
+  //
+  // X-10 — per-recipient try/catch: this used to be a bare loop with no
+  // per-iteration guard, so one recipient's push throwing propagated out of
+  // the whole cron run. Under BullMQ retry, the dedup SELECT above then finds
+  // every "today" row already inserted for everyone and returns early —
+  // nobody gets a birthday push that day, and the retry cannot recover it.
   for (const r of toInsert) {
-    await notifyUsers({
-      userIds: [r.userId],
-      kind: "birthday",
-      title_en: "Happy Birthday!",
-      title_hi: "जन्मदिन की शुभकामनाएँ!",
-      body_en: `Wishing ${r.studentName} a joyful and blessed birthday.`,
-      body_hi: `जैन पाठशाला परिवार की ओर से ${r.studentName} को जन्मदिन की हार्दिक शुभकामनाएँ।`,
-      inbox: false,
-      push: true,
-      data: { kind: "birthday" },
-    });
+    try {
+      await notifyUsers({
+        userIds: [r.userId],
+        kind: "birthday",
+        title_en: "Happy Birthday!",
+        title_hi: "जन्मदिन की शुभकामनाएँ!",
+        body_en: `Wishing ${joinNames(r.names, "and")} a joyful and blessed birthday.`,
+        body_hi: `जैन पाठशाला परिवार की ओर से ${joinNames(r.names, "और")} को जन्मदिन की हार्दिक शुभकामनाएँ।`,
+        inbox: false,
+        push: true,
+        data: { kind: "birthday" },
+      });
+    } catch (err) {
+      logger.error({ err, userId: r.userId }, "runBirthdayWishes: push failed for one recipient");
+    }
   }
 
   return { students: birthdayStudents.length, notifications: toInsert.length };
