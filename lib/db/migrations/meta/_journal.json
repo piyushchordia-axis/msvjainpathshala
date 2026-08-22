@@ -729,6 +729,55 @@
       "when": 1792060800005,
       "tag": "0103_progress_report_snapshot_version",
       "breakpoints": true
+    },
+    {
+      "idx": 104,
+      "version": "7",
+      "when": 1792400400000,
+      "tag": "0104_notices_title_hi_not_null",
+      "breakpoints": true
+    },
+    {
+      "idx": 105,
+      "version": "7",
+      "when": 1792400400001,
+      "tag": "0105_notices_scope_fk_restrict",
+      "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "7",
+      "when": 1792400400002,
+      "tag": "0106_notices_hardening",
+      "breakpoints": true
+    },
+    {
+      "idx": 107,
+      "version": "7",
+      "when": 1792400400003,
+      "tag": "0107_notifications_data_column",
+      "breakpoints": true
+    },
+    {
+      "idx": 108,
+      "version": "7",
+      "when": 1792400400004,
+      "tag": "0108_notifications_index_cleanup",
+      "breakpoints": true
+    },
+    {
+      "idx": 109,
+      "version": "7",
+      "when": 1792400400005,
+      "tag": "0109_push_receipts_token_fk",
+      "breakpoints": true
+    },
+    {
+      "idx": 110,
+      "version": "7",
+      "when": 1792400400006,
+      "tag": "0110_notification_kind_notice",
+      "breakpoints": true
     }
   ]
 }

@@ -189,6 +189,12 @@ export const NOTIFICATION_KINDS = [
   "punya_tier",
   /** Library content request published (Section 17 v3 §17.10.7). */
   "library",
+  /**
+   * SU-4 (review 2026-08) — a notice marked is_critical drove nothing; the
+   * checkbox read like it did something. Published on publish, when
+   * is_critical is true, to the resolved notice audience.
+   */
+  "notice",
 ] as const;
 export const DONATION_PAYMENT_STATUSES = ["created", "pending", "captured", "failed", "refunded"] as const;
 

@@ -1,0 +1,11 @@
+-- SU-4 (Notifications & Notices review, 2026-08) — a notice marked
+-- is_critical / "Important / महत्वपूर्ण" drove nothing: notices.ts never
+-- imported notifyUsers and there was no 'notice' member in
+-- notification_kind_enum. Delivery was pull-only despite the checkbox
+-- reading like it wasn't.
+--
+-- Separate file: ALTER TYPE ... ADD VALUE is kept away from other DDL so a
+-- retry cannot half-apply a mixed transaction, and the new value can't be
+-- used in the same transaction that adds it (same reasoning as 0082, 0093,
+-- 0095).
+ALTER TYPE "notification_kind_enum" ADD VALUE IF NOT EXISTS 'notice';

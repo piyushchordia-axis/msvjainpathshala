@@ -1,4 +1,5 @@
-import { boolean, index, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import { boolean, index, jsonb, pgTable, text, timestamp, uniqueIndex, uuid, varchar } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 import { timestamps } from "./_helpers";
 import { notificationKindEnum } from "./enums";
@@ -12,13 +13,15 @@ export const device_push_tokens = pgTable(
     user_id: uuid("user_id")
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
-    expo_token: text("expo_token").notNull(),
+    // DB-9 (review 2026-08): was a plain uniqueIndex, which Postgres will not
+    // accept as an ON DELETE target for a foreign key (push_receipts.expo_token
+    // below) — needs a real UNIQUE CONSTRAINT, not just a unique index.
+    expo_token: text("expo_token").notNull().unique("device_push_tokens_token_unique"),
     platform: text("platform"),
     is_active: boolean("is_active").notNull().default(true),
     ...timestamps(),
   },
   (t) => ({
-    token_unique: uniqueIndex("device_push_tokens_token_unique").on(t.expo_token),
     user_idx: index("idx_device_push_tokens_user").on(t.user_id),
   }),
 );
@@ -32,7 +35,14 @@ export const push_receipts = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     ticket_id: text("ticket_id").notNull(),
-    expo_token: text("expo_token").notNull(),
+    // DB-9: real FK against device_push_tokens' unique expo_token index, so a
+    // sweep for a token whose row is gone is caught rather than silently
+    // going nowhere. device_push_tokens rows are soft-deactivated
+    // (is_active=false), never hard-deleted, so this FK never blocks a
+    // legitimate deactivation.
+    expo_token: text("expo_token")
+      .notNull()
+      .references(() => device_push_tokens.expo_token, { onDelete: "cascade" }),
     checked_at: timestamp("checked_at", { withTimezone: true }),
     ...timestamps(),
   },
@@ -55,19 +65,32 @@ export const notifications = pgTable(
     title_hi: text("title_hi").notNull(),
     body_en: text("body_en").notNull(),
     body_hi: text("body_hi").notNull(),
+    // DB-1 / X-9 (review 2026-08): the durable row previously carried no
+    // reference to the thing it's about, so it could never deep-link even in
+    // principle. Mirrors opts.data already accepted (and merged into the push
+    // payload only) by notifyUsers.
+    data: jsonb("data").$type<Record<string, unknown>>(),
     read_at: timestamp("read_at", { withTimezone: true }),
     ...timestamps(),
   },
   (t) => ({
-    // (user_id, created_at DESC) covers inbox list; subsumes old idx_notifications_user.
-    user_created_idx: index("idx_notifications_user_created").on(t.user_id, t.created_at),
-    // Keyset pagination (FIX #10): id breaks ties when notifyUsers inserts a batch.
+    // Keyset pagination (FIX #10): id breaks ties when notifyUsers inserts a
+    // batch. DESC to match migration 0046's actual index direction (DB-6) —
+    // backward-scan made runtime correct either way, but a mismatched
+    // declaration makes drizzle-kit generate propose a spurious
+    // drop-and-recreate of the hottest index in the app.
     user_created_id_idx: index("idx_notifications_user_created_id").on(
       t.user_id,
-      t.created_at,
-      t.id,
+      t.created_at.desc(),
+      t.id.desc(),
     ),
     user_read_idx: index("idx_notifications_user_read").on(t.user_id, t.read_at),
+    // DB-2: retention.ts's prune query filters read_at IS NOT NULL and sorts
+    // by created_at — this partial index matches that shape exactly, instead
+    // of seq-scanning + sorting the whole table every 5000-row batch.
+    retention_prune_idx: index("idx_notifications_retention_prune")
+      .on(t.created_at)
+      .where(sql`${t.read_at} IS NOT NULL`),
   }),
 );
 

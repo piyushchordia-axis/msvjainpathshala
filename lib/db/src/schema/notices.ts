@@ -1,6 +1,6 @@
 import { boolean, index, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 
-import { timestamps } from "./_helpers";
+import { softDelete, timestamps } from "./_helpers";
 import { noticeAudienceEnum } from "./enums";
 import { cities, states } from "./geography";
 import { centres, batches } from "./centres";
@@ -11,16 +11,25 @@ export const notices = pgTable(
   {
     id: uuid("id").primaryKey().defaultRandom(),
     title_en: text("title_en").notNull(),
-    title_hi: text("title_hi"),
+    // DB-7 (review 2026-08): was nullable while notifications.title_hi is
+    // NOT NULL, so mobile refused to submit without it and web called it
+    // optional — two clients disagreeing about the same bilingual rule.
+    // Backfilled then tightened in migration 0104, same pattern as 0044.
+    title_hi: text("title_hi").notNull(),
     content_en: text("content_en"),
     content_hi: text("content_hi"),
     audience: noticeAudienceEnum("audience").notNull().default("national"),
-    state_id: uuid("state_id").references(() => states.id, { onDelete: "cascade" }),
-    city_id: uuid("city_id").references(() => cities.id, { onDelete: "cascade" }),
-    centre_id: uuid("centre_id").references(() => centres.id, { onDelete: "cascade" }),
+    // SU-1 (review 2026-08): these were CASCADE, so deleting a state/city/
+    // centre/batch silently hard-deleted every notice that ever targeted it
+    // with no audit trail. RESTRICT forces an explicit decision (CU29
+    // pattern) instead — the caller must reassign or delete the notices
+    // first.
+    state_id: uuid("state_id").references(() => states.id, { onDelete: "restrict" }),
+    city_id: uuid("city_id").references(() => cities.id, { onDelete: "restrict" }),
+    centre_id: uuid("centre_id").references(() => centres.id, { onDelete: "restrict" }),
     // Target a specific batch when audience = 'batch'. Without this column the
     // 'batch' audience could never be targeted, so the enum value was dead.
-    batch_id: uuid("batch_id").references(() => batches.id, { onDelete: "cascade" }),
+    batch_id: uuid("batch_id").references(() => batches.id, { onDelete: "restrict" }),
     is_public: boolean("is_public").notNull().default(false),
     pinned: boolean("pinned").notNull().default(false),
     is_critical: boolean("is_critical").notNull().default(false),
@@ -28,13 +37,16 @@ export const notices = pgTable(
     // Nullable end of visibility. Null = standing announcement (never expires).
     expires_at: timestamp("expires_at", { withTimezone: true }),
     created_by: uuid("created_by").references(() => users.id, { onDelete: "set null" }),
+    updated_by: uuid("updated_by").references(() => users.id, { onDelete: "set null" }),
     ...timestamps(),
+    ...softDelete(),
   },
   (t) => ({
     centre_idx: index("idx_notices_centre").on(t.centre_id),
     city_idx: index("idx_notices_city").on(t.city_id),
     state_idx: index("idx_notices_state").on(t.state_id),
     batch_idx: index("idx_notices_batch").on(t.batch_id),
+    audience_idx: index("idx_notices_audience").on(t.audience),
   }),
 );
 
