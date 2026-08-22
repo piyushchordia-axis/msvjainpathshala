@@ -86,7 +86,9 @@ export async function sendParentAttendancePush(
     body_en: `${row.full_name}: ${row.status} on ${row.session_date}`,
     body_hi: `${row.full_name}: ${row.session_date} को ${row.status}`,
     push: true,
-    data: { kind: "attendance", session_id: sessionId, student_id: studentId },
+    // X-9 (review 2026-08) — route was missing; data.route now lets the tap
+    // land on the parent's attendance view instead of the generic inbox.
+    data: { kind: "attendance", session_id: sessionId, student_id: studentId, route: "/my-attendance" },
   });
 }
 

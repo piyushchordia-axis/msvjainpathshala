@@ -15,6 +15,8 @@
 import { db, quiz_events, push_quizzes } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
 import { notifyUsers } from "./notify";
+import { enqueueJob } from "./queues";
+import { QUEUE_NAMES } from "@jp/shared/constants";
 import { logger } from "./logger";
 
 /**
@@ -109,7 +111,14 @@ async function recipientUserIds(targets: QuizTargets): Promise<string[]> {
   return rows.map((r) => r.id);
 }
 
-/** A live push quiz has started for this student's batch/centre. */
+/**
+ * A live push quiz has started for this student's batch/centre.
+ * Queue handler entry point — see enqueuePushQuizStartedAnnouncement. Not
+ * called directly from a request path (X-8): recipientUserIds for a
+ * national scope has no upper bound, and this file's `notifyUsers` call
+ * batches internally but the fan-out itself must not block the API request
+ * that started the quiz.
+ */
 export async function notifyPushQuizStarted(pushQuizId: string): Promise<void> {
   try {
     const [row] = await db
@@ -119,7 +128,12 @@ export async function notifyPushQuizStarted(pushQuizId: string): Promise<void> {
       .limit(1);
     if (!row) return;
     const userIds = await recipientUserIds(normalize(row));
-    if (userIds.length === 0) return;
+    if (userIds.length === 0) {
+      // X-25 (review 2026-08) — a misconfigured scope (e.g. city audience,
+      // empty city list) was indistinguishable from a successful send.
+      logger.info({ pushQuizId, scope: row.scope }, "notifyPushQuizStarted: zero-audience outcome");
+      return;
+    }
     await notifyUsers({
       userIds,
       kind: "quiz",
@@ -136,7 +150,24 @@ export async function notifyPushQuizStarted(pushQuizId: string): Promise<void> {
   }
 }
 
-/** A scheduled quiz event is open for taking right now. */
+/**
+ * Hand the "push quiz started" fan-out to the worker (X-8, review 2026-08) —
+ * mirrors shivir-notify.ts's enqueueShivirPublishedAnnouncement. A national
+ * scope's recipientUserIds is unbounded, so this must never run inside the
+ * request that started the quiz.
+ */
+export async function enqueuePushQuizStartedAnnouncement(pushQuizId: string): Promise<void> {
+  try {
+    await enqueueJob(QUEUE_NAMES.PARENT_NOTIFY, { kind: "quiz_started", push_quiz_id: pushQuizId });
+  } catch (err) {
+    logger.warn({ err, pushQuizId }, "push quiz started announcement enqueue failed");
+  }
+}
+
+/**
+ * A scheduled quiz event is open for taking right now.
+ * Queue handler entry point — see enqueueQuizEventOpenAnnouncement.
+ */
 export async function notifyQuizEventOpen(quizEventId: string): Promise<void> {
   try {
     const [row] = await db
@@ -146,7 +177,10 @@ export async function notifyQuizEventOpen(quizEventId: string): Promise<void> {
       .limit(1);
     if (!row) return;
     const userIds = await recipientUserIds(normalize(row));
-    if (userIds.length === 0) return;
+    if (userIds.length === 0) {
+      logger.info({ quizEventId, scope: row.scope }, "notifyQuizEventOpen: zero-audience outcome");
+      return;
+    }
     await notifyUsers({
       userIds,
       kind: "quiz",
@@ -158,6 +192,15 @@ export async function notifyQuizEventOpen(quizEventId: string): Promise<void> {
     });
   } catch (err) {
     logger.warn({ err, quizEventId }, "notifyQuizEventOpen failed");
+  }
+}
+
+/** Same X-8 reasoning as the push-quiz path — the fan-out belongs on the worker. */
+export async function enqueueQuizEventOpenAnnouncement(quizEventId: string): Promise<void> {
+  try {
+    await enqueueJob(QUEUE_NAMES.PARENT_NOTIFY, { kind: "quiz_event_open", quiz_event_id: quizEventId });
+  } catch (err) {
+    logger.warn({ err, quizEventId }, "quiz event open announcement enqueue failed");
   }
 }
 

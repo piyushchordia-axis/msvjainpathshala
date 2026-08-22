@@ -40,7 +40,7 @@ import {
   type QuizScope,
   type QuizTargetRow,
 } from "../../lib/quiz-admin-scope";
-import { notifyPushQuizStarted, notifyQuizEventOpen } from "../../lib/quiz-notify";
+import { enqueuePushQuizStartedAnnouncement, enqueueQuizEventOpenAnnouncement } from "../../lib/quiz-notify";
 import { emitPushQuizEvent, emitPushQuizRosterEvent } from "../../lib/push-quiz-feed";
 import { auditFromReq } from "../../lib/audit";
 import { clampLimit, ownedStudentsCondition } from "../../lib/route-helpers";
@@ -977,7 +977,7 @@ router.post("/events", requireRole("super_admin", "state_admin", "city_admin"), 
   const endsAt = new Date(body.end_at);
   const nowTs = new Date();
   if (startsAt <= nowTs && endsAt > nowTs) {
-    await notifyQuizEventOpen(event.id);
+    await enqueueQuizEventOpenAnnouncement(event.id);
   }
 
   ok(res, { id: event.id });
@@ -2106,7 +2106,7 @@ router.post("/push", requireAdminPanel, async (req: Request, res: Response) => {
 
   // H10 — a live in-class quiz on a 20s poll (that only runs while the student
   // is already looking at the quizzes screen) is not discoverable. Tell them.
-  await notifyPushQuizStarted(pq.id);
+  await enqueuePushQuizStartedAnnouncement(pq.id);
   // Anyone watching the live roster sees it appear without waiting for a poll.
   emitPushQuizEvent(pq.id, { type: "started", question_count: body.questions.length });
 

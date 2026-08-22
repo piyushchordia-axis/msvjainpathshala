@@ -110,6 +110,23 @@ export function registerDerivedDataJobs(): void {
       await notifyParentsOfGalleryWallFeature(ids);
       return;
     }
+    if (kind === "quiz_started") {
+      // X-8 (review 2026-08) — a national push quiz's fan-out has no upper
+      // bound, so it must not run inside the API request that started it
+      // (same reasoning as shivir_published above).
+      const pushQuizId = String((data as { push_quiz_id?: string }).push_quiz_id ?? "");
+      if (!pushQuizId) throw new Error("notifications.parent quiz_started missing push_quiz_id");
+      const { notifyPushQuizStarted } = await import("../lib/quiz-notify");
+      await notifyPushQuizStarted(pushQuizId);
+      return;
+    }
+    if (kind === "quiz_event_open") {
+      const quizEventId = String((data as { quiz_event_id?: string }).quiz_event_id ?? "");
+      if (!quizEventId) throw new Error("notifications.parent quiz_event_open missing quiz_event_id");
+      const { notifyQuizEventOpen } = await import("../lib/quiz-notify");
+      await notifyQuizEventOpen(quizEventId);
+      return;
+    }
     if (kind === "homework_bulk_graded") {
       const raw = (data as { student_ids?: unknown }).student_ids;
       const studentIds = Array.isArray(raw)
