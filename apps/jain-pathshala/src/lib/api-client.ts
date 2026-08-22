@@ -114,7 +114,7 @@ export async function apiDelete<T>(path: string, body?: unknown): Promise<T> {
   return unwrap<T>(res);
 }
 
-export async function apiGet<T>(path: string): Promise<T> {
-  const res = await get<{ data: T } | T>(path);
+export async function apiGet<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await get<{ data: T } | T>(path, init);
   return unwrap<T>(res);
 }

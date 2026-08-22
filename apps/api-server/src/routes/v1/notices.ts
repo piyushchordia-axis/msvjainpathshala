@@ -30,6 +30,8 @@ import {
   notice_reads,
   batches,
   centres,
+  cities,
+  states,
   students,
   users,
 } from "@workspace/db";
@@ -381,6 +383,11 @@ router.get("/admin", requireAuth, requireAdminPanel, async (req: Request, res: R
       batch_id: notices.batch_id,
       centre_name: centres.name,
       batch_name: batches.name,
+      // CA-11 — a state/city notice used to show a bare "State"/"City" pill;
+      // state_id/city_id were resolved by the server but no join supplied a
+      // name for either.
+      state_name: states.name,
+      city_name: cities.name,
       is_public: notices.is_public,
       pinned: notices.pinned,
       is_critical: notices.is_critical,
@@ -394,6 +401,8 @@ router.get("/admin", requireAuth, requireAdminPanel, async (req: Request, res: R
     .from(notices)
     .leftJoin(centres, eq(centres.id, notices.centre_id))
     .leftJoin(batches, eq(batches.id, notices.batch_id))
+    .leftJoin(states, eq(states.id, notices.state_id))
+    .leftJoin(cities, eq(cities.id, notices.city_id))
     .where(where)
     .orderBy(...ORDER)
     .limit(limit);
