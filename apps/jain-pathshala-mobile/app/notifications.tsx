@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { Pressable, Text, View } from "react-native";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Redirect, useLocalSearchParams, useRouter } from "expo-router";
 import { bodyFamily } from "@/constants/typography";
 import { useColors } from "@/hooks/useColors";
 import { useLocale } from "@/contexts/LocaleContext";
+import { useAuth } from "@/contexts/AuthContext";
+import { routeForRole } from "@/lib/roles";
 import { ActivityThemed } from "@/contexts/ActivityThemeContext";
 import { useNotifications } from "@/lib/queries";
 import { AppHeader } from "@/components/AppHeader";
@@ -63,6 +65,11 @@ function HubSegment({
               style={{
                 fontFamily: bodyFamily(hi, "semibold"),
                 fontSize: 13,
+                // P-10 (review 2026-08) — the only genuinely broken lineHeight
+                // site; a raw Text with no lineHeight sits under CLAUDE.md's
+                // 22px Devanagari floor (Body/Title already bake in 22px
+                // defaults elsewhere, so this was the one exception).
+                lineHeight: 22,
                 color: selected ? c.primaryForeground : c.mutedForeground,
               }}
             >
@@ -81,8 +88,16 @@ export default function NotificationsHub() {
   const router = useRouter();
   const params = useLocalSearchParams<{ tab?: string | string[] }>();
   const [tab, setTab] = useState<HubTab>(() => parseTab(params.tab));
-  const notifications = useNotifications();
+  // P-8 (review 2026-08) — routeForNotificationData falls back to
+  // /notifications for most kinds; tapping a push while signed out (or
+  // after a session expired) previously rendered a 401 as "Could not load
+  // notifications" instead of sending the user to sign in.
+  const { user, loading: authLoading } = useAuth();
+  const notifications = useNotifications(!authLoading && !!user);
   const unreadCount = notifications.data?.unread_count ?? 0;
+
+  if (authLoading) return null;
+  if (!user) return <Redirect href={routeForRole(undefined)} />;
 
   useEffect(() => {
     setTab(parseTab(params.tab));

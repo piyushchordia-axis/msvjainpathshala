@@ -203,6 +203,9 @@ router.get("/", async (req: Request, res: Response) => {
       body_hi: notifications.body_hi,
       read_at: notifications.read_at,
       created_at: notifications.created_at,
+      // X-9 / DB-1 — the durable row can now carry the deep-link payload;
+      // it was persisted (Phase 1) but never selected back out.
+      data: notifications.data,
     })
     .from(notifications)
     .where(and(...conds))

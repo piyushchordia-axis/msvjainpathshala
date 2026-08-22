@@ -19,9 +19,9 @@ import {
 import { TiroDevanagariSanskrit_400Regular } from "@expo-google-fonts/tiro-devanagari-sanskrit";
 import { useFonts } from "expo-font";
 import { PersistQueryClientProvider } from "@tanstack/react-query-persist-client";
-import { router, Stack } from "expo-router";
-import type { Href } from "expo-router";
+import { router, Stack, useRootNavigationState } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import React, { useEffect, useState } from "react";
 import { Platform } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
@@ -45,20 +45,34 @@ import { API_BASE } from "@/lib/api";
 import { isExpoGo } from "@/lib/expo-go";
 import { fonts } from "@/constants/typography";
 import colors from "@/constants/colors";
+import { routeForNotificationData } from "@/lib/notification-routing";
 
 SplashScreen.preventAutoHideAsync();
 
+/** P-7 — the id of the last push tap this install has already navigated for. */
+const LAST_HANDLED_NOTIFICATION_KEY = "jp.mobile.last_handled_notification_id";
+
 /**
- * Best-effort deep link for a tapped notification. The server puts a `route`
- * (an explicit path) and/or a `kind` on the notification's data payload (see
- * the API's sendPush callers). Fall back to the in-app notifications inbox.
+ * Navigate for a tapped notification, once per unique identifier.
+ *
+ * P-7 (review 2026-08) — `getLastNotificationResponseAsync()` returns the
+ * SAME response on every cold start until the user taps a genuinely new
+ * notification, so without this guard, re-opening the app from the icon
+ * days later replayed a stale tap's navigation every time. Persisted (not
+ * just an in-memory ref) because the replay happens across app restarts,
+ * not just within one process's lifetime — which also covers the cold-start
+ * check and the live listener firing for the same tap.
  */
-function routeForNotificationData(data: unknown): Href {
-  const d = (data ?? {}) as { route?: unknown; kind?: unknown };
-  if (typeof d.route === "string" && d.route.startsWith("/")) {
-    return d.route as Href;
+async function handleNotificationTap(data: unknown, identifier: string): Promise<void> {
+  try {
+    const last = await AsyncStorage.getItem(LAST_HANDLED_NOTIFICATION_KEY);
+    if (last === identifier) return;
+    await AsyncStorage.setItem(LAST_HANDLED_NOTIFICATION_KEY, identifier);
+  } catch {
+    // Storage unavailable — fall through and navigate anyway; a possible
+    // double-navigation beats a notification tap doing nothing.
   }
-  return "/notifications";
+  router.push(routeForNotificationData(data));
 }
 
 function RootLayoutNav() {
@@ -91,7 +105,10 @@ function RootLayoutNav() {
       <Stack.Screen name="team/index" options={{ title: hi ? "टीम" : "Team" }} />
       <Stack.Screen name="team/[citySlug]" options={{ title: hi ? "टीम" : "Team" }} />
       <Stack.Screen name="shivirs" options={{ title: hi ? "शिविर" : "Shivirs" }} />
-      <Stack.Screen name="notices" options={{ title: hi ? "सूचनाएँ" : "Notices" }} />
+      {/* P-16 — this screen draws its own AppHeader; a titled stack header
+          was a second bar over the same screen (and flashed before the
+          redirect below bounces to /notifications). */}
+      <Stack.Screen name="notices" options={{ headerShown: false }} />
       <Stack.Screen name="centre/[id]" options={{ title: hi ? "केंद्र" : "Centre" }} />
       <Stack.Screen name="shivir/[id]" options={{ title: hi ? "शिविर" : "Shivir" }} />
       <Stack.Screen name="my-shivirs" options={{ title: hi ? "मेरे शिविर" : "My shivirs" }} />
@@ -106,7 +123,8 @@ function RootLayoutNav() {
       <Stack.Screen name="info/[slug]" options={{ title: "" }} />
       <Stack.Screen name="gallery" options={{ title: hi ? "पुण्य गैलरी" : "Punya Wall" }} />
       {/* Wave 4 — new student/parent flows */}
-      <Stack.Screen name="notifications" options={{ title: hi ? "इनबॉक्स" : "Inbox" }} />
+      {/* P-16 — draws its own AppHeader (notifications.tsx). */}
+      <Stack.Screen name="notifications" options={{ headerShown: false }} />
       <Stack.Screen name="niyam-submit" options={{ title: hi ? "नियम भेजें" : "Submit Niyam" }} />
       <Stack.Screen
         name="niyam-submissions"
@@ -211,15 +229,23 @@ export default function RootLayout() {
     }
   }, []);
 
-  // Configure the foreground handler and deep-link into the relevant screen
-  // when a push notification is tapped (including the cold-start case where the
-  // tap launched the app). expo-notifications is imported lazily and only on
-  // native outside Expo Go: in Expo Go it is unavailable (SDK 53+), and on web
-  // getLastNotificationResponseAsync throws outright.
+  // P-7 (review 2026-08) — the root navigator (<Stack>) does not exist until
+  // this component actually renders it, which it doesn't until fonts are
+  // ready (the `return null` below runs AFTER this hook is called on the
+  // first render). A router.push from the cold-start check below used to be
+  // able to fire before there was anywhere to navigate to.
+  const navigationState = useRootNavigationState();
+
+  // Foreground handler + live listener. expo-notifications is imported
+  // lazily and only on native outside Expo Go: in Expo Go it is unavailable
+  // (SDK 53+), and on web these APIs throw outright. A tap on a LIVE
+  // notification only happens while the app is already interactive, so this
+  // effect does not need to wait on navigationState the way the cold-start
+  // check below does.
   useEffect(() => {
     if (isExpoGo || Platform.OS === "web") return;
-    let mounted = true;
     let sub: { remove: () => void } | undefined;
+    let cleanedUp = false;
 
     void (async () => {
       try {
@@ -235,18 +261,21 @@ export default function RootLayout() {
           }),
         });
 
-        const response = await Notifications.getLastNotificationResponseAsync();
-        if (mounted && response) {
-          router.push(
-            routeForNotificationData(response.notification.request.content.data),
-          );
-        }
-
-        sub = Notifications.addNotificationResponseReceivedListener((res) => {
-          router.push(
-            routeForNotificationData(res.notification.request.content.data),
+        const newSub = Notifications.addNotificationResponseReceivedListener((res) => {
+          void handleNotificationTap(
+            res.notification.request.content.data,
+            res.notification.request.identifier,
           );
         });
+        // The effect's cleanup can run before this async setup finishes (a
+        // fast unmount/remount); assigning `sub` only inside this async
+        // block meant an early cleanup saw `sub === undefined` and could
+        // never remove the listener registered moments later.
+        if (cleanedUp) {
+          newSub.remove();
+        } else {
+          sub = newSub;
+        }
       } catch (err) {
         // Notification deep-linking is a nicety: never let it take down boot.
         if (__DEV__) console.warn("[notifications] setup skipped:", err);
@@ -254,10 +283,37 @@ export default function RootLayout() {
     })();
 
     return () => {
-      mounted = false;
+      cleanedUp = true;
       sub?.remove();
     };
   }, []);
+
+  // Cold-start deep link: gated on the navigator actually being ready, so
+  // this can never race the <Stack> into existence.
+  useEffect(() => {
+    if (isExpoGo || Platform.OS === "web") return;
+    if (!navigationState?.key) return;
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const Notifications = await import("expo-notifications");
+        const response = await Notifications.getLastNotificationResponseAsync();
+        if (!cancelled && response) {
+          await handleNotificationTap(
+            response.notification.request.content.data,
+            response.notification.request.identifier,
+          );
+        }
+      } catch (err) {
+        if (__DEV__) console.warn("[notifications] cold-start check skipped:", err);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [navigationState?.key]);
 
   if (!fontsLoaded && !fontError) return null;
 

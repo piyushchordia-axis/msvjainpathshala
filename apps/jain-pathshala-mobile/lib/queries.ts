@@ -3,11 +3,14 @@
  * screens stay declarative and cache keys never drift. All hooks return the
  * unwrapped DTO (lib/api.ts strips the { data } envelope).
  */
+import { useEffect, useMemo } from "react";
+import { AppState, type AppStateStatus } from "react-native";
 import {
   useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
+  type InfiniteData,
 } from "@tanstack/react-query";
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete, apiGetEnvelope, ApiError } from "@/lib/api";
 // Type-only: the sync engine itself is imported dynamically at each call site so
@@ -246,10 +249,17 @@ export function useCancelShivirRegistration(shivirId?: string) {
   });
 }
 
-export function useNotices() {
+/**
+ * P-9 (review 2026-08) — this had no `enabled` guard, so the public feed was
+ * fetched unconditionally on every mount even for a signed-in member whose
+ * result (NoticesFeedScreen's `publicFeed`) is immediately discarded in
+ * favour of the member feed.
+ */
+export function useNotices(enabled = true) {
   return useQuery({
     queryKey: qk.notices,
     queryFn: () => apiGet<List<NoticeItem>>("/v1/notices/public?limit=50"),
+    enabled,
   });
 }
 
@@ -1374,6 +1384,8 @@ export type AdminNoticeRow = {
   batch_id: string | null;
   centre_name: string | null;
   batch_name: string | null;
+  state_name: string | null;
+  city_name: string | null;
   is_public: boolean;
   pinned: boolean;
   is_critical: boolean;
@@ -1381,12 +1393,21 @@ export type AdminNoticeRow = {
   expires_at: string | null;
   is_expired: boolean;
   created_at: string;
+  editable: boolean;
 };
 
-export function useAdminNotices(enabled = true) {
+/**
+ * SN-3 (review 2026-08) — this fetched a flat, capped page and let callers
+ * filter client-side; for a city+/state+ caller whose page is dominated by
+ * national/state/city/msv rows, that filter could land on an empty set
+ * while the server held a full page of centre/batch notices further back.
+ * `audience` narrows the query itself instead.
+ */
+export function useAdminNotices(enabled = true, audience?: string[]) {
+  const audienceParam = audience?.length ? `&audience=${audience.join(",")}` : "";
   return useQuery({
-    queryKey: qk.adminNotices,
-    queryFn: () => apiGet<List<AdminNoticeRow>>("/v1/notices/admin?limit=100"),
+    queryKey: audience?.length ? [...qk.adminNotices, ...audience] : qk.adminNotices,
+    queryFn: () => apiGet<List<AdminNoticeRow>>(`/v1/notices/admin?limit=100${audienceParam}`),
     enabled,
   });
 }
@@ -1722,6 +1743,10 @@ export type NoticeWriteBody = {
   pinned?: boolean;
   is_critical?: boolean;
   expires_at?: string | null;
+  // SN-6 (resolved decision) — shipped and migrated server-side, but no UI
+  // could ever set them until now.
+  publish_now?: boolean;
+  publish_at?: string | null;
 };
 
 export function useCreateNotice() {
@@ -1741,11 +1766,25 @@ export function useUpdateNotice() {
   });
 }
 
+/** SN-10 (review 2026-08) — optimistic removal so a deleted row doesn't sit
+ * on screen until the refetch lands; rolls back on failure. */
 export function useDeleteNotice() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => apiDelete(`/v1/notices/admin/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.adminNotices }),
+    onMutate: async (id: string) => {
+      await qc.cancelQueries({ queryKey: qk.adminNotices });
+      const previous = qc.getQueriesData<List<AdminNoticeRow>>({ queryKey: qk.adminNotices });
+      for (const [key, data] of previous) {
+        if (!data) continue;
+        qc.setQueryData<List<AdminNoticeRow>>(key, { ...data, items: data.items.filter((n) => n.id !== id) });
+      }
+      return { previous };
+    },
+    onError: (_err, _id, context) => {
+      context?.previous.forEach(([key, data]) => qc.setQueryData(key, data));
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.adminNotices }),
   });
 }
 
@@ -1764,6 +1803,9 @@ export type NotificationRow = {
   body_hi: string | null;
   read_at: string | null;
   created_at: string;
+  // X-9 / DB-1 (review 2026-08) — the deep-link payload, now persisted on
+  // the durable row (previously it existed only in the push payload).
+  data?: Record<string, unknown> | null;
 };
 export type NotificationsResponse = {
   items: NotificationRow[];
@@ -1784,6 +1826,7 @@ export type NotificationsResponse = {
  * — unlike gallery/homework, which put it in `meta`.
  */
 export function useNotifications(enabled = true) {
+  const qc = useQueryClient();
   const query = useInfiniteQuery({
     queryKey: qk.notifications,
     initialPageParam: undefined as string | undefined,
@@ -1795,24 +1838,94 @@ export function useNotifications(enabled = true) {
     enabled,
   });
 
-  const pages = query.data?.pages ?? [];
-  return {
-    ...query,
-    // Flattened view so call sites keep the shape they had before paging.
-    data: pages.length
+  // P-14 (review 2026-08) — unread_count was a page-0 snapshot that never
+  // refreshed on its own; a cold start (or leaving the app open in the
+  // background) rendered a stale count until the user manually pulled to
+  // refresh. Refetch when the app returns to the foreground.
+  useEffect(() => {
+    if (!enabled) return;
+    const sub = AppState.addEventListener("change", (state: AppStateStatus) => {
+      if (state === "active") void qc.refetchQueries({ queryKey: qk.notifications, type: "active" });
+    });
+    return () => sub.remove();
+  }, [enabled, qc]);
+
+  // P-15 (review 2026-08) — memoized on the react-query-stable `query.data`
+  // reference, not recomputed into a brand-new object/array on every render;
+  // FlatList's `data` identity bail-out was previously defeated by this.
+  const data = useMemo(() => {
+    const pages = query.data?.pages ?? [];
+    return pages.length
       ? {
           items: pages.flatMap((p) => p.items),
           // Only page 0 carries the count — the server omits it on later pages.
           unread_count: pages[0]?.unread_count ?? 0,
         }
-      : undefined,
-  };
+      : undefined;
+  }, [query.data]);
+
+  return { ...query, data };
 }
+
+type NotificationsInfiniteData = InfiniteData<NotificationsResponse, string | undefined>;
+
 export function useMarkNotificationRead() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: ({ id }: { id: string }) => apiPost(`/v1/notifications/${id}/read`, {}),
-    onSuccess: () => qc.invalidateQueries({ queryKey: qk.notifications }),
+    // P-3 (review 2026-08) — no onMutate/onError meant the "New" pill stayed
+    // until the whole infinite query round-tripped, and stayed forever with
+    // no message on failure. Now the read receipt (and unread_count) update
+    // immediately, and roll back if the request fails.
+    onMutate: async ({ id }) => {
+      await qc.cancelQueries({ queryKey: qk.notifications });
+      const previous = qc.getQueryData<NotificationsInfiniteData>(qk.notifications);
+      if (previous) {
+        const now = new Date().toISOString();
+        let wasUnread = false;
+        const pages = previous.pages.map((page, i) => {
+          const items = page.items.map((item) => {
+            if (item.id !== id || item.read_at) return item;
+            wasUnread = true;
+            return { ...item, read_at: now };
+          });
+          return i === 0 && wasUnread ? { ...page, items, unread_count: Math.max(0, page.unread_count - 1) } : { ...page, items };
+        });
+        qc.setQueryData<NotificationsInfiniteData>(qk.notifications, { ...previous, pages });
+      }
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) qc.setQueryData(qk.notifications, context.previous);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.notifications }),
+  });
+}
+
+/** P-4 (review 2026-08) — POST /v1/notifications/read-all was implemented and
+ * tested server-side with zero clients; this is the missing one. */
+export function useMarkAllNotificationsRead() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => apiPost<{ updated: number }>("/v1/notifications/read-all", {}),
+    onMutate: async () => {
+      await qc.cancelQueries({ queryKey: qk.notifications });
+      const previous = qc.getQueryData<NotificationsInfiniteData>(qk.notifications);
+      if (previous) {
+        const now = new Date().toISOString();
+        const pages = previous.pages.map((page, i) => ({
+          ...page,
+          items: page.items.map((item) => (item.read_at ? item : { ...item, read_at: now })),
+          ...(i === 0 ? { unread_count: 0 } : {}),
+        }));
+        qc.setQueryData<NotificationsInfiniteData>(qk.notifications, { ...previous, pages });
+      }
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) qc.setQueryData(qk.notifications, context.previous);
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: qk.notifications }),
   });
 }
 

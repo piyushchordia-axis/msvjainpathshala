@@ -34,6 +34,7 @@ import {
   states,
   students,
   users,
+  NOTICE_AUDIENCES,
 } from "@workspace/db";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { ErrorCode, NoticeWrite } from "@workspace/api-zod";
@@ -361,13 +362,24 @@ router.post("/:id/read", requireAuth, async (req: Request, res: Response) => {
 
 /* ═══════════════════════════════ ADMIN ═══════════════════════════════ */
 
-/* GET /v1/notices/admin?limit= — authoring list, scoped to the caller */
+/* GET /v1/notices/admin?limit=&audience= — authoring list, scoped to the caller */
 router.get("/admin", requireAuth, requireAdminPanel, async (req: Request, res: Response) => {
   const user = req.authUser!;
   const scope = await resolveAdminScope(user);
   const limit = clampLimit(req.query.limit, 100, 300);
   const scopeWhere = adminFeedWhere(scope, user.state_id ?? null, user.city_id ?? null);
-  const where = scopeWhere ? and(scopeWhere, NOT_DELETED) : NOT_DELETED;
+  // SN-3 (review 2026-08) — the sanchalak mobile composer fetched a capped
+  // page and filtered to centre/batch client-side; for a city+/state+ caller
+  // whose page is dominated by national/state/city/msv rows, that filter
+  // could land on an empty set while the server held a full page. An
+  // explicit server-side filter lets that client ask for exactly what it
+  // wants instead of guessing at how many rows to fetch.
+  const audienceParam = req.query.audience;
+  const audienceList = (typeof audienceParam === "string" ? audienceParam.split(",") : [])
+    .map((a) => a.trim())
+    .filter((a): a is (typeof NOTICE_AUDIENCES)[number] => (NOTICE_AUDIENCES as readonly string[]).includes(a));
+  const audienceWhere = audienceList.length > 0 ? inArray(notices.audience, audienceList) : undefined;
+  const where = and(...[scopeWhere, audienceWhere, NOT_DELETED].filter((c) => c !== undefined));
 
   const rows = await db
     .select({

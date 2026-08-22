@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { apiPost, setAuthToken, setRefreshToken, setTokenPersistor } from "@/lib/api";
-import { registerPushTokenWithApi } from "@/lib/push";
+import { deactivatePushTokenWithApi, registerPushTokenWithApi, watchForPushTokenRotation } from "@/lib/push";
 import { secureStorage } from "@/lib/secure-storage";
 import type { AuthTokens, SessionUser } from "@/lib/auth";
 
@@ -64,7 +64,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // for push, best-effort. Covers reinstall/restore/permission changes
         // where sign-in never runs again. No-ops in Expo Go / placeholder EAS
         // project (guarded in lib/push.ts) and never blocks hydration.
-        if (token && rawUser) void registerPushTokenWithApi();
+        if (token && rawUser) {
+          void registerPushTokenWithApi();
+          void watchForPushTokenRotation();
+        }
       } catch {
       } finally {
         setLoading(false);
@@ -87,6 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       ]);
       // Register this device for push, best-effort — must never block sign-in.
       void registerPushTokenWithApi();
+      void watchForPushTokenRotation();
     },
     [queryClient],
   );
@@ -97,6 +101,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = useCallback(async () => {
+    // X-4 (review 2026-08) — must run BEFORE the auth token is cleared: the
+    // deactivate route is scoped to the caller's own token. Without this, a
+    // shared family handset kept delivering the signed-out account's
+    // notifications to whoever signs in next.
+    await deactivatePushTokenWithApi();
     // Send the refresh token so the server revokes the session (mobile has no
     // cookie); short access TTL means the access token also lapses quickly.
     const refresh = await secureStorage.getItem(REFRESH_KEY).catch(() => null);
