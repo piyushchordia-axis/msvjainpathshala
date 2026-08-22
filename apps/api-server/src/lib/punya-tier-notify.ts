@@ -53,17 +53,21 @@ export async function notifyTierUpgrade(opts: {
 
   try {
     const [student] = await db
-      .select({ full_name: students.full_name, parent_id: students.parent_id })
+      .select({ full_name: students.full_name, parent_id: students.parent_id, user_id: students.user_id })
       .from(students)
       .where(eq(students.id, opts.studentId))
       .limit(1);
-    if (!student?.parent_id) return;
+    // X-16 (review 2026-08) — parent_id-only left the student who earned the
+    // tier (Q4, 8+ with their own OTP login) hearing nothing about their own
+    // achievement, same reasoning niyam-approve.ts already applies.
+    const userIds = [...new Set([student?.parent_id, student?.user_id].filter((id): id is string => !!id))];
+    if (userIds.length === 0) return;
 
     const label = TIER_LABELS[opts.newTier] ?? { en: opts.newTier, hi: opts.newTier };
-    const name = student.full_name;
+    const name = student?.full_name ?? "your child";
 
     await notifyUsers({
-      userIds: [student.parent_id],
+      userIds,
       kind: "punya_tier",
       title_en: `${name} is now ${label.en}`,
       title_hi: `${name} अब ${label.hi} हैं`,

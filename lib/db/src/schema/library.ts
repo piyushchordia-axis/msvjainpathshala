@@ -246,6 +246,11 @@ export const library_content_requests = pgTable(
     }),
     actioned_by: uuid("actioned_by").references(() => users.id, { onDelete: "set null" }),
     actioned_at: timestamp("actioned_at", { withTimezone: true }),
+    // X-17 (review 2026-08) — per-row marker so a publish fan-out that fails
+    // partway through (one recipient's notifyUsers call throws) can be
+    // retried for just the rows still missing a notification, instead of
+    // stranding them forever once the row is already terminal (`published`).
+    notified_at: timestamp("notified_at", { withTimezone: true }),
     ...timestamps(),
   },
   (t) => ({

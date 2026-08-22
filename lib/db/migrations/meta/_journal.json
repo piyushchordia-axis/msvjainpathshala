@@ -778,6 +778,20 @@
       "when": 1792400400006,
       "tag": "0110_notification_kind_notice",
       "breakpoints": true
+    },
+    {
+      "idx": 111,
+      "version": "7",
+      "when": 1792400400007,
+      "tag": "0111_library_content_requests_notified_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 112,
+      "version": "7",
+      "when": 1792400400008,
+      "tag": "0112_notifications_unread_stale_index",
+      "breakpoints": true
     }
   ]
 }

@@ -18,27 +18,11 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import { notifyUsers } from "./notify";
 import { logger } from "./logger";
 
-/** Unique parent user ids for the given students (skips null parent_id). */
-export async function parentUserIdsForStudents(studentIds: string[]): Promise<string[]> {
-  const ids = [...new Set(studentIds)].filter(Boolean);
-  if (ids.length === 0) return [];
-  const rows = await db
-    .select({ parent_id: students.parent_id })
-    .from(students)
-    .where(
-      and(
-        inArray(students.id, ids),
-        eq(students.status, "active"),
-        isNull(students.deleted_at),
-      ),
-    );
-  return [...new Set(rows.map((r) => r.parent_id).filter((id): id is string => !!id))];
-}
-
 /**
  * Parent AND the student's own (Q4, 8+) user ids for the given active
  * students — X-16 (review 2026-08). A parent_id-only send left a student who
- * has their own OTP login hearing nothing about their own homework.
+ * has their own OTP login hearing nothing about their own homework. Replaces
+ * the old parent-only parentUserIdsForStudents helper everywhere in this file.
  */
 async function recipientUserIdsForStudents(
   studentIds: string[],
@@ -96,7 +80,7 @@ export async function notifyParentHomeworkGraded(opts: {
 }): Promise<void> {
   try {
     // X-27 (review 2026-08) — filter to active, non-deleted, matching the
-    // batch helper (parentUserIdsForStudents) which already did this.
+    // batch helper (recipientUserIdsForStudents) which already did this.
     const [stu] = await db
       .select({
         parent_id: students.parent_id,
@@ -210,7 +194,7 @@ export async function notifyParentHomeworkReturned(opts: {
   feedbackNote: string;
 }): Promise<void> {
   try {
-    // X-27 — active/non-deleted, matching parentUserIdsForStudents.
+    // X-27 — active/non-deleted, matching recipientUserIdsForStudents.
     const [stu] = await db
       .select({
         parent_id: students.parent_id,

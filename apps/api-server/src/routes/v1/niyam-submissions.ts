@@ -659,6 +659,7 @@ router.post("/bulk-approve", requireAdminPanel, async (req: Request, res: Respon
         results.push({ id, status: "approved" });
         await notifyBadgesPush({
           parentUserId: outcome.parent_id,
+          studentUserId: outcome.student_user_id,
           studentName: outcome.student_name,
           badges: outcome.newBadges,
         });
@@ -727,6 +728,7 @@ router.post("/:id/approve", requireAdminPanel, async (req: Request, res: Respons
 
   await notifyBadgesPush({
     parentUserId: outcome.parent_id,
+    studentUserId: outcome.student_user_id,
     studentName: outcome.student_name,
     badges: outcome.newBadges,
   });

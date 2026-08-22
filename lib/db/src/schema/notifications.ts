@@ -91,6 +91,11 @@ export const notifications = pgTable(
     retention_prune_idx: index("idx_notifications_retention_prune")
       .on(t.created_at)
       .where(sql`${t.read_at} IS NOT NULL`),
+    // X-21: access path for the long-horizon unread cap (stale unread rows
+    // are no longer retained forever, just far longer than read ones).
+    unread_stale_idx: index("idx_notifications_unread_stale")
+      .on(t.created_at)
+      .where(sql`${t.read_at} IS NULL`),
   }),
 );
 

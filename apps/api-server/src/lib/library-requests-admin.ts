@@ -257,6 +257,31 @@ export async function decideRequest(opts: {
       "Someone else just actioned this request — reload the queue to see where it stands.",
     );
   }
+
+  // X-17 (review 2026-08) — a rejected request never reached the requester
+  // at all, despite admin_note existing specifically to tell them something.
+  // Account holders only (§17.10.7, same scope cut as the publish path);
+  // best-effort — a notify failure must not undo the decision that already
+  // committed above.
+  if (opts.to === "rejected" && updated.requester_user_id) {
+    const note = updated.admin_note?.trim();
+    await notifyUsers({
+      userIds: [updated.requester_user_id],
+      kind: "library",
+      title_en: "Update on your library request",
+      title_hi: "आपके पुस्तकालय अनुरोध पर अपडेट",
+      body_en: note
+        ? `"${updated.title}" was not added this time — ${note}`
+        : `"${updated.title}" was not added this time.`,
+      body_hi: note
+        ? `“${updated.title}” इस बार नहीं जोड़ा गया — ${note}`
+        : `“${updated.title}” इस बार नहीं जोड़ा गया।`,
+      data: { kind: "library", request_id: updated.id },
+    }).catch((err) => {
+      logger.warn({ err, request_id: updated.id }, "library request rejection notify failed");
+    });
+  }
+
   return updated;
 }
 
@@ -381,6 +406,7 @@ async function uniqueItemCode(title: string): Promise<string> {
  * not be delivered; the request rows are already updated by then.
  */
 export async function publishLinkedContentRequests(itemId: string): Promise<number> {
+  let newlyPublished = 0;
   try {
     const updated = await db
       .update(library_content_requests)
@@ -391,21 +417,53 @@ export async function publishLinkedContentRequests(itemId: string): Promise<numb
           eq(library_content_requests.status, "accepted"),
         ),
       )
-      .returning({
-        id: library_content_requests.id,
-        title: library_content_requests.title,
-        requester_user_id: library_content_requests.requester_user_id,
-      });
+      .returning({ id: library_content_requests.id });
+    newlyPublished = updated.length;
+  } catch (err) {
+    logger.error({ err, item_id: itemId }, "[library-requests] publish transition failed");
+    return 0;
+  }
 
-    if (updated.length === 0) return 0;
+  // X-17 (review 2026-08) — re-select EVERY published-but-unnotified row for
+  // this item, not just the ones this call just transitioned. A prior call
+  // that flipped the status but threw before notifying everyone left rows
+  // permanently unreachable by the old WHERE (status = 'accepted'); notified_at
+  // is what lets a retry find and finish them.
+  const pending = await db
+    .select({
+      id: library_content_requests.id,
+      title: library_content_requests.title,
+      requester_user_id: library_content_requests.requester_user_id,
+    })
+    .from(library_content_requests)
+    .where(
+      and(
+        eq(library_content_requests.linked_item_id, itemId),
+        eq(library_content_requests.status, "published"),
+        isNull(library_content_requests.notified_at),
+      ),
+    );
 
-    // §17.10.7 — account holders only. A pure guest who never signed in has no
-    // inbox to write to; their number permits manual outreach and nothing more.
-    // This is a deliberate scope cut, not an oversight.
-    const withAccounts = updated.filter((r) => r.requester_user_id);
-    for (const row of withAccounts) {
+  if (pending.length === 0) return newlyPublished;
+
+  // §17.10.7 — account holders only. A pure guest who never signed in has no
+  // inbox to write to; their number permits manual outreach and nothing more.
+  // This is a deliberate scope cut, not an oversight. A guest row has no
+  // notification to send, so it is marked notified immediately.
+  let notified = 0;
+  for (const row of pending) {
+    if (!row.requester_user_id) {
+      await db
+        .update(library_content_requests)
+        .set({ notified_at: new Date() })
+        .where(eq(library_content_requests.id, row.id));
+      continue;
+    }
+    // X-10 shape — per-row try/catch so one requester's push failure does
+    // not strand every other requester's notification behind it.
+    try {
       await notifyUsers({
-        userIds: [row.requester_user_id!],
+        userIds: [row.requester_user_id],
         kind: "library",
         title_en: "Your request is in the library",
         title_hi: "आपका अनुरोध पुस्तकालय में आ गया",
@@ -413,17 +471,21 @@ export async function publishLinkedContentRequests(itemId: string): Promise<numb
         body_hi: `“${row.title}” जोड़ दिया गया है — पुस्तकालय में खोलें।`,
         data: { kind: "library", library_item_id: itemId, request_id: row.id },
       });
+      await db
+        .update(library_content_requests)
+        .set({ notified_at: new Date() })
+        .where(eq(library_content_requests.id, row.id));
+      notified += 1;
+    } catch (err) {
+      logger.error({ err, item_id: itemId, request_id: row.id }, "[library-requests] notify failed for one requester");
     }
-
-    logger.info(
-      { item_id: itemId, requests: updated.length, notified: withAccounts.length },
-      "[library-requests] linked requests published",
-    );
-    return updated.length;
-  } catch (err) {
-    logger.error({ err, item_id: itemId }, "[library-requests] publish fan-out failed");
-    return 0;
   }
+
+  logger.info(
+    { item_id: itemId, newly_published: newlyPublished, notified, pending: pending.length },
+    "[library-requests] linked requests published",
+  );
+  return newlyPublished;
 }
 
 /** Requester display names for the queue, resolved in one round trip. */

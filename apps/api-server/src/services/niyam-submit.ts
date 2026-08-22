@@ -108,6 +108,7 @@ export async function submitNiyam(input: SubmitNiyamInput): Promise<SubmitNiyamO
       id: students.id,
       msv_status: students.msv_status,
       parent_id: students.parent_id,
+      user_id: students.user_id,
       full_name: students.full_name,
       city_id: centres.city_id,
       state_id: centres.state_id,
@@ -356,6 +357,7 @@ export async function submitNiyam(input: SubmitNiyamInput): Promise<SubmitNiyamO
     });
     await notifyBadgesPush({
       parentUserId: studentCtx.parent_id,
+      studentUserId: studentCtx.user_id,
       studentName: studentCtx.full_name,
       badges: newBadges,
     });

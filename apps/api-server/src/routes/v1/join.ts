@@ -448,6 +448,7 @@ router.post("/registrations", async (req: Request, res: Response) => {
     void notifyJoinSubmitted({
       kind: "student",
       centreId: row!.centre_id,
+      registrationId: row!.id,
       name: row!.name,
       displayCode: row!.display_code,
     });
@@ -517,6 +518,7 @@ router.post("/registrations", async (req: Request, res: Response) => {
   void notifyJoinSubmitted({
     kind: kindRaw,
     centreId: row!.centre_id,
+    registrationId: row!.id,
     name: row!.name,
     displayCode: row!.display_code,
   });

@@ -148,17 +148,20 @@ export async function awardNewlyReachedBadges(
  */
 export async function notifyBadgesPush(opts: {
   parentUserId: string | null;
+  /** X-16 (review 2026-08) — the child's own Q4 login, if they have one. */
+  studentUserId?: string | null;
   studentName: string;
   badges: AwardedBadge[];
 }): Promise<void> {
-  if (!opts.parentUserId || opts.badges.length === 0) return;
+  const userIds = [...new Set([opts.parentUserId, opts.studentUserId].filter((id): id is string => !!id))];
+  if (userIds.length === 0 || opts.badges.length === 0) return;
 
   const labelsEn = opts.badges.map((b) => niyamBadgeLabel(b.badge_key, "en")).join(", ");
   const labelsHi = opts.badges.map((b) => niyamBadgeLabel(b.badge_key, "hi")).join(", ");
 
   // Request-handler path — never fail approve/badge award on notify.
   await notifyUsers({
-    userIds: [opts.parentUserId],
+    userIds,
     kind: "niyam_badge",
     title_en: "Streak badge earned!",
     title_hi: "लकीर बैज मिला!",
@@ -170,6 +173,6 @@ export async function notifyBadgesPush(opts: {
       badges: opts.badges.map((b) => b.badge_key),
     },
   }).catch((err) => {
-    logger.warn({ err, parentUserId: opts.parentUserId }, "notifyBadgesPush failed");
+    logger.warn({ err, userIds }, "notifyBadgesPush failed");
   });
 }

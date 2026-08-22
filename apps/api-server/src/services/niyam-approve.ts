@@ -85,6 +85,7 @@ export type ApproveNiyamOutcome =
       tier: string;
       newBadges: AwardedBadge[];
       parent_id: string | null;
+      student_user_id: string | null;
       student_name: string;
       created_at: Date;
       niyam_id: string;
@@ -270,6 +271,7 @@ export async function approveNiyamSubmission(opts: {
     tier: award.result.tier,
     newBadges: award.newBadges,
     parent_id: sub.parent_id,
+    student_user_id: sub.student_user_id,
     student_name: sub.student_name,
     created_at: sub.created_at,
     niyam_id: sub.niyam_id,

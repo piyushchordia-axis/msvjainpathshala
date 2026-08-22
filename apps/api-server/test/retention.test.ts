@@ -3,7 +3,11 @@
  */
 import { afterAll, describe, expect, it } from "vitest";
 import { pool, db, sync_operations, notifications, users } from "@workspace/db";
-import { pruneSyncOperations, pruneReadNotifications } from "../src/lib/retention";
+import {
+  pruneSyncOperations,
+  pruneReadNotifications,
+  pruneStaleUnreadNotifications,
+} from "../src/lib/retention";
 import { ulid } from "../src/lib/ulid";
 
 afterAll(async () => {
@@ -143,6 +147,62 @@ describe("retention prune (PERF #8)", () => {
       );
       expect(left.rows.map((r) => r.id)).toContain(unread!.id);
       expect(left.rows.map((r) => r.id)).not.toContain(read!.id);
+    } finally {
+      await pool.query(`delete from notifications where id = any($1::uuid[])`, [planted]);
+    }
+  });
+
+  it("X-21: a long-horizon cap prunes stale unread rows but keeps recent unread ones", async () => {
+    const [user] = await db.select({ id: users.id }).from(users).limit(1);
+    expect(user).toBeTruthy();
+
+    const veryOld = new Date(Date.now() - 800 * 24 * 60 * 60 * 1000); // > 730 days
+    const recent = new Date(Date.now() - 5 * 24 * 60 * 60 * 1000);
+    const planted: string[] = [];
+
+    const [stale] = await db
+      .insert(notifications)
+      .values({
+        user_id: user!.id,
+        kind: "general",
+        title_en: "x21 stale unread",
+        title_hi: "x21 पुराना अनरीड",
+        body_en: "prune me eventually",
+        body_hi: "आखिरकार हटाएँ",
+        read_at: null,
+        created_at: veryOld,
+        updated_at: veryOld,
+      })
+      .returning({ id: notifications.id });
+    planted.push(stale!.id);
+
+    const [fresh] = await db
+      .insert(notifications)
+      .values({
+        user_id: user!.id,
+        kind: "general",
+        title_en: "x21 fresh unread",
+        title_hi: "x21 नया अनरीड",
+        body_en: "keep me",
+        body_hi: "रखें",
+        read_at: null,
+        created_at: recent,
+        updated_at: recent,
+      })
+      .returning({ id: notifications.id });
+    planted.push(fresh!.id);
+
+    try {
+      const deleted = await pruneStaleUnreadNotifications(730);
+      expect(deleted).toBeGreaterThanOrEqual(1);
+
+      const left = await pool.query<{ id: string }>(
+        `select id from notifications where id = any($1::uuid[])`,
+        [planted],
+      );
+      const ids = left.rows.map((r) => r.id);
+      expect(ids).toContain(fresh!.id);
+      expect(ids).not.toContain(stale!.id);
     } finally {
       await pool.query(`delete from notifications where id = any($1::uuid[])`, [planted]);
     }
