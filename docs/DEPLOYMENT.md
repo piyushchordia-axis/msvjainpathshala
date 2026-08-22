@@ -101,14 +101,22 @@ nothing). Configure for real payments.
 
 ### File storage
 
-Default is local disk; switch to S3 for multi-instance/autoscale (local disk is
-per-instance and ephemeral — see the autoscale caveat).
+Default is local disk; set `STORAGE_PROVIDER` to `r2` or `s3` for remote
+object storage (multi-instance / autoscale — local disk is per-instance and
+ephemeral).
 
 | Var | Purpose |
 |-----|---------|
-| `UPLOADS_DIR` | Local-disk uploads directory (default `<cwd>/uploads`). |
+| `STORAGE_PROVIDER` | `local` (default), `r2`, `s3`, or `minio` (S3-compatible with custom endpoint). |
+| `UPLOADS_DIR` | Local-disk uploads directory when `STORAGE_PROVIDER=local`. |
 | `UPLOAD_URL_TTL_SECONDS` | TTL for signed `/uploads/*` links. |
-| `S3_BUCKET` | S3 bucket for the S3 storage provider (plus the usual `AWS_*` credentials in the runtime). |
+| `STORAGE_BUCKET` | Remote bucket name (aliases: `R2_BUCKET`, `S3_BUCKET`). |
+| `STORAGE_ACCESS_KEY_ID` | Remote access key (aliases: `R2_ACCESS_KEY_ID`, `AWS_ACCESS_KEY_ID`). |
+| `STORAGE_SECRET_ACCESS_KEY` | Remote secret (aliases: `R2_SECRET_ACCESS_KEY`, `AWS_SECRET_ACCESS_KEY`). |
+| `STORAGE_REGION` | Region (`auto` for R2; e.g. `ap-south-1` for AWS). Alias: `AWS_REGION`. |
+| `STORAGE_ENDPOINT` | Custom S3 endpoint (required for `minio`; auto-derived for R2 from `R2_ACCOUNT_ID`). Alias: `S3_ENDPOINT`. |
+| `R2_ACCOUNT_ID` | Cloudflare account id — used to build the R2 API endpoint when `STORAGE_PROVIDER=r2`. |
+| `R2_PUBLIC_BASE_URL` | Optional public bucket URL for direct assets (uploads still gate through `/uploads/*`). |
 
 ### Optional / tuning
 
@@ -149,5 +157,6 @@ pieces of in-process state are not safe across instances:
   count and resets on restart/scale events. Back it with the shared **`REDIS_URL`** for
   a correct cluster-wide limit (the code comments already flag this).
 
-Local-disk file storage has the same multi-instance problem — use `S3_BUCKET` so
-uploads are shared and durable across instances.
+Local-disk file storage has the same multi-instance problem — set
+`STORAGE_PROVIDER=r2` or `STORAGE_PROVIDER=s3` so uploads are shared and durable
+across instances.

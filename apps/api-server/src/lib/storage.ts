@@ -1,18 +1,19 @@
 /**
  * Pluggable file storage. LocalDiskProvider (dev default) or S3StorageProvider
- * in production — both implement the same StorageProvider interface, so no
- * call-site changes are needed to switch.
+ * for R2 / AWS S3 / MinIO — both implement the same StorageProvider interface.
+ * Provider selection and credentials live in storage-config.ts (env-driven).
  *
  * LocalDisk: files are written under UPLOADS_DIR (default <cwd>/uploads) and
- * served by Express static at `${PUBLIC_API_URL}/uploads/<key>`. S3: objects
- * live in S3_BUCKET; url() returns the same gated `/uploads/<key>` URL and
- * presignedUrl() returns a direct, time-limited S3 link when needed.
+ * served by Express static at `${PUBLIC_API_URL}/uploads/<key>`. Remote: objects
+ * live in the configured bucket; url() returns the same gated `/uploads/<key>`
+ * URL and presignedUrl() returns a direct, time-limited object link when needed.
  */
 import { createReadStream, type ReadStream } from "node:fs";
 import { Readable, PassThrough } from "node:stream";
 import { mkdir, writeFile, copyFile, stat, unlink } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { getStorageConfig, type RemoteStorageConfig } from "./storage-config";
 
 export interface StoredObject {
   key: string;
@@ -109,7 +110,12 @@ class LocalDiskProvider implements StorageProvider {
  */
 type S3Client = { send(command: unknown): Promise<{ Body?: unknown }> };
 type S3Module = {
-  S3Client: new (opts: { region: string; endpoint?: string; forcePathStyle?: boolean }) => S3Client;
+  S3Client: new (opts: {
+    region: string;
+    endpoint?: string;
+    forcePathStyle?: boolean;
+    credentials: { accessKeyId: string; secretAccessKey: string };
+  }) => S3Client;
   PutObjectCommand: new (opts: Record<string, unknown>) => unknown;
   GetObjectCommand: new (opts: Record<string, unknown>) => unknown;
   DeleteObjectCommand: new (opts: Record<string, unknown>) => unknown;
@@ -119,19 +125,13 @@ type PresignerModule = {
 };
 
 class S3StorageProvider implements StorageProvider {
-  private readonly bucket: string;
-  private readonly region: string;
-  private readonly endpoint: string | undefined;
-  private readonly urlTtl: number;
+  private readonly config: RemoteStorageConfig;
   // Lazily-constructed S3 client (dynamic import keeps the SDK out of dev/test).
   private client: S3Client | undefined;
   private sdk: S3Module | undefined;
 
-  constructor(opts: { bucket: string; region: string; endpoint?: string; urlTtl?: number }) {
-    this.bucket = opts.bucket;
-    this.region = opts.region;
-    this.endpoint = opts.endpoint;
-    this.urlTtl = opts.urlTtl ?? 3600;
+  constructor(config: RemoteStorageConfig) {
+    this.config = config;
   }
 
   private async getSdk(): Promise<S3Module> {
@@ -144,9 +144,11 @@ class S3StorageProvider implements StorageProvider {
   private async getClient(): Promise<S3Client> {
     if (!this.client) {
       const { S3Client } = await this.getSdk();
+      const { region, endpoint, forcePathStyle, accessKeyId, secretAccessKey } = this.config;
       this.client = new S3Client({
-        region: this.region,
-        ...(this.endpoint ? { endpoint: this.endpoint, forcePathStyle: true } : {}),
+        region,
+        credentials: { accessKeyId, secretAccessKey },
+        ...(endpoint ? { endpoint, forcePathStyle } : {}),
       });
     }
     return this.client;
@@ -160,7 +162,7 @@ class S3StorageProvider implements StorageProvider {
       const stream = createReadStream(body);
       await client.send(
         new PutObjectCommand({
-          Bucket: this.bucket,
+          Bucket: this.config.bucket,
           Key: key,
           Body: stream,
           ContentType: contentType,
@@ -170,7 +172,12 @@ class S3StorageProvider implements StorageProvider {
       return { key, url: this.url(key), content_type: contentType, size: info.size };
     }
     await client.send(
-      new PutObjectCommand({ Bucket: this.bucket, Key: key, Body: body, ContentType: contentType }),
+      new PutObjectCommand({
+        Bucket: this.config.bucket,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+      }),
     );
     return { key, url: this.url(key), content_type: contentType, size: body.length };
   }
@@ -191,12 +198,14 @@ class S3StorageProvider implements StorageProvider {
     const { GetObjectCommand } = await this.getSdk();
     const { getSignedUrl } = (await import("@aws-sdk/s3-request-presigner")) as unknown as PresignerModule;
     const ttl = Math.min(
-      Math.max(expiresInSeconds ?? this.urlTtl, 60),
-      this.urlTtl,
+      Math.max(expiresInSeconds ?? this.config.urlTtl, 60),
+      this.config.urlTtl,
     );
-    return getSignedUrl(client, new GetObjectCommand({ Bucket: this.bucket, Key: key }), {
-      expiresIn: ttl,
-    });
+    return getSignedUrl(
+      client,
+      new GetObjectCommand({ Bucket: this.config.bucket, Key: key }),
+      { expiresIn: ttl },
+    );
   }
 
   getStream(key: string): ReadStream {
@@ -209,7 +218,9 @@ class S3StorageProvider implements StorageProvider {
       try {
         const client = await this.getClient();
         const { GetObjectCommand } = await this.getSdk();
-        const out = await client.send(new GetObjectCommand({ Bucket: this.bucket, Key: key }));
+        const out = await client.send(
+          new GetObjectCommand({ Bucket: this.config.bucket, Key: key }),
+        );
         const body = out.Body as Readable | undefined;
         if (!body) {
           passthrough.destroy(new Error("Empty S3 body"));
@@ -227,39 +238,33 @@ class S3StorageProvider implements StorageProvider {
     try {
       const client = await this.getClient();
       const { DeleteObjectCommand } = await this.getSdk();
-      await client.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: key }));
+      await client.send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: key }));
     } catch {
       /* best-effort; ignore */
     }
   }
 }
 
+function resolveUploadsDir(): string {
+  const cfg = getStorageConfig();
+  if (cfg.kind === "local") return cfg.uploadsDir;
+  return process.env["UPLOADS_DIR"]
+    ? path.resolve(process.env["UPLOADS_DIR"])
+    : path.resolve(process.cwd(), "uploads");
+}
+
 /** Absolute path to the on-disk uploads directory (also served by Express static). */
-export const UPLOADS_DIR = process.env["UPLOADS_DIR"]
-  ? path.resolve(process.env["UPLOADS_DIR"])
-  : path.resolve(process.cwd(), "uploads");
+export const UPLOADS_DIR = resolveUploadsDir();
 
 // ---------------------------------------------------------------------------
 // Factory (singleton)
 // ---------------------------------------------------------------------------
-/**
- * S3 in production (STORAGE_PROVIDER=s3 or an S3_BUCKET present), LocalDisk in
- * dev — mirrors the payments/sms provider-selection pattern.
- */
 function build(): StorageProvider {
-  const bucket = process.env["S3_BUCKET"];
-  const useS3 = process.env["STORAGE_PROVIDER"] === "s3" || !!bucket;
-  if (useS3) {
-    if (!bucket) {
-      throw new Error("STORAGE_PROVIDER=s3 requires S3_BUCKET to be set.");
-    }
-    return new S3StorageProvider({
-      bucket,
-      region: process.env["AWS_REGION"] ?? "us-east-1",
-      ...(process.env["S3_ENDPOINT"] ? { endpoint: process.env["S3_ENDPOINT"] } : {}),
-    });
+  const cfg = getStorageConfig();
+  if (cfg.kind === "local") {
+    return new LocalDiskProvider(cfg.uploadsDir);
   }
-  return new LocalDiskProvider(UPLOADS_DIR);
+  return new S3StorageProvider(cfg);
 }
 
 /** Singleton storage provider for the whole server. */

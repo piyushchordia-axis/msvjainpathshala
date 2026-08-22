@@ -15,6 +15,7 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "ingest:bhaktamar": "tsx ./scripts/ingest-bhaktamar.ts",
     "ingest:istavan": "tsx ./scripts/ingest-istavan.ts",
+    "migrate:uploads-to-r2": "tsx ./scripts/migrate-uploads-to-r2.ts",
     "panchang:check": "tsx ./scripts/check-panchang.ts"
   },
   "dependencies": {

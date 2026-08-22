@@ -74,3 +74,6 @@ __pycache__/
 
 # Local scratch / debug artifacts
 infra/scratch/
+
+# DB dumps (PII — never commit)
+dumps/*.dump

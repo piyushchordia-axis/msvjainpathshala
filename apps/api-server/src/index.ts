@@ -5,6 +5,7 @@ import { startScheduler } from "./lib/scheduler";
 import { getSmsProvider, logSmsBalanceIfConfigured } from "./lib/sms";
 import { warmTestOtpNumbers } from "./lib/otp-test-numbers";
 import { warmOtpConfig } from "./lib/otp-config";
+import { warmStorageConfig } from "./lib/storage-config";
 import { warnIfHeicUndecodable } from "./lib/image-normalise";
 import { assertProductionRedisConfigured } from "./lib/assert-production-redis";
 import { registerAllJobs } from "./jobs/register-all";
@@ -100,6 +101,7 @@ const server = app.listen(port, host, () => {
   // after review is precisely the thing that should be impossible to miss.
   warmTestOtpNumbers();
   warmOtpConfig();
+  warmStorageConfig();
 
   // Same reasoning: if this build cannot decode HEIC, every iPhone photo that
   // reaches us raw is refused, and that belongs in the startup log rather than
