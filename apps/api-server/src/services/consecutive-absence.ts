@@ -58,6 +58,14 @@ export async function findConsecutiveAbsenceCandidates(opts?: {
       from sessions s
       inner join batches b on b.id = s.batch_id
       where s.status <> 'cancelled'
+        -- X-2 (review 2026-08): AT7 materialises sessions in a rolling 60-day
+        -- FORWARD window, and a future 'scheduled' session passed this filter
+        -- with no upper bound — so "last 3 sessions" was the next three
+        -- sessions that hadn't happened yet, whose attendance is always NULL.
+        -- The cron reported {flagged: 0} every night for this reason alone.
+        -- AT27 runs at 02:00 IST the FOLLOWING day, so "yesterday and
+        -- earlier" is the correct frame.
+        and s.scheduled_date < (now() at time zone 'Asia/Kolkata')::date
         and not exists (
           select 1
           from centre_holidays h
@@ -95,8 +103,12 @@ export async function findConsecutiveAbsenceCandidates(opts?: {
         array_agg(session_id order by rn) as session_ids
       from student_last3
       group by student_id, full_name, parent_id, centre_id
-      having count(*) = 3
-         and bool_and(status = 'absent')
+      -- X-3 (review 2026-08) — count(*) counts the left-joined row whether or
+      -- not attendance exists, and bool_and SKIPS NULL inputs, so
+      -- {absent, absent, unmarked} used to satisfy count(*)=3 AND
+      -- bool_and(status='absent'). AT6/AT27: unmarked is never inferred
+      -- absent, so only rows that are AFFIRMATIVELY 'absent' may count.
+      having count(*) filter (where status = 'absent') = 3
     )
     select
       student_id::text,
@@ -117,54 +129,68 @@ export async function findConsecutiveAbsenceCandidates(opts?: {
 export async function runConsecutiveAbsenceCheck(): Promise<{ flagged: number }> {
   const rows = await findConsecutiveAbsenceCandidates();
 
+  // X-19 (review 2026-08) — sanchalakUserIdsForCentre/cityAdminUserIdsForCentre
+  // used to run PER STUDENT (the latter itself two round trips), so 200
+  // flagged students at one centre meant ~600 redundant queries. Resolve
+  // once per distinct centre instead. The old outer "chunk" loop did no
+  // batching, concurrency or pause — byte-identical to a flat loop — so it
+  // is removed rather than kept as decoration.
+  const centreIds = [...new Set(rows.map((r) => r.centre_id))];
+  const reviewersByCentre = new Map<string, string[]>();
+  for (const centreId of centreIds) {
+    const [sanchalaks, cityAdmins] = await Promise.all([
+      sanchalakUserIdsForCentre(centreId),
+      cityAdminUserIdsForCentre(centreId),
+    ]);
+    reviewersByCentre.set(centreId, [...new Set([...sanchalaks, ...cityAdmins])]);
+  }
+
   let flagged = 0;
-  const NOTIFY_CHUNK = 40;
-
-  for (let i = 0; i < rows.length; i += NOTIFY_CHUNK) {
-    const chunk = rows.slice(i, i + NOTIFY_CHUNK);
-    for (const stu of chunk) {
-      const inserted = await db
-        .insert(consecutive_absence_alerts)
-        .values({
-          student_id: stu.student_id,
-          end_session_id: stu.end_session_id,
-        })
-        .onConflictDoNothing()
-        .returning({ id: consecutive_absence_alerts.id });
-
-      if (inserted.length === 0) continue;
-
-      const sessionIds = Array.isArray(stu.session_ids) ? stu.session_ids : [];
-
-      await db.insert(student_notes).values({
+  for (const stu of rows) {
+    const inserted = await db
+      .insert(consecutive_absence_alerts)
+      .values({
         student_id: stu.student_id,
-        note_type: "alert",
-        body_en: `${stu.full_name} has been absent for 3 consecutive sessions.`,
-        body_hi: `${stu.full_name} लगातार 3 सत्रों से अनुपस्थित हैं।`,
-        metadata: {
-          kind: "consecutive_absence",
-          session_ids: sessionIds,
-          end_session_id: stu.end_session_id,
-        },
-      });
+        end_session_id: stu.end_session_id,
+      })
+      .onConflictDoNothing()
+      .returning({ id: consecutive_absence_alerts.id });
 
-      const recipients = new Set<string>();
-      if (stu.parent_id) recipients.add(stu.parent_id);
-      for (const id of await sanchalakUserIdsForCentre(stu.centre_id)) recipients.add(id);
-      for (const id of await cityAdminUserIdsForCentre(stu.centre_id)) recipients.add(id);
+    if (inserted.length === 0) continue;
 
-      await notifyUsers({
-        userIds: [...recipients],
-        kind: "general",
-        title_en: "Consecutive absences",
-        title_hi: "लगातार अनुपस्थिति",
-        body_en: `${stu.full_name} missed the last 3 Pathshala sessions.`,
-        body_hi: `${stu.full_name} पिछले 3 पाठशाला सत्रों से अनुपस्थित रहे।`,
-        push: true,
-      });
+    const sessionIds = Array.isArray(stu.session_ids) ? stu.session_ids : [];
 
-      flagged += 1;
-    }
+    await db.insert(student_notes).values({
+      student_id: stu.student_id,
+      note_type: "alert",
+      body_en: `${stu.full_name} has been absent for 3 consecutive sessions.`,
+      body_hi: `${stu.full_name} लगातार 3 सत्रों से अनुपस्थित हैं।`,
+      metadata: {
+        kind: "consecutive_absence",
+        session_ids: sessionIds,
+        end_session_id: stu.end_session_id,
+      },
+    });
+
+    const recipients = new Set<string>();
+    if (stu.parent_id) recipients.add(stu.parent_id);
+    for (const id of reviewersByCentre.get(stu.centre_id) ?? []) recipients.add(id);
+
+    // X-20 (review 2026-08) — 'general' muted the catch-all bucket along with
+    // this alert, and muting absence alerts specifically was impossible.
+    // With no `data`, a Sanchalak couldn't tap through to the student either.
+    await notifyUsers({
+      userIds: [...recipients],
+      kind: "attendance",
+      title_en: "Consecutive absences",
+      title_hi: "लगातार अनुपस्थिति",
+      body_en: `${stu.full_name} missed the last 3 Pathshala sessions.`,
+      body_hi: `${stu.full_name} पिछले 3 पाठशाला सत्रों से अनुपस्थित रहे।`,
+      push: true,
+      data: { kind: "attendance", student_id: stu.student_id, centre_id: stu.centre_id },
+    });
+
+    flagged += 1;
   }
 
   logger.info({ flagged, candidates: rows.length }, "attendance.consecutive_check complete");
