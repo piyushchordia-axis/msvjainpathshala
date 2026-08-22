@@ -1787,7 +1787,13 @@ describe("homework", () => {
     expect(latest.rows[0]!.body_hi).toMatch(/गुरुजी/);
   });
 
-  it("a parent who has opted out of push receives no push", async () => {
+  it("a parent who has opted out of push still gets the inbox row, but no push (X-1)", async () => {
+    // X-1 (review 2026-08): push:false is a CHANNEL gate — it must suppress
+    // only the Expo send, never the durable inbox row. The old, buggy
+    // contract collapsed both into one switch; this replaces that assertion.
+    const pushModule = await import("../src/lib/push");
+    const sendPushSpy = vi.spyOn(pushModule, "sendPush");
+
     const admin = await loginAs("super_admin");
     const parent = await loginAs("parent");
     const studentId = await firstChildId(parent.token);
@@ -1804,6 +1810,13 @@ describe("homework", () => {
       `update users set notification_preferences = '{"push": false}'::jsonb where id = $1`,
       [parent.user.id],
     );
+    // A registered token so the push path is actually exercised — otherwise
+    // "no push" would be true regardless of the preference.
+    const token = `ExponentPushToken[opt-out-${Date.now()}]`;
+    await pool.query(
+      `insert into device_push_tokens (user_id, expo_token, is_active) values ($1, $2, true)`,
+      [parent.user.id, token],
+    );
 
     try {
       const before = await pool.query<{ n: string }>(
@@ -1813,6 +1826,7 @@ describe("homework", () => {
       );
       const beforeN = Number(before.rows[0]!.n);
 
+      sendPushSpy.mockClear();
       const create = await request(app)
         .post("/v1/homework/assignments")
         .set(auth(admin.token))
@@ -1829,9 +1843,20 @@ describe("homework", () => {
           where user_id = $1 and kind = 'homework'`,
         [parent.user.id],
       );
-      // prefsAllowKind: push===false skips insert entirely in notifyUsers.
-      expect(Number(after.rows[0]!.n)).toBe(beforeN);
+      // Kind gate allows it (only `push` was disabled, not `homework`) —
+      // the durable row still lands.
+      expect(Number(after.rows[0]!.n)).toBe(beforeN + 1);
+
+      // Channel gate suppresses the push: no call carries this parent's token.
+      const sentToThisToken = sendPushSpy.mock.calls.some((call) =>
+        (call[0] as Array<{ to: string | string[] }>).some((p) =>
+          Array.isArray(p.to) ? p.to.includes(token) : p.to === token,
+        ),
+      );
+      expect(sentToThisToken).toBe(false);
     } finally {
+      sendPushSpy.mockRestore();
+      await pool.query(`delete from device_push_tokens where expo_token = $1`, [token]);
       await pool.query(`update users set notification_preferences = $2::jsonb where id = $1`, [
         parent.user.id,
         JSON.stringify(prev.rows[0]?.prefs ?? {}),

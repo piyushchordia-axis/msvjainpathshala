@@ -690,7 +690,11 @@ export type NoticeItem = z.infer<typeof noticeItemSchema>;
 export const noticeWriteSchema = z
   .object({
     title_en: z.string().min(1).max(300),
-    title_hi: z.string().max(300).optional(),
+    // DB-7 / CA-6 (review 2026-08): notices.title_hi is NOT NULL at the DB
+    // layer (aligned with notifications.title_hi) — required here so every
+    // client enforces the same bilingual rule the mobile composer already
+    // did, instead of web treating it as optional.
+    title_hi: z.string().min(1).max(300),
     content_en: z.string().max(8000).optional(),
     content_hi: z.string().max(8000).optional(),
     audience: z.enum(["batch", "centre", "city", "state", "national", "msv"]),

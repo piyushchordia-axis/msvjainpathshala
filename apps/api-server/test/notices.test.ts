@@ -71,7 +71,12 @@ async function parentScope(
 
 /** Create a notice as super_admin and return its id. */
 async function createNotice(adminToken: string, body: Record<string, unknown>): Promise<string> {
-  const res = await request(app).post("/v1/notices/admin").set(auth(adminToken)).send(body);
+  // title_hi is required (DB-7 / CA-6, review 2026-08) — default it for
+  // every caller that doesn't care about Hindi copy specifically.
+  const res = await request(app)
+    .post("/v1/notices/admin")
+    .set(auth(adminToken))
+    .send({ title_hi: "शीर्षक", ...body });
   expect(res.status).toBe(201);
   expect(res.body.data.id).toBeTruthy();
   return res.body.data.id as string;
@@ -138,7 +143,13 @@ describe("notices", () => {
     const edit = await request(app)
       .patch(`/v1/notices/admin/${id}`)
       .set(auth(admin.token))
-      .send({ title_en: newTitle, audience: "centre", centre_id: scope.centreId, content_en: "Edited body." });
+      .send({
+        title_en: newTitle,
+        title_hi: "शीर्षक",
+        audience: "centre",
+        centre_id: scope.centreId,
+        content_en: "Edited body.",
+      });
     expect(edit.status).toBe(200);
     expect(edit.body.data.id).toBe(id);
 
@@ -171,7 +182,7 @@ describe("notices", () => {
     const national = await request(app)
       .post("/v1/notices/admin")
       .set(auth(cityAdmin.token))
-      .send({ title_en: `CA national ${tag()}`, audience: "national" });
+      .send({ title_en: `CA national ${tag()}`, title_hi: "शीर्षक", audience: "national" });
     expect(national.status).toBe(403);
     expect(national.body.error.code).toBe("ERR_FORBIDDEN");
 
@@ -179,7 +190,7 @@ describe("notices", () => {
     const foreignCity = await request(app)
       .post("/v1/notices/admin")
       .set(auth(cityAdmin.token))
-      .send({ title_en: `CA foreign city ${tag()}`, audience: "city", city_id: AHMEDABAD_CITY });
+      .send({ title_en: `CA foreign city ${tag()}`, title_hi: "शीर्षक", audience: "city", city_id: AHMEDABAD_CITY });
     expect(foreignCity.status).toBe(403);
 
     // A super_admin national notice cannot be edited or deleted by the city_admin.
@@ -440,6 +451,7 @@ describe("notices", () => {
       .set(auth(admin.token))
       .send({
         title_en: `BAD EXPIRY ${tag()}`,
+        title_hi: "शीर्षक",
         audience: "national",
         publish_at: publishedAt,
         expires_at: expiresAt,

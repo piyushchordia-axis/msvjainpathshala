@@ -31,15 +31,24 @@ import {
   batches,
   centres,
   students,
+  users,
 } from "@workspace/db";
 import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import type { ErrorCode, NoticeWrite } from "@workspace/api-zod";
 import { noticeWriteSchema } from "@workspace/api-zod";
 import { ok, fail } from "../../lib/envelope";
 import { requireAuth, requireAdminPanel } from "../../middlewares/auth";
-import { resolveAdminScope, cityIdsForState, type AdminScope } from "../../lib/scope";
+import {
+  resolveAdminScope,
+  cityIdsForState,
+  inBatchWriteScope,
+  inCentreScope,
+  type AdminScope,
+} from "../../lib/scope";
 import { auditFromReq } from "../../lib/audit";
-import { clampLimit, inScope, ownedStudentsCondition } from "../../lib/route-helpers";
+import { clampLimit, ownedStudentsCondition } from "../../lib/route-helpers";
+import { notifyUsers, sanchalakUserIdsForCentre } from "../../lib/notify";
+import { logger } from "../../lib/logger";
 
 const router: IRouter = Router();
 
@@ -48,7 +57,14 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 /* ---- local scope helpers (mirrors the pattern in every admin route file) ---- */
 
-const ORDER = [desc(notices.pinned), desc(notices.published_at), desc(notices.created_at)] as const;
+// SU-4 (review 2026-08) — is_critical previously didn't even affect list
+// ordering, so a critical notice could sort below any pinned routine one.
+const ORDER = [
+  desc(notices.is_critical),
+  desc(notices.pinned),
+  desc(notices.published_at),
+  desc(notices.created_at),
+] as const;
 
 /** A notice is live when it is published and has not expired. */
 const LIVE = and(
@@ -56,6 +72,9 @@ const LIVE = and(
   sql`${notices.published_at} <= now()`,
   or(isNull(notices.expires_at), sql`${notices.expires_at} > now()`),
 );
+
+/** SU-2 — soft-deleted notices never appear in any list/read query. */
+const NOT_DELETED = isNull(notices.deleted_at);
 
 const EXPIRES_AFTER_PUBLISH_MSG =
   "The end date must be after the publish date — pick a later date.";
@@ -93,14 +112,27 @@ router.get("/public", async (req: Request, res: Response) => {
       content_hi: notices.content_hi,
       pinned: notices.pinned,
       is_critical: notices.is_critical,
+      // G-1 (review 2026-08) — a centre/batch-scoped notice used to appear
+      // on the public site and guest app with no indication which centre it
+      // was about. audience + centre_name let the client render that.
+      audience: notices.audience,
+      centre_name: centres.name,
+      // DB-11 — /public sorts by published_at but never selected it, so the
+      // client rendered created_at against a published_at-ordered list.
+      published_at: notices.published_at,
       created_at: notices.created_at,
     })
     .from(notices)
-    .where(and(eq(notices.is_public, true), LIVE))
+    .leftJoin(centres, eq(centres.id, notices.centre_id))
+    .where(and(eq(notices.is_public, true), LIVE, NOT_DELETED))
     .orderBy(...ORDER)
     .limit(limit);
 
-  const items = rows.map((r) => ({ ...r, created_at: r.created_at.toISOString() }));
+  const items = rows.map((r) => ({
+    ...r,
+    published_at: r.published_at ? r.published_at.toISOString() : null,
+    created_at: r.created_at.toISOString(),
+  }));
   ok(res, { items }, { count: items.length });
 });
 
@@ -139,40 +171,75 @@ function memberVisibility(args: {
   return or(...clauses);
 }
 
-/* GET /v1/notices/feed?limit= — audience-scoped feed for the authed caller */
-router.get("/feed", requireAuth, async (req: Request, res: Response) => {
-  const user = req.authUser!;
-  const limit = clampLimit(req.query.limit, 50, 200);
-
-  let scopeWhere;
+/**
+ * Resolve the caller's own visibility predicate (member or admin-panel), and
+ * — for admin-panel callers — the scope needed to compute `editable` per row.
+ * Shared by /feed and /:id/read (P-5) so a read receipt can never be
+ * recorded for a notice the caller could not otherwise see.
+ */
+async function resolveCallerVisibility(
+  user: NonNullable<Request["authUser"]>,
+): Promise<{ where: ReturnType<typeof memberVisibility> | undefined; scope: AdminScope | null }> {
   if (canSeeEverythingInScope(user.role)) {
     // Admin-panel users: every notice whose scope intersects their centre scope.
     // National/state/city audiences (which have no centre) stay visible too.
     const scope = await resolveAdminScope(user);
-    scopeWhere = adminFeedWhere(scope, user.state_id ?? null, user.city_id ?? null);
-  } else {
-    // Member: resolve the centres/batches they belong to (own student records or
-    // children they parent), then build the visibility predicate.
-    const owned = await db
-      .select({ centre_id: students.centre_id, batch_id: students.batch_id, msv_status: students.msv_status })
-      .from(students)
-      // Q11 — shared ownership predicate (excludes soft-deleted and inactive students).
-      .where(ownedStudentsCondition(user.id));
+    return { where: adminFeedWhere(scope, user.state_id ?? null, user.city_id ?? null), scope };
+  }
+  // Member: resolve the centres/batches they belong to (own student records or
+  // children they parent), then build the visibility predicate.
+  const owned = await db
+    .select({ centre_id: students.centre_id, batch_id: students.batch_id, msv_status: students.msv_status })
+    .from(students)
+    // Q11 — shared ownership predicate (excludes soft-deleted and inactive students).
+    .where(ownedStudentsCondition(user.id));
 
-    const centreIds = Array.from(new Set(owned.map((o) => o.centre_id).filter((x): x is string => !!x)));
-    const batchIds = Array.from(new Set(owned.map((o) => o.batch_id).filter((x): x is string => !!x)));
-    const isMsv = owned.some((o) => o.msv_status === "approved");
+  const centreIds = Array.from(new Set(owned.map((o) => o.centre_id).filter((x): x is string => !!x)));
+  const batchIds = Array.from(new Set(owned.map((o) => o.batch_id).filter((x): x is string => !!x)));
+  const isMsv = owned.some((o) => o.msv_status === "approved");
 
-    scopeWhere = memberVisibility({
+  return {
+    where: memberVisibility({
       cityId: user.city_id ?? null,
       stateId: user.state_id ?? null,
       centreIds,
       batchIds,
       isMsv,
-    });
-  }
+    }),
+    scope: null,
+  };
+}
 
-  const where = scopeWhere ? and(scopeWhere, LIVE) : LIVE;
+/**
+ * CA-1 (review 2026-08) — whether the caller may edit/delete this specific
+ * notice, mirroring loadScoped's authorization exactly so the client never
+ * renders a control whose only outcome is a 404.
+ */
+function canActOnNotice(
+  role: string,
+  scope: AdminScope,
+  callerStateId: string | null,
+  callerCityId: string | null,
+  row: { audience: string; centre_id: string | null; batch_id: string | null; state_id: string | null; city_id: string | null },
+): boolean {
+  if (role === "super_admin") return true;
+  if (row.audience === "batch") return inBatchWriteScope(scope, row.batch_id, row.centre_id);
+  // A centre-wide broadcast is not a batch-bound action (SH-2) — only a
+  // caller with whole-centre reach (sanchalak+, batchIds === null) may act
+  // on it, never a shikshak whose scope.batchIds is populated.
+  if (row.audience === "centre") return scope.batchIds === null && inCentreScope(scope, row.centre_id);
+  if (row.audience === "state") return role === "state_admin" && !!callerStateId && row.state_id === callerStateId;
+  if (row.audience === "city") return role === "city_admin" && !!callerCityId && row.city_id === callerCityId;
+  return false; // national / msv: super_admin only, already returned above
+}
+
+/* GET /v1/notices/feed?limit= — audience-scoped feed for the authed caller */
+router.get("/feed", requireAuth, async (req: Request, res: Response) => {
+  const user = req.authUser!;
+  const limit = clampLimit(req.query.limit, 50, 200);
+
+  const { where: scopeWhere, scope } = await resolveCallerVisibility(user);
+  const where = scopeWhere ? and(scopeWhere, LIVE, NOT_DELETED) : and(LIVE, NOT_DELETED);
 
   const rows = await db
     .select({
@@ -182,6 +249,10 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
       content_en: notices.content_en,
       content_hi: notices.content_hi,
       audience: notices.audience,
+      state_id: notices.state_id,
+      city_id: notices.city_id,
+      centre_id: notices.centre_id,
+      batch_id: notices.batch_id,
       is_public: notices.is_public,
       pinned: notices.pinned,
       is_critical: notices.is_critical,
@@ -206,6 +277,7 @@ router.get("/feed", requireAuth, async (req: Request, res: Response) => {
       published_at: r.published_at ? r.published_at.toISOString() : null,
       created_at: r.created_at.toISOString(),
       read_at: r.read_at ? r.read_at.toISOString() : null,
+      editable: scope ? canActOnNotice(user.role, scope, user.state_id ?? null, user.city_id ?? null, r) : false,
     };
   });
   ok(res, { items, unread_count: unread }, { count: items.length });
@@ -256,10 +328,19 @@ router.post("/:id/read", requireAuth, async (req: Request, res: Response) => {
     fail(res, 404, "ERR_NOT_FOUND", "Notice not found.");
     return;
   }
+
+  // P-5 (review 2026-08) — resolve through the SAME visibility predicate as
+  // /feed, instead of an unscoped id lookup. Previously any authenticated
+  // user could mark any notice read — including a draft or one targeted at
+  // a different city — and the 200-vs-404 response was an existence oracle.
+  const { where: scopeWhere } = await resolveCallerVisibility(req.authUser!);
+  const readWhere = scopeWhere
+    ? and(eq(notices.id, id), scopeWhere, LIVE, NOT_DELETED)
+    : and(eq(notices.id, id), LIVE, NOT_DELETED);
   const [notice] = await db
     .select({ id: notices.id })
     .from(notices)
-    .where(eq(notices.id, id))
+    .where(readWhere)
     .limit(1);
   if (!notice) {
     fail(res, 404, "ERR_NOT_FOUND", "Notice not found.");
@@ -280,9 +361,11 @@ router.post("/:id/read", requireAuth, async (req: Request, res: Response) => {
 
 /* GET /v1/notices/admin?limit= — authoring list, scoped to the caller */
 router.get("/admin", requireAuth, requireAdminPanel, async (req: Request, res: Response) => {
-  const scope = await resolveAdminScope(req.authUser!);
+  const user = req.authUser!;
+  const scope = await resolveAdminScope(user);
   const limit = clampLimit(req.query.limit, 100, 300);
-  const where = adminFeedWhere(scope, req.authUser!.state_id ?? null, req.authUser!.city_id ?? null);
+  const scopeWhere = adminFeedWhere(scope, user.state_id ?? null, user.city_id ?? null);
+  const where = scopeWhere ? and(scopeWhere, NOT_DELETED) : NOT_DELETED;
 
   const rows = await db
     .select({
@@ -304,6 +387,9 @@ router.get("/admin", requireAuth, requireAdminPanel, async (req: Request, res: R
       published_at: notices.published_at,
       expires_at: notices.expires_at,
       created_at: notices.created_at,
+      // SU-3 — created_by was written but never selected; updated_by is new.
+      created_by: notices.created_by,
+      updated_by: notices.updated_by,
     })
     .from(notices)
     .leftJoin(centres, eq(centres.id, notices.centre_id))
@@ -319,6 +405,11 @@ router.get("/admin", requireAuth, requireAdminPanel, async (req: Request, res: R
     expires_at: r.expires_at ? r.expires_at.toISOString() : null,
     is_expired: r.expires_at != null && r.expires_at.getTime() <= now,
     created_at: r.created_at.toISOString(),
+    // CA-1 (review 2026-08) — the client used this to unconditionally render
+    // Edit/Delete on rows that could only ever 404 (e.g. a super_admin's
+    // national notice shown to a city_admin). Compute the real answer once,
+    // here, instead of the client guessing.
+    editable: canActOnNotice(user.role, scope, user.state_id ?? null, user.city_id ?? null, r),
   }));
   ok(res, { items }, { count: items.length });
 });
@@ -387,9 +478,21 @@ async function authorizeWrite(
   if (role === "super_admin") return { ok: true };
 
   switch (body.audience) {
-    case "centre":
+    // SH-1 (Critical) — was one branch sharing the deprecated centre-level
+    // inScope helper for BOTH audiences, so a shikshak's populated
+    // scope.batchIds was never consulted: a Guruji could publish to any
+    // batch in their centre, not just their own (Q12).
     case "batch":
-      if (!inScope(scope, effectiveCentreId)) {
+      if (!inBatchWriteScope(scope, body.batch_id ?? null, effectiveCentreId)) {
+        return { ok: false, status: 403, code: "ERR_FORBIDDEN", message: "Target is not in your scope." };
+      }
+      return { ok: true };
+    // SH-2 (High) — a centre-wide broadcast is not a batch-bound action.
+    // Only a caller with whole-centre reach (sanchalak+, scope.batchIds ===
+    // null) may publish/edit it — a shikshak's batch-scoped reach is not
+    // enough to speak in the Sanchalak's voice to the whole centre.
+    case "centre":
+      if (scope.batchIds !== null || !inCentreScope(scope, effectiveCentreId)) {
         return { ok: false, status: 403, code: "ERR_FORBIDDEN", message: "Target is not in your scope." };
       }
       return { ok: true };
@@ -407,6 +510,96 @@ async function authorizeWrite(
     case "national":
     case "msv":
       return { ok: false, status: 403, code: "ERR_FORBIDDEN", message: "Only national admins can publish to this audience." };
+  }
+}
+
+/**
+ * SU-4 (review 2026-08) — is_critical previously drove nothing: notices.ts
+ * never imported notifyUsers and there was no 'notice' kind. Resolves
+ * concrete recipient user ids for a notice's resolved audience so a critical
+ * notice can actually push, not just show a coloured pill.
+ */
+async function resolveCriticalNoticeAudience(row: {
+  audience: string;
+  state_id: string | null;
+  city_id: string | null;
+  centre_id: string | null;
+  batch_id: string | null;
+}): Promise<string[]> {
+  switch (row.audience) {
+    case "national":
+    case "msv": {
+      const rows = await db.select({ id: users.id }).from(users).where(eq(users.is_active, true));
+      return rows.map((r) => r.id);
+    }
+    case "state": {
+      if (!row.state_id) return [];
+      const rows = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.state_id, row.state_id), eq(users.is_active, true)));
+      return rows.map((r) => r.id);
+    }
+    case "city": {
+      if (!row.city_id) return [];
+      const rows = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.city_id, row.city_id), eq(users.is_active, true)));
+      return rows.map((r) => r.id);
+    }
+    case "centre": {
+      if (!row.centre_id) return [];
+      const [studentRows, sanchalakIds] = await Promise.all([
+        db
+          .select({ parent_id: students.parent_id, user_id: students.user_id })
+          .from(students)
+          .where(and(eq(students.centre_id, row.centre_id), eq(students.status, "active"), isNull(students.deleted_at))),
+        sanchalakUserIdsForCentre(row.centre_id),
+      ]);
+      const memberIds = studentRows.flatMap((s) => [s.parent_id, s.user_id]).filter((id): id is string => !!id);
+      return [...new Set([...memberIds, ...sanchalakIds])];
+    }
+    case "batch": {
+      if (!row.batch_id) return [];
+      const studentRows = await db
+        .select({ parent_id: students.parent_id, user_id: students.user_id })
+        .from(students)
+        .where(and(eq(students.batch_id, row.batch_id), eq(students.status, "active"), isNull(students.deleted_at)));
+      return [...new Set(studentRows.flatMap((s) => [s.parent_id, s.user_id]).filter((id): id is string => !!id))];
+    }
+    default:
+      return [];
+  }
+}
+
+/** Fire the critical-notice push, best-effort — never fails the authoring request. */
+async function notifyCriticalNotice(row: {
+  id: string;
+  audience: string;
+  state_id: string | null;
+  city_id: string | null;
+  centre_id: string | null;
+  batch_id: string | null;
+  title_en: string;
+  title_hi: string;
+  content_en: string | null;
+  content_hi: string | null;
+}): Promise<void> {
+  try {
+    const userIds = await resolveCriticalNoticeAudience(row);
+    if (userIds.length === 0) return;
+    await notifyUsers({
+      userIds,
+      kind: "notice",
+      title_en: row.title_en,
+      title_hi: row.title_hi,
+      body_en: row.content_en?.trim() ? row.content_en : "Tap to view this important notice.",
+      body_hi: row.content_hi?.trim() ? row.content_hi : "यह महत्वपूर्ण सूचना देखने के लिए टैप करें।",
+      data: { kind: "notice", notice_id: row.id, route: "/notices" },
+    });
+  } catch (err) {
+    logger.error({ err, noticeId: row.id }, "notifyCriticalNotice failed");
   }
 }
 
@@ -442,7 +635,7 @@ router.post("/admin", requireAuth, requireAdminPanel, async (req: Request, res: 
     .insert(notices)
     .values({
       title_en: body.title_en,
-      title_hi: body.title_hi ?? null,
+      title_hi: body.title_hi,
       content_en: body.content_en ?? null,
       content_hi: body.content_hi ?? null,
       audience: body.audience,
@@ -467,6 +660,23 @@ router.post("/admin", requireAuth, requireAdminPanel, async (req: Request, res: 
     metadata: { audience: body.audience, is_public: body.is_public ?? false },
   });
 
+  // SU-4 — fire immediately only when the notice is both critical AND
+  // published now (not a draft, not scheduled for later).
+  if (body.is_critical === true && publishedAt !== null && publishedAt.getTime() <= Date.now()) {
+    await notifyCriticalNotice({
+      id: row.id,
+      audience: body.audience,
+      state_id: resolved.cols.state_id,
+      city_id: resolved.cols.city_id,
+      centre_id: resolved.cols.centre_id,
+      batch_id: resolved.cols.batch_id,
+      title_en: body.title_en,
+      title_hi: body.title_hi,
+      content_en: body.content_en ?? null,
+      content_hi: body.content_hi ?? null,
+    });
+  }
+
   ok(res, { id: row.id }, undefined, 201);
 });
 
@@ -474,7 +684,17 @@ router.post("/admin", requireAuth, requireAdminPanel, async (req: Request, res: 
 async function loadScoped(
   req: Request,
 ): Promise<
-  | { ok: true; centre_id: string | null; published_at: Date | null; expires_at: Date | null }
+  | {
+      ok: true;
+      title_en: string;
+      audience: string;
+      centre_id: string | null;
+      is_public: boolean;
+      pinned: boolean;
+      is_critical: boolean;
+      published_at: Date | null;
+      expires_at: Date | null;
+    }
   | { ok: false }
 > {
   const id = String(req.params.id);
@@ -482,21 +702,31 @@ async function loadScoped(
   const [row] = await db
     .select({
       id: notices.id,
+      title_en: notices.title_en,
       audience: notices.audience,
       centre_id: notices.centre_id,
+      batch_id: notices.batch_id,
       state_id: notices.state_id,
       city_id: notices.city_id,
+      is_public: notices.is_public,
+      pinned: notices.pinned,
+      is_critical: notices.is_critical,
       published_at: notices.published_at,
       expires_at: notices.expires_at,
     })
     .from(notices)
-    .where(eq(notices.id, id))
+    .where(and(eq(notices.id, id), NOT_DELETED))
     .limit(1);
   if (!row) return { ok: false };
 
   const scoped = {
     ok: true as const,
+    title_en: row.title_en,
+    audience: row.audience,
     centre_id: row.centre_id,
+    is_public: row.is_public,
+    pinned: row.pinned,
+    is_critical: row.is_critical,
     published_at: row.published_at,
     expires_at: row.expires_at,
   };
@@ -505,13 +735,7 @@ async function loadScoped(
   if (role === "super_admin") return scoped;
 
   const scope = await resolveAdminScope(req.authUser!);
-  if ((row.audience === "centre" || row.audience === "batch") && inScope(scope, row.centre_id)) {
-    return scoped;
-  }
-  if (row.audience === "state" && role === "state_admin" && req.authUser!.state_id && row.state_id === req.authUser!.state_id) {
-    return scoped;
-  }
-  if (row.audience === "city" && role === "city_admin" && req.authUser!.city_id && row.city_id === req.authUser!.city_id) {
+  if (canActOnNotice(role, scope, req.authUser!.state_id ?? null, req.authUser!.city_id ?? null, row)) {
     return scoped;
   }
   return { ok: false };
@@ -571,12 +795,21 @@ const editNotice = async (req: Request, res: Response): Promise<void> => {
     return;
   }
 
+  // CA-7 (review 2026-08) — PATCH is a full-replace verb here on
+  // is_public/pinned/is_critical: an unrelated edit (title/content) that
+  // omits these fields silently un-published, un-pinned and un-criticalled
+  // the notice. undefined now means "unchanged", matching expires_at's
+  // existing pattern.
+  const nextIsPublic = body.is_public ?? existing.is_public;
+  const nextPinned = body.pinned ?? existing.pinned;
+  const nextIsCritical = body.is_critical ?? existing.is_critical;
+
   const id = String(req.params.id);
   await db
     .update(notices)
     .set({
       title_en: body.title_en,
-      title_hi: body.title_hi ?? null,
+      title_hi: body.title_hi,
       content_en: body.content_en ?? null,
       content_hi: body.content_hi ?? null,
       audience: body.audience,
@@ -584,11 +817,12 @@ const editNotice = async (req: Request, res: Response): Promise<void> => {
       city_id: resolved.cols.city_id,
       centre_id: resolved.cols.centre_id,
       batch_id: resolved.cols.batch_id,
-      is_public: body.is_public ?? false,
-      pinned: body.pinned ?? false,
-      is_critical: body.is_critical ?? false,
+      is_public: nextIsPublic,
+      pinned: nextPinned,
+      is_critical: nextIsCritical,
       published_at: publishedAt,
       expires_at: nextExpires,
+      updated_by: req.authUser!.id,
       updated_at: new Date(),
     })
     .where(eq(notices.id, id));
@@ -598,8 +832,28 @@ const editNotice = async (req: Request, res: Response): Promise<void> => {
     entityKind: "notice",
     entityId: id,
     summary: `Edited notice "${body.title_en}" (${body.audience}).`,
-    metadata: { audience: body.audience, is_public: body.is_public ?? false },
+    metadata: { audience: body.audience, is_public: nextIsPublic },
   });
+
+  // SU-4 — fire only on the TRANSITION into "critical and live", never on
+  // every subsequent metadata edit of an already-critical live notice.
+  const wasLiveCritical =
+    existing.is_critical && existing.published_at !== null && existing.published_at.getTime() <= Date.now();
+  const willBeLiveCritical = nextIsCritical && publishedAt !== null && publishedAt.getTime() <= Date.now();
+  if (!wasLiveCritical && willBeLiveCritical) {
+    await notifyCriticalNotice({
+      id,
+      audience: body.audience,
+      state_id: resolved.cols.state_id,
+      city_id: resolved.cols.city_id,
+      centre_id: resolved.cols.centre_id,
+      batch_id: resolved.cols.batch_id,
+      title_en: body.title_en,
+      title_hi: body.title_hi,
+      content_en: body.content_en ?? null,
+      content_hi: body.content_hi ?? null,
+    });
+  }
 
   ok(res, { id });
 };
@@ -609,7 +863,7 @@ router.patch("/admin/:id", requireAuth, requireAdminPanel, editNotice);
 /* POST /v1/notices/admin/:id — alias for clients without a PATCH helper */
 router.post("/admin/:id", requireAuth, requireAdminPanel, editNotice);
 
-/* DELETE /v1/notices/admin/:id — remove a notice (hard delete; reads cascade) */
+/* DELETE /v1/notices/admin/:id — remove a notice (SU-2: soft delete, never recoverable data lost) */
 router.delete("/admin/:id", requireAuth, requireAdminPanel, async (req: Request, res: Response) => {
   const existing = await loadScoped(req);
   if (!existing.ok) {
@@ -617,13 +871,16 @@ router.delete("/admin/:id", requireAuth, requireAdminPanel, async (req: Request,
     return;
   }
   const id = String(req.params.id);
-  await db.delete(notices).where(eq(notices.id, id));
+  await db
+    .update(notices)
+    .set({ deleted_at: new Date(), updated_by: req.authUser!.id, updated_at: new Date() })
+    .where(eq(notices.id, id));
 
   await auditFromReq(req, {
     action: "delete",
     entityKind: "notice",
     entityId: id,
-    summary: "Deleted notice.",
+    summary: `Deleted notice "${existing.title_en}" (${existing.audience}).`,
   });
 
   ok(res, { id, deleted: true });

@@ -115,22 +115,27 @@ export async function notifyUsers(opts: {
   const prefsById = new Map(prefRows.map((r) => [r.id, r.prefs] as const));
 
   if (opts.inbox !== false) {
+    // Inbox insert failures PROPAGATE (module docstring, and asserted by
+    // notifications.test.ts's "notifyUsers throws when the inbox insert
+    // fails") so a queueing caller can retry — unlike the push send below,
+    // nothing here has its own idempotency key, so a chunk that fails must
+    // stop the whole call rather than being logged and skipped: silently
+    // continuing past it would mean a caller's retry re-inserts the chunks
+    // that already succeeded, duplicating inbox rows. X-7 only chunks the
+    // statement to stay under Postgres' bind-parameter cap; it does not
+    // change this failure contract.
     for (const idChunk of chunk(kindAllowedIds, INSERT_CHUNK_SIZE)) {
-      try {
-        await db.insert(notifications).values(
-          idChunk.map((user_id) => ({
-            user_id,
-            kind,
-            title_en: opts.title_en,
-            title_hi: opts.title_hi,
-            body_en: opts.body_en,
-            body_hi: opts.body_hi,
-            data: opts.data ?? null,
-          })),
-        );
-      } catch (err) {
-        logger.error({ err, kind, count: idChunk.length }, "notifyUsers inbox insert chunk failed");
-      }
+      await db.insert(notifications).values(
+        idChunk.map((user_id) => ({
+          user_id,
+          kind,
+          title_en: opts.title_en,
+          title_hi: opts.title_hi,
+          body_en: opts.body_en,
+          body_hi: opts.body_hi,
+          data: opts.data ?? null,
+        })),
+      );
     }
   }
 
