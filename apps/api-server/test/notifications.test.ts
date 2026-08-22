@@ -11,6 +11,7 @@ import {
   attendance,
   device_push_tokens,
   upload_objects,
+  NOTIFICATION_KINDS,
 } from "@workspace/db";
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { loginAs, auth } from "./helpers";
@@ -197,6 +198,12 @@ describe("notifications — inbox + read flow", () => {
     const session = await loginAs("parent");
     const uid = session.user.id;
 
+    // T-8 (review 2026-08) — a loose >=1 assertion is satisfied by a query
+    // that dropped the user_id filter and counted every user's unread rows.
+    // Capture the baseline so the assertion below pins the actual delta.
+    const before = await request(app).get("/v1/notifications?limit=50").set(auth(session.token));
+    const baselineUnread = before.body.data.unread_count as number;
+
     // Self-create a notification directly so the test is rerun-safe.
     const [created] = await db
       .insert(notifications)
@@ -214,7 +221,7 @@ describe("notifications — inbox + read flow", () => {
     expect(listRes.status).toBe(200);
     expect(Array.isArray(listRes.body.data.items)).toBe(true);
     expect(typeof listRes.body.data.unread_count).toBe("number");
-    expect(listRes.body.data.unread_count).toBeGreaterThanOrEqual(1);
+    expect(listRes.body.data.unread_count).toBe(baselineUnread + 1);
     const found = listRes.body.data.items.find((n: { id: string }) => n.id === created.id);
     expect(found).toBeTruthy();
     expect(found.read_at).toBeNull();
@@ -234,12 +241,22 @@ describe("notifications — inbox + read flow", () => {
       .limit(1);
     expect(after.read_at).not.toBeNull();
 
-    // Re-reading is idempotent (still 200).
+    // T-3 (review 2026-08) — the previous assertion here was only
+    // `status === 200`; the actual contract (notifications.ts's own
+    // comment: "re-calling keeps the timestamp") is that read_at does NOT
+    // move on a repeat call. Assert the timestamp is stable, not just the
+    // status code.
     const readAgain = await request(app)
       .post(`/v1/notifications/${created.id}/read`)
       .set(auth(session.token))
       .send({});
     expect(readAgain.status).toBe(200);
+    const [afterAgain] = await db
+      .select({ read_at: notifications.read_at })
+      .from(notifications)
+      .where(eq(notifications.id, created.id))
+      .limit(1);
+    expect(afterAgain.read_at?.getTime()).toBe(after.read_at?.getTime());
   });
 
   it("returns 404 marking a notification that is not the caller's", async () => {
@@ -629,8 +646,16 @@ describe("notifications — inbox keyset pagination (FIX #10)", () => {
     await db.delete(notifications).where(eq(notifications.user_id, uid));
 
     try {
+      // T-1 (review 2026-08) — `i` used to land in the SECONDS field, so all
+      // five rows got distinct created_at values and the (created_at, id)
+      // tie-break (the entire reason `id` is in the cursor, and the reason
+      // migration 0046 exists) was never exercised — deleting that clause
+      // would leave this test green. Every row shares the exact same
+      // created_at here, forcing the ordering (and the cursor) to rely on
+      // `id DESC` alone.
+      const sharedCreatedAt = new Date(Date.UTC(2024, 5, 1, 12, 0, 0));
       for (let i = 0; i < 5; i++) {
-        const createdAt = new Date(Date.UTC(2024, 5, 1, 12, 0, i));
+        const createdAt = sharedCreatedAt;
         const [row] = await db
           .insert(notifications)
           .values({
@@ -687,17 +712,40 @@ describe("notifications — inbox keyset pagination (FIX #10)", () => {
 
     await db.delete(notifications).where(eq(notifications.user_id, userB.user.id));
 
+    // T-2 (review 2026-08) — the previous version of this test planted only
+    // ONE row for userA, so `[]` came back from userB's query whether or
+    // not `eq(notifications.user_id, uid)` was actually in it (there was
+    // nothing else for the query to wrongly return). A second, OLDER row
+    // for userA — positioned exactly where it would surface next if the
+    // user_id filter were silently dropped — makes the assertion real.
+    const newer = new Date(Date.UTC(2024, 5, 2, 12, 0, 0));
+    const older = new Date(Date.UTC(2024, 5, 1, 12, 0, 0));
     const [aRow] = await db
       .insert(notifications)
       .values({
         user_id: userA.user.id,
         kind: "general",
-        title_en: `Fix10 A ${suffix}`,
+        title_en: `Fix10 A newer ${suffix}`,
         title_hi: "ए",
         body_en: "A only",
         body_hi: "केवल ए",
+        created_at: newer,
+        updated_at: newer,
       })
       .returning({ id: notifications.id, created_at: notifications.created_at });
+    const [aRowOlder] = await db
+      .insert(notifications)
+      .values({
+        user_id: userA.user.id,
+        kind: "general",
+        title_en: `Fix10 A older ${suffix}`,
+        title_hi: "ए पुराना",
+        body_en: "A only, older",
+        body_hi: "केवल ए, पुराना",
+        created_at: older,
+        updated_at: older,
+      })
+      .returning({ id: notifications.id });
 
     try {
       // Cursor is a position only — user_id filter still applies independently.
@@ -712,9 +760,9 @@ describe("notifications — inbox keyset pagination (FIX #10)", () => {
       expect(listB.status).toBe(200);
       const items = listB.body.data.items as Array<{ id: string; title_en: string }>;
       expect(items).toEqual([]);
-      expect(items.every((n) => n.id !== aRow!.id)).toBe(true);
+      expect(items.every((n) => n.id !== aRow!.id && n.id !== aRowOlder!.id)).toBe(true);
     } finally {
-      await db.delete(notifications).where(eq(notifications.id, aRow!.id));
+      await db.delete(notifications).where(inArray(notifications.id, [aRow!.id, aRowOlder!.id]));
     }
   });
 
@@ -1580,5 +1628,26 @@ describe("notifications — parent attendance push scope (FIX #1)", () => {
         await db.delete(users).where(inArray(users.id, plantedParents));
       }
     }
+  });
+});
+
+describe("notifications — enum parity (T-10)", () => {
+  it("NOTIFICATION_KINDS (TS) matches notification_kind_enum (Postgres) exactly", async () => {
+    // T-10 (review 2026-08) — NotificationKind is derived from the TS array,
+    // but the Postgres type is mutated by hand-written `ALTER TYPE ... ADD
+    // VALUE` migrations. Nothing ever tied the two together before this: a
+    // kind added to the array without a matching migration produces
+    // "invalid input value for enum" on the insert at notifyUsers' call
+    // site — a 500 on the user-facing action, not a background job.
+    const { rows } = await pool.query<{ enumlabel: string }>(
+      `select e.enumlabel
+         from pg_type t
+         join pg_enum e on e.enumtypid = t.oid
+        where t.typname = 'notification_kind_enum'
+        order by e.enumlabel`,
+    );
+    const pgValues = rows.map((r) => r.enumlabel).sort();
+    const tsValues = [...NOTIFICATION_KINDS].sort();
+    expect(tsValues).toEqual(pgValues);
   });
 });

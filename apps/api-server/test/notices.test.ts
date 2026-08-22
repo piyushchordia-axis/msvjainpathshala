@@ -192,6 +192,11 @@ describe("notices", () => {
       .set(auth(cityAdmin.token))
       .send({ title_en: `CA foreign city ${tag()}`, title_hi: "शीर्षक", audience: "city", city_id: AHMEDABAD_CITY });
     expect(foreignCity.status).toBe(403);
+    // T-11 (review 2026-08) — a bare status assertion can't distinguish
+    // "wrong city" from "requireAdminPanel rejected for an unrelated
+    // reason"; pin the actual error code, matching the sibling assertion
+    // two lines up.
+    expect(foreignCity.body.error.code).toBe("ERR_FORBIDDEN");
 
     // A super_admin national notice cannot be edited or deleted by the city_admin.
     const admin = await loginAs("super_admin");
@@ -208,6 +213,90 @@ describe("notices", () => {
 
     // cleanup
     await request(app).delete(`/v1/notices/admin/${nationalId}`).set(auth(admin.token));
+  });
+
+  // T-5 (review 2026-08) — authorizeWrite's ALLOW branches for state/city
+  // (centre/batch already covered by "lets an admin create, edit and
+  // delete a centre-targeted notice") had zero coverage: only the deny
+  // paths above were ever exercised, so replacing the whole `case "city":`
+  // block with a bare 403 would still pass every existing test.
+  //
+  // T-6 (review 2026-08) — adminFeedWhere itself had zero coverage from
+  // any non-super-admin role. GET /admin as state_admin/city_admin here
+  // closes that gap in the same pass.
+  it("lets a state_admin target their own state, and a city_admin target their own city", async () => {
+    const stateAdmin = await loginAs("state_admin"); // Maharashtra
+    const cityAdmin = await loginAs("city_admin"); // Mumbai
+
+    const [stateRow] = (
+      await pool.query<{ state_id: string }>(`select state_id from users where id = $1`, [
+        stateAdmin.user.id,
+      ])
+    ).rows;
+    const [cityRow] = (
+      await pool.query<{ city_id: string }>(`select city_id from users where id = $1`, [
+        cityAdmin.user.id,
+      ])
+    ).rows;
+    expect(stateRow?.state_id).toBeTruthy();
+    expect(cityRow?.city_id).toBeTruthy();
+
+    const stateNoticeId = await createNotice(stateAdmin.token, {
+      title_en: `SA state ${tag()}`,
+      audience: "state",
+      state_id: stateRow!.state_id,
+    });
+    const cityNoticeId = await createNotice(cityAdmin.token, {
+      title_en: `CA city ${tag()}`,
+      audience: "city",
+      city_id: cityRow!.city_id,
+    });
+
+    // T-6 — GET /admin as each role actually returns the row it just made
+    // (adminFeedWhere resolves their own state/city correctly), and GET
+    // /admin as a shikshak/sanchalak (centre-bound scope, no state/city)
+    // never sees state/city rows outside their reach.
+    const stateAdminList = await request(app).get("/v1/notices/admin?limit=300").set(auth(stateAdmin.token));
+    expect(stateAdminList.status).toBe(200);
+    expect(
+      stateAdminList.body.data.items.find((n: { id: string }) => n.id === stateNoticeId),
+    ).toBeTruthy();
+
+    const cityAdminList = await request(app).get("/v1/notices/admin?limit=300").set(auth(cityAdmin.token));
+    expect(cityAdminList.status).toBe(200);
+    expect(cityAdminList.body.data.items.find((n: { id: string }) => n.id === cityNoticeId)).toBeTruthy();
+
+    // Sanchalak/shikshak are ALSO Mumbai/Maharashtra personas, so
+    // adminFeedWhere correctly includes their own state/city rows too —
+    // this is the same geography arm as the admin cases above, just via a
+    // centre-bound role. The point of exercising it here is T-6 coverage
+    // (adminFeedWhere had never run as these two roles at all), not a
+    // scope-exclusion assertion.
+    const sanchalak = await loginAs("sanchalak");
+    const shikshak = await loginAs("shikshak");
+    for (const role of [sanchalak, shikshak]) {
+      const roleList = await request(app).get("/v1/notices/admin?limit=300").set(auth(role.token));
+      expect(roleList.status).toBe(200);
+      expect(
+        roleList.body.data.items.find((n: { id: string }) => n.id === stateNoticeId),
+      ).toBeTruthy();
+      expect(
+        roleList.body.data.items.find((n: { id: string }) => n.id === cityNoticeId),
+      ).toBeTruthy();
+    }
+
+    // GET /feed as an ordinary member (parent) in the same state/city sees
+    // both — memberVisibility's geography arms, also otherwise untested
+    // for the positive case (T-4).
+    const parent = await loginAs("parent"); // Mumbai / Maharashtra
+    const feed = await request(app).get("/v1/notices/feed?limit=300").set(auth(parent.token));
+    expect(feed.status).toBe(200);
+    expect(feed.body.data.items.find((n: { id: string }) => n.id === stateNoticeId)).toBeTruthy();
+    expect(feed.body.data.items.find((n: { id: string }) => n.id === cityNoticeId)).toBeTruthy();
+
+    // cleanup
+    await request(app).delete(`/v1/notices/admin/${stateNoticeId}`).set(auth(stateAdmin.token));
+    await request(app).delete(`/v1/notices/admin/${cityNoticeId}`).set(auth(cityAdmin.token));
   });
 
   /* ─────────────────── scoped feed: in-scope vs elsewhere ─────────────────── */
@@ -322,6 +411,18 @@ describe("notices", () => {
       .send({ audience: "national" });
     expect(noTitle.status).toBe(422);
     expect(noTitle.body.error.code).toBe("ERR_VALIDATION_FAILED");
+
+    // T-12 (review 2026-08) — DB-7's NOT NULL on notices.title_hi previously
+    // only had a direct-DB test (bypassing every route); this is the
+    // route-level equivalent, isolating "title_hi missing" from "title_en
+    // missing" so a regression that made title_hi optional again would be
+    // caught even though title_en is present here.
+    const noTitleHi = await request(app)
+      .post("/v1/notices/admin")
+      .set(auth(admin.token))
+      .send({ title_en: "x", audience: "national" });
+    expect(noTitleHi.status).toBe(422);
+    expect(noTitleHi.body.error.code).toBe("ERR_VALIDATION_FAILED");
 
     // Invalid audience enum.
     const badAudience = await request(app)
