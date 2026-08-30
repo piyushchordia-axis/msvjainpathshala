@@ -2,7 +2,7 @@
   "expo": {
     "name": "MSV SMART Jain Pathshala",
     "slug": "jain-pathshala-mobile",
-    "version": "1.1.0",
+    "version": "1.1.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "jain-pathshala-mobile",

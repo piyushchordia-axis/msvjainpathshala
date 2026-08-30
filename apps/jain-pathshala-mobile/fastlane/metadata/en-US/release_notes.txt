@@ -1,12 +1,9 @@
-The app is now called MSV SMART Jain Pathshala.
-
 New in this version:
-• Join Pathshala — students, shikshaks and sanchalaks can now register from inside the app and follow their request through to approval.
-• Library — a rebuilt library with stavans, stotras and study material, including audio playback with a mini player.
-• Team directory — meet the people behind your centre and city.
-• Course progress — track section and subsection progress through each course.
-• Attendance marking for Guruji is faster, with a denser roster view.
-• Refreshed colours and typography throughout, and clearer Hindi text.
-• More reliable sign-in, with a fresh code sent by SMS each time.
+• Courses — follow your progress through every section and subsection, and collect your certificate as you finish.
+• Exams — take an exam in the app, and see your result once your Guruji has released it.
+• Notices and notifications — announcements from your centre and city now reach you in the app, with a feed you can catch up on.
+• Punya — clearer points and tiers, manual awards, and the MSV track shown alongside your regular Punya.
+• Library — more granths and reference material, with steadier reading and audio.
+• Shivir, quizzes, Niyam and sign-in have all had a round of fixes.
 
 Thank you for using Jain Pathshala. Please share any feedback with us through Support.
